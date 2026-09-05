@@ -89,6 +89,14 @@ test-short: preflight ## Run only the smoke test.
 # A create that died before writing state.yaml is the harder case: talosctl
 # cannot destroy what it cannot read, and the directory still holds the nodes'
 # sparse disk images, so it is removed directly once destroy has had its turn.
+#
+# Worse still is a create whose own failure path removed the state directory
+# while its children kept running. Nothing then names the cluster, the virtual
+# machines stay up holding their memory and the host bridge, and macOS restarts
+# bootpd for as long as one of them holds a vmnet interface. So the sweep matches
+# the processes rather than the state: every talosctl helper, qemu-launch among
+# them, and the virtual machines themselves, recognized by the cluster directory
+# on their command line so that a developer's unrelated machines are left alone.
 clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
 	@found=0; \
 	for d in $$HOME/.talos/clusters/sbi-* $$HOME/.talos/clusters/sb-integration*; do \
@@ -98,9 +106,15 @@ clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
 	  sudo -E talosctl cluster destroy --name "$$n" || true; \
 	  [ -d "$$d" ] && { echo "  removing leftover state $$d"; sudo rm -rf "$$d"; } || true; \
 	done; \
-	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
-	if [ -n "$$pids" ]; then \
-	  echo "killing orphaned helpers: $$pids"; \
-	  sudo kill $$pids || true; \
+	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|qemu-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
+	vms=$$(pgrep -f "qemu-system-[a-z0-9_]+ .*\.talos/clusters/(sbi-|sb-integration)" 2>/dev/null || true); \
+	all=$$(echo $$pids $$vms); \
+	if [ -n "$$all" ]; then \
+	  found=1; \
+	  echo "killing orphaned helpers: $$all"; \
+	  sudo kill $$all || true; \
+	  sleep 2; \
+	  still=$$(ps -o pid= -p $$all 2>/dev/null || true); \
+	  if [ -n "$$still" ]; then echo "  still up, forcing: $$still"; sudo kill -9 $$still || true; fi; \
 	fi; \
-	test $$found -eq 1 || echo "no leftover clusters found"
+	test $$found -eq 1 || echo "nothing left to clean"
