@@ -36,9 +36,9 @@ import (
 //
 // It does not carry the second of those. Both architectures of v26.2.6 and of
 // v26.3.0, and the base image both are built on, were read out of the registry
-// on 2026-09-05: nvme, blkid, blockdev, mkfs.ext4, mkfs.xfs, mount, umount, and
-// mountpoint are present in every one, and no LVM binary is, nor dmsetup, as a
-// file or a symlink or at all. Since lvm execs those directly in the container
+// on 2026-09-05: `nvme`, blkid, blockdev, mkfs.ext4, mkfs.xfs, mount, umount,
+// and mountpoint are present in every one, and no LVM binary is, nor dmsetup, as
+// a file or a symlink or at all. Since `lvm` execs those directly in the container
 // rather than through nsenter, the LVM plans cannot run in this image, and
 // requireTools skips them by name rather than letting the first pvcreate fail as
 // though the layer under test were wrong.
@@ -51,10 +51,16 @@ import (
 // should is a question for the image, not for this suite.
 const stackShellImage = "quay.io/simplyblock-io/spdkcsi:v26.3.0"
 
-// stackTools are the binaries the on-node suite cannot run without. They are
-// checked before anything is built or copied, so a missing one reads as a
-// missing one rather than as a layer that failed.
-var stackTools = []string{"nvme", "pvcreate", "vgcreate", "lvcreate", "mkfs.ext4", "mount", "blockdev"}
+// stackCoreTools are what no plan can run without: the fabric layer shells out
+// to nvme-cli, and the filesystem layer to mkfs and mount. An image missing one
+// of these can exercise nothing, so the suite skips entirely.
+var stackCoreTools = []string{"nvme", "blkid", "blockdev", "mkfs.ext4", "mount", "umount", "mountpoint"}
+
+// stackLVMTools are what only the two LVM layers need. They are separate because
+// no published driver image carries them, and folding them into the list above
+// would skip the raw block and plain plans as well, which need none of them.
+// Half a suite that runs is worth more than a whole one that never does.
+var stackLVMTools = []string{"pvcreate", "vgcreate", "lvcreate", "dmsetup"}
 
 // The stack volume's identity, distinct from the other suites' so that a shared
 // snapshot can never confuse them.
@@ -109,7 +115,7 @@ func TestVolumeStackOnNode(t *testing.T) {
 		}
 	})
 
-	requireTools(ctx, t, sh)
+	withLVM := requireTools(ctx, t, sh)
 
 	// Two namespaces, because the striped plan is the one shape whose bottom
 	// layer takes more than one and the composite's ordering is what the record
@@ -134,6 +140,9 @@ func TestVolumeStackOnNode(t *testing.T) {
 		"SB_TARGET2_PORT": strconv.Itoa(stackPort2),
 		"SB_TARGET2_NSID": "1",
 	}
+	if !withLVM {
+		env["SB_NO_LVM"] = "1"
+	}
 
 	out, err := sh.Run(ctx, exportEnv(env)+stackRemotePath+" -test.v -test.timeout=30m")
 	t.Logf("on-node suite output:\n%s", out)
@@ -154,13 +163,29 @@ func stackImage() string {
 	return stackShellImage
 }
 
-// requireTools fails early when the image is missing something the layers shell
-// out to. Without it the first missing binary surfaces as a layer error deep in
-// the on-node run, which reads as a defect in the code under test.
-func requireTools(ctx context.Context, t *testing.T, sh *fabric.Shell) {
+// requireTools checks the image before anything is built or copied, and reports
+// whether the LVM plans can run. Without it the first missing binary surfaces as
+// a layer error deep in the on-node run, which reads as a defect in the code
+// under test rather than as an image that was never going to work.
+func requireTools(ctx context.Context, t *testing.T, sh *fabric.Shell) bool {
+	t.Helper()
+	if missing := absentTools(ctx, t, sh, stackCoreTools); len(missing) > 0 {
+		t.Skipf("the shell image %s is missing %v, and every plan shells out to them; "+
+			"set SB_STACK_IMAGE to an image that carries them", stackImage(), missing)
+	}
+	if missing := absentTools(ctx, t, sh, stackLVMTools); len(missing) > 0 {
+		t.Logf("the shell image %s is missing %v, so the plans carrying LVM layers skip; "+
+			"the rest of the stack still runs", stackImage(), missing)
+		return false
+	}
+	return true
+}
+
+// absentTools is which of these the image does not carry.
+func absentTools(ctx context.Context, t *testing.T, sh *fabric.Shell, tools []string) []string {
 	t.Helper()
 	var missing []string
-	for _, tool := range stackTools {
+	for _, tool := range tools {
 		out, err := sh.Run(ctx, "command -v "+shellValue(tool)+" || true")
 		if err != nil {
 			t.Fatalf("look for %s on %s: %v", tool, sh.Node(), err)
@@ -169,10 +194,7 @@ func requireTools(ctx context.Context, t *testing.T, sh *fabric.Shell) {
 			missing = append(missing, tool)
 		}
 	}
-	if len(missing) > 0 {
-		t.Skipf("the shell image %s is missing %v, and the stack shells out to every one of them; "+
-			"set SB_STACK_IMAGE to an image that carries them", stackImage(), missing)
-	}
+	return missing
 }
 
 // publishNamespace creates one nvmet subsystem with a single namespace behind
