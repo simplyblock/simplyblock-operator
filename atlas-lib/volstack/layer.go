@@ -206,6 +206,18 @@ type Recorder interface {
 	Params() any
 }
 
+// Composite is implemented by a fan-in layer that is assembled out of a sub-plan,
+// which today is the layer holding a striped volume's several namespaces.
+//
+// The runner asks for the sub-plan in order to record it, and the record carries
+// it as a field of its own rather than inside the layer's parameters because the
+// order is the runner's concern: a stripe assembled over the same members in a
+// different order is a different device, and the order cannot be recovered from
+// a set. Running the members is still the composite's own business.
+type Composite interface {
+	Members() Plan
+}
+
 // Plan is a volume's stack, bottom layer first. Up walks it forward and Down
 // walks it back, which is most of why the order is recorded rather than
 // re-derived from a StorageClass that may have been edited since.

@@ -251,6 +251,15 @@ func recordFor(handle string, plan Plan) (Record, error) {
 				entry.Params = raw
 			}
 		}
+		// A fan-in layer's sub-plan is recorded in order, because a stripe
+		// assembled over the same members in another order is another device.
+		if composite, ok := layer.(Composite); ok {
+			sub, err := recordFor(handle, composite.Members())
+			if err != nil {
+				return Record{}, fmt.Errorf("volstack: record the members of %s: %w", layer.Name(), err)
+			}
+			entry.Members = sub.Plan
+		}
 		rec.Plan = append(rec.Plan, entry)
 	}
 	if len(rec.Plan) == 0 {
