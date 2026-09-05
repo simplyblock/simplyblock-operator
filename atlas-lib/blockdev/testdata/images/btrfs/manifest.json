@@ -1,0 +1,15 @@
+{
+  "name": "btrfs",
+  "tool": "mkfs.btrfs",
+  "tool_version": "mkfs.btrfs, part of btrfs-progs v6.6.3",
+  "command": "mkfs.btrfs -q -f",
+  "device_size": 268435456,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:43Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop15 UUID=1492dcf2-e666-4e40-a9f2-b628bb521a56 UUID_SUB=a6cf9493-3f47-4457-9478-237dcb776dac FSBLOCKSIZE=4096 BLOCK_SIZE=4096 FSLASTBLOCK=65536 FSSIZE=268435456 TYPE=btrfs USAGE=filesystem",
+  "head_sha256": "f68beb965e043a47af7234dac8ff63c42053839908bc4fbf6c878b0622134b38",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}

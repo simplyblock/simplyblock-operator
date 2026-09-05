@@ -1,0 +1,15 @@
+{
+  "name": "xfs",
+  "tool": "mkfs.xfs",
+  "tool_version": "mkfs.xfs version 6.6.0",
+  "command": "mkfs.xfs -q -f",
+  "device_size": 536870912,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:35Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop4 UUID=6d464707-597a-4b9f-96b7-525e58f0140a FSSIZE=469762048 FSLASTBLOCK=131072 FSBLOCKSIZE=4096 BLOCK_SIZE=512 TYPE=xfs USAGE=filesystem",
+  "head_sha256": "dae76ae281e1ea8005802e204ce59253c7b1e0eeb371486cc3bac7577c77c9ba",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}

@@ -14,6 +14,8 @@
 //	nvme            Discover and look up local NVMe controllers and namespaces.
 //	nvmeof          Connect and disconnect NVMe-oF (TCP) targets.
 //	nqn             Build and parse NVMe Qualified Names.
+//	blockdev        What a Linux block device is, and what it carries: the
+//	                reading a formatting decision rests on.
 //	lvm             Run Linux LVM commands scoped to a device, and answer
 //	                content-based identity questions about them.
 //	lvol            Logical-volume identity, and lvol -> NVMe device mapping.
