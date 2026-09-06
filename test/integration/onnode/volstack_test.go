@@ -18,6 +18,7 @@ package onnode
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"path/filepath"
@@ -94,19 +95,17 @@ func newHarness(t *testing.T) *harness {
 	}
 }
 
-// volumeScope reduces a case's name to something a volume group can be named
-// after: LVM takes letters, digits, and a few marks, and nothing else.
+// volumeScope reduces a case's name to something short enough to name a volume
+// after.
+//
+// Short because LVM refuses a volume group and a logical volume whose names
+// together run past 128 characters, and a case name spelled out in both halves
+// of that reaches 170. A digest rather than a truncation, because the cases that
+// have to be told apart are exactly the ones whose names begin alike.
 func volumeScope(name string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + ('a' - 'A')
-		default:
-			return '-'
-		}
-	}, name)
+	digest := fnv.New32a()
+	_, _ = digest.Write([]byte(name))
+	return fmt.Sprintf("%08x", digest.Sum32())
 }
 
 func readTarget(t *testing.T, prefix string) Target {

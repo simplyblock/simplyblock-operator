@@ -140,10 +140,15 @@ func TestGrowExtend(t *testing.T) {
 	// onto the size it already had and report success.
 	h.awaitLargerMembers(ctx, t, staged.DeviceBytes, grownMembers(len(h.targets)))
 
+	// Registered before the expand rather than after it. A case that expects the
+	// expand to be refused leaves the stack up otherwise, and a mount nothing
+	// released holds the container open long enough that deleting it times out,
+	// which fails a suite whose cases all passed.
+	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
+
 	if err := h.runner().Grow(ctx, plan); err != nil {
 		t.Fatalf("grow the stack: %v", err)
 	}
-	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
 
 	grown := filesystemBytes(t, h.volume.StagingPath)
 	if grown <= staged.FilesystemBytes {
