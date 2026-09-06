@@ -52,8 +52,10 @@ type ContentReader interface {
 
 // FilesystemConfig is what a filesystem layer is built with.
 type FilesystemConfig struct {
-	// FsType is the filesystem to create on a blank device. What is already on
-	// a device is mounted as what it is, whatever this says.
+	// FsType is the filesystem this volume is. It decides what a blank device is
+	// formatted as, and it is also the only filesystem the layer will mount: a
+	// device carrying another is refused, because neither reformatting it nor
+	// serving what is on it is safe.
 	FsType string
 
 	// StagingPath is where the filesystem is mounted.
@@ -71,7 +73,8 @@ type FilesystemConfig struct {
 	Content ContentReader
 }
 
-// Filesystem formats a blank device and mounts what is on any other.
+// Filesystem formats a blank device, mounts one already carrying the filesystem
+// the volume is, and refuses every other device.
 type Filesystem struct {
 	cfg FilesystemConfig
 }
@@ -94,10 +97,9 @@ func (f *Filesystem) Observe(ctx context.Context, below volstack.Artifact) (vols
 	return state, own, err
 }
 
-// observe is Observe plus the reading it decided on, which Ensure needs in order
-// to mount a device as the filesystem that is actually on it. Keeping them in
-// one call is what makes a stage read the device once rather than twice, and on
-// a degraded device a probe is the expensive thing in the whole path.
+// observe is Observe plus the reading it decided on. Keeping them in one call is
+// what makes a stage read the device once rather than twice, and on a degraded
+// device a probe is the expensive thing in the whole path.
 func (f *Filesystem) observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, blockdev.Reading, volstack.Artifact, error) {
@@ -136,8 +138,8 @@ func (f *Filesystem) observe(
 	}
 }
 
-// Ensure formats a blank device and mounts whatever is there, and does nothing
-// at all to one already mounted.
+// Ensure formats a blank device, mounts one already carrying this volume's
+// filesystem, and does nothing at all to one already mounted.
 func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
 	dev, ok := below.Device()
 	if !ok {
@@ -169,7 +171,7 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 		}
 	}
 
-	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, fsType, mountFlags(fsType, f.cfg.MountFlags)); err != nil {
+	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, fsType, f.mountFlags()); err != nil {
 		return volstack.Artifact{}, fmt.Errorf("filesystem: mount %s at %s as %s: %w",
 			dev.Path, f.cfg.StagingPath, fsType, err)
 	}
@@ -264,8 +266,7 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 		return err
 	}
 
-	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, f.cfg.FsType,
-		mountFlags(f.cfg.FsType, f.cfg.MountFlags)); err != nil {
+	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, f.cfg.FsType, f.mountFlags()); err != nil {
 		return fmt.Errorf("filesystem: remount %s at %s: %w", dev.Path, f.cfg.StagingPath, err)
 	}
 	return nil
@@ -325,33 +326,23 @@ func (f *Filesystem) read(ctx context.Context, below volstack.Artifact) (blockde
 	return reading, nil
 }
 
-// formatOptions are the caller's, plus stripe alignment when the layer below
-// reports geometry to align to.
-//
-// A virtualized device reports none, and the hints computed for the backend
-// underneath it describe nothing once its blocks are relocated, so passing them
-// there is misleading rather than merely useless.
+// formatOptions are the volume's own, plus whatever the filesystem being created
+// asks for on the geometry below it.
 func (f *Filesystem) formatOptions(below volstack.Artifact) []string {
-	opts := append([]string{}, f.cfg.FormatOptions...)
-	if !below.Geometry.Known() || f.cfg.FsType != "xfs" {
-		return opts
-	}
-	return append(opts,
-		"-d", fmt.Sprintf("su=%d,sw=%d", below.Geometry.ChunkBytes, below.Geometry.Stripes),
-		"-l", fmt.Sprintf("su=%d", below.Geometry.ChunkBytes))
+	return f.strategy().FormatOptions(append([]string{}, f.cfg.FormatOptions...), below.Geometry)
 }
 
-// mountFlags are the volume's, plus the ones the filesystem itself requires.
-//
-// XFS refuses to mount two filesystems carrying the same UUID, which a volume
-// and its clone or restored snapshot do, so nouuid is what lets both be mounted
-// on one node.
-func mountFlags(fsType string, flags []string) []string {
-	out := append([]string{}, flags...)
-	if fsType == "xfs" {
-		out = append(out, "nouuid")
-	}
-	return out
+// mountFlags are the volume's own, plus whatever the filesystem requires in
+// order to mount at all.
+func (f *Filesystem) mountFlags() []string {
+	return f.strategy().MountFlags(append([]string{}, f.cfg.MountFlags...))
+}
+
+// strategy is the per-filesystem half of this layer, for the filesystem the plan
+// asked for. That is also the only one the layer acts on, since a device
+// carrying another is refused rather than reconciled.
+func (f *Filesystem) strategy() FilesystemLayerStrategy {
+	return FilesystemStrategyFor(f.cfg.FsType)
 }
 
 // deviceOf names the device below for an error message, without asserting there
