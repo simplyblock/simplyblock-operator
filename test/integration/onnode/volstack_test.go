@@ -121,12 +121,21 @@ func requireLVM(t *testing.T) {
 // because the commands are right: a compute node cannot see a storage node's
 // backing store, and the duplicate exists only because this test collapses the
 // two onto one machine.
+//
+// The narrowing names what to accept rather than what to reject. One block
+// device answers to several paths, so excluding the backing store by name leaves
+// it reachable under the next one: rejecting /dev/loop2 left LVM finding the very
+// same volume at /dev/disk/by-diskseq/15. What a plan may build on is knowable
+// and short, and everything outside it is somebody else's.
 func hideTheTargetBacking(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
+	// The namespaces the fabric layer attaches, and the device-mapper nodes the
+	// volume layer creates over them. Nothing else on this host belongs to a
+	// volume under test.
 	const conf = `devices {
-	filter = [ "r|^/dev/loop|", "a|.*|" ]
-	global_filter = [ "r|^/dev/loop|", "a|.*|" ]
+	filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/dm-[0-9]+$|", "r|.*|" ]
+	global_filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/dm-[0-9]+$|", "r|.*|" ]
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "lvm.conf"), []byte(conf), 0o600); err != nil {
