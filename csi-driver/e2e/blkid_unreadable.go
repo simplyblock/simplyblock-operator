@@ -166,8 +166,9 @@ func pvcAnnotation(f *framework.Framework, ns, pvcName, key string) string {
 // replacement pod's staging runs while the fabric is still down.
 func forceDeletePod(f *framework.Framework, w managedWorkload) {
 	zero := int64(0)
+	immediately := metav1.DeleteOptions{GracePeriodSeconds: &zero}
 	framework.ExpectNoError(
-		f.ClientSet.CoreV1().Pods(w.ns).Delete(context.Background(), w.pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero}),
+		f.ClientSet.CoreV1().Pods(w.ns).Delete(context.Background(), w.pod.Name, immediately),
 		"force-delete pod %s", w.pod.Name,
 	)
 }
