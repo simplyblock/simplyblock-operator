@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -105,8 +106,73 @@ func (p *nodePool) acquire(n int) []string {
 	return taken
 }
 
-// release puts nodes back and wakes whoever is waiting for them.
-func (p *nodePool) release(nodes []string) {
+// scrubScript returns a node to the state a lease expects to find it in.
+//
+// The expensive leftover is a controller whose target has gone away. Its block
+// device stays present and every read on it blocks, so the next spec's `blkid`,
+// `pvscan`, or `lvm` — every tool that enumerates devices rather than opening one
+// by name — blocks with it and is eventually killed. That is invisible while each
+// spec has a cluster to itself and fatal the moment two of them share a node.
+//
+// Nothing here may enumerate block devices, which rules out `vgs`, `pvscan`, and
+// `blkid`: those are the commands the wedge hangs, so a scrub built on them hangs
+// exactly when it is needed. `/proc/mounts` and `dmsetup ls` read kernel tables
+// instead and answer whether or not a device behind them can be read, and once
+// the controllers are gone there is no volume group left on the node to remove.
+//
+// Everything is guarded and best-effort: the pool runs it in whichever shells a
+// node has, and the images differ in which tools they carry.
+const scrubScript = `
+set +e
+for m in $(awk '$1 ~ "^/dev/(mapper/vol-|nvme)" {print $2}' /proc/mounts); do
+  umount -f "$m" 2>/dev/null && echo "scrub: unmounted $m"
+done
+if command -v dmsetup >/dev/null 2>&1; then
+  for dm in $(dmsetup ls 2>/dev/null | awk '$1 ~ "^vol-" {print $1}'); do
+    dmsetup remove -f "$dm" >/dev/null 2>&1 && echo "scrub: removed device-mapper node $dm"
+  done
+fi
+if command -v nvme >/dev/null 2>&1; then
+  left=$(nvme list-subsys 2>/dev/null | grep -c "NQN=")
+  if [ "${left:-0}" -gt 0 ]; then
+    nvme disconnect-all >/dev/null 2>&1
+    echo "scrub: disconnected ${left} leftover subsystem(s)"
+  fi
+fi
+`
+
+// scrub cleans one node through every shell the pool holds for it. What it had
+// to clean is logged rather than swallowed: a spec that leaves something behind
+// is a defect in that spec, and the next run should name it.
+func (p *nodePool) scrub(ctx context.Context, t *testing.T, node string) {
+	t.Helper()
+	p.mu.Lock()
+	shells := make([]*fabric.Shell, 0, len(p.shells))
+	for key, sh := range p.shells {
+		if strings.HasSuffix(key, "\x00"+node) {
+			shells = append(shells, sh)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, sh := range shells {
+		out, err := sh.Run(ctx, scrubScript)
+		if err != nil {
+			t.Logf("scrub %s: %v\n%s", node, err, out)
+			continue
+		}
+		if trimmed := strings.TrimSpace(out); trimmed != "" {
+			t.Logf("%s was not left clean by %s:\n%s", node, t.Name(), trimmed)
+		}
+	}
+}
+
+// release scrubs the nodes, puts them back, and wakes whoever is waiting.
+func (p *nodePool) release(ctx context.Context, t *testing.T, nodes []string) {
+	t.Helper()
+	for _, node := range nodes {
+		p.scrub(ctx, t, node)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.free = append(p.free, nodes...)
@@ -179,7 +245,13 @@ func leaseNodes(ctx context.Context, t *testing.T, n int) (*cluster.Cluster, []s
 		t.Fatalf("bring up the shared cluster: %v", err)
 	}
 	nodes := shared.acquire(n)
-	t.Cleanup(func() { shared.release(nodes) })
+	t.Cleanup(func() {
+		// Its own context and its own deadline: the spec's is canceled by the time
+		// cleanup runs, and a node put back dirty is the next spec's failure.
+		clean, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+		shared.release(clean, t, nodes)
+	})
 	return c, nodes
 }
 
