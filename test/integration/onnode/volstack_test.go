@@ -57,7 +57,11 @@ func newHarness(t *testing.T) *harness {
 		targets = append(targets, readTarget(t, "SB_TARGET2"))
 	}
 
-	records := t.TempDir()
+	// Overridable because a case spanning more than one run of this binary has to
+	// find the same stack again, and a directory this process made goes away with
+	// it. The mount itself is the node's and outlives either way.
+	records := envOr("SB_RECORDS", t.TempDir())
+	staging := envOr("SB_STAGING_PATH", filepath.Join(t.TempDir(), "staging"))
 	uuid := envOr("SB_VOLUME_UUID", "00000000-0000-0000-0000-000000000000")
 	return &harness{
 		t:       t,
@@ -65,7 +69,7 @@ func newHarness(t *testing.T) *harness {
 		targets: targets,
 		volume: Volume{
 			UUID:        uuid,
-			StagingPath: filepath.Join(t.TempDir(), "staging"),
+			StagingPath: staging,
 			FsType:      envOr("SB_FSTYPE", "ext4"),
 		},
 		records: records,
