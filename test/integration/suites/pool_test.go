@@ -141,9 +141,19 @@ if command -v nvme >/dev/null 2>&1; then
 fi
 `
 
-// scrub cleans one node through every shell the pool holds for it. What it had
-// to clean is logged rather than swallowed: a spec that leaves something behind
-// is a defect in that spec, and the next run should name it.
+// scrub cleans one node through every shell the pool holds for it, and logs what
+// it had to clean rather than swallowing it.
+//
+// A connected subsystem in that log is expected rather than a leak. `Release` on
+// the fabric layer detaches the device and disconnects only a subsystem that
+// cannot be shared, and `nvme.Subsystem.IsMultiNamespace` decides that from the
+// MNAN field of Identify Controller. nvmet advertises room for many namespaces
+// whether or not it holds them, so every target this suite publishes reads as
+// shareable and is deliberately left connected — §8's co-tenant policy, working
+// as designed against a target that says it could carry co-tenants. Reaping such
+// a subsystem is an explicit act, and on a shared node the scrub is what performs
+// it. A mount or a device-mapper node in that log is a different matter and does
+// mean the spec above left something behind.
 func (p *nodePool) scrub(ctx context.Context, t *testing.T, node string) {
 	t.Helper()
 	p.mu.Lock()
@@ -162,7 +172,7 @@ func (p *nodePool) scrub(ctx context.Context, t *testing.T, node string) {
 			continue
 		}
 		if trimmed := strings.TrimSpace(out); trimmed != "" {
-			t.Logf("%s was not left clean by %s:\n%s", node, t.Name(), trimmed)
+			t.Logf("scrubbed %s after %s:\n%s", node, t.Name(), trimmed)
 		}
 	}
 }
