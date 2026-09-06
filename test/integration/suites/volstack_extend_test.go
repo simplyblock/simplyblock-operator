@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simplyblock/simplyblock-operator/test/integration/cluster"
 	"github.com/simplyblock/simplyblock-operator/test/integration/fabric"
 )
 
@@ -37,34 +36,11 @@ func TestVolumeStackExtendsOntoNewMembers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{Name: clusterNameFor("extend")})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		if destroyErr := c.Destroy(context.WithoutCancel(ctx)); destroyErr != nil {
-			t.Errorf("destroy cluster: %v", destroyErr)
-		}
-	})
-	if err = c.WaitNodesReady(ctx, 1, 5*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) == 0 {
-		t.Fatalf("list nodes: %v (%v)", err, nodes)
-	}
+	c, nodes := leaseNodes(ctx, t, 1)
 	node := nodes[0]
 	ip := internalIP(ctx, t, c, node)
 
-	sh, err := fabric.NewShell(ctx, c, node, fabric.WithImage(stackImage()))
-	if err != nil {
-		t.Fatalf("start a shell on %s: %v", node, err)
-	}
-	t.Cleanup(func() {
-		if closeErr := sh.Close(context.WithoutCancel(ctx)); closeErr != nil {
-			t.Errorf("close the shell on %s: %v", node, closeErr)
-		}
-	})
+	sh := leaseShell(ctx, t, node, stackImage())
 
 	if !requireTools(ctx, t, sh) {
 		t.Skipf("the shell image %s carries no LVM tooling", stackImage())

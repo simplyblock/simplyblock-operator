@@ -7,9 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/simplyblock/simplyblock-operator/test/integration/cluster"
-	"github.com/simplyblock/simplyblock-operator/test/integration/fabric"
 )
 
 // TestSmoke_NodeCanHostATarget is the harness's own test. Everything else in this
@@ -26,32 +23,10 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{Name: clusterName()})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		// Its own context: the test's is canceled by the time cleanup runs, and
-		// a cluster left behind holds memory and a bridge for the whole run.
-		if err := c.Destroy(context.WithoutCancel(ctx)); err != nil {
-			t.Errorf("destroy cluster: %v", err)
-		}
-	})
-
-	if err := c.WaitNodesReady(ctx, 1, 5*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) == 0 {
-		t.Fatalf("list nodes: %v (%v)", err, nodes)
-	}
+	c, nodes := leaseNodes(ctx, t, 1)
 	t.Logf("cluster up with node %s", nodes[0])
 
-	sh, err := fabric.NewShell(ctx, c, nodes[0])
-	if err != nil {
-		t.Fatalf("node shell: %v", err)
-	}
-	t.Cleanup(func() { _ = sh.Close(context.WithoutCancel(ctx)) })
+	sh := leaseShell(ctx, t, nodes[0], "")
 
 	// The machine config asks for these at boot. Reading /proc/modules rather
 	// than modprobing proves the patch worked, not merely that the modules exist.

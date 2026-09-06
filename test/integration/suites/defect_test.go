@@ -24,6 +24,10 @@ const (
 	testNQN    = "nqn.2023-04.io.simplyblock:integration:" + volumeUUID
 	testSerial = "ha"
 	testPort   = 4420
+	// This suite's own port ID. An nvmet port is a directory named after its ID,
+	// so two specs sharing a node and an ID configure one port between them, and
+	// whichever finishes first takes it away from the other.
+	testPortID = 10
 )
 
 // TestDefect_ControllerNotContributing forces the defect that costs the most to
@@ -44,42 +48,16 @@ func TestDefect_ControllerNotContributing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{
-		Name:    clusterNameFor("cnc"),
-		Workers: 1,
-	})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := c.Destroy(context.WithoutCancel(ctx)); err != nil {
-			t.Errorf("destroy cluster: %v", err)
-		}
-	})
-
-	if err := c.WaitNodesReady(ctx, 2, 5*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) < 2 {
-		t.Fatalf("need two nodes, got %v (%v)", nodes, err)
-	}
+	// Two nodes, because the defect is two targets of one subsystem answering
+	// from separate kernels.
+	c, nodes := leaseNodes(ctx, t, 2)
 	ips := nodeIPs(ctx, t, c)
 	serving, silent := nodes[0], nodes[1]
 	t.Logf("serving target on %s (%s), silent target on %s (%s)",
 		serving, ips[serving], silent, ips[silent])
 
-	shServing, err := fabric.NewShell(ctx, c, serving)
-	if err != nil {
-		t.Fatalf("node shell on %s: %v", serving, err)
-	}
-	t.Cleanup(func() { _ = shServing.Close(context.WithoutCancel(ctx)) })
-
-	shSilent, err := fabric.NewShell(ctx, c, silent)
-	if err != nil {
-		t.Fatalf("node shell on %s: %v", silent, err)
-	}
-	t.Cleanup(func() { _ = shSilent.Close(context.WithoutCancel(ctx)) })
+	shServing := leaseShell(ctx, t, serving, "")
+	shSilent := leaseShell(ctx, t, silent, "")
 
 	// Disjoint controller-ID ranges. Controller IDs are unique within a
 	// subsystem rather than within a target, so two targets left on nvmet's
@@ -90,7 +68,7 @@ func TestDefect_ControllerNotContributing(t *testing.T) {
 		Model:     volumeUUID,
 		Serial:    testSerial,
 		CntlIDMin: 1, CntlIDMax: 999,
-		Addr: ips[serving], Port: testPort, PortID: 1,
+		Addr: ips[serving], Port: testPort, PortID: testPortID,
 		ANAState: "optimized",
 	})
 	if err != nil {
@@ -110,7 +88,7 @@ func TestDefect_ControllerNotContributing(t *testing.T) {
 		Model:     volumeUUID,
 		Serial:    testSerial,
 		CntlIDMin: 1000, CntlIDMax: 1999,
-		Addr: ips[silent], Port: testPort, PortID: 1,
+		Addr: ips[silent], Port: testPort, PortID: testPortID,
 		ANAState: "optimized",
 	})
 	if err != nil {
@@ -331,10 +309,4 @@ func nodeIPs(ctx context.Context, t *testing.T, c *cluster.Cluster) map[string]s
 		t.Fatalf("want an internal IP for each node, got %v from:\n%s", ips, out)
 	}
 	return ips
-}
-
-// clusterNameFor keeps one spec's cluster from colliding with another's, since
-// two clusters of one name cannot coexist on a host.
-func clusterNameFor(suffix string) string {
-	return clusterName() + "-" + suffix
 }

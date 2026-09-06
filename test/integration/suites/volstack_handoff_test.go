@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simplyblock/simplyblock-operator/test/integration/cluster"
 	"github.com/simplyblock/simplyblock-operator/test/integration/fabric"
 )
 
@@ -39,27 +38,9 @@ func TestVolumeStackMovesBetweenHosts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{
-		Name: clusterNameFor("handoff"),
-		// A worker, because a volume cannot be handed anywhere on a single node
-		// and the point of the case is the host that has never seen it.
-		Workers: 1,
-	})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		if destroyErr := c.Destroy(context.WithoutCancel(ctx)); destroyErr != nil {
-			t.Errorf("destroy cluster: %v", destroyErr)
-		}
-	})
-	if err = c.WaitNodesReady(ctx, 2, 8*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) < 2 {
-		t.Fatalf("list nodes: %v (%v)", err, nodes)
-	}
+	// Two nodes, because a volume cannot be handed anywhere on a single one and
+	// the point of the case is the host that has never seen it.
+	c, nodes := leaseNodes(ctx, t, 2)
 	serving, receiving := nodes[0], nodes[1]
 	ip := internalIP(ctx, t, c, serving)
 
@@ -68,16 +49,7 @@ func TestVolumeStackMovesBetweenHosts(t *testing.T) {
 	// which is what every node in a real cluster does.
 	shells := map[string]*fabric.Shell{}
 	for _, node := range []string{serving, receiving} {
-		sh, shellErr := fabric.NewShell(ctx, c, node, fabric.WithImage(stackImage()))
-		if shellErr != nil {
-			t.Fatalf("start a shell on %s: %v", node, shellErr)
-		}
-		t.Cleanup(func() {
-			if closeErr := sh.Close(context.WithoutCancel(ctx)); closeErr != nil {
-				t.Errorf("close the shell on %s: %v", node, closeErr)
-			}
-		})
-		shells[node] = sh
+		shells[node] = leaseShell(ctx, t, node, stackImage())
 	}
 
 	if !requireTools(ctx, t, shells[serving]) {

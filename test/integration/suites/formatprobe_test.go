@@ -33,7 +33,7 @@ const (
 	probeVolumeUUID = "9d2e5a71-6c48-4f0b-8e37-1a5b9c4d2e60"
 	probeBlankUUID  = "5f1a8c3d-2b7e-4a90-b6c4-8d0e7f3a1b52"
 	probeNQN        = "nqn.2023-04.io.simplyblock:integration:" + probeVolumeUUID
-	probePort       = 4420
+	probePort       = 4425
 )
 
 // TestProbe_PathlessDeviceReadsAsBlank reproduces the device state the
@@ -56,31 +56,11 @@ func TestProbe_PathlessDeviceReadsAsBlank(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{Name: clusterNameFor("probe")})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := c.Destroy(context.WithoutCancel(ctx)); err != nil {
-			t.Errorf("destroy cluster: %v", err)
-		}
-	})
-
-	if err := c.WaitNodesReady(ctx, 1, 5*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) == 0 {
-		t.Fatalf("list nodes: %v (%v)", err, nodes)
-	}
+	c, nodes := leaseNodes(ctx, t, 1)
 	node := nodes[0]
 	ip := internalIP(ctx, t, c, node)
 
-	sh, err := fabric.NewShell(ctx, c, node, fabric.WithImage(probeShellImage))
-	if err != nil {
-		t.Fatalf("node shell: %v", err)
-	}
-	t.Cleanup(func() { _ = sh.Close(context.WithoutCancel(ctx)) })
+	sh := leaseShell(ctx, t, node, probeShellImage)
 
 	tgt, err := fabric.NewTarget(ctx, sh, fabric.TargetSpec{
 		NQN:       probeNQN,

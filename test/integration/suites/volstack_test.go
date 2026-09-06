@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simplyblock/simplyblock-operator/test/integration/cluster"
 	"github.com/simplyblock/simplyblock-operator/test/integration/fabric"
 )
 
@@ -85,43 +84,23 @@ func TestVolumeStackOnNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	c, err := cluster.Create(ctx, cluster.Config{Name: clusterNameFor("volstack")})
-	if err != nil {
-		t.Fatalf("create cluster: %v", err)
-	}
-	t.Cleanup(func() {
-		if destroyErr := c.Destroy(context.WithoutCancel(ctx)); destroyErr != nil {
-			t.Errorf("destroy cluster: %v", destroyErr)
-		}
-	})
-
-	if err = c.WaitNodesReady(ctx, 1, 5*time.Minute); err != nil {
-		t.Fatalf("nodes never became ready: %v", err)
-	}
-	nodes, err := c.Nodes(ctx)
-	if err != nil || len(nodes) == 0 {
-		t.Fatalf("list nodes: %v (%v)", err, nodes)
-	}
+	c, nodes := leaseNodes(ctx, t, 1)
 	node := nodes[0]
 	ip := internalIP(ctx, t, c, node)
 
-	sh, err := fabric.NewShell(ctx, c, node, fabric.WithImage(stackImage()))
-	if err != nil {
-		t.Fatalf("start a shell on %s: %v", node, err)
-	}
-	t.Cleanup(func() {
-		if closeErr := sh.Close(context.WithoutCancel(ctx)); closeErr != nil {
-			t.Errorf("close the shell on %s: %v", node, closeErr)
-		}
-	})
+	sh := leaseShell(ctx, t, node, stackImage())
 
 	withLVM := requireTools(ctx, t, sh)
 
 	// Two namespaces, because the striped plan is the one shape whose bottom
 	// layer takes more than one and the composite's ordering is what the record
 	// has to preserve.
-	first := publishNamespace(ctx, t, sh, stackNQN, ip, stackPort, 1)
-	second := publishNamespace(ctx, t, sh, stackNQN2, ip, stackPort2, 2)
+	// The port IDs are this suite's own. An nvmet port is a directory named after
+	// its ID, so two specs sharing a node and an ID would be configuring one port
+	// between them, and whichever finished first would take it away from the
+	// other. Ports and IDs are handed out per suite for that reason.
+	first := publishNamespace(ctx, t, sh, stackNQN, ip, stackPort, 20)
+	second := publishNamespace(ctx, t, sh, stackNQN2, ip, stackPort2, 21)
 
 	binary := buildOnNodeSuite(ctx, t)
 	if copyErr := c.CopyTo(ctx, fabric.Namespace, sh.Pod(), binary, stackRemotePath); copyErr != nil {
