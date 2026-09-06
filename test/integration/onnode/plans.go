@@ -119,22 +119,24 @@ func (n *node) Plain(t Target, v Volume) volstack.Plan {
 	return volstack.Plan{n.fabric(t), n.filesystem(v)}
 }
 
-// LVM is `fabric` → `lvmPV` → `lvmVolume` → `filesystem`, the shape a volume
-// with client-side dedup or compression takes. definition decides what the
-// logical volume is, so the linear and the VDO plans differ in it and in
-// nothing else.
+// LVM is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
+// `lvmLogicalVolume` → `filesystem`, the shape a volume with client-side dedup
+// or compression takes. definition decides what the logical volume is, so the
+// linear and the VDO plans differ in it and in nothing else.
 func (n *node) LVM(t Target, v Volume, definition lvm.LogicalVolumeDefinition, pool string) volstack.Plan {
 	return volstack.Plan{
 		n.fabric(t),
 		n.physicalVolume(v),
+		n.volumeGroup(v),
 		n.logicalVolume(v, definition, pool),
 		n.filesystem(v),
 	}
 }
 
-// Striped is `members(n)` → `lvmPV` → `lvmVolume(striped)` → `filesystem`, the
-// striped export's plan without the export on top. It is the only plan whose
-// bottom is not a single layer, which is the whole reason the composite exists.
+// Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
+// `lvmLogicalVolume(striped)` → `filesystem`, the striped export's plan without
+// the export on top. It is the only plan whose bottom is not a single layer,
+// which is the whole reason the composite exists.
 func (n *node) Striped(targets []Target, v Volume, definition lvm.LogicalVolumeDefinition) volstack.Plan {
 	members := make(volstack.Plan, 0, len(targets))
 	for _, t := range targets {
@@ -143,6 +145,7 @@ func (n *node) Striped(targets []Target, v Volume, definition lvm.LogicalVolumeD
 	return volstack.Plan{
 		layers.NewMembers(members),
 		n.physicalVolume(v),
+		n.volumeGroup(v),
 		n.logicalVolume(v, definition, ""),
 		n.filesystem(v),
 	}
@@ -157,8 +160,15 @@ func (n *node) physicalVolume(v Volume) volstack.Layer {
 	})
 }
 
+func (n *node) volumeGroup(v Volume) volstack.Layer {
+	return layers.NewLVMVolumeGroup(layers.LVMVolumeGroupConfig{
+		VolumeGroup: v.VolumeGroup(),
+		Manager:     n.manager,
+	})
+}
+
 func (n *node) logicalVolume(v Volume, definition lvm.LogicalVolumeDefinition, pool string) volstack.Layer {
-	return layers.NewLVMVolume(layers.LVMVolumeConfig{
+	return layers.NewLVMLogicalVolume(layers.LVMLogicalVolumeConfig{
 		VolumeGroup:   v.VolumeGroup(),
 		LogicalVolume: v.LogicalVolume(),
 		PoolName:      pool,

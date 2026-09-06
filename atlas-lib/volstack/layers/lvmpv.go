@@ -61,7 +61,7 @@ func NewLVMPhysicalVolume(cfg LVMPhysicalVolumeConfig) *LVMPhysicalVolume {
 }
 
 // Name is what the record calls this layer.
-func (l *LVMPhysicalVolume) Name() string { return "lvmPV" }
+func (l *LVMPhysicalVolume) Name() string { return "lvmPhysicalVolume" }
 
 // Observe reads the device below and reports what may be done to it.
 //
@@ -124,7 +124,7 @@ type labeling struct {
 // device instead is what failed such a plan before it labeled anything.
 func (l *LVMPhysicalVolume) survey(ctx context.Context, below volstack.Artifact) ([]labeling, error) {
 	if len(below.Devices) == 0 {
-		return nil, errors.New("lvmPV: the layer below exposes no device to label")
+		return nil, errors.New("lvmPhysicalVolume: the layer below exposes no device to label")
 	}
 
 	surveyed := make([]labeling, 0, len(below.Devices))
@@ -134,7 +134,7 @@ func (l *LVMPhysicalVolume) survey(ctx context.Context, below volstack.Artifact)
 		reading, err := l.cfg.Content.Read(ctx, dev)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"lvmPV: cannot read what %s carries, so it is not a device this may label: %w", dev.Path, err)
+				"lvmPhysicalVolume: cannot read what %s carries, so it is not a device this may label: %w", dev.Path, err)
 		}
 
 		switch {
@@ -150,7 +150,7 @@ func (l *LVMPhysicalVolume) survey(ctx context.Context, below volstack.Artifact)
 
 		default:
 			return nil, fmt.Errorf(
-				"lvmPV: refusing to label %s, which carries %s: %s", dev.Path, reading.Content, reading.Detail)
+				"lvmPhysicalVolume: refusing to label %s, which carries %s: %s", dev.Path, reading.Content, reading.Detail)
 		}
 	}
 	return surveyed, nil
@@ -165,7 +165,7 @@ func (l *LVMPhysicalVolume) identify(ctx context.Context, pv lvm.PhysicalVolume)
 	group, err := l.cfg.Manager.VolumeGroup(ctx, pv)
 	if err != nil {
 		return volstack.StateAbsent, fmt.Errorf(
-			"lvmPV: %s carries a label and its volume group cannot be read: %w", pv.DevicePath, err)
+			"lvmPhysicalVolume: %s carries a label and its volume group cannot be read: %w", pv.DevicePath, err)
 	}
 
 	switch group.Name {
@@ -199,7 +199,7 @@ func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact)
 
 		case volstack.StateAbsent:
 			if _, err := l.cfg.Manager.CreatePhysicalVolume(ctx, d.pv); err != nil {
-				return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
+				return volstack.Artifact{}, fmt.Errorf("lvmPhysicalVolume: %w", err)
 			}
 
 		case volstack.StateForeign:
@@ -209,13 +209,13 @@ func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact)
 			if _, err := l.cfg.Manager.ResolveClonedVolumeGroup(ctx, d.pv,
 				lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
 				l.cfg.PreserveLogicalVolumes...); err != nil {
-				return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
+				return volstack.Artifact{}, fmt.Errorf("lvmPhysicalVolume: %w", err)
 			}
 
 		case volstack.StatePartial, volstack.StateInactive:
 			// A label is written or it is not, so survey reports neither.
 			return volstack.Artifact{}, fmt.Errorf(
-				"lvmPV: %s reports %s, which a physical-volume label has no meaning for", d.pv.DevicePath, d.state)
+				"lvmPhysicalVolume: %s reports %s, which a physical-volume label has no meaning for", d.pv.DevicePath, d.state)
 		}
 	}
 
@@ -237,11 +237,11 @@ func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error { 
 // every one of them.
 func (l *LVMPhysicalVolume) Destroy(ctx context.Context, below volstack.Artifact) error {
 	if len(below.Devices) == 0 {
-		return errors.New("lvmPV: the layer below exposes no device to unlabel")
+		return errors.New("lvmPhysicalVolume: the layer below exposes no device to unlabel")
 	}
 	for _, dev := range below.Devices {
 		if err := l.cfg.Manager.RemovePhysicalVolume(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {
-			return fmt.Errorf("lvmPV: %w", err)
+			return fmt.Errorf("lvmPhysicalVolume: %w", err)
 		}
 	}
 	return nil

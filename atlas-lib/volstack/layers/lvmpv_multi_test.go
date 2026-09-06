@@ -1,6 +1,7 @@
 // What the physical-volume layer owes a plan that hands it several devices.
 //
-// A striped volume's plan is members(n) -> lvmPV -> lvmVolume, so this layer is
+// A striped volume's plan is members(n) -> lvmPhysicalVolume -> lvmVolumeGroup,
+// so this layer is
 // handed every namespace at once and the volume group above it is created over
 // all of them. Every other test in this package hands it one, which is why the
 // gap survived until the suite ran the LVM plans on a node.

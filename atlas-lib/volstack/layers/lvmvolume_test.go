@@ -1,9 +1,10 @@
-// What the volume layer has to guarantee.
+// What the logical-volume layer has to guarantee.
 //
-// It is the layer that both creates and activates, and the whole of its risk is
-// telling those apart. A volume group present but not mapped on this host is a
-// volume to reactivate; the same group read as absent is a volume to create, and
-// creating over the first destroys it.
+// The whole of its risk is telling a volume that exists from one that does not.
+// A volume present but not mapped on this host is one to reactivate; the same
+// volume read as absent is one to create, and creating over the first destroys
+// it. The group it lives in, and which members that group is made of, belong to
+// the layer below.
 
 package layers
 
@@ -20,7 +21,7 @@ import (
 // lvmVolumeFixture is the layer plus the commands it issued.
 type lvmVolumeFixture struct {
 	cmds  *lvmCommands
-	layer *LVMVolume
+	layer *LVMLogicalVolume
 }
 
 // newLVMVolume builds the layer over a fake LVM, told what the device reports.
@@ -34,7 +35,7 @@ func newLVMVolume(vg, lvs, attr string, def lvm.LogicalVolumeDefinition) *lvmVol
 	cmds.out["lvs:lv_attr"] = attr
 	return &lvmVolumeFixture{
 		cmds: cmds,
-		layer: NewLVMVolume(LVMVolumeConfig{
+		layer: NewLVMLogicalVolume(LVMLogicalVolumeConfig{
 			VolumeGroup:   testVG,
 			LogicalVolume: testLV,
 			Definition:    def,
@@ -49,7 +50,8 @@ func newLVMVolume(vg, lvs, attr string, def lvm.LogicalVolumeDefinition) *lvmVol
 // present is the lvs listing for a volume group holding this volume.
 func present() string { return "  " + testLV + "\n" }
 
-// A volume group nothing has created yet is the only state a vgcreate may run in.
+// A group holding no volume of ours is the only state an lvcreate may run in.
+// The group itself is already there by then, made by the layer below.
 func TestLVMVolumeAbsentCreates(t *testing.T) {
 	f := newLVMVolume("\n", "", "", lvm.LogicalVolumeDefinition{})
 
@@ -67,8 +69,11 @@ func TestLVMVolumeAbsentCreates(t *testing.T) {
 	if _, err := f.layer.Ensure(context.Background(), belowArtifact()); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	if !f.cmds.ran("vgcreate") || !f.cmds.ran("lvcreate") {
-		t.Fatalf("a create did not run both halves:\n%s", f.cmds.issued())
+	if !f.cmds.ran("lvcreate") {
+		t.Fatalf("the volume was never created:\n%s", f.cmds.issued())
+	}
+	if f.cmds.ran("vgcreate") {
+		t.Fatalf("it made a group, which the layer below owns:\n%s", f.cmds.issued())
 	}
 }
 
@@ -194,57 +199,40 @@ func TestLVMVolumeNeverCreatesOnAFailedProbe(t *testing.T) {
 	}
 }
 
-// Release deactivates and keeps the data. It is what an unstage calls, and an
-// unstage fires on an ordinary pod restart.
-func TestLVMVolumeReleaseDeactivates(t *testing.T) {
+// Release does nothing here. What holds a logical volume on a host is its group
+// being mapped there, and the group is the layer below: a teardown walks down
+// through both, so the hold is given up either way, and giving it up here as
+// well would take everything else in the group down with this one volume.
+func TestLVMVolumeReleaseLeavesTheGroupToTheLayerBelow(t *testing.T) {
 	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-a-----\n", lvm.LogicalVolumeDefinition{})
 
 	if err := f.layer.Release(context.Background(), belowArtifact()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if !f.cmds.ran("vgchange") {
-		t.Errorf("the volume group was not deactivated:\n%s", f.cmds.issued())
-	}
-	for _, forbidden := range []string{"lvremove", "vgremove", "pvremove"} {
-		if f.cmds.ran(forbidden) {
-			t.Fatalf("Release ran %s, which an unstage must never do:\n%s", forbidden, f.cmds.issued())
-		}
+	if len(f.cmds.calls) != 0 {
+		t.Errorf("Release ran something, and an unstage reaches it:\n%s", f.cmds.issued())
 	}
 }
 
-// When the backing device is gone, LVM can no longer read the metadata it needs
-// to deactivate, and a layer with no force path strands the stack it sits on.
-func TestLVMVolumeReleaseFallsBackToDeviceMapper(t *testing.T) {
-	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-a-----\n", lvm.LogicalVolumeDefinition{})
-	f.cmds.err["vgchange"] = errors.New("Volume group vol-... not found")
-
-	if err := f.layer.Release(context.Background(), belowArtifact()); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	if !f.cmds.ran("dmsetup") {
-		t.Fatalf("the force path never ran, so a dead stack has nothing left to clear it:\n%s", f.cmds.issued())
-	}
-}
-
-// Destroy removes the volume and its data, in the order that leaves nothing
-// behind: the logical volume first, then the group that held it.
-func TestLVMVolumeDestroyRemovesBoth(t *testing.T) {
+// Destroy removes the volume and the data in it, and leaves the group to the
+// layer below, which a teardown reaches next.
+func TestLVMVolumeDestroyRemovesTheVolume(t *testing.T) {
 	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-a-----\n", lvm.LogicalVolumeDefinition{})
 
 	if err := f.layer.Destroy(context.Background(), belowArtifact()); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	lvremove, vgremove := f.cmds.indexOf("lvremove"), f.cmds.indexOf("vgremove")
-	if lvremove < 0 || vgremove < 0 {
-		t.Fatalf("Destroy did not remove both:\n%s", f.cmds.issued())
+	if !f.cmds.ran("lvremove") {
+		t.Fatalf("Destroy did not remove the volume:\n%s", f.cmds.issued())
 	}
-	if lvremove > vgremove {
-		t.Errorf("the group was removed before the volume in it:\n%s", f.cmds.issued())
+	if f.cmds.ran("vgremove") {
+		t.Errorf("Destroy removed the group, which belongs to the layer below:\n%s", f.cmds.issued())
 	}
 }
 
-// Grow extends the volume to the space its members gained, and is convergent:
-// kubelet reissues NodeExpandVolume after one that already succeeded.
+// Grow takes the space the group below now has, and only takes it: making the
+// space is the group's, whether that meant resizing members or accepting new
+// ones.
 func TestLVMVolumeGrow(t *testing.T) {
 	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-a-----\n", lvm.LogicalVolumeDefinition{})
 
@@ -252,8 +240,8 @@ func TestLVMVolumeGrow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Grow: %v", err)
 	}
-	if !f.cmds.ran("pvresize") {
-		t.Errorf("the member was never resized, so there is no new space to take:\n%s", f.cmds.issued())
+	if f.cmds.ran("pvresize") {
+		t.Errorf("the volume resized a member, which the group below owns:\n%s", f.cmds.issued())
 	}
 	if !f.cmds.ran("lvextend") {
 		t.Errorf("the volume was never extended:\n%s", f.cmds.issued())
@@ -316,7 +304,7 @@ func TestLVMVolumeDeclaresItsNodeRequirement(t *testing.T) {
 		t.Error("the volume layer pins to a node, but its state is on the device, not the host")
 	}
 
-	capable := NewLVMVolume(LVMVolumeConfig{
+	capable := NewLVMLogicalVolume(LVMLogicalVolumeConfig{
 		VolumeGroup: testVG, LogicalVolume: testLV,
 		Capability: "vdo",
 		Manager:    newLVM().manager(),
@@ -337,9 +325,9 @@ func TestLVMVolumeRecordsWhatItWasBuiltWith(t *testing.T) {
 	if !ok {
 		t.Fatal("the volume layer records nothing, so a teardown cannot rebuild it")
 	}
-	params, ok := recorder.Params().(LVMVolumeParams)
+	params, ok := recorder.Params().(LVMLogicalVolumeParams)
 	if !ok {
-		t.Fatalf("Params() = %T, want LVMVolumeParams", recorder.Params())
+		t.Fatalf("Params() = %T, want LVMLogicalVolumeParams", recorder.Params())
 	}
 	if params.Stripes != 4 || params.StripeChunkBytes != 65536 {
 		t.Errorf("Params() = %+v, want the striping it was built with", params)

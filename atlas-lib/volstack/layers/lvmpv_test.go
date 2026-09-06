@@ -30,6 +30,11 @@ type lvmCommands struct {
 	calls [][]string
 	out   map[string]string
 	err   map[string]error
+
+	// byDevice answers a probe differently for each device, which a case needs
+	// when the members disagree about which group they belong to: one already in
+	// it, one not yet, one carrying somebody else's.
+	byDevice map[string]string
 }
 
 func newLVM() *lvmCommands {
@@ -42,6 +47,18 @@ func (l *lvmCommands) run(_ context.Context, args ...string) (string, error) {
 		if err, ok := l.err[key]; ok {
 			return "", err
 		}
+	}
+	// Asked before the per-command answers, because a case that gives the members
+	// different answers means exactly that: the reply depends on which device was
+	// named, not on which command asked.
+	if l.byDevice != nil && args[0] == "pvs" {
+		for _, arg := range args {
+			if out, ok := l.byDevice[arg]; ok {
+				return out, nil
+			}
+		}
+	}
+	for _, key := range keysFor(args) {
 		if out, ok := l.out[key]; ok {
 			return out, nil
 		}
