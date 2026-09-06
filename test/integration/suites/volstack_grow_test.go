@@ -144,11 +144,15 @@ func TestVolumeStackGrows(t *testing.T) {
 		// The refusal has to come from the extension, not from anything on the way
 		// to it. A case that accepted any failure would pass whether the stripe
 		// held or the fabric fell over.
-		if !strings.Contains(out, "grow the stack") {
+		refusal := refusalLine(out, "grow the stack")
+		if refusal == "" {
 			t.Fatalf("the extension failed for some reason other than refusing to spread onto one member:\n%s",
 				tail(out, 20))
 		}
-		t.Logf("the stripe refused to extend onto one member, as it must:\n%s", tail(out, 12))
+		// The refusal alone, rather than what the phase printed on its way to it.
+		// That transcript ends in a failure line of its own, and a passing run
+		// carrying one reads as a run that failed and was ignored.
+		t.Logf("the stripe declined to extend onto one member, as it must: %s", refusal)
 	})
 }
 
@@ -261,6 +265,17 @@ func sanitizeForNQN(name string) string {
 			return -1
 		}
 	}, name)
+}
+
+// refusalLine is the one line of an output that says why something was turned
+// down, or empty when nothing in it says so.
+func refusalLine(out, marker string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, marker) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 // tail is the last few lines of an output, for a log line that should not carry
