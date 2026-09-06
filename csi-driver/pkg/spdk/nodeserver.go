@@ -748,18 +748,27 @@ func (ns *nodeServer) stageVolume(
 	// (fsck -a) every existing filesystem it mounts read-write, which writes to
 	// a device whose path state staging cannot judge.
 	//
-	// It is mounted as the found filesystem, not the requested one, for the same
-	// reason the annotation branch below mounts the recorded one: the two
-	// disagree exactly when it matters, mounting ext4 as XFS fails, and XFS
-	// needs nouuid. Recording the found filesystem on the claim also gives a
-	// volume formatted by an older driver its annotation on the first stage,
-	// instead of only after a future format.
+	// A filesystem that is not the one asked for stops staging here.
+	//
+	// The volume was formatted once and holds data, so the class saying something
+	// else now is somebody having changed what a class says about a volume that
+	// already exists. Neither way of reconciling that is safe. Reformatting
+	// destroys the volume, which is the failure this path exists to prevent.
+	// Mounting the one that is there works, and leaves a volume serving a
+	// filesystem nobody declared, with the disagreement in a log line and nowhere
+	// else, until whatever notices next decides to make the device match the
+	// class again — and that decision reformats.
+	//
+	// Refusing costs an outage on a volume nobody can currently mount correctly
+	// anyway, and it puts the misconfiguration in front of an operator while the
+	// data is still there.
 	if fs != "" {
 		if fs != fsType {
-			klog.Warningf(
-				"volume %s: the device carries a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
-				req.GetVolumeId(), fs, fsType, devicePath, stagingPath, fs,
-			)
+			return status.Errorf(codes.FailedPrecondition,
+				"volume %s carries a %s filesystem and its class asks for %s; refusing to stage it, "+
+					"because reformatting would destroy the volume and mounting it as %s would serve "+
+					"a filesystem the class does not declare",
+				req.GetVolumeId(), fs, fsType, fs)
 		}
 		volumeContext[stagedFsTypeKey] = fs
 		if err := ns.mounter.Mount(
@@ -780,11 +789,11 @@ func (ns *nodeServer) stageVolume(
 	// was formatted once, so this reading is a failed probe rather than a blank
 	// device, and it is mounted as what the claim says is down there.
 	//
-	// It is mounted as the recorded filesystem, not the requested one, because
-	// those disagree exactly when it matters — a volume formatted before its
-	// StorageClass changed — and mounting ext4 as XFS fails. The mount flags
-	// follow the same filesystem for the same reason: XFS needs nouuid, and
-	// deriving the flags from the request would drop it.
+	// A record that is not the filesystem asked for stops staging, for the reason
+	// the branch above stops: the volume was formatted once and holds data, so a
+	// class naming something else cannot be reconciled here. Reformatting
+	// destroys it, and mounting the recorded one serves a filesystem nobody
+	// declared until something later decides to correct the mismatch.
 	//
 	// A mount that fails here is the correct outcome and must stay one. It means
 	// the claim's record disagrees with the device, or the device is genuinely
@@ -798,10 +807,11 @@ func (ns *nodeServer) stageVolume(
 	}
 	if annotated != "" {
 		if annotated != fsType {
-			klog.Warningf(
-				"volume %s: claim records a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
-				req.GetVolumeId(), annotated, fsType, devicePath, stagingPath, annotated,
-			)
+			return status.Errorf(codes.FailedPrecondition,
+				"volume %s is recorded as holding a %s filesystem and its class asks for %s; refusing to "+
+					"stage it, because reformatting would destroy the volume and mounting it as %s would "+
+					"serve a filesystem the class does not declare",
+				req.GetVolumeId(), annotated, fsType, annotated)
 		}
 		volumeContext[stagedFsTypeKey] = annotated
 		return mounter.Mount(

@@ -100,8 +100,15 @@ func belowArtifact() volstack.Artifact {
 
 func newFS(t *testing.T, fs *fakeFS, reading blockdev.Reading, readErr error) *Filesystem {
 	t.Helper()
+	return newFSAsking(t, fs, "ext4", reading, readErr)
+}
+
+// newFSAsking is newFS for a case that has to name the filesystem the plan asks
+// for, because the layer refuses a device carrying any other.
+func newFSAsking(t *testing.T, fs *fakeFS, fsType string, reading blockdev.Reading, readErr error) *Filesystem {
+	t.Helper()
 	return NewFilesystem(FilesystemConfig{
-		FsType:      "ext4",
+		FsType:      fsType,
 		StagingPath: stagingPath,
 		Ops:         fs,
 		Content:     fakeReader{reading: reading, err: readErr},
@@ -135,9 +142,9 @@ func TestFilesystemFormatsOnlyABlankDevice(t *testing.T) {
 // A device that already carries a filesystem is mounted and never formatted,
 // and it is mounted as what is on it rather than as what the volume asked for:
 // those disagree exactly when it matters, and mounting ext4 as XFS fails.
-func TestFilesystemMountsWhatIsOnTheDeviceAndNeverFormats(t *testing.T) {
+func TestFilesystemMountsAnExistingFilesystemAndNeverFormats(t *testing.T) {
 	fs := newFakeFS()
-	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "xfs"}, nil)
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
 
 	state, _, err := l.Observe(context.Background(), belowArtifact())
 	if err != nil {
@@ -153,8 +160,8 @@ func TestFilesystemMountsWhatIsOnTheDeviceAndNeverFormats(t *testing.T) {
 	if len(fs.formatted) != 0 {
 		t.Fatalf("a device carrying a filesystem was formatted: %+v", fs.formatted)
 	}
-	if len(fs.mounted) != 1 || fs.mounted[0].fsType != "xfs" {
-		t.Fatalf("mounted %+v, want it mounted as the xfs that is on it", fs.mounted)
+	if len(fs.mounted) != 1 || fs.mounted[0].fsType != "ext4" {
+		t.Fatalf("mounted %+v, want the filesystem already on the device mounted as it is", fs.mounted)
 	}
 }
 
@@ -304,7 +311,8 @@ func TestFilesystemMountFlagsFollowTheFilesystem(t *testing.T) {
 	} {
 		t.Run(tc.fsType, func(t *testing.T) {
 			fs := newFakeFS()
-			l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: tc.fsType}, nil)
+			l := newFSAsking(t, fs, tc.fsType,
+				blockdev.Reading{Content: blockdev.ContentFilesystem, Type: tc.fsType}, nil)
 
 			if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
 				t.Fatalf("Ensure: %v", err)

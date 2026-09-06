@@ -139,12 +139,21 @@ func TestStageNeverFormatsWhenPreflightFoundFilesystem(t *testing.T) {
 // must not run fsck: FormatAndMountSensitiveWithFormatOptions preen-repairs
 // every existing filesystem it mounts read-write, which writes to a device
 // whose path state staging cannot judge.
-func TestStageMountsTheFoundFilesystemNotTheRequestedOne(t *testing.T) {
+// Regression: 2026-09-06-staged-a-filesystem-the-class-did-not-ask-for. Staging
+// mounted whatever the device carried, warning about the disagreement and
+// carrying on. Nothing was destroyed by that, and it is still the wrong answer:
+// a volume serving XFS to a class that says ext4 is a misconfiguration nobody is
+// told about, and the next thing to notice it is whatever decides to make the
+// device match the class again. That decision reformats.
+//
+// So staging refuses, while the volume is intact and while the disagreement is
+// the thing in front of whoever is looking. It must refuse without reformatting,
+// which is the half of this that would be catastrophic to get wrong.
+func TestStageRefusesAFilesystemTheClassDidNotAskFor(t *testing.T) {
 	fe, calls := scriptedExec([]scriptedResult{
 		{out: "TYPE=xfs\n"}, // preflight blkid: the device carries XFS
-		{out: "TYPE=xfs\n"}, // the second blkid the unfixed code runs
-		{out: ""},           // the fsck the unfixed code runs next
-		{out: ""},           // spare scripting for any further command
+		{out: ""},           // spare scripting, in case anything else runs
+		{out: ""},
 	})
 	fm := mount.NewFakeMounter(nil)
 	ns := &nodeServer{mounter: fm, execer: fe}
@@ -152,38 +161,66 @@ func TestStageMountsTheFoundFilesystemNotTheRequestedOne(t *testing.T) {
 	stagingPath := stagingDir(t)
 	volumeContext := map[string]string{}
 	err := ns.stageVolume(context.Background(), fakeDevice, stagingPath, stageRequest(extFS), volumeContext)
-	if err != nil {
-		t.Fatalf("stageVolume: %v", err)
+	if err == nil {
+		t.Fatal("staging mounted a device carrying xfs for a volume that asks for ext4")
+	}
+	for _, want := range []string{xfsFS, extFS} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s, so a reader cannot tell what disagreed: %v", want, err)
+		}
 	}
 
 	for _, call := range *calls {
-		if call[0] == "fsck" {
-			t.Fatalf("staging ran %v against a device it only needed to mount", call)
+		switch call[0] {
+		case "mkfs", "mkfs.ext4", "mkfs.xfs":
+			t.Fatalf("staging formatted a device carrying a filesystem: %v", call)
+		case "fsck":
+			t.Fatalf("staging ran %v against a device it refused to stage", call)
 		}
+	}
+	if len(fm.MountPoints) != 0 {
+		t.Errorf("staging mounted something anyway: %v", fm.MountPoints)
+	}
+}
+
+// The same rule on the other branch: a blank probe settled by the claim's
+// record. The record says what the volume was formatted as, so a class asking
+// for something else is the same disagreement, reached by a different road.
+//
+// Regression: 2026-09-06-staged-a-filesystem-the-class-did-not-ask-for.
+func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
+	ns, _ := newPVCTestNodeServer(t, annotatedPVC(xfsFS))
+	fe, calls := scriptedExec([]scriptedResult{
+		{out: ""}, // preflight blkid: reads blank, so the claim settles it
+		{out: ""},
+		{out: ""},
+	})
+	fm := mount.NewFakeMounter(nil)
+	ns.mounter = fm
+	ns.execer = fe
+
+	req := stageRequest(extFS)
+	req.VolumeId = pvcTestHandle
+	volumeContext := map[string]string{
+		CSIStorageNamespaceKey: pvcTestNamespace,
+		CSIStorageNameKey:      pvcTestName,
 	}
 
-	var staged *mount.MountPoint
-	for i := range fm.MountPoints {
-		if fm.MountPoints[i].Path == stagingPath {
-			staged = &fm.MountPoints[i]
+	err := ns.stageVolume(context.Background(), fakeDevice, stagingDir(t), req, volumeContext)
+	if err == nil {
+		t.Fatal("staging mounted a volume recorded as xfs for a class that asks for ext4")
+	}
+	for _, want := range []string{xfsFS, extFS} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
 		}
 	}
-	if staged == nil {
-		t.Fatalf("staging did not mount anything at %s", stagingPath)
-	}
-	if staged.Type != xfsFS {
-		t.Fatalf("staging mounted the device as %q, but the device carries xfs", staged.Type)
-	}
-	nouuid := false
-	for _, opt := range staged.Opts {
-		if opt == "nouuid" {
-			nouuid = true
+	for _, call := range *calls {
+		if strings.HasPrefix(call[0], "mkfs") {
+			t.Fatalf("staging formatted a volume the claim says holds a filesystem: %v", call)
 		}
 	}
-	if !nouuid {
-		t.Fatalf("staging mounted xfs without nouuid; opts: %v", staged.Opts)
-	}
-	if got := volumeContext[stagedFsTypeKey]; got != xfsFS {
-		t.Fatalf("staging recorded %q as the staged filesystem, want xfs", got)
+	if len(fm.MountPoints) != 0 {
+		t.Errorf("staging mounted something anyway: %v", fm.MountPoints)
 	}
 }

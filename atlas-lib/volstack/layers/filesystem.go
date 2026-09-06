@@ -120,6 +120,9 @@ func (f *Filesystem) observe(
 		// Nothing of this layer exists yet, so it exposes nothing.
 		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
 	case blockdev.ContentFilesystem:
+		if err := f.agrees(reading); err != nil {
+			return volstack.StateAbsent, reading, volstack.Artifact{}, err
+		}
 		// The filesystem is there and is not mounted. It exposes no path until
 		// it is, which is what the layer above waits for.
 		return volstack.StateInactive, reading, volstack.Artifact{Devices: below.Devices}, nil
@@ -142,10 +145,11 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 			"filesystem: the layer below exposes no single device to put a filesystem on")
 	}
 
-	// One observation, which carries the reading with it: the device is read
-	// once per Ensure rather than once to decide the state and again to learn
-	// what is on it.
-	state, reading, own, err := f.observe(ctx, below)
+	// One observation: the device is read once per Ensure rather than once to
+	// decide the state and again to act on it. The reading itself is not needed
+	// past that, because the filesystem to act on is the one the plan named and
+	// observe has already refused every device carrying another.
+	state, _, own, err := f.observe(ctx, below)
 	if err != nil {
 		return volstack.Artifact{}, err
 	}
@@ -153,12 +157,13 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 		return own, nil
 	}
 
-	// The filesystem to mount is the one that is there. It and the one the
-	// volume asked for disagree exactly when it matters, for a volume formatted
-	// before its StorageClass changed, and mounting ext4 as XFS fails.
-	fsType := reading.Type
+	// The filesystem is the one the plan asked for, because observe has already
+	// refused every device carrying another. Nothing here has to reconcile a
+	// disagreement, which is the point: the only two ways to reconcile one are to
+	// reformat, which destroys the volume, and to serve the other filesystem,
+	// which hides the misconfiguration until something else acts on it.
+	fsType := f.cfg.FsType
 	if state == volstack.StateAbsent {
-		fsType = f.cfg.FsType
 		if err := f.cfg.Ops.Format(ctx, dev.Path, fsType, f.formatOptions(below)); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("filesystem: format %s as %s: %w", dev.Path, fsType, err)
 		}
@@ -246,6 +251,9 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 			"filesystem: refusing to remount %s, which carries %s rather than a filesystem: %s",
 			dev.Path, reading.Content, reading.Detail)
 	}
+	if err := f.agrees(reading); err != nil {
+		return err
+	}
 
 	// Clear whatever is at the path before mounting onto it. A heal runs against
 	// a mount that Healthy just reported unserviceable, and the dead mount total
@@ -256,8 +264,8 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 		return err
 	}
 
-	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, reading.Type,
-		mountFlags(reading.Type, f.cfg.MountFlags)); err != nil {
+	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, f.cfg.FsType,
+		mountFlags(f.cfg.FsType, f.cfg.MountFlags)); err != nil {
 		return fmt.Errorf("filesystem: remount %s at %s: %w", dev.Path, f.cfg.StagingPath, err)
 	}
 	return nil
@@ -273,6 +281,32 @@ type FilesystemParams struct {
 // that: what is actually on the device is read from the device.
 func (f *Filesystem) Params() any {
 	return FilesystemParams{FsType: f.cfg.FsType}
+}
+
+// agrees reports whether the filesystem on the device is the one the plan asked
+// for, and refuses when it is not.
+//
+// A volume formatted as one filesystem and asked for as another is somebody
+// having changed what a class says about a volume that already exists, and there
+// is no safe way to reconcile that here. Reformatting destroys the volume, which
+// is the failure this whole design exists to prevent. Mounting the one that is
+// there works, and leaves a volume serving something nobody declared, with the
+// disagreement recorded in a log line and in nothing else, until whatever notices
+// next decides to make the device match the plan again.
+//
+// So it stops, while the data is intact and while the misconfiguration is still
+// the thing in front of whoever is looking.
+//
+// An empty FsType expresses no opinion, which is what a plan that never named a
+// filesystem has, and there is then nothing to disagree with.
+func (f *Filesystem) agrees(reading blockdev.Reading) error {
+	if f.cfg.FsType == "" || reading.Type == f.cfg.FsType {
+		return nil
+	}
+	return fmt.Errorf(
+		"filesystem: the volume carries %s and this plan asks for %s, and neither reformatting it "+
+			"nor mounting it as %s is safe; the plan and the volume have to be reconciled first",
+		reading.Type, f.cfg.FsType, reading.Type)
 }
 
 // read takes the content reading of the device below.
