@@ -76,9 +76,24 @@ func (h *harness) growPlan(t *testing.T) volstack.Plan {
 	}
 }
 
+// requireGrowPhase skips unless a driver is running the expand phases.
+//
+// These two are halves of one case and leave the stack up between them, so
+// running either on its own puts a volume group and a mount on a namespace that
+// whatever runs next is about to use for something else. A caller that runs this
+// binary without naming a test gets everything in it, and that is how these came
+// to contaminate a suite that had not asked for them.
+func requireGrowPhase(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SB_GROW_PLAN") == "" {
+		t.Skip("no expand is being driven: SB_GROW_PLAN is unset, and these phases leave a stack up")
+	}
+}
+
 // TestGrowStage brings the stack up and leaves it up, because the phase after it
 // is a separate run of this binary against the same node.
 func TestGrowStage(t *testing.T) {
+	requireGrowPhase(t)
 	requireLVM(t)
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
@@ -110,6 +125,7 @@ func TestGrowStage(t *testing.T) {
 // TestGrowExtend runs after the driver has grown the namespaces underneath, and
 // is what a NodeExpandVolume does: take the space that is already there.
 func TestGrowExtend(t *testing.T) {
+	requireGrowPhase(t)
 	requireLVM(t)
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
@@ -122,7 +138,7 @@ func TestGrowExtend(t *testing.T) {
 	// an asynchronous event, so each member is waited for against the size it was
 	// before rather than against whatever it reads now: acting early would resize
 	// onto the size it already had and report success.
-	h.awaitLargerMembers(ctx, t, staged.DeviceBytes)
+	h.awaitLargerMembers(ctx, t, staged.DeviceBytes, grownMembers(len(h.targets)))
 
 	if err := h.runner().Grow(ctx, plan); err != nil {
 		t.Fatalf("grow the stack: %v", err)
@@ -162,13 +178,19 @@ func (h *harness) memberSizes(ctx context.Context, t *testing.T) []uint64 {
 // awaitLargerMembers waits until every member reports more capacity than it had
 // when the stack was staged, asking the kernel to look again in case the event
 // announcing it was missed.
-func (h *harness) awaitLargerMembers(ctx context.Context, t *testing.T, was []uint64) {
+func (h *harness) awaitLargerMembers(ctx context.Context, t *testing.T, was []uint64, grown int) {
 	t.Helper()
 	if len(was) != len(h.targets) {
 		t.Fatalf("the staging phase recorded %d members and this plan has %d", len(was), len(h.targets))
 	}
 
 	for i, target := range h.targets {
+		if i >= grown {
+			// Left at the size it was, deliberately. Waiting for it would time
+			// out, and a case that expects the extension to be refused would then
+			// pass on the timeout instead of on the refusal.
+			continue
+		}
 		h.onDevice(ctx, target, func(dev blockdev.Device) {
 			_ = runTool(ctx, "nvme", "ns-rescan", controllerOf(dev.Path))
 
@@ -191,6 +213,20 @@ func (h *harness) awaitLargerMembers(ctx context.Context, t *testing.T, was []ui
 			}
 		})
 	}
+}
+
+// grownMembers is how many of the members the driver grew, which is all of them
+// unless a case is about what happens when it is not.
+func grownMembers(members int) int {
+	raw := os.Getenv("SB_GROW_MEMBERS")
+	if raw == "" {
+		return members
+	}
+	grown, err := strconv.Atoi(raw)
+	if err != nil || grown < 0 || grown > members {
+		return members
+	}
+	return grown
 }
 
 // assertStillStriped checks that the extension went across the same legs.

@@ -132,10 +132,21 @@ func TestVolumeStackGrows(t *testing.T) {
 		if err := targets[0].GrowNamespace(ctx, 1, growToMB); err != nil {
 			t.Fatalf("grow the first namespace: %v", err)
 		}
+		// Only the first grew, so only the first is waited for. Waiting for the
+		// other would time out, and this case would then pass on the timeout
+		// rather than on the refusal it exists to observe.
+		env["SB_GROW_MEMBERS"] = "1"
 
 		out, err := onNode(ctx, sh, env, "TestGrowExtend")
 		if err == nil {
 			t.Fatalf("a stripe extended onto one grown member:\n%s", out)
+		}
+		// The refusal has to come from the extension, not from anything on the way
+		// to it. A case that accepted any failure would pass whether the stripe
+		// held or the fabric fell over.
+		if !strings.Contains(out, "grow the stack") {
+			t.Fatalf("the extension failed for some reason other than refusing to spread onto one member:\n%s",
+				tail(out, 20))
 		}
 		t.Logf("the stripe refused to extend onto one member, as it must:\n%s", tail(out, 12))
 	})

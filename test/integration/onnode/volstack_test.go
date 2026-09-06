@@ -64,6 +64,17 @@ func newHarness(t *testing.T) *harness {
 	staging := envOr("SB_STAGING_PATH", filepath.Join(t.TempDir(), "staging"))
 	uuid := envOr("SB_VOLUME_UUID", "00000000-0000-0000-0000-000000000000")
 
+	// A volume of its own per case, because the volume group and the logical
+	// volume are named after this and two cases sharing one would have the second
+	// find the first's, whether or not the device underneath was emptied first.
+	//
+	// The expand phases are the exception, and have to be: they are two cases
+	// either side of one volume, so they are given an identity by whoever drives
+	// them rather than taking one from their own names.
+	if os.Getenv("SB_GROW_PLAN") == "" {
+		uuid += "-" + volumeScope(t.Name())
+	}
+
 	// The host's identity is the node's rather than the volume's, and the kernel
 	// rejects a connect whose hostid is not a UUID. Deriving one from the other
 	// tied them together, so naming a volume anything but a UUID stopped the
@@ -81,6 +92,21 @@ func newHarness(t *testing.T) *harness {
 		},
 		records: records,
 	}
+}
+
+// volumeScope reduces a case's name to something a volume group can be named
+// after: LVM takes letters, digits, and a few marks, and nothing else.
+func volumeScope(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		default:
+			return '-'
+		}
+	}, name)
 }
 
 func readTarget(t *testing.T, prefix string) Target {
@@ -162,6 +188,11 @@ func hideTheTargetBacking(t *testing.T) {
 func (h *harness) runner() *volstack.Runner { return volstack.NewRunner(volstack.NewStore(h.records)) }
 
 // blank makes these namespaces read as empty volumes again.
+//
+// Every case calls it before it builds anything. The cases share the fabric the
+// driver published, so one that did not would be starting from whatever the case
+// before it left, and would pass or fail on the order the files happen to sort
+// in rather than on what it is testing.
 //
 // The cases share the fabric the driver published, and a case that formats one
 // leaves the filesystem behind for the next. That is not a fixture problem to
@@ -268,6 +299,8 @@ func TestRawBlockExposesADeviceAndNoPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
 
+	h.blank(ctx, h.targets[0])
+
 	plan := h.node.RawBlock(h.targets[0])
 	art := h.up(ctx, plan)
 	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
@@ -290,6 +323,8 @@ func TestPlainStackIsIdempotent(t *testing.T) {
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
+
+	h.blank(ctx, h.targets[0])
 
 	plan := h.node.Plain(h.targets[0], h.volume)
 	first := h.up(ctx, plan)
@@ -322,6 +357,8 @@ func TestPlainStackSurvivesARestage(t *testing.T) {
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
+
+	h.blank(ctx, h.targets[0])
 
 	plan := h.node.Plain(h.targets[0], h.volume)
 	art := h.up(ctx, plan)
