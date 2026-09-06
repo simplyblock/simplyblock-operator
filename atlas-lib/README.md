@@ -54,6 +54,21 @@ atlas/
 │   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
 │       ├── volume.go       Registers itself with lvm, UpdateVolume
 │       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
+├── volstack/               A volume's node-side stack, as ordered layers
+│   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Grower, NodeRequirements, Recorder), Plan
+│   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
+│   ├── record.go           Store: what was planned for a volume and how far bring-up got
+│   ├── layers/             The layer implementations
+│   │   ├── fabric.go       fabric: the volume's namespace, attached
+│   │   ├── members.go      members: several namespaces presented upward as one
+│   │   ├── lvmpv.go        lvmPhysicalVolume: the device labeled into this volume's group
+│   │   ├── lvmvolumegroup.go  lvmVolumeGroup: the group between the physical volumes and the logical one
+│   │   ├── lvmvolume.go    lvmLogicalVolume: linear, striped, or VDO, by definition
+│   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
+│   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
+│   └── plans/              The plan shapes: one constructor per row of the design's plan table
+│       ├── plans.go        RawBlock / Plain / LVM / Striped + the LVM naming rule
+│       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -805,6 +820,66 @@ extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
 `Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
 `NodeExpandVolume`. A striped LVM volume group across several members would use
 `CreateVolumeGroup`'s variadic device-path list the same way.
+
+#### Bring up a volume's stack
+
+`volstack` is a volume's node side expressed as ordered layers, and
+`volstack/plans` is the catalog of the orders that mean something. Build the node
+once per process, because the seams are the host's rather than any volume's, then
+name the kind of volume and hand the plan to the runner.
+
+```go
+node := plans.NewNode(plans.NodeConfig{
+	HostNQN:    hostNQN,
+	HostID:     hostID,
+	Connector:  nvmeof.NewCLIConnector(subsystems),
+	Devices:    nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{}),
+	Manager:    lvm.NewManager(),
+	Content:    blockdev.NewProber(),
+	Filesystem: mounter, // the consumer's own mount library
+})
+
+plan := node.Plain(connection, plans.Volume{
+	UUID:        handle.VolumeID,
+	StagingPath: stagingPath,
+	FsType:      fsType,
+})
+
+runner := volstack.NewRunner(volstack.NewStore("/var/lib/simplyblock/stacks"))
+artifact, err := runner.Up(ctx, handle.String(), plan)
+```
+
+There are four shapes, and they are the design's plan table: `RawBlock`
+(`fabric` alone, which is raw block mode as a shorter plan rather than a flag
+inside a stage function), `Plain` (`fabric` → `filesystem`), `LVM` (`fabric` →
+`lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume` → `filesystem`, for
+client-side deduplication or compression), and `Striped` (the same four above a
+`members` composite, for a volume assembled over several namespaces). The last
+two take a `LogicalVolumeOptions`, which is the only thing separating a linear
+volume from a VDO or a striped one: one layer, three definitions.
+
+Deciding which shape a volume gets stays with the consumer, because that answer
+comes from a StorageClass, a volume capability, and the node's role for the
+volume, none of which this library knows about. What it does own is the layer
+list each shape means, so that a node service and the tests that cover it cannot
+disagree about what a staged volume looks like.
+
+`VolumeGroupName` and `LogicalVolumeName` are the LVM naming rule on their own,
+for a caller that has a volume's identity and no plan: a teardown driven from a
+stack record, or a sweep looking for what this driver left behind, has to name
+the group the way the plan that created it did, character for character.
+
+Building a plan reaches nothing. It resolves no device, runs no command, and
+reads no sysfs, so a consumer can unit-test the selection it makes and only the
+runner needs a host.
+
+_Today:_ nothing in the operator or the CSI driver imports `volstack` yet. The
+on-node integration suite (`test/integration/onnode`) is the only caller, and it
+fills the seams with the implementations that ship: nvme-cli, the sysfs
+resolvers, `lvm.Manager`, and `blockdev.Prober`. `NodeStageVolume` still
+assembles its own fabric connect, `mkfs`, and mount in
+`csi-driver/pkg/spdk/nodeserver.go`, which is the call site the `Plain` and `LVM`
+shapes are meant to replace.
 
 ### Cross-cutting
 

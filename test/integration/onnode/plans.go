@@ -1,6 +1,13 @@
 //go:build linux
 
-// The plans this suite brings up, built from the implementations that ship.
+// The node this suite runs its plans on, and the targets the host-side driver
+// published for the run.
+//
+// The plan shapes themselves are atlas-lib's, in volstack/plans, because a suite
+// that composed its own layer lists would prove those lists work and say nothing
+// about the ones the driver stages. What is left here is the two things only a
+// run on a node can supply: which implementations fill the seams, and which
+// namespaces exist.
 //
 // Every layer takes its side effects as an interface, which is what lets the
 // unit tests run without a kernel. The value of running here is the opposite
@@ -18,8 +25,7 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
-	"github.com/simplyblock/atlas/volstack"
-	"github.com/simplyblock/atlas/volstack/layers"
+	"github.com/simplyblock/atlas/volstack/plans"
 )
 
 // Target is the namespace the host-side driver published for this run, handed
@@ -32,148 +38,61 @@ type Target struct {
 	NSID    uint32
 }
 
-// Volume is the identity a plan derives its names from. It stands in for the
-// volume handle the CSI driver would carry.
-type Volume struct {
-	UUID        string
-	StagingPath string
-	FsType      string
+// Connection is the target in the shape a plan takes it, which is the shape the
+// control plane publishes: a namespace and the endpoints serving it, in priority
+// order. Here the order is trivial because nvmet advertises one.
+func (t Target) Connection() lvol.Connection {
+	return lvol.Connection{
+		NQN:  t.NQN,
+		NSID: t.NSID,
+		Endpoints: []lvol.Endpoint{{
+			Transport: "tcp",
+			Address:   t.Address,
+			Port:      t.Port,
+		}},
+	}
 }
 
-// VolumeGroup is the group name a volume's LVM layers use. Derived from the
-// volume's own UUID and nothing host-specific, so a plan replayed on another
-// host arrives at the same name.
-func (v Volume) VolumeGroup() string { return "vol-" + v.UUID }
+// connections is the same for a plan whose bottom is several namespaces. The
+// order is the driver's, and it is preserved: a stripe assembled over the same
+// members in another order is a different device.
+func connections(targets []Target) []lvol.Connection {
+	all := make([]lvol.Connection, 0, len(targets))
+	for _, t := range targets {
+		all = append(all, t.Connection())
+	}
+	return all
+}
 
-// LogicalVolume is the name of the one logical volume inside that group.
-func (v Volume) LogicalVolume() string { return "lv-" + v.UUID }
-
-// node is everything the layers need from the host, resolved once so that every
-// plan in a run shares one connector and one view of sysfs.
+// node is the suite's handle on the host: the plan builder, plus the two seams
+// the assertions reach through directly. A case that has run a plan goes on to
+// ask LVM what it made and the prober what is on a device, which is a question
+// about the node rather than about a stack.
 type node struct {
-	hostNQN   string
-	hostID    string
-	subsys    nvme.SubsystemResolver
-	devices   nvme.DeviceResolver
-	connector nvmeof.Connector
-	manager   *lvm.Manager
-	content   *blockdev.Prober
-	ops       layers.FilesystemOps
+	*plans.Node
+
+	manager *lvm.Manager
+	content *blockdev.Prober
 }
 
-// newNode wires the shipped implementations together.
+// newNode fills the plan builder's seams with the implementations that ship.
 func newNode(hostNQN, hostID string) *node {
 	cfg := nvme.SysfsConfig{}
 	subs := nvme.NewSysfsSubsystemResolver(cfg)
+	manager := lvm.NewManager()
+	content := blockdev.NewProber()
+
 	return &node{
-		hostNQN:   hostNQN,
-		hostID:    hostID,
-		subsys:    subs,
-		devices:   nvme.NewSysfsDeviceResolver(cfg),
-		connector: nvmeof.NewCLIConnector(subs),
-		manager:   lvm.NewManager(),
-		content:   blockdev.NewProber(),
-		ops:       shellFilesystem{},
+		Node: plans.NewNode(plans.NodeConfig{
+			HostNQN:    hostNQN,
+			HostID:     hostID,
+			Connector:  nvmeof.NewCLIConnector(subs),
+			Devices:    nvme.NewSysfsDeviceResolver(cfg),
+			Manager:    manager,
+			Content:    content,
+			Filesystem: shellFilesystem{},
+		}),
+		manager: manager,
+		content: content,
 	}
-}
-
-// fabric is the bottom layer of every plan: the volume's namespace, attached.
-func (n *node) fabric(t Target) volstack.Layer {
-	return layers.NewFabric(layers.FabricConfig{
-		Connection: lvol.Connection{
-			NQN:  t.NQN,
-			NSID: t.NSID,
-			Endpoints: []lvol.Endpoint{{
-				Transport: "tcp",
-				Address:   t.Address,
-				Port:      t.Port,
-			}},
-		},
-		Connector: n.connector,
-		Devices:   n.devices,
-		HostNQN:   n.hostNQN,
-		HostID:    n.hostID,
-	})
-}
-
-// filesystem is the top layer of every plan that has one.
-func (n *node) filesystem(v Volume) volstack.Layer {
-	return layers.NewFilesystem(layers.FilesystemConfig{
-		FsType:      v.FsType,
-		StagingPath: v.StagingPath,
-		Ops:         n.ops,
-		Content:     n.content,
-	})
-}
-
-// RawBlock is `fabric`, and nothing above it. Raw block mode is the plain plan
-// with its top layer absent rather than a flag inside a stage function, and
-// asserting that shape here is what keeps it that way.
-func (n *node) RawBlock(t Target) volstack.Plan {
-	return volstack.Plan{n.fabric(t)}
-}
-
-// Plain is `fabric` → `filesystem`, the RWO plan the node service performs
-// today and the one Phase 1 has to match call for call.
-func (n *node) Plain(t Target, v Volume) volstack.Plan {
-	return volstack.Plan{n.fabric(t), n.filesystem(v)}
-}
-
-// LVM is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
-// `lvmLogicalVolume` → `filesystem`, the shape a volume with client-side dedup
-// or compression takes. definition decides what the logical volume is, so the
-// linear and the VDO plans differ in it and in nothing else.
-func (n *node) LVM(t Target, v Volume, definition lvm.LogicalVolumeDefinition, pool string) volstack.Plan {
-	return volstack.Plan{
-		n.fabric(t),
-		n.physicalVolume(v),
-		n.volumeGroup(v),
-		n.logicalVolume(v, definition, pool),
-		n.filesystem(v),
-	}
-}
-
-// Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
-// `lvmLogicalVolume(striped)` → `filesystem`, the striped export's plan without
-// the export on top. It is the only plan whose bottom is not a single layer,
-// which is the whole reason the composite exists.
-func (n *node) Striped(targets []Target, v Volume, definition lvm.LogicalVolumeDefinition) volstack.Plan {
-	members := make(volstack.Plan, 0, len(targets))
-	for _, t := range targets {
-		members = append(members, n.fabric(t))
-	}
-	return volstack.Plan{
-		layers.NewMembers(members),
-		n.physicalVolume(v),
-		n.volumeGroup(v),
-		n.logicalVolume(v, definition, ""),
-		n.filesystem(v),
-	}
-}
-
-func (n *node) physicalVolume(v Volume) volstack.Layer {
-	return layers.NewLVMPhysicalVolume(layers.LVMPhysicalVolumeConfig{
-		VolumeGroup:   v.VolumeGroup(),
-		LogicalVolume: v.LogicalVolume(),
-		Manager:       n.manager,
-		Content:       n.content,
-	})
-}
-
-func (n *node) volumeGroup(v Volume) volstack.Layer {
-	return layers.NewLVMVolumeGroup(layers.LVMVolumeGroupConfig{
-		VolumeGroup: v.VolumeGroup(),
-		Manager:     n.manager,
-	})
-}
-
-func (n *node) logicalVolume(v Volume, definition lvm.LogicalVolumeDefinition, pool string) volstack.Layer {
-	return layers.NewLVMLogicalVolume(layers.LVMLogicalVolumeConfig{
-		VolumeGroup:   v.VolumeGroup(),
-		LogicalVolume: v.LogicalVolume(),
-		PoolName:      pool,
-		Definition:    definition,
-		Manager:       n.manager,
-		Resolve:       blockdev.ResolveDevice,
-	})
 }

@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/simplyblock/atlas/blockdev"
-	"github.com/simplyblock/atlas/volstack"
 )
 
 // onDevice attaches one namespace, hands the device over, and detaches it again.
@@ -28,7 +27,7 @@ import (
 // layers that are under test.
 func (h *harness) onDevice(ctx context.Context, target Target, do func(dev blockdev.Device)) {
 	h.t.Helper()
-	plan := volstack.Plan{h.node.fabric(target)}
+	plan := h.node.RawBlock(target.Connection())
 	handle := h.volume.UUID + "-direct"
 
 	art, err := h.runner().Up(ctx, handle, plan)
@@ -69,7 +68,7 @@ func (h *harness) formatAs(ctx context.Context, target Target, fsType string) {
 	volume := h.volume
 	volume.FsType = fsType
 
-	plan := volstack.Plan{h.node.fabric(target), h.node.filesystem(volume)}
+	plan := h.node.Plain(target.Connection(), volume)
 	handle := h.volume.UUID + "-setup-" + fsType
 	if _, err := h.runner().Up(ctx, handle, plan); err != nil {
 		h.t.Fatalf("format %s as %s: %v", target.NQN, fsType, err)
@@ -97,7 +96,7 @@ func TestPlainStackRefusesAFilesystemTheClassDidNotAskFor(t *testing.T) {
 
 			volume := h.volume
 			volume.FsType = tc.asks
-			plan := volstack.Plan{h.node.fabric(h.targets[0]), h.node.filesystem(volume)}
+			plan := h.node.Plain(h.targets[0].Connection(), volume)
 
 			_, err := h.runner().Up(ctx, h.handle(), plan)
 			if err == nil {
@@ -148,7 +147,7 @@ func TestPlainStackRefusesAVolumeCarryingSomethingElse(t *testing.T) {
 
 			volume := h.volume
 			volume.FsType = asks
-			plan := volstack.Plan{h.node.fabric(h.targets[0]), h.node.filesystem(volume)}
+			plan := h.node.Plain(h.targets[0].Connection(), volume)
 
 			if _, err := h.runner().Up(ctx, h.handle(), plan); err == nil {
 				h.down(ctx, plan)

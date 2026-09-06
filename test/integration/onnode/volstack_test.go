@@ -30,6 +30,7 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
 )
 
 // stackTimeout bounds one bring-up. A fabric connect waits for a namespace to
@@ -42,7 +43,7 @@ type harness struct {
 	t       *testing.T
 	node    *node
 	targets []Target
-	volume  Volume
+	volume  plans.Volume
 	records string
 }
 
@@ -90,7 +91,7 @@ func newHarness(t *testing.T) *harness {
 		t:       t,
 		node:    newNode(hostNQN, hostID),
 		targets: targets,
-		volume: Volume{
+		volume: plans.Volume{
 			UUID:        uuid,
 			StagingPath: staging,
 			FsType:      envOr("SB_FSTYPE", "ext4"),
@@ -209,7 +210,7 @@ func (h *harness) runner() *volstack.Runner { return volstack.NewRunner(volstack
 func (h *harness) blank(ctx context.Context, targets ...Target) {
 	h.t.Helper()
 	for i, target := range targets {
-		plan := volstack.Plan{h.node.fabric(target)}
+		plan := h.node.RawBlock(target.Connection())
 		handle := fmt.Sprintf("%s-blank-%d", h.volume.UUID, i)
 
 		art, err := h.runner().Up(ctx, handle, plan)
@@ -304,7 +305,7 @@ func TestRawBlockExposesADeviceAndNoPath(t *testing.T) {
 
 	h.blank(ctx, h.targets[0])
 
-	plan := h.node.RawBlock(h.targets[0])
+	plan := h.node.RawBlock(h.targets[0].Connection())
 	art := h.up(ctx, plan)
 	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
 
@@ -329,7 +330,7 @@ func TestPlainStackIsIdempotent(t *testing.T) {
 
 	h.blank(ctx, h.targets[0])
 
-	plan := h.node.Plain(h.targets[0], h.volume)
+	plan := h.node.Plain(h.targets[0].Connection(), h.volume)
 	first := h.up(ctx, plan)
 	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
 
@@ -363,7 +364,7 @@ func TestPlainStackSurvivesARestage(t *testing.T) {
 
 	h.blank(ctx, h.targets[0])
 
-	plan := h.node.Plain(h.targets[0], h.volume)
+	plan := h.node.Plain(h.targets[0].Connection(), h.volume)
 	art := h.up(ctx, plan)
 
 	marker := filepath.Join(art.Path, "survives-an-unstage")
@@ -402,7 +403,7 @@ func TestLVMStackReactivatesRatherThanRecreating(t *testing.T) {
 	// filesystem cases above ran over this same namespace.
 	h.blank(ctx, h.targets[0])
 
-	plan := h.node.LVM(h.targets[0], h.volume, lvm.LogicalVolumeDefinition{}, "")
+	plan := h.node.LVM(h.targets[0].Connection(), h.volume, plans.LogicalVolumeOptions{})
 	art := h.up(ctx, plan)
 
 	marker := filepath.Join(art.Path, "under-the-volume-group")
@@ -447,7 +448,9 @@ func TestStripedStackAssemblesItsMembers(t *testing.T) {
 		Stripes:          len(h.targets),
 		StripeChunkBytes: 64 << 10,
 	}
-	plan := h.node.Striped(h.targets, h.volume, definition)
+	plan := h.node.Striped(connections(h.targets), h.volume, plans.LogicalVolumeOptions{
+		Definition: definition,
+	})
 	art := h.up(ctx, plan)
 	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
 

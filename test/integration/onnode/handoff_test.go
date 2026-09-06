@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
 )
 
 // handoffFiles is what the volume is filled with, and how much of it. Enough
@@ -54,9 +54,9 @@ func (h *harness) handoffPlan(t *testing.T) volstack.Plan {
 
 	switch shape := envOr("SB_HANDOFF_PLAN", "lvm"); shape {
 	case "plain":
-		return h.node.Plain(h.targets[0], volume)
+		return h.node.Plain(h.targets[0].Connection(), volume)
 	case "lvm":
-		return h.node.LVM(h.targets[0], volume, lvm.LogicalVolumeDefinition{}, "")
+		return h.node.LVM(h.targets[0].Connection(), volume, plans.LogicalVolumeOptions{})
 	default:
 		t.Fatalf("SB_HANDOFF_PLAN is %q, which is not a plan this suite builds", shape)
 		return nil

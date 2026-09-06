@@ -29,6 +29,7 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
 )
 
 // growState is what the staging phase leaves for the phase that extends.
@@ -60,15 +61,17 @@ func (h *harness) growPlan(t *testing.T) volstack.Plan {
 
 	switch shape := envOr("SB_GROW_PLAN", "lvm"); shape {
 	case "plain":
-		return h.node.Plain(h.targets[0], volume)
+		return h.node.Plain(h.targets[0].Connection(), volume)
 	case "lvm":
-		return h.node.LVM(h.targets[0], volume, lvm.LogicalVolumeDefinition{}, "")
+		return h.node.LVM(h.targets[0].Connection(), volume, plans.LogicalVolumeOptions{})
 	case "striped":
 		if len(h.targets) < 2 {
 			t.Skip("a striped plan needs a second namespace, and SB_TARGET2_NQN is unset")
 		}
-		return h.node.Striped(h.targets, volume, lvm.LogicalVolumeDefinition{
-			Stripes: len(h.targets), StripeChunkBytes: 64 << 10,
+		return h.node.Striped(connections(h.targets), volume, plans.LogicalVolumeOptions{
+			Definition: lvm.LogicalVolumeDefinition{
+				Stripes: len(h.targets), StripeChunkBytes: 64 << 10,
+			},
 		})
 	default:
 		t.Fatalf("SB_GROW_PLAN is %q, which is not a plan this suite builds", shape)

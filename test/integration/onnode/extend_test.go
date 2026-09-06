@@ -26,6 +26,7 @@ import (
 
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
 )
 
 // requireExtendPhase skips unless a driver is adding members to a volume.
@@ -41,12 +42,15 @@ func requireExtendPhase(t *testing.T) {
 func (h *harness) extendPlan() volstack.Plan {
 	volume := h.volume
 	volume.FsType = envOr("SB_EXTEND_FS", "ext4")
-	return h.node.Striped(h.targets, volume, lvm.LogicalVolumeDefinition{
+	definition := lvm.LogicalVolumeDefinition{
 		// The stripe count stays what the volume was built with. LVM places new
 		// extents across as many members as the last segment used, so a volume
 		// striped two ways spreads onto two of the new members at a time.
 		Stripes:          extendStripes(),
 		StripeChunkBytes: 64 << 10,
+	}
+	return h.node.Striped(connections(h.targets), volume, plans.LogicalVolumeOptions{
+		Definition: definition,
 	})
 }
 

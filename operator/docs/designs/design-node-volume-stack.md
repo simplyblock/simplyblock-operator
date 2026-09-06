@@ -16,7 +16,7 @@
 
 | Phase                   | Status         | Scope                                                                                                                                                           | Behavior change                                                         |
 |-------------------------|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| **Phase 1** (§4–§8)     | Built, unwired | The `blockdev` split, the layer contract, the runner, the stack record, and the `fabric` and `filesystem` layers                                                | None. RWO parity with today's node service                              |
+| **Phase 1** (§4–§8)     | Built, unwired | The `blockdev` split, the layer contract, the runner, the stack record, the plan shapes, and the `fabric` and `filesystem` layers                               | None. RWO parity with today's node service                              |
 | **Phase 2** (§5.3–§5.5) | Partly built   | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
 | **Phase 3** (§9)        | Partly built   | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
 | **Phase 4** (§10)       | Planned        | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
@@ -1114,17 +1114,27 @@ is Kubernetes-shaped, and the striped pNFS design needs two different compositio
 of the same set, one on the MDS host and one on every client. They belong in
 `atlas-lib`.
 
-| Package                      | Holds                                                                                               |
-|------------------------------|-----------------------------------------------------------------------------------------------------|
-| `atlas-lib/blockdev/`        | `Device`: what a Linux block device is, independent of what produced it (Appendix A)                |
-| `atlas-lib/volstack/`        | `Layer`, `State`, `Artifact`, `Geometry`, the optional interfaces, the runner, and the stack record |
-| `atlas-lib/volstack/layers/` | The layer implementations                                                                           |
-| `atlas-lib/lvm/`             | The LVM and device-mapper primitives PR #402 wrote as `csi-driver/pkg/util/vdo.go`                  |
-| `csi-driver/pkg/spdk`        | The plan: a pure function from `VolumeContext`, `VolumeCapability`, and `Role` to a layer list      |
+| Package                      | Holds                                                                                                                               |
+|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `atlas-lib/blockdev/`        | `Device`: what a Linux block device is, independent of what produced it (Appendix A)                                                |
+| `atlas-lib/volstack/`        | `Layer`, `State`, `Artifact`, `Geometry`, the optional interfaces, the runner, and the stack record                                 |
+| `atlas-lib/volstack/layers/` | The layer implementations                                                                                                           |
+| `atlas-lib/volstack/plans/`  | The plan shapes: one constructor per row of §3's table, and the LVM naming rule they derive from a volume                           |
+| `atlas-lib/lvm/`             | The LVM and device-mapper primitives PR #402 wrote as `csi-driver/pkg/util/vdo.go`                                                  |
+| `csi-driver/pkg/spdk`        | The selection: a pure function from `VolumeContext`, `VolumeCapability`, and `Role` to which shape, and the values it is built with |
 
-Plan construction stays in the CSI driver because it is the one Kubernetes-shaped
-part, and it is deliberately thin. The package name `volstack` is provisional
-(§17 Q1).
+**Selection stays in the CSI driver, and the shapes do not.** Which layers a kind
+of volume is made of is a property of the storage rather than of Kubernetes, and
+§3's table is the whole of it, so the constructors live beside the layers they
+compose. What that buys is a single answer: a node service and the on-node tests
+that cover it cannot disagree about the shape of a staged volume, because both
+name the same constructor. What remains Kubernetes-shaped is which row a volume
+is, which is read from a `VolumeContext`, a `VolumeCapability`, and the node's
+role, and that stays where those types are. It is deliberately thin: a switch
+over the provisioning parameters ending in one constructor call, and it reaches
+nothing, so it is covered by a unit test rather than by a cluster.
+
+The package name `volstack` is provisional (§17 Q1).
 
 **The role is an input, and resolving it is not part of the pure function.** A
 pNFS volume has two plans over one namespace (§1), and §3's last four rows differ
