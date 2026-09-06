@@ -24,7 +24,9 @@ import (
 // what is under test is whether each layer takes the space rather than how much
 // of it there is, and a sparse file costs nothing until it is written to.
 const (
-	growVolumeUUID = "6b41f0e7-25d8-4a3c-9f16-2ec7b5a03d84"
+	// Completed by each case with two more digits, so every case has a volume
+	// identity of its own that is still a UUID.
+	growVolumeUUID = "6b41f0e7-25d8-4a3c-9f16-2ec7b5a03d"
 	growNQN        = "nqn.2023-04.io.simplyblock:integration:" + growVolumeUUID
 	growPort       = 4440
 	growFromMB     = 512
@@ -81,20 +83,30 @@ func TestVolumeStackGrows(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
+		uuid    string
 		shape   string
 		fsType  string
 		members int
 	}{
-		{name: "ext4 on one namespace", shape: "lvm", fsType: "ext4", members: 1},
-		{name: "xfs on one namespace", shape: "lvm", fsType: "xfs", members: 1},
-		{name: "ext4 striped across two", shape: "striped", fsType: "ext4", members: 2},
+		{
+			name: "ext4 on one namespace", uuid: growVolumeUUID + "01",
+			shape: "lvm", fsType: "ext4", members: 1,
+		},
+		{
+			name: "xfs on one namespace", uuid: growVolumeUUID + "02",
+			shape: "lvm", fsType: "xfs", members: 1,
+		},
+		{
+			name: "ext4 striped across two", uuid: growVolumeUUID + "03",
+			shape: "striped", fsType: "ext4", members: 2,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// A namespace of its own per case, so a case never inherits what the
 			// one before it left, and a fresh subsystem so the initiator has
 			// nothing of the previous case still attached.
 			targets := growTargets(ctx, t, sh, ip, tc.name, tc.members)
-			env := growEnv(targets, ip, tc.name, tc.shape, tc.fsType)
+			env := growEnv(targets, ip, tc.name, tc.uuid, tc.shape, tc.fsType)
 
 			runOnNode(ctx, t, sh, env, "TestGrowStage")
 
@@ -113,7 +125,7 @@ func TestVolumeStackGrows(t *testing.T) {
 	// alternative would be a volume half spread and half not, with nothing said.
 	t.Run("a stripe with only one member grown", func(t *testing.T) {
 		targets := growTargets(ctx, t, sh, ip, "partial", 2)
-		env := growEnv(targets, ip, "partial", "striped", "ext4")
+		env := growEnv(targets, ip, "partial", growVolumeUUID+"04", "striped", "ext4")
 
 		runOnNode(ctx, t, sh, env, "TestGrowStage")
 
@@ -169,7 +181,7 @@ func growTargets(
 
 // growEnv is what both phases of one case are told, and it has to be the same
 // for both or the second addresses a different stack than the first raised.
-func growEnv(targets []*fabric.Target, ip, name, shape, fsType string) map[string]string {
+func growEnv(targets []*fabric.Target, ip, name, uuid, shape, fsType string) map[string]string {
 	// Fixed across the two phases of one case, because the phase that extends has
 	// to find the stack the phase before it raised and a directory made by a
 	// process that has exited is not where it is. Distinct between cases, because
@@ -181,8 +193,10 @@ func growEnv(targets []*fabric.Target, ip, name, shape, fsType string) map[strin
 		"SB_ONNODE": "1",
 		// The volume's identity is the case's, because the volume group and the
 		// logical volume are named after it and two cases sharing one would have
-		// the second find the first's.
-		"SB_VOLUME_UUID":  scope + "-" + growVolumeUUID,
+		// the second find the first's. A UUID rather than a name, because the
+		// initiator's own identity used to be derived from this one and a connect
+		// carrying a hostid that is not a UUID is refused by the kernel.
+		"SB_VOLUME_UUID":  uuid,
 		"SB_GROW_PLAN":    shape,
 		"SB_GROW_FS":      fsType,
 		"SB_STAGING_PATH": "/var/tmp/volstack-grow/" + scope + "/staging",

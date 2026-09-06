@@ -63,9 +63,16 @@ func newHarness(t *testing.T) *harness {
 	records := envOr("SB_RECORDS", t.TempDir())
 	staging := envOr("SB_STAGING_PATH", filepath.Join(t.TempDir(), "staging"))
 	uuid := envOr("SB_VOLUME_UUID", "00000000-0000-0000-0000-000000000000")
+
+	// The host's identity is the node's rather than the volume's, and the kernel
+	// rejects a connect whose hostid is not a UUID. Deriving one from the other
+	// tied them together, so naming a volume anything but a UUID stopped the
+	// initiator from connecting at all.
+	hostID := envOr("SB_HOST_ID", "11111111-2222-3333-4444-555555555555")
+	hostNQN := envOr("SB_HOST_NQN", "nqn.2014-08.org.nvmexpress:uuid:"+hostID)
 	return &harness{
 		t:       t,
-		node:    newNode(envOr("SB_HOST_NQN", "nqn.2014-08.org.nvmexpress:uuid:"+uuid), uuid),
+		node:    newNode(hostNQN, hostID),
 		targets: targets,
 		volume: Volume{
 			UUID:        uuid,
