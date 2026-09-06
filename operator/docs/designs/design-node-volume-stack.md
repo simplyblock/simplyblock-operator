@@ -14,12 +14,20 @@
 
 ## Phasing Overview
 
-| Phase                   | Status  | Scope                                                                                                                     | Behavior change                                                         |
-|-------------------------|---------|---------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| **Phase 1** (§4–§8)     | Planned | The `blockdev` split, the layer contract, the runner, the stack record, and the `fabric` and `filesystem` layers          | None. RWO parity with today's node service                              |
-| **Phase 2** (§5.3–§5.4) | Planned | The `lvmPV` and `lvmVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
-| **Phase 3** (§9)        | Planned | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                        | Heal and expand become correct for every layer, not only the bottom one |
-| **Phase 4** (§10)       | Planned | Node requirements derived from the plan on the controller side                                                            | Topology gating stops being hand-written per feature                    |
+| Phase                   | Status         | Scope                                                                                                                                                           | Behavior change                                                         |
+|-------------------------|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| **Phase 1** (§4–§8)     | Built, unwired | The `blockdev` split, the layer contract, the runner, the stack record, and the `fabric` and `filesystem` layers                                                | None. RWO parity with today's node service                              |
+| **Phase 2** (§5.3–§5.5) | Partly built   | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
+| **Phase 3** (§9)        | Partly built   | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
+| **Phase 4** (§10)       | Planned        | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
+
+What "built" means here is that the layers, the runner, and the record live in
+`atlas-lib/volstack` and are covered by unit tests and by the on-node integration
+suite. What it does not mean is that anything calls them: neither the CSI driver
+nor the operator imports the package yet, so none of this is on a data path. Phase
+2 is partly built because the three LVM layers exist and the VDO call sites have
+not moved onto them; Phase 3 because every `Grower` is implemented and `Healer` is
+implemented on `fabric`, `members`, and `filesystem` alone.
 
 Phase 1 is shippable on its own because it changes no observable behavior: the
 existing RWO plan is `fabric` → `filesystem`, and the runner performs exactly the
@@ -232,8 +240,9 @@ implementation slips, and §4 answers each of them once instead of per layer:
 - **Replacing the volume-context stash.** `util.StashVolumeContext` keeps its
   current role. §6 adds a record of the plan beside it and does not merge the two.
 - **Block-mode plus VDO.** PR #402 excludes it explicitly and this design does not
-  add it. The plan for it is representable (`fabric` → `lvmPV` →
-  `lvmVolume(vdo)`, with no `filesystem`), which makes it a scoping decision
+  add it. The plan for it is representable (`fabric` → `lvmPhysicalVolume` →
+  `lvmVolumeGroup` → `lvmLogicalVolume(vdo)`, with no `filesystem`), which makes
+  it a scoping decision
   rather than an untested combination, but it is still out of scope.
 
 ---
@@ -282,21 +291,23 @@ The plans the contract has to express, bottom to top. The last four differ from
 each other only by the node's role for the volume, which is why the role is an
 input to plan construction and not a property of the volume:
 
-| Volume kind                                   | Plan                                                                       |
-|-----------------------------------------------|----------------------------------------------------------------------------|
-| Plain, raw block                              | `fabric`                                                                   |
-| Plain, ext4 or XFS                            | `fabric` → `filesystem`                                                    |
-| Client-side dedup or compression, ext4 or XFS | `fabric` → `lvmPV` → `lvmVolume(vdo)` → `filesystem`                       |
-| pNFS single, MDS host                         | `fabric` → `filesystem` → `nfsExport`                                      |
-| pNFS single, client node                      | `fabric` → `alias` → `nfsMount`                                            |
-| pNFS striped, MDS host                        | `members(n)` → `lvmPV` → `lvmVolume(striped)` → `filesystem` → `nfsExport` |
-| pNFS striped, client node                     | `members(n)` → `alias` → `lvmVolume(activate, read-only)` → `nfsMount`     |
+| Volume kind                                   | Plan                                                                                                             |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| Plain, raw block                              | `fabric`                                                                                                         |
+| Plain, ext4 or XFS                            | `fabric` → `filesystem`                                                                                          |
+| Client-side dedup or compression, ext4 or XFS | `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume(vdo)` → `filesystem`                       |
+| pNFS single, MDS host                         | `fabric` → `filesystem` → `nfsExport`                                                                            |
+| pNFS single, client node                      | `fabric` → `alias` → `nfsMount`                                                                                  |
+| pNFS striped, MDS host                        | `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume(striped)` → `filesystem` → `nfsExport` |
+| pNFS striped, client node                     | `members(n)` → `alias` → `lvmVolumeGroup(activate)` → `lvmLogicalVolume(read-only)` → `nfsMount`                 |
 
-Two results are worth reading off that table. Raw block mode is the plain plan
-with its top layer absent rather than a conditional inside a stage function. And
-the VDO volume and the striped export use the same `lvmVolume` layer with a
-different logical-volume type, which is why §5.4 treats striping as a parameter
-and not as a second implementation.
+Three results are worth reading off that table. Raw block mode is the plain plan
+with its top layer absent rather than a conditional inside a stage function. The
+VDO volume and the striped export use the same `lvmLogicalVolume` layer with a
+different logical-volume type, which is why §5.5 treats striping as a parameter
+and not as a second implementation. And the group is a layer between the physical
+volumes and the logical one, rather than part of either, because a striped export
+gains capacity by taking on members rather than by growing the ones it has (§5.4).
 
 ---
 
@@ -361,7 +372,7 @@ pod restart. The existing `defer initiator.Disconnect()` in `NodeStageVolume` is
 already a `Release` and is safe for that reason. The same reflex applied to a
 volume group is the defect PR #402 fixed.
 
-Not every layer implements all four distinctly. `lvmPV` has nothing to release,
+Not every layer implements all four distinctly. `lvmPhysicalVolume` has nothing to release,
 because a physical-volume signature is not something a host holds. `fabric` has
 nothing to destroy, because the namespace belongs to the control plane. A verb
 with nothing to do returns without error rather than returning "unsupported": the
@@ -451,7 +462,7 @@ Expressed as a value, the VDO layer reports `Geometry{}` and the `filesystem`
 layer passes no `-d su=,sw=` because there is nothing to align to.
 
 The same field improves the striped case rather than merely unifying it. A striped
-`lvmVolume` layer knows its own stripe count and chunk size, so the `filesystem`
+`lvmLogicalVolume` layer knows its own stripe count and chunk size, so the `filesystem`
 layer above it receives real geometry instead of the `xfs_su` and `xfs_sw`
 StorageClass parameters and their `16k`/`1` fallbacks.
 
@@ -512,9 +523,10 @@ type Recorder interface {
 }
 ```
 
-Optional rather than mandatory is deliberate. Three of the seven layers in §5 have
-nothing to heal, four have nothing to grow, and `lvmPV` has nothing to record,
-and a mandatory interface would fill them with methods that return nil. The runner's assertion is also what keeps
+Optional rather than mandatory is deliberate. Five of the nine layers in §5 have
+nothing to heal, five have nothing to grow, and `lvmPhysicalVolume` has nothing to
+record, and a mandatory interface would fill them with methods that return nil.
+The runner's assertion is also what keeps
 `NodeExpandVolume` honest: a plan whose layers implement no `Grower` at all is a
 plan that needs no node-side expansion, which is the correct answer for a pNFS
 client.
@@ -527,16 +539,17 @@ error on kubelet's reconciliation retry.
 
 ## 5. Layer Catalog
 
-| Layer               | Ensure                                                                               | Release                                                             | Destroy                   | Optional                     |
-|---------------------|--------------------------------------------------------------------------------------|---------------------------------------------------------------------|---------------------------|------------------------------|
-| `fabric` (§5.1)     | Connect every endpoint in the control plane's priority order, wait for the namespace | Detach, disconnecting only when the subsystem cannot be shared (§8) | —                         | `Healer`                     |
-| `members` (§5.2)    | *n* × `fabric` in the recorded order                                                 | Reverse order                                                       | —                         | `Healer`                     |
-| `lvmPV` (§5.3)      | `pvcreate`, or re-identify when `StateForeign`                                       | —                                                                   | `pvremove`                | —                            |
-| `lvmVolume` (§5.4)  | `vgcreate` and `lvcreate` of the configured type, or activate when `StateInactive`   | `vgchange -an`, with a `dmsetup` force path                         | `lvremove` and `vgremove` | `Grower`, `NodeRequirements` |
-| `filesystem` (§5.5) | `mkfs` when unformatted, then mount                                                  | Unmount                                                             | —                         | `Healer`, `Grower`           |
-| `alias`             | Publish the `eui64` symlink                                                          | Remove the symlink                                                  | —                         | —                            |
-| `nfsExport`         | Write the export drop-in, `exportfs -ra`                                             | `exportfs -u`                                                       | Remove the drop-in        | `Grower`                     |
-| `nfsMount`          | `mount -t nfs -o v4.1`                                                               | Unmount                                                             | —                         | `Healer`                     |
+| Layer                      | Ensure                                                                               | Release                                                             | Destroy            | Optional                     |
+|----------------------------|--------------------------------------------------------------------------------------|---------------------------------------------------------------------|--------------------|------------------------------|
+| `fabric` (§5.1)            | Connect every endpoint in the control plane's priority order, wait for the namespace | Detach, disconnecting only when the subsystem cannot be shared (§8) | —                  | `Healer`                     |
+| `members` (§5.2)           | *n* × `fabric` in the recorded order                                                 | Reverse order                                                       | —                  | `Healer`                     |
+| `lvmPhysicalVolume` (§5.3) | `pvcreate` on every device below, or re-identify when `StateForeign`                 | —                                                                   | `pvremove`         | —                            |
+| `lvmVolumeGroup` (§5.4)    | `vgcreate` or `vgextend`, then activate                                              | `vgchange -an`, with a `dmsetup` force path                         | `vgremove`         | `Grower`, `NodeRequirements` |
+| `lvmLogicalVolume` (§5.5)  | `lvcreate` of the configured type                                                    | —                                                                   | `lvremove`         | `Grower`                     |
+| `filesystem` (§5.6)        | `mkfs` when unformatted, then mount                                                  | Unmount                                                             | —                  | `Healer`, `Grower`           |
+| `alias`                    | Publish the `eui64` symlink                                                          | Remove the symlink                                                  | —                  | —                            |
+| `nfsExport`                | Write the export drop-in, `exportfs -ra`                                             | `exportfs -u`                                                       | Remove the drop-in | `Grower`                     |
+| `nfsMount`                 | `mount -t nfs -o v4.1`                                                               | Unmount                                                             | —                  | `Healer`                     |
 
 `alias`, `nfsExport`, and `nfsMount` are listed for completeness and are out of
 scope here (§2). They are specified by
@@ -585,12 +598,15 @@ rebuilt from the current StorageClass.
 only non-linear shape any of the plans in §3 has, and a composite layer expresses
 it without making the ordering of anything else implicit.
 
-### 5.3 `lvmPV` (Phase 2)
+### 5.3 `lvmPhysicalVolume` (Phase 2)
 
-`Ensure` on `StateAbsent` runs `pvcreate` against the device below. `Observe`
-reads the device's on-disk LVM signature to answer which volume group it currently
-belongs to, and reports `StateForeign` when that is a volume group belonging to
-another volume, which is what a byte-level clone produces.
+`Ensure` on `StateAbsent` runs `pvcreate` against every device below, and against
+every one of them rather than the first: a striped plan hands this layer as many
+devices as the volume has members, and labeling one of them leaves the group to be
+built over devices that carry no label. `Observe` reads each device's on-disk LVM
+signature to answer which volume group it currently belongs to, and reports
+`StateForeign` when that is a volume group belonging to another volume, which is
+what a byte-level clone produces.
 
 How `Observe` establishes `StateAbsent` here is specified by
 [`design-device-content-detection.md`](design-device-content-detection.md) §6. An
@@ -610,26 +626,62 @@ by on-disk content has it, and
 volume-group names without addressing what happens when a clone and its source are
 staged on one host. `StateForeign` is that specification, in one place, for both.
 
-### 5.4 `lvmVolume` (Phase 2)
+### 5.4 `lvmVolumeGroup` (Phase 2)
 
-One volume group holding one logical volume, whose type is a parameter: linear,
-`vdo`, or striped. `Ensure` on `StateAbsent` runs `vgcreate` over the physical
-volumes below and then `lvcreate` of the configured type. `Ensure` on
-`StateInactive` runs `vgchange -ay` and creates nothing. `Ensure` on
-`StatePartial`, the volume group whose logical volume was never created, completes
-the `lvcreate`.
+The group over the physical volumes below, and the host's hold on it. `Observe`
+asks which of those devices already carry this group's label: none is
+`StateAbsent`, all of them is `StateReady`, and a mixture is `StatePartial`, the
+state a volume that has been given new members arrives in. A group that exists but
+is not activated is `StateInactive`.
+
+`Ensure` runs `vgcreate` when the group does not exist and `vgextend` for the
+members that have not joined the one that does, and then activates the group in
+either case. Activating unconditionally is what makes `StateInactive` converge
+without a branch of its own.
 
 `Release` runs `vgchange -an`, and falls back to removing the device-mapper nodes
 directly when the backing device is gone and every LVM retry fails. That force
 path has to escape the volume-group name the way device-mapper does, doubling
 dashes, or it matches nothing.
 
-`Destroy` runs `lvremove` and `vgremove`. Its callers are volume deletion and, for
-a pNFS export, `DeleteExport`. It is never reached from `NodeUnstageVolume`.
+`Destroy` runs `vgremove`.
+
+`Grow` resizes the members that have already joined with `pvresize` and takes in
+the ones that have not with `vgextend`. Those are the two ways a group gains
+capacity, and a volume can arrive needing either.
+
+**The group is a layer of its own because capacity arrives two ways.** A volume
+whose members can be grown grows in place, and one whose members cannot — a
+striped pNFS export, where each leg is a separate namespace — grows only by taking
+on more members. The second is a change to the group's membership and not to the
+logical volume above it, so a design that folded the two together would have the
+logical-volume layer reaching down to reshape something it does not own. The hold
+is the other reason: a group is activated and deactivated on a host, and a logical
+volume is not, so `Release` belongs here and has nothing to do one layer up.
+
+### 5.5 `lvmLogicalVolume` (Phase 2)
+
+One logical volume in the group below, whose type is a parameter: linear, `vdo`,
+or striped. `Ensure` on `StateAbsent` runs `lvcreate` of the configured type.
+`Ensure` on `StatePartial`, the group whose logical volume was never created,
+completes the same `lvcreate`.
+
+`Release` does nothing. The hold on the LVM objects is the group's activation
+(§5.4), and a second layer deactivating it would be the same hold released twice.
+
+`Destroy` runs `lvremove`. Its callers are volume deletion and, for a pNFS export,
+`DeleteExport`. It is never reached from `NodeUnstageVolume`.
 
 `Grow` extends the logical volume to the new physical capacity of the group and
-then matches the logical size, and succeeds without acting when the volume is
-already at its target.
+succeeds without acting when the volume is already at its target. For a `vdo`
+volume it sizes the pool as well as the volume on it.
+
+Growing onto members the volume did not have before is not `Grow` alone. The
+layers that attach and label those members do not grow — there is nothing about a
+connected namespace or a physical-volume label that has a larger version — so a
+bare `Grow` observes them rather than converging them, and the group is offered
+devices that were never attached. An expand that adds members is `Up` on the plan
+that names them, then `Grow`; §9 states the ordering rule.
 
 Naming is derived from the logical volume's UUID and nothing host-specific, so a
 plan replayed on another host arrives at the same names. The lvol UUID is already
@@ -643,7 +695,7 @@ The striped and the VDO plans differ only in the logical-volume type and its
 options. The `Artifact` a striped volume reports carries its real `Geometry`, and
 a VDO volume reports the zero value (§4.3).
 
-### 5.5 `filesystem`
+### 5.6 `filesystem`
 
 `Ensure` formats the device below when it is unformatted, then mounts it at the
 staging path. What "unformatted" means, and why `blkid` cannot establish it, are
@@ -767,7 +819,7 @@ type Entry struct {
 	//
 	// A layer contributes them through the optional Recorder interface (§4.4),
 	// and one whose identity is fully determined by the volume handle implements
-	// nothing and carries none. `lvmPV` below is that case.
+	// nothing and carries none. `lvmPhysicalVolume` below is that case.
 	Params json.RawMessage `json:"params,omitempty"`
 
 	// Members is the ordered sub-plan of a fan-in layer (§5.2) and is empty for
@@ -796,8 +848,9 @@ A striped stack whose `filesystem` layer was never reached:
         {"layer": "fabric", "params": {"nqn": "nqn.2023-05.io.simplyblock:lvol:bbbb"}, "attempted": true}
       ]
     },
-    {"layer": "lvmPV", "attempted": true},
-    {"layer": "lvmVolume", "params": {"type": "vdo", "stripes": 2, "chunkBytes": 65536}, "attempted": true},
+    {"layer": "lvmPhysicalVolume", "attempted": true},
+    {"layer": "lvmVolumeGroup", "attempted": true},
+    {"layer": "lvmLogicalVolume", "params": {"type": "vdo", "stripes": 2, "chunkBytes": 65536}, "attempted": true},
     {"layer": "filesystem", "params": {"fsType": "xfs"}, "attempted": false}
   ]
 }
@@ -995,9 +1048,19 @@ sequence of no-ops rather than a sequence of alarming errors.
 The three layers with something to heal are `fabric` (path reconnection and ANA
 reconciliation, which the existing `MonitorConnection` and guardian machinery
 already perform), `filesystem` (dead-mount detection and remount), and `nfsMount`
-(`ESTALE` detection). The three with something to grow are `lvmVolume`,
-`filesystem`, and `nfsExport`. Every other layer implements neither, which is the
-argument for the interfaces being optional (§4.4).
+(`ESTALE` detection). The four with something to grow are `lvmVolumeGroup`,
+`lvmLogicalVolume`, `filesystem`, and `nfsExport`. Every other layer implements
+neither, which is the argument for the interfaces being optional (§4.4).
+
+**A layer with nothing to grow is why an expand that adds members is not `Grow`
+alone.** `Grow` walks the stack and asks each layer for its grown artifact,
+falling back to `Observe` for the layers that cannot grow, because a connected
+namespace and a physical-volume label have no larger version of themselves. That
+fallback observes rather than converges: a namespace the volume did not have
+before is not connected by it, and a device that has never been labeled is not
+labeled by it. So a volume gaining members is brought `Up` on the plan that names
+them, which attaches and labels the new ones, and only then grown. A volume whose
+existing members were resized needs no such thing and is `Grow` on its own.
 
 ---
 
@@ -1099,7 +1162,7 @@ and rebasing that validation onto a package boundary buys nothing.
 inherits that: one volume's stack is brought up, brought down, healed, or grown by
 one goroutine at a time.
 
-Per-volume locking is not sufficient for every layer. `lvmPV` and `lvmVolume`
+Per-volume locking is not sufficient for every layer. The three LVM layers
 invoke LVM commands that take LVM's own host-wide locks and scan every visible
 device, and two volumes staging at the same moment on one host contend there
 regardless of their volume IDs. The pNFS layers are worse: `/etc/exports` is one
@@ -1222,8 +1285,8 @@ Full scenario matrix, coverage status, and hand-off test concepts:
 - **Load and long-running:** genuinely concurrent staging of several
   LVM-backed volumes on one host, which is the specific gap §12 names and which
   PR #402's validation did not reach. It decides §17 Q2: overlapping `pvscan` and
-  `vgchange` either survive, and `lvmPV` and `lvmVolume` keep separate keys, or
-  they do not, and both layers return the one key that serializes all LVM work.
+  `vgchange` either survive, and the LVM layers keep separate keys, or they do
+  not, and all three return the one key that serializes all LVM work.
 
 Risk concentrates in §4.2 and §7.3. A `State` misclassification formats a volume
 that had data, and an unwind that calls `Destroy` removes one. Those scenarios
@@ -1359,13 +1422,13 @@ type LockScope interface {
 ```
 
 A layer that does not implement it is serialized per volume. `fabric` returns its
-volume handle. `lvmPV` and `lvmVolume` return a key naming the LVM work, so two
+volume handle. The three LVM layers return a key naming the LVM work, so two
 volumes staging at once serialize through `pvscan` and `vgchange` while their
 fabric connects still run concurrently. `nfsExport` returns a key naming
 `/etc/exports`, which is one file per host.
 
-**The scope is a key and not a named scope.** Whether `lvmPV` and `lvmVolume`
-return one key or two follows from whether overlapping `pvscan` and `vgchange` are
+**The scope is a key and not a named scope.** Whether the LVM layers
+return one key or several follows from whether overlapping `pvscan` and `vgchange` are
 safe. As a key, that answer changes a returned value. As a choice between "per
 volume" and "host-wide," it would change the contract.
 
