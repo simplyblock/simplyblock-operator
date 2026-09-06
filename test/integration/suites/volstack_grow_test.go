@@ -208,6 +208,7 @@ func growEnv(targets []*fabric.Target, ip, name, uuid, shape, fsType string) map
 		// initiator's own identity used to be derived from this one and a connect
 		// carrying a hostid that is not a UUID is refused by the kernel.
 		"SB_VOLUME_UUID":  uuid,
+		"SB_PHASED":       "1",
 		"SB_GROW_PLAN":    shape,
 		"SB_GROW_FS":      fsType,
 		"SB_STAGING_PATH": "/var/tmp/volstack-grow/" + scope + "/staging",

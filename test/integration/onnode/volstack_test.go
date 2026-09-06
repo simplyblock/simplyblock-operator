@@ -69,10 +69,11 @@ func newHarness(t *testing.T) *harness {
 	// volume are named after this and two cases sharing one would have the second
 	// find the first's, whether or not the device underneath was emptied first.
 	//
-	// The expand phases are the exception, and have to be: they are two cases
-	// either side of one volume, so they are given an identity by whoever drives
-	// them rather than taking one from their own names.
-	if os.Getenv("SB_GROW_PLAN") == "" {
+	// A driven phase is the exception, and has to be: phases come in pairs either
+	// side of one volume and are named differently from each other, so taking an
+	// identity from their own names would have the second address a volume the
+	// first never made. Those are given one by whoever drives them.
+	if os.Getenv("SB_PHASED") == "" {
 		uuid += "-" + volumeScope(t.Name())
 	}
 

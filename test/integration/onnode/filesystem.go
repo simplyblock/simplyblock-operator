@@ -108,10 +108,18 @@ func (shellFilesystem) IsMountPoint(_ context.Context, path string) (bool, error
 // runTool executes one of the node's storage tools and folds its output into
 // the error, because the layers above match on what a tool said.
 func runTool(ctx context.Context, name string, args ...string) error {
+	_, err := runToolOutput(ctx, name, args...)
+	return err
+}
+
+// runToolOutput is runTool for a tool that is being asked something rather than
+// told to do something.
+func runToolOutput(ctx context.Context, name string, args ...string) (string, error) {
 	//nolint:gosec // a fixed set of storage tools, with structured arguments
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return string(out), fmt.Errorf("%s %s: %w: %s",
+			name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return string(out), nil
 }
