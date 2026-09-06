@@ -94,7 +94,7 @@ func TestVolumeStackGrows(t *testing.T) {
 			// one before it left, and a fresh subsystem so the initiator has
 			// nothing of the previous case still attached.
 			targets := growTargets(ctx, t, sh, ip, tc.name, tc.members)
-			env := growEnv(targets, ip, tc.shape, tc.fsType)
+			env := growEnv(targets, ip, tc.name, tc.shape, tc.fsType)
 
 			runOnNode(ctx, t, sh, env, "TestGrowStage")
 
@@ -113,7 +113,7 @@ func TestVolumeStackGrows(t *testing.T) {
 	// alternative would be a volume half spread and half not, with nothing said.
 	t.Run("a stripe with only one member grown", func(t *testing.T) {
 		targets := growTargets(ctx, t, sh, ip, "partial", 2)
-		env := growEnv(targets, ip, "striped", "ext4")
+		env := growEnv(targets, ip, "partial", "striped", "ext4")
 
 		runOnNode(ctx, t, sh, env, "TestGrowStage")
 
@@ -169,17 +169,24 @@ func growTargets(
 
 // growEnv is what both phases of one case are told, and it has to be the same
 // for both or the second addresses a different stack than the first raised.
-func growEnv(targets []*fabric.Target, ip, shape, fsType string) map[string]string {
+func growEnv(targets []*fabric.Target, ip, name, shape, fsType string) map[string]string {
+	// Fixed across the two phases of one case, because the phase that extends has
+	// to find the stack the phase before it raised and a directory made by a
+	// process that has exited is not where it is. Distinct between cases, because
+	// a case that fails leaves its stack mounted and its volume group behind, and
+	// the next one would then be handed the wreckage of the last one and fail for
+	// a reason that has nothing to do with it.
+	scope := sanitizeForNQN(name)
 	env := map[string]string{
-		"SB_ONNODE":      "1",
-		"SB_VOLUME_UUID": growVolumeUUID,
-		"SB_GROW_PLAN":   shape,
-		"SB_GROW_FS":     fsType,
-		// Fixed, because the phase that extends has to find the stack the phase
-		// before it raised, and a directory made by a process that has exited is
-		// not where it is.
-		"SB_STAGING_PATH": "/var/tmp/volstack-grow/staging",
-		"SB_RECORDS":      "/var/tmp/volstack-grow/records",
+		"SB_ONNODE": "1",
+		// The volume's identity is the case's, because the volume group and the
+		// logical volume are named after it and two cases sharing one would have
+		// the second find the first's.
+		"SB_VOLUME_UUID":  scope + "-" + growVolumeUUID,
+		"SB_GROW_PLAN":    shape,
+		"SB_GROW_FS":      fsType,
+		"SB_STAGING_PATH": "/var/tmp/volstack-grow/" + scope + "/staging",
+		"SB_RECORDS":      "/var/tmp/volstack-grow/" + scope + "/records",
 	}
 	for i, target := range targets {
 		prefix := "SB_TARGET"
