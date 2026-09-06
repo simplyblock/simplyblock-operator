@@ -33,11 +33,41 @@ func TestFilesystemStrategyStripeAlignment(t *testing.T) {
 		t.Errorf("xfs was created without aligning to the stripes below it: %v", xfs)
 	}
 
-	// Not a defect, and not silence either: the ext family has stride and
-	// stripe_width and does not pass them yet, which leaves it misaligned rather
-	// than wrong. The case is here so that changes when somebody adds them.
-	if got := FilesystemStrategyFor("ext4").FormatOptions(nil, striped); len(got) != 0 {
-		t.Errorf("ext4 now contributes format options; this case is what said it did not: %v", got)
+	// stride is one member's chunk counted in filesystem blocks and stripe_width
+	// is one full trip across the members, so 65536/4096 = 16 and 16*4 = 64.
+	ext := FilesystemStrategyFor("ext4").FormatOptions(nil, striped)
+	if !slices.Contains(ext, "stride=16,stripe_width=64") {
+		t.Errorf("ext4 was created without aligning to the stripes below it: %v", ext)
+	}
+}
+
+// A chunk that is not a whole number of filesystem blocks describes a layout the
+// device does not have, and rounding it would be worse than saying nothing.
+func TestFilesystemStrategyDeclinesAChunkItCannotExpress(t *testing.T) {
+	odd := volstack.Geometry{ChunkBytes: 100000, Stripes: 2}
+	if got := FilesystemStrategyFor("ext4").FormatOptions(nil, odd); len(got) != 0 {
+		t.Errorf("ext4 rounded a chunk of %d bytes into %v", odd.ChunkBytes, got)
+	}
+}
+
+// Each filesystem is grown by its own tool, pointed at whatever that tool
+// resizes: ext resizes the device and XFS resizes the mount. Neither can be
+// assembled from a name and a path by a caller that does not know which
+// filesystem it is talking about.
+func TestFilesystemStrategyGrowCommand(t *testing.T) {
+	const dev, mnt = "/dev/nvme0n1", "/var/lib/kubelet/staging"
+
+	if got := FilesystemStrategyFor("ext4").GrowCommand(dev, mnt); !slices.Equal(got, []string{"resize2fs", dev}) {
+		t.Errorf("ext4 grows with %v, want resize2fs against the device", got)
+	}
+	if got := FilesystemStrategyFor("xfs").GrowCommand(dev, mnt); !slices.Equal(got, []string{"xfs_growfs", mnt}) {
+		t.Errorf("xfs grows with %v, want xfs_growfs against the mount", got)
+	}
+	// Guessing at a tool name would run something arbitrary against a volume
+	// holding data, so a filesystem nothing is known about reports that it cannot
+	// be grown here.
+	if got := FilesystemStrategyFor("btrfs").GrowCommand(dev, mnt); got != nil {
+		t.Errorf("an unknown filesystem offered %v as a way to grow it", got)
 	}
 }
 

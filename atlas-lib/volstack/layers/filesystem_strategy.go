@@ -37,6 +37,18 @@ type FilesystemLayerStrategy interface {
 	// MountFlags are the flags the volume asked for plus any this filesystem
 	// requires in order to mount at all.
 	MountFlags(flags []string) []string
+
+	// GrowCommand extends the filesystem onto the device it now sits on, or nil
+	// when this filesystem cannot be grown in place.
+	//
+	// Both the tool and what it is pointed at differ: ext resizes the device and
+	// XFS resizes the mount, so a caller cannot compose the command from a name
+	// and a path without knowing which filesystem it is talking about. That is
+	// why it is asked for rather than assembled.
+	//
+	// Growing only. XFS cannot shrink at all, ext shrinks only while unmounted,
+	// and a volume is never shrunk beneath a running pod.
+	GrowCommand(device, mountpoint string) []string
 }
 
 // FilesystemStrategyFor is the strategy for a filesystem, and a strategy that
@@ -61,11 +73,33 @@ type extStrategy struct{ fsType string }
 
 func (e extStrategy) Name() string { return e.fsType }
 
-// FormatOptions adds nothing yet. An ext filesystem on a striped volume wants
-// stride and stripe_width, and not passing them leaves it misaligned rather than
-// wrong, so it is a gap rather than a defect.
-func (e extStrategy) FormatOptions(options []string, _ volstack.Geometry) []string {
-	return options
+// extBlockBytes is the block size mkfs picks for a volume of any size worth
+// striping, and the unit stride and stripe_width are counted in. A filesystem
+// made with a different one would want different numbers, and nothing here can
+// ask what the size will be before the filesystem exists.
+const extBlockBytes = 4096
+
+// FormatOptions align the filesystem to the stripes underneath it. stride is one
+// member's chunk counted in filesystem blocks, and stripe_width is one full trip
+// across the members, which is what lets the allocator spread writes instead of
+// landing them all on the same one.
+//
+// Only when the chunk is a whole number of blocks. It is in practice, and
+// rounding it would describe a layout the device does not have, which is worse
+// than describing none.
+func (e extStrategy) FormatOptions(options []string, geometry volstack.Geometry) []string {
+	if !geometry.Known() || geometry.ChunkBytes%extBlockBytes != 0 {
+		return options
+	}
+	stride := geometry.ChunkBytes / extBlockBytes
+	return append(options, "-E", fmt.Sprintf("stride=%d,stripe_width=%d",
+		stride, stride*int64(geometry.Stripes)))
+}
+
+// GrowCommand resizes the device, which resize2fs does whether the filesystem is
+// mounted or not.
+func (e extStrategy) GrowCommand(device, _ string) []string {
+	return []string{"resize2fs", device}
 }
 
 // MountFlags adds nothing: ext mounts a volume and its clone side by side
@@ -101,6 +135,12 @@ func (xfsStrategy) MountFlags(flags []string) []string {
 	return append(flags, "nouuid")
 }
 
+// GrowCommand resizes the mount rather than the device, because XFS grows only
+// while mounted and is told which filesystem by the path it is mounted at.
+func (xfsStrategy) GrowCommand(_, mountpoint string) []string {
+	return []string{"xfs_growfs", mountpoint}
+}
+
 // plainStrategy is a filesystem this package knows no specifics about, which
 // contributes nothing to either question rather than being turned away.
 type plainStrategy struct{ fsType string }
@@ -110,3 +150,8 @@ func (p plainStrategy) Name() string { return p.fsType }
 func (p plainStrategy) FormatOptions(options []string, _ volstack.Geometry) []string { return options }
 
 func (p plainStrategy) MountFlags(flags []string) []string { return flags }
+
+// GrowCommand is nil. Nothing here knows how to grow a filesystem it knows
+// nothing else about, and guessing at a tool name would run something arbitrary
+// against a volume holding data.
+func (p plainStrategy) GrowCommand(_, _ string) []string { return nil }

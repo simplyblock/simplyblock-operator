@@ -27,9 +27,12 @@ type fakeFS struct {
 
 	mountPoints map[string]bool
 
+	grown [][]string
+
 	formatErr  error
 	mountErr   error
 	unmountErr error
+	growErr    error
 }
 
 type formatCall struct {
@@ -72,6 +75,11 @@ func (f *fakeFS) ForceUnmount(_ context.Context, target string) error {
 	f.forceUnmounted = append(f.forceUnmounted, target)
 	delete(f.mountPoints, target)
 	return nil
+}
+
+func (f *fakeFS) Grow(_ context.Context, command []string) error {
+	f.grown = append(f.grown, command)
+	return f.growErr
 }
 
 func (f *fakeFS) IsMountPoint(_ context.Context, path string) (bool, error) {

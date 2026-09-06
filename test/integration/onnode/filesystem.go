@@ -12,6 +12,7 @@ package onnode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,6 +65,16 @@ func (shellFilesystem) ForceUnmount(ctx context.Context, target string) error {
 		return fmt.Errorf("force unmount %s: %w", target, err)
 	}
 	return nil
+}
+
+// Grow runs the resize tool the filesystem chose, pointed at whatever that
+// filesystem resizes. Nothing here decides which tool it is: the layer asked its
+// filesystem, and this runs what it was handed.
+func (shellFilesystem) Grow(ctx context.Context, command []string) error {
+	if len(command) == 0 {
+		return errors.New("no resize command to run")
+	}
+	return runTool(ctx, command[0], command[1:]...)
 }
 
 // IsMountPoint reports whether anything is mounted at path, by comparing the

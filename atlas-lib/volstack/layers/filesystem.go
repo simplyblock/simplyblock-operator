@@ -42,6 +42,13 @@ type FilesystemOps interface {
 
 	// IsMountPoint reports whether anything is mounted at path.
 	IsMountPoint(ctx context.Context, path string) (bool, error)
+
+	// Grow runs the filesystem's own resize tool, which the filesystem chose and
+	// pointed at whatever it resizes. It is a command rather than a device and a
+	// size because the tools disagree about both: ext resizes a device, XFS
+	// resizes a mount, and neither is told how far to go, since both take the
+	// whole of what is now underneath them.
+	Grow(ctx context.Context, command []string) error
 }
 
 // ContentReader is the reading a format decision rests on, which
@@ -270,6 +277,49 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 		return fmt.Errorf("filesystem: remount %s at %s: %w", dev.Path, f.cfg.StagingPath, err)
 	}
 	return nil
+}
+
+// Grow extends the filesystem over whatever the volume beneath it gained.
+//
+// Convergent, because kubelet reissues NodeExpandVolume after one that already
+// succeeded: both resize tools take the whole of what is now underneath them and
+// report success when that is where they already are, so a volume at its target
+// costs a command and changes nothing.
+//
+// It grows the filesystem and never the volume. The layer below has already
+// taken the space by the time the runner reaches this one, and a filesystem
+// asked to grow past its device fails rather than corrupting anything.
+func (f *Filesystem) Grow(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
+	dev, ok := below.Device()
+	if !ok {
+		return volstack.Artifact{}, errors.New(
+			"filesystem: the layer below exposes no single device to grow onto")
+	}
+
+	// Mounted, because XFS is grown through its mount and because a filesystem
+	// this host has not staged is not this host's to resize. An expand arrives
+	// against a staged volume, so anything else is a caller out of order rather
+	// than a volume that needs work.
+	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
+	if err != nil {
+		return volstack.Artifact{}, fmt.Errorf("filesystem: check %s: %w", f.cfg.StagingPath, err)
+	}
+	if !mounted {
+		return volstack.Artifact{}, fmt.Errorf(
+			"filesystem: %s is not mounted at %s, so there is no filesystem here to grow",
+			dev.Path, f.cfg.StagingPath)
+	}
+
+	command := f.strategy().GrowCommand(dev.Path, f.cfg.StagingPath)
+	if len(command) == 0 {
+		return volstack.Artifact{}, fmt.Errorf(
+			"filesystem: %s cannot be grown in place, and this volume is %s", f.cfg.FsType, f.cfg.FsType)
+	}
+	if err := f.cfg.Ops.Grow(ctx, command); err != nil {
+		return volstack.Artifact{}, fmt.Errorf("filesystem: grow %s at %s: %w",
+			dev.Path, f.cfg.StagingPath, err)
+	}
+	return volstack.Artifact{Devices: below.Devices, Path: f.cfg.StagingPath}, nil
 }
 
 // FilesystemParams is what the record carries for this layer.
