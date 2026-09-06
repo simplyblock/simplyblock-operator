@@ -185,6 +185,24 @@ func (h *harness) blank(ctx context.Context, targets ...Target) {
 // not what a case spends its time on.
 const zeroWindow = 4 << 20
 
+// writeAt puts bytes on a device at an offset, which is how a case builds a
+// volume carrying something no tool on the node would produce.
+func writeAt(t *testing.T, dev blockdev.Device, off int64, data []byte) {
+	t.Helper()
+	f, err := os.OpenFile(dev.Path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open %s to write at %d: %v", dev.Path, off, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.WriteAt(data, off); err != nil {
+		t.Fatalf("write %d bytes to %s at %d: %v", len(data), dev.Path, off, err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("flush the write to %s: %v", dev.Path, err)
+	}
+}
+
 func zero(t *testing.T, dev blockdev.Device) {
 	t.Helper()
 	f, err := os.OpenFile(dev.Path, os.O_WRONLY, 0)
