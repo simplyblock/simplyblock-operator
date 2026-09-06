@@ -53,9 +53,12 @@ func newHarness(t *testing.T) *harness {
 		t.Skip("not running on a node: SB_ONNODE is unset, and this suite needs a real fabric")
 	}
 
+	// As many as the driver named, in order, stopping at the first it did not.
+	// A case where a volume gains members is told about more of them in its
+	// second phase than in its first, so the count is not fixed.
 	targets := []Target{readTarget(t, "SB_TARGET")}
-	if os.Getenv("SB_TARGET2_NQN") != "" {
-		targets = append(targets, readTarget(t, "SB_TARGET2"))
+	for i := 2; os.Getenv("SB_TARGET"+strconv.Itoa(i)+"_NQN") != ""; i++ {
+		targets = append(targets, readTarget(t, "SB_TARGET"+strconv.Itoa(i)))
 	}
 
 	// Overridable because a case spanning more than one run of this binary has to
