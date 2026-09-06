@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -369,7 +370,14 @@ func TestStripedStackAssemblesItsMembers(t *testing.T) {
 
 	h.blank(ctx, h.targets...)
 
-	definition := lvm.LogicalVolumeDefinition{}
+	// Said out loud, because a volume group spanning several members still
+	// produces a linear volume unless lvcreate is told otherwise. A definition
+	// left at its zero value builds a stack that passes every assertion below
+	// while striping across nothing.
+	definition := lvm.LogicalVolumeDefinition{
+		Stripes:          len(h.targets),
+		StripeChunkBytes: 64 << 10,
+	}
 	plan := h.node.Striped(h.targets, h.volume, definition)
 	art := h.up(ctx, plan)
 	t.Cleanup(func() { h.down(context.WithoutCancel(ctx), plan) })
@@ -380,5 +388,23 @@ func TestStripedStackAssemblesItsMembers(t *testing.T) {
 	marker := filepath.Join(art.Path, "across-both-members")
 	if err := os.WriteFile(marker, []byte("striped"), 0o600); err != nil {
 		t.Fatalf("write into the striped filesystem: %v", err)
+	}
+
+	// LVM's own account of the volume, because everything above is satisfied by a
+	// linear one: it mounts, it holds the file, and the members are all attached.
+	// Whether the data is actually spread across them is visible only here.
+	//
+	// Asked of LVM rather than of the artifact on purpose. The filesystem layer
+	// consumes the geometry below it to align a format and does not carry it
+	// upward, which is its business, and a case that asserted otherwise would be
+	// describing the plumbing rather than the volume.
+	out, err := h.node.manager.Run(ctx, "lvs", "--noheadings", "-o", "stripes",
+		h.volume.VolumeGroup()+"/"+h.volume.LogicalVolume())
+	if err != nil {
+		t.Fatalf("read the stripe count of the volume: %v", err)
+	}
+	if got, want := strings.TrimSpace(out), strconv.Itoa(len(h.targets)); got != want {
+		t.Errorf("LVM reports %s stripes, want %s: the volume spans the members without striping across them",
+			got, want)
 	}
 }
