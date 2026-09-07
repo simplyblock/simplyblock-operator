@@ -245,3 +245,29 @@ NvmeConnectEntry@GET /api/v2/volumes/{volume_id}/connect:
 		t.Error("the variant's rule leaked onto the base")
 	}
 }
+
+// TestOnlyRuledTypesGetADecoder. A response type nothing is required of has
+// nothing to check: its keys are not listed, and the generated models carry no
+// validate tags, so a method emitted for it would decode and then validate
+// nothing while its comment said otherwise. The count in the generator's own
+// output said so too, which is the part that misleads: 20 types validating
+// themselves reads as 20 responses whose drift would be caught, where 7 of them
+// were.
+func TestOnlyRuledTypesGetADecoder(t *testing.T) {
+	reachable := []string{"VolumeDTO", "NvmeConnectEntry", "MigrationDTO", "FailoverResultDTO"}
+	rules := []rule{
+		{typ: "VolumeDTO", keys: []string{"id"}},
+		{typ: "LvolConnectEntry", base: "NvmeConnectEntry"}, // a variant, emitted from the rule
+	}
+
+	kept := ruled(reachable, rules)
+
+	if !slices.Equal(kept, []string{"VolumeDTO"}) {
+		t.Errorf("kept %v, want only the type with a rule", kept)
+	}
+	// The variant's base has no rule of its own here, so it is not kept by
+	// name: what a variant needs is emitted from the rule that declared it.
+	if slices.Contains(kept, "NvmeConnectEntry") {
+		t.Errorf("kept a base with no rule of its own: %v", kept)
+	}
+}

@@ -11,12 +11,18 @@ package cpapi
 // a plausible-looking zero (connect to namespace 0, publish a 0-byte volume)
 // instead of noticing the version skew.
 //
-// So every response type validates itself as it is deserialized: its generated
-// UnmarshalJSON decodes and then calls Validate. Nothing has to be remembered
-// at a call site, because validation fires wherever a body is decoded, including
-// inside the generated ParseXxxResponse functions and for DTOs nested in other
-// DTOs, and failures wrap errs.ErrInvalidResponse, surfacing as the error of
-// the client call itself.
+// So every response type something is required of validates itself as it is
+// deserialized: its generated UnmarshalJSON decodes and then calls Validate.
+// Nothing has to be remembered at a call site, because validation fires wherever
+// a body is decoded, including inside the generated ParseXxxResponse functions
+// and for DTOs nested in other DTOs, and failures wrap errs.ErrInvalidResponse,
+// surfacing as the error of the client call itself.
+//
+// A type with no rules gets no such method, and decodes the ordinary way. One
+// emitted for it would validate nothing, since its keys are not listed and the
+// generated models carry no validate tags, and a method that says it validates
+// on a type nothing is required of claims a guarantee it does not give. Adding
+// a block to validation.yaml is what brings the method with it.
 
 import (
 	"bytes"
