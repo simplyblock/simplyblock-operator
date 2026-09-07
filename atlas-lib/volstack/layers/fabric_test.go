@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
@@ -59,11 +60,16 @@ func (f *fakeConnector) IsConnected(context.Context, string) (bool, error) { ret
 type fakeDevices struct {
 	devices []nvme.Device
 	err     error
+
+	// asked records every selector the layer looked up with, in order, so a
+	// test can say which question was put first and how many were needed.
+	asked []nvme.DeviceSelector
 }
 
 func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) { return f.devices, f.err }
 
 func (f *fakeDevices) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
+	f.asked = append(f.asked, sel)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -342,5 +348,142 @@ func TestFabricNameIsStable(t *testing.T) {
 	f := newFabric(t, &fakeConnector{}, &fakeDevices{})
 	if got := f.Name(); got != "fabric" {
 		t.Errorf("Name = %q, want fabric", got)
+	}
+}
+
+// movedDevice is the namespace as it comes back after a failover: the volume's
+// data is in a clone, exported by another subsystem and holding whatever
+// namespace id that subsystem gave it, and the one thing that did not change is
+// the namespace UUID the control plane knows the volume by.
+func movedDevice(uuid string) nvme.Device {
+	d := device("nvme3n7", true)
+	d.Namespace.ID = 7
+	d.Namespace.UUID = uuid
+	d.Subsystem.NQN = testNQN + "-clone"
+	return d
+}
+
+// TestFabricFindsTheNamespaceByItsIdentityWhenTheCoordinatesMiss is the failover
+// case. A volume is addressed by subsystem and namespace id, and neither
+// survives being served out of a clone, so a layer that could only ask that
+// question would report a volume that is attached and serving as absent, and
+// stage would go on to build a second stack over nothing.
+func TestFabricFindsTheNamespaceByItsIdentityWhenTheCoordinatesMiss(t *testing.T) {
+	const uuid = "3f2b1c00-0000-4000-8000-00000000beef"
+	devs := &fakeDevices{devices: []nvme.Device{movedDevice(uuid)}}
+
+	conn := testConnection()
+	conn.UUID = uuid
+	f := NewFabric(FabricConfig{Connection: conn, Connector: &fakeConnector{}, Devices: devs})
+
+	state, art, err := f.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if state != volstack.StateReady {
+		t.Fatalf("state: got %v, want ready for a namespace that is attached and serving", state)
+	}
+	if len(art.Devices) != 1 || art.Devices[0].Name != "nvme3n7" {
+		t.Fatalf("artifact: got %+v, want the namespace the volume actually lives on", art.Devices)
+	}
+}
+
+// TestFabricAsksForTheIdentityFirst. Every simplyblock namespace carries the
+// volume's UUID, and it is the only one of the three that survives the volume
+// being served out of a clone, so it is the question to ask. The subsystem and
+// namespace id are where the volume was published, which is a weaker statement
+// about where it is.
+func TestFabricAsksForTheIdentityFirst(t *testing.T) {
+	const uuid = "3f2b1c00-0000-4000-8000-00000000beef"
+	present := device("nvme0n1", true)
+	present.Namespace.UUID = uuid
+	devs := &fakeDevices{devices: []nvme.Device{present}}
+
+	conn := testConnection()
+	conn.UUID = uuid
+	f := NewFabric(FabricConfig{Connection: conn, Connector: &fakeConnector{}, Devices: devs})
+
+	if _, _, err := f.Observe(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if len(devs.asked) != 1 {
+		t.Fatalf("asked %d questions, want one: %+v", len(devs.asked), devs.asked)
+	}
+	if devs.asked[0].UUID != uuid {
+		t.Errorf("asked %+v first, want the namespace identity", devs.asked[0])
+	}
+}
+
+// TestFabricFallsBackToTheSubsystemCoordinates. A namespace whose target sets no
+// UUID reports none through sysfs, and the volume is still attached and still
+// has to be found, so the published coordinates remain the second question.
+func TestFabricFallsBackToTheSubsystemCoordinates(t *testing.T) {
+	devs := &fakeDevices{devices: []nvme.Device{device("nvme0n1", true)}} // no UUID on it
+
+	conn := testConnection()
+	conn.UUID = "3f2b1c00-0000-4000-8000-00000000beef"
+	f := NewFabric(FabricConfig{Connection: conn, Connector: &fakeConnector{}, Devices: devs})
+
+	state, art, err := f.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if state != volstack.StateReady {
+		t.Fatalf("state: got %v, want ready", state)
+	}
+	if len(art.Devices) != 1 || art.Devices[0].Name != "nvme0n1" {
+		t.Fatalf("artifact: got %+v", art.Devices)
+	}
+	if len(devs.asked) != 2 || devs.asked[1].NQN != testNQN {
+		t.Errorf("asked %+v, want the identity then the coordinates", devs.asked)
+	}
+}
+
+// TestFabricStillPrefersTheServiceablePathOfSeveral. Looking a volume up by
+// identity must not lose what looking it up by coordinates knows: a stale
+// controller leaves two namespaces carrying one volume, and only one of them can
+// take I/O. This is why the identity is a selector and not a lookup of its own.
+func TestFabricStillPrefersTheServiceablePathOfSeveral(t *testing.T) {
+	const uuid = "3f2b1c00-0000-4000-8000-00000000beef"
+	stale := device("nvme0n1", false)
+	stale.Namespace.UUID = uuid
+	live := device("nvme1n1", true)
+	live.Namespace.UUID = uuid
+	devs := &fakeDevices{devices: []nvme.Device{stale, live}}
+
+	conn := testConnection()
+	conn.UUID = uuid
+	f := NewFabric(FabricConfig{Connection: conn, Connector: &fakeConnector{}, Devices: devs})
+
+	_, art, err := f.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if len(art.Devices) != 1 || art.Devices[0].Name != "nvme1n1" {
+		t.Fatalf("artifact: got %+v, want the namespace that can serve I/O", art.Devices)
+	}
+}
+
+// TestFabricEnsureFallsBackToTheNamespaceIdentity is the same fallback on the
+// bring-up path, where its absence costs more: the wait for a device that is
+// already attached under another number ends in a timeout, and the stage fails
+// on a volume that is sitting there serving.
+func TestFabricEnsureFallsBackToTheNamespaceIdentity(t *testing.T) {
+	const uuid = "3f2b1c00-0000-4000-8000-00000000beef"
+	devs := &fakeDevices{devices: []nvme.Device{movedDevice(uuid)}}
+
+	conn := testConnection()
+	conn.UUID = uuid
+	f := NewFabric(FabricConfig{Connection: conn, Connector: &fakeConnector{}, Devices: devs})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	art, err := f.Ensure(ctx, volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if len(art.Devices) != 1 || art.Devices[0].Name != "nvme3n7" {
+		t.Fatalf("artifact: got %+v, want the namespace the volume actually lives on", art.Devices)
 	}
 }

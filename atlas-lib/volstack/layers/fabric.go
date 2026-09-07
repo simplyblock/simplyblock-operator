@@ -59,7 +59,34 @@ func (f *Fabric) Name() string { return "fabric" }
 
 // selector identifies this volume's namespace among everything attached.
 func (f *Fabric) selector() nvme.DeviceSelector {
+	if uuid := f.cfg.Connection.UUID; uuid != "" {
+		return nvme.DeviceSelector{UUID: uuid}
+	}
+	return f.coordinates()
+}
+
+// coordinates is where the control plane published the volume, which is a
+// weaker statement about the volume than its identity is: a volume served out of
+// a clone after a failover keeps neither the subsystem nor the namespace id it
+// was published under, and keeps its UUID.
+//
+// It stays as the second question because a namespace whose target sets no UUID
+// reports none, and that volume is attached and still has to be found.
+func (f *Fabric) coordinates() nvme.DeviceSelector {
 	return nvme.DeviceSelector{NQN: f.cfg.Connection.NQN, NSID: nvme.NamespaceID(f.cfg.Connection.NSID)}
+}
+
+// selectors are the questions that find this volume's namespace, in the order
+// they are asked. Both are selectors rather than one being a lookup of its own,
+// so that whichever answers, the same rule picks between several matches: a
+// stale controller leaves two namespaces carrying one volume and only one of
+// them can take I/O.
+func (f *Fabric) selectors() []nvme.DeviceSelector {
+	primary := f.selector()
+	if coordinates := f.coordinates(); primary != coordinates {
+		return []nvme.DeviceSelector{primary, coordinates}
+	}
+	return []nvme.DeviceSelector{primary}
 }
 
 // Observe maps what the kernel has onto the stack's states.
@@ -107,6 +134,13 @@ func (f *Fabric) Ensure(ctx context.Context, _ volstack.Artifact) (volstack.Arti
 
 	dev, err := nvmeof.WaitForDevice(ctx, f.cfg.Devices, f.selector())
 	if err != nil {
+		// The wait is spent on the question this volume is expected to answer,
+		// and the others are put once at the end rather than each being waited
+		// on in turn: by now the namespace has had the whole wait to appear, so
+		// what a second wait would find is already there.
+		if fallback, ok, lookupErr := f.device(ctx); lookupErr == nil && ok {
+			return volstack.Artifact{Devices: []blockdev.Device{fallback.Namespace.BlockDevice()}}, nil
+		}
 		return volstack.Artifact{}, fmt.Errorf("fabric: wait for the namespace of %s: %w",
 			f.cfg.Connection.NQN, err)
 	}
@@ -187,10 +221,17 @@ func (f *Fabric) Params() any {
 // all. More than one match is the stale-subsystem case, and the most serviceable
 // one is the answer: that is the device a layer above would be using.
 func (f *Fabric) device(ctx context.Context) (nvme.Device, bool, error) {
-	devices, err := f.cfg.Devices.ListWithSelector(ctx, f.selector())
-	if err != nil {
-		return nvme.Device{}, false, fmt.Errorf("fabric: look up the namespace of %s: %w",
-			f.cfg.Connection.NQN, err)
+	var devices []nvme.Device
+	for _, sel := range f.selectors() {
+		found, err := f.cfg.Devices.ListWithSelector(ctx, sel)
+		if err != nil {
+			return nvme.Device{}, false, fmt.Errorf("fabric: look up the namespace of %s: %w",
+				f.cfg.Connection.NQN, err)
+		}
+		if len(found) > 0 {
+			devices = found
+			break
+		}
 	}
 	if len(devices) == 0 {
 		return nvme.Device{}, false, nil
