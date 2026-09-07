@@ -53,3 +53,27 @@ func TestCheckNameFits_AccountsForTheStateDirectory(t *testing.T) {
 		t.Errorf("checkNameFits(%q, %q) = nil; the state path leaves no room", long, cluster)
 	}
 }
+
+// TestSurvivorMessageSaysWhatToDo. A create that fails leaves the cluster's
+// QEMU processes running, and talosctl reports the teardown of a cluster whose
+// state it could not read as a success and removes the state directory anyway.
+// Nothing can find those processes afterward, and they hold a vmnet interface,
+// so every later create on the host fails too, with an error about a port or an
+// interface that says nothing about the cause. The teardown cannot kill them,
+// since they belong to root, so what it owes is the exact command that can.
+func TestSurvivorMessageSaysWhatToDo(t *testing.T) {
+	msg := survivorMessage("sbi-4899", []string{"4914", "4916"})
+
+	for _, want := range []string{"sbi-4899", "4914", "4916", "sudo kill -9"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message does not carry %q:\n%s", want, msg)
+		}
+	}
+}
+
+// TestSurvivorMessageIsEmptyWhenNothingSurvived keeps a clean teardown quiet.
+func TestSurvivorMessageIsEmptyWhenNothingSurvived(t *testing.T) {
+	if msg := survivorMessage("sbi-4899", nil); msg != "" {
+		t.Errorf("a clean teardown reported: %s", msg)
+	}
+}

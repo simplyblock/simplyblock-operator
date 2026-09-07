@@ -17,10 +17,12 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -290,9 +292,59 @@ func (c *Cluster) Destroy(ctx context.Context) error {
 		return err
 	}
 	if c.ownWorkDir {
-		return os.RemoveAll(c.workDir)
+		if err := os.RemoveAll(c.workDir); err != nil {
+			return err
+		}
+	}
+	// A destroy that could not read the cluster's state reports success and the
+	// state directory goes with it, while the nodes it started keep running.
+	// Nothing can find them after that: they are root's, they hold a vmnet
+	// interface, and the next create on this host fails on a port or an
+	// interface for reasons that name none of this. Saying which processes
+	// survived, and the one command that ends them, is what this teardown can
+	// still do about it.
+	pids, err := c.survivingPIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("check for surviving cluster processes for %s: %w", c.cfg.Name, err)
+	}
+	if msg := survivorMessage(c.cfg.Name, pids); msg != "" {
+		return errors.New(msg)
 	}
 	return nil
+}
+
+// survivingPIDs are this cluster's node processes still running. Only the QEMU
+// processes can be attributed: their command line carries the cluster's state
+// directory, while talosctl's own helpers are launched with no argument naming
+// the cluster they belong to.
+func (c *Cluster) survivingPIDs(ctx context.Context) ([]string, error) {
+	if c.cfg.Name == "" {
+		return nil, nil
+	}
+	pattern := fmt.Sprintf(`qemu-system-[a-z0-9_]+ .*clusters/%s/`, regexp.QuoteMeta(c.cfg.Name))
+	cmd := exec.CommandContext(ctx, "pgrep", "-f", pattern) //nolint:gosec // pattern is built from the cluster name
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil // pgrep exits non-zero when nothing matches, which is the good case
+		}
+		return nil, fmt.Errorf("pgrep -f %q: %w", pattern, err)
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// survivorMessage is what a teardown that left processes behind owes its
+// caller, and nothing at all when it left none.
+func survivorMessage(name string, pids []string) string {
+	if len(pids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"cluster %s was not torn down: %d of its processes are still running and this "+
+			"cannot end them, because they are root's. They hold a vmnet interface, so the "+
+			"next create on this host fails until they are gone:\n  sudo kill -9 %s",
+		name, len(pids), strings.Join(pids, " "))
 }
 
 // destroyedOrAbsent reports whether a failed destroy left nothing to destroy.
