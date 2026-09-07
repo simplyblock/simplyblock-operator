@@ -17,6 +17,24 @@ import (
 	"github.com/simplyblock/atlas/volstack"
 )
 
+// FormatParameters is what a format is decided from besides the options the
+// volume passed through verbatim.
+//
+// It is a struct rather than an argument list because what a filesystem can be
+// asked for grows: a reservation is spelled one way by the ext family and not at
+// all by XFS, and the next such property should reach the strategies without
+// every one of them changing shape.
+type FormatParameters struct {
+	// Geometry is the stripe layout underneath, and the zero value when there is
+	// none, which is what a virtualized device reports.
+	Geometry volstack.Geometry
+
+	// ReservedBlocksPercent is how much of the filesystem is held back for
+	// privileged processes, as the volume asked for it. Empty leaves the
+	// filesystem at its own default, which is not what asking for zero means.
+	ReservedBlocksPercent string
+}
+
 // FilesystemLayerStrategy is the per-filesystem half of the filesystem layer.
 //
 // Chosen from the filesystem the plan asks for, which is also the only one the
@@ -29,10 +47,8 @@ type FilesystemLayerStrategy interface {
 	Name() string
 
 	// FormatOptions are the volume's own options plus whatever this filesystem
-	// needs in order to be created well on the device below. geometry describes
-	// the stripe layout underneath and is the zero value when there is none, which
-	// is what a virtualized device reports.
-	FormatOptions(options []string, geometry volstack.Geometry) []string
+	// needs, or was asked, to be created with on the device below.
+	FormatOptions(options []string, params FormatParameters) []string
 
 	// MountFlags are the flags the volume asked for plus any this filesystem
 	// requires in order to mount at all.
@@ -87,13 +103,31 @@ const extBlockBytes = 4096
 // Only when the chunk is a whole number of blocks. It is in practice, and
 // rounding it would describe a layout the device does not have, which is worse
 // than describing none.
-func (e extStrategy) FormatOptions(options []string, geometry volstack.Geometry) []string {
+func (e extStrategy) FormatOptions(options []string, params FormatParameters) []string {
+	options = reserveBlocks(options, params.ReservedBlocksPercent)
+
+	geometry := params.Geometry
 	if !geometry.Known() || geometry.ChunkBytes%extBlockBytes != 0 {
 		return options
 	}
 	stride := geometry.ChunkBytes / extBlockBytes
 	return append(options, "-E", fmt.Sprintf("stride=%d,stripe_width=%d",
 		stride, stride*int64(geometry.Stripes)))
+}
+
+// reserveBlocks holds part of the filesystem back for privileged processes,
+// which the ext family spells as mke2fs's -m and no other filesystem spells at
+// all. It is set when the filesystem is created rather than tuned afterward,
+// because the two produce the same filesystem and only one of them is a second
+// command that can fail on its own after the volume is already formatted.
+//
+// A volume that asked for nothing is left at mke2fs's default, since asking for
+// no reservation is a different thing from not asking.
+func reserveBlocks(options []string, percent string) []string {
+	if percent == "" {
+		return options
+	}
+	return append(options, "-m", percent)
 }
 
 // GrowCommand resizes the device, which resize2fs does whether the filesystem is
@@ -119,7 +153,8 @@ func (xfsStrategy) Name() string { return "xfs" }
 // and the hints computed for the backend underneath it describe nothing once its
 // blocks are relocated, so passing them there would be misleading rather than
 // merely useless.
-func (xfsStrategy) FormatOptions(options []string, geometry volstack.Geometry) []string {
+func (xfsStrategy) FormatOptions(options []string, params FormatParameters) []string {
+	geometry := params.Geometry
 	if !geometry.Known() {
 		return options
 	}
@@ -147,7 +182,7 @@ type plainStrategy struct{ fsType string }
 
 func (p plainStrategy) Name() string { return p.fsType }
 
-func (p plainStrategy) FormatOptions(options []string, _ volstack.Geometry) []string { return options }
+func (p plainStrategy) FormatOptions(options []string, _ FormatParameters) []string { return options }
 
 func (p plainStrategy) MountFlags(flags []string) []string { return flags }
 

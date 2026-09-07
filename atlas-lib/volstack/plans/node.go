@@ -10,6 +10,8 @@
 package plans
 
 import (
+	"context"
+
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
@@ -44,6 +46,14 @@ type NodeConfig struct {
 	// Filesystem formats and mounts. The CSI driver passes the Kubernetes mount
 	// utilities, because atlas has no business depending on them.
 	Filesystem layers.FilesystemOps
+
+	// PriorFormat answers what a volume is recorded as carrying, from a record
+	// kept away from the device itself, and is consulted only when the device
+	// reads blank. It is what stands between a probe that failed and a volume
+	// that gets reformatted, so a consumer holding such a record should pass it:
+	// the CSI driver reads the volume's claim. A consumer that keeps none leaves
+	// it nil, and the reading decides alone.
+	PriorFormat func(ctx context.Context, volume Volume) (string, error)
 
 	// Resolve answers what the kernel says about a device path, and defaults to
 	// blockdev.ResolveDevice. It is a seam only because the logical-volume layer
@@ -84,13 +94,31 @@ func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 // filesystem is the top layer of every plan that has one.
 func (n *Node) filesystem(volume Volume) volstack.Layer {
 	return layers.NewFilesystem(layers.FilesystemConfig{
-		FsType:        volume.FsType,
-		StagingPath:   volume.StagingPath,
-		MountFlags:    volume.MountFlags,
-		FormatOptions: volume.FormatOptions,
-		Ops:           n.cfg.Filesystem,
-		Content:       n.cfg.Content,
+		FsType:                volume.FsType,
+		StagingPath:           volume.StagingPath,
+		MountFlags:            volume.MountFlags,
+		FormatOptions:         volume.FormatOptions,
+		ReservedBlocksPercent: volume.ReservedBlocksPercent,
+		PriorFormat:           n.priorFormat(volume),
+		Ops:                   n.cfg.Filesystem,
+		Content:               n.cfg.Content,
 	})
+}
+
+// priorFormat binds the node's record to one volume, which is the shape the
+// layer takes it in: the layer knows it is asking about the device beneath it
+// and has no volume to name.
+//
+// A node keeping no record contributes nothing, rather than a function that
+// answers with an empty string, so that the layer can tell a consumer without a
+// record from one whose record is empty.
+func (n *Node) priorFormat(volume Volume) func(context.Context) (string, error) {
+	if n.cfg.PriorFormat == nil {
+		return nil
+	}
+	return func(ctx context.Context) (string, error) {
+		return n.cfg.PriorFormat(ctx, volume)
+	}
 }
 
 // physicalVolume labels the device below as belonging to this volume's group.

@@ -16,8 +16,10 @@ package plans
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/volstack"
@@ -227,12 +229,28 @@ func TestNamesDeriveFromTheVolumeAlone(t *testing.T) {
 // IsMountPoint is reached below, and the rest exist because the layer takes the
 // whole interface.
 type recordingFS struct {
-	checked []string
+	checked   []string
+	formatted []formatCall
+	mounted   []string
+	isMounted bool
 }
 
-func (r *recordingFS) Format(context.Context, string, string, []string) error { return nil }
+// formatCall is one mkfs, kept so a test can read what the plan asked for.
+type formatCall struct {
+	device  string
+	fsType  string
+	options []string
+}
 
-func (r *recordingFS) Mount(context.Context, string, string, string, []string) error { return nil }
+func (r *recordingFS) Format(_ context.Context, device, fsType string, options []string) error {
+	r.formatted = append(r.formatted, formatCall{device, fsType, options})
+	return nil
+}
+
+func (r *recordingFS) Mount(_ context.Context, _, target, _ string, _ []string) error {
+	r.mounted = append(r.mounted, target)
+	return nil
+}
 
 func (r *recordingFS) Unmount(context.Context, string) error { return nil }
 
@@ -242,7 +260,20 @@ func (r *recordingFS) Grow(context.Context, []string) error { return nil }
 
 func (r *recordingFS) IsMountPoint(_ context.Context, path string) (bool, error) {
 	r.checked = append(r.checked, path)
-	return true, nil
+	return r.isMounted, nil
+}
+
+// blankDevice is a layers.ContentReader for a device carrying nothing, which is
+// the only reading that permits a format.
+type blankDevice struct{}
+
+func (blankDevice) Read(context.Context, blockdev.Device) (blockdev.Reading, error) {
+	return blockdev.Reading{Content: blockdev.ContentBlank}, nil
+}
+
+// aDevice is what the fabric below a filesystem layer hands upward.
+func aDevice() volstack.Artifact {
+	return volstack.Artifact{Devices: []blockdev.Device{{Name: "nvme0n1", Path: "/dev/nvme0n1"}}}
 }
 
 // TestTheNodesSeamsReachTheLayers is the other half of what a constructor
@@ -252,6 +283,7 @@ func (r *recordingFS) IsMountPoint(_ context.Context, path string) (bool, error)
 // with the volume's own values.
 func TestTheNodesSeamsReachTheLayers(t *testing.T) {
 	ops := &recordingFS{}
+	ops.isMounted = true
 	node := NewNode(NodeConfig{HostNQN: "nqn:host", HostID: "host-id", Filesystem: ops})
 	volume := testVolume()
 
@@ -270,5 +302,83 @@ func TestTheNodesSeamsReachTheLayers(t *testing.T) {
 	}
 	if artifact.Path != volume.StagingPath {
 		t.Errorf("artifact path: got %s, want %s", artifact.Path, volume.StagingPath)
+	}
+}
+
+// TestTheVolumesReservationReachesMkfs proves a volume asking for reserved
+// blocks gets them. The plan carries the property and the filesystem spells it,
+// so a consumer never writes the flag itself.
+func TestTheVolumesReservationReachesMkfs(t *testing.T) {
+	ops := &recordingFS{}
+	node := NewNode(NodeConfig{Filesystem: ops, Content: blankDevice{}})
+
+	volume := testVolume()
+	volume.FsType = "ext4"
+	volume.ReservedBlocksPercent = "3"
+
+	plan := node.Plain(conn("nqn:vol"), volume)
+	if _, err := plan[1].Ensure(context.Background(), aDevice()); err != nil {
+		t.Fatalf("ensure the filesystem: %v", err)
+	}
+
+	if len(ops.formatted) != 1 {
+		t.Fatalf("formatted %d times, want once", len(ops.formatted))
+	}
+	options := strings.Join(ops.formatted[0].options, " ")
+	if !strings.Contains(options, "-m 3") {
+		t.Errorf("mkfs options are %q, want the reservation the volume asked for", options)
+	}
+}
+
+// TestThePriorFormatRecordReachesTheFilesystem proves the guard is wired. The
+// device reads blank and the node's record says this volume was formatted, so
+// the plan must mount it and never format it: the record is what stands between
+// a failed probe and a destroyed volume.
+func TestThePriorFormatRecordReachesTheFilesystem(t *testing.T) {
+	ops := &recordingFS{}
+	var asked []string
+	node := NewNode(NodeConfig{
+		Filesystem: ops,
+		Content:    blankDevice{},
+		PriorFormat: func(_ context.Context, volume Volume) (string, error) {
+			asked = append(asked, volume.UUID)
+			return "ext4", nil
+		},
+	})
+
+	volume := testVolume()
+	volume.FsType = "ext4"
+
+	plan := node.Plain(conn("nqn:vol"), volume)
+	if _, err := plan[1].Ensure(context.Background(), aDevice()); err != nil {
+		t.Fatalf("ensure the filesystem: %v", err)
+	}
+
+	if len(ops.formatted) != 0 {
+		t.Fatalf("formatted a volume the record says was already formatted: %+v", ops.formatted)
+	}
+	if len(ops.mounted) != 1 {
+		t.Errorf("mounted %d times, want once", len(ops.mounted))
+	}
+	if !slices.Equal(asked, []string{volume.UUID}) {
+		t.Errorf("the record was asked about %v, want the volume being staged", asked)
+	}
+}
+
+// TestAPlanWithoutARecordAsksNothing keeps the guard optional: a consumer that
+// keeps no record leaves the seam nil and the reading decides alone.
+func TestAPlanWithoutARecordAsksNothing(t *testing.T) {
+	ops := &recordingFS{}
+	node := NewNode(NodeConfig{Filesystem: ops, Content: blankDevice{}})
+
+	volume := testVolume()
+	volume.FsType = "ext4"
+
+	plan := node.Plain(conn("nqn:vol"), volume)
+	if _, err := plan[1].Ensure(context.Background(), aDevice()); err != nil {
+		t.Fatalf("ensure the filesystem: %v", err)
+	}
+	if len(ops.formatted) != 1 {
+		t.Errorf("formatted %d times, want once for a device nothing contradicts", len(ops.formatted))
 	}
 }

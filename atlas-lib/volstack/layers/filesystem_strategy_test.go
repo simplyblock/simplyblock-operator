@@ -28,14 +28,14 @@ func TestFilesystemStrategyForKnowsItsFilesystem(t *testing.T) {
 func TestFilesystemStrategyStripeAlignment(t *testing.T) {
 	striped := volstack.Geometry{ChunkBytes: 64 << 10, Stripes: 4}
 
-	xfs := FilesystemStrategyFor("xfs").FormatOptions(nil, striped)
+	xfs := FilesystemStrategyFor("xfs").FormatOptions(nil, FormatParameters{Geometry: striped})
 	if !slices.Contains(xfs, "su=65536,sw=4") {
 		t.Errorf("xfs was created without aligning to the stripes below it: %v", xfs)
 	}
 
 	// stride is one member's chunk counted in filesystem blocks and stripe_width
 	// is one full trip across the members, so 65536/4096 = 16 and 16*4 = 64.
-	ext := FilesystemStrategyFor("ext4").FormatOptions(nil, striped)
+	ext := FilesystemStrategyFor("ext4").FormatOptions(nil, FormatParameters{Geometry: striped})
 	if !slices.Contains(ext, "stride=16,stripe_width=64") {
 		t.Errorf("ext4 was created without aligning to the stripes below it: %v", ext)
 	}
@@ -45,7 +45,7 @@ func TestFilesystemStrategyStripeAlignment(t *testing.T) {
 // device does not have, and rounding it would be worse than saying nothing.
 func TestFilesystemStrategyDeclinesAChunkItCannotExpress(t *testing.T) {
 	odd := volstack.Geometry{ChunkBytes: 100000, Stripes: 2}
-	if got := FilesystemStrategyFor("ext4").FormatOptions(nil, odd); len(got) != 0 {
+	if got := FilesystemStrategyFor("ext4").FormatOptions(nil, FormatParameters{Geometry: odd}); len(got) != 0 {
 		t.Errorf("ext4 rounded a chunk of %d bytes into %v", odd.ChunkBytes, got)
 	}
 }
@@ -75,7 +75,7 @@ func TestFilesystemStrategyGrowCommand(t *testing.T) {
 // underneath it describe nothing once its blocks are relocated.
 func TestFilesystemStrategyAlignsToNothingItCannotSee(t *testing.T) {
 	for _, fsType := range []string{"xfs", "ext4", "btrfs"} {
-		got := FilesystemStrategyFor(fsType).FormatOptions([]string{"-q"}, volstack.Geometry{})
+		got := FilesystemStrategyFor(fsType).FormatOptions([]string{"-q"}, FormatParameters{})
 		if !slices.Equal(got, []string{"-q"}) {
 			t.Errorf("%s added %v to a device that reports no geometry", fsType, got)
 		}
@@ -103,12 +103,89 @@ func TestFilesystemStrategyMountFlags(t *testing.T) {
 
 // The volume's own options and flags survive, whatever the filesystem adds.
 func TestFilesystemStrategyKeepsWhatTheVolumeAsked(t *testing.T) {
-	opts := FilesystemStrategyFor("xfs").FormatOptions(
-		[]string{"-K"}, volstack.Geometry{ChunkBytes: 1 << 16, Stripes: 2})
+	opts := FilesystemStrategyFor("xfs").FormatOptions([]string{"-K"},
+		FormatParameters{Geometry: volstack.Geometry{ChunkBytes: 1 << 16, Stripes: 2}})
 	if opts[0] != "-K" {
 		t.Errorf("the volume's own format option is no longer first: %v", opts)
 	}
 	if n := strings.Count(strings.Join(opts, " "), "-K"); n != 1 {
 		t.Errorf("the volume's own format option appears %d times: %v", n, opts)
+	}
+}
+
+// TestExtReservesBlocksWhenTheVolumeAsks proves the ext family knows how the
+// reservation is spelled, so that a consumer asks for the property and not for
+// the flag. A volume that asks for none is left at the filesystem's own default,
+// which is not the same as asking for zero.
+func TestExtReservesBlocksWhenTheVolumeAsks(t *testing.T) {
+	for _, fsType := range []string{"ext4", "ext3", "ext2"} {
+		got := FilesystemStrategyFor(fsType).FormatOptions(nil, FormatParameters{
+			ReservedBlocksPercent: "3",
+		})
+		if i := slices.Index(got, "-m"); i < 0 || i+1 >= len(got) || got[i+1] != "3" {
+			t.Errorf("%s: got %v, want the reservation spelled as -m 3", fsType, got)
+		}
+	}
+}
+
+// TestExtReservesNothingWhenTheVolumeDoesNotAsk keeps mkfs at its own default
+// rather than passing an empty value it would reject.
+func TestExtReservesNothingWhenTheVolumeDoesNotAsk(t *testing.T) {
+	got := FilesystemStrategyFor("ext4").FormatOptions([]string{"-q"}, FormatParameters{})
+	if slices.Contains(got, "-m") {
+		t.Errorf("got %v, want no reservation flag", got)
+	}
+	if !slices.Contains(got, "-q") {
+		t.Errorf("got %v, want the volume's own options kept", got)
+	}
+}
+
+// TestExtKeepsTheReservationBesideTheStripeAlignment proves the two
+// contributions compose, since a striped ext volume asking for a reservation
+// needs both and neither may replace the other.
+func TestExtKeepsTheReservationBesideTheStripeAlignment(t *testing.T) {
+	got := FilesystemStrategyFor("ext4").FormatOptions(nil, FormatParameters{
+		Geometry:              volstack.Geometry{Stripes: 2, ChunkBytes: 64 << 10},
+		ReservedBlocksPercent: "0",
+	})
+	if !slices.Contains(got, "-E") {
+		t.Errorf("got %v, want the stripe alignment kept", got)
+	}
+	if i := slices.Index(got, "-m"); i < 0 || got[i+1] != "0" {
+		t.Errorf("got %v, want the reservation kept", got)
+	}
+}
+
+// TestOnlyExtSpellsAReservation is the negative half: -m is mke2fs's flag, and a
+// filesystem that has no such notion must not be handed one.
+func TestOnlyExtSpellsAReservation(t *testing.T) {
+	for _, fsType := range []string{"xfs", "btrfs"} {
+		got := FilesystemStrategyFor(fsType).FormatOptions(nil, FormatParameters{
+			ReservedBlocksPercent: "3",
+		})
+		if slices.Contains(got, "-m") {
+			t.Errorf("%s: got %v, want no reservation flag", fsType, got)
+		}
+	}
+}
+
+// TestNoFilesystemIsForcedPastItsOwnRefusal. mkfs has its own guard: it declines
+// when it finds something where it is about to write, and both -F and -f exist
+// to take that guard away. The layer formats only what it has positively read as
+// blank, so the two checks agree in every ordinary case, and where they disagree
+// the disagreement is the point. Overriding it turns a device this driver failed
+// to understand into a destroyed volume.
+func TestNoFilesystemIsForcedPastItsOwnRefusal(t *testing.T) {
+	for _, fsType := range []string{"ext4", "ext3", "ext2", "xfs", "btrfs"} {
+		got := FilesystemStrategyFor(fsType).FormatOptions(nil, FormatParameters{
+			Geometry:              volstack.Geometry{Stripes: 2, ChunkBytes: 64 << 10},
+			ReservedBlocksPercent: "0",
+		})
+		for _, force := range []string{"-F", "-f", "--force"} {
+			if slices.Contains(got, force) {
+				t.Errorf("%s is created with %s, which overrides mkfs's own refusal: %v",
+					fsType, force, got)
+			}
+		}
 	}
 }

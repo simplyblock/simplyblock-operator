@@ -76,6 +76,16 @@ type FilesystemConfig struct {
 	// geometry below.
 	FormatOptions []string
 
+	// ReservedBlocksPercent is how much of the filesystem is held back for
+	// privileged processes, for a filesystem that has such a notion. Empty leaves
+	// it at its own default.
+	ReservedBlocksPercent string
+
+	// PriorFormat answers what this volume is recorded as carrying, from a record
+	// kept away from the device. It is consulted only when the device reads
+	// blank, and a consumer that keeps no such record leaves it nil.
+	PriorFormat func(ctx context.Context) (string, error)
+
 	Ops     FilesystemOps
 	Content ContentReader
 }
@@ -126,8 +136,7 @@ func (f *Filesystem) observe(
 	}
 	switch reading.Content {
 	case blockdev.ContentBlank:
-		// Nothing of this layer exists yet, so it exposes nothing.
-		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
+		return f.blank(ctx, reading, below)
 	case blockdev.ContentFilesystem:
 		if err := f.agrees(reading); err != nil {
 			return volstack.StateAbsent, reading, volstack.Artifact{}, err
@@ -361,6 +370,49 @@ func (f *Filesystem) agrees(reading blockdev.Reading) error {
 }
 
 // read takes the content reading of the device below.
+// blank decides what a device carrying no signature means, which is not always
+// that it is empty.
+//
+// The reading is a positive one, so a device that could not be read never
+// arrives here. The record is the second statement, kept away from the device so
+// that losing the device does not lose it: a volume it says was formatted is one
+// this layer may not format, whatever the device appears to say.
+func (f *Filesystem) blank(
+	ctx context.Context, reading blockdev.Reading, below volstack.Artifact,
+) (volstack.State, blockdev.Reading, volstack.Artifact, error) {
+	if f.cfg.PriorFormat == nil {
+		// Nothing of this layer exists yet, so it exposes nothing.
+		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
+	}
+
+	prior, err := f.cfg.PriorFormat(ctx)
+	if err != nil {
+		// An unreachable record is not evidence that the volume is empty, and of
+		// the two ways to be wrong here only one destroys data.
+		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
+			"filesystem: %s reads blank and what it carries cannot be looked up, "+
+				"so it is not a device this may format: %w", deviceOf(below), err)
+	}
+
+	switch {
+	case prior == "":
+		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
+	case prior != f.cfg.FsType:
+		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
+			"filesystem: refusing to stage %s, which is recorded as carrying %s where the plan "+
+				"asks for %s: reformatting would destroy the volume, and mounting it as %s would "+
+				"serve a filesystem the plan does not declare",
+			deviceOf(below), prior, f.cfg.FsType, prior)
+	default:
+		// Recorded as formatted while nothing was found on it: the reading is a
+		// failed probe rather than an empty device, so the filesystem is treated as
+		// present and unmounted. Mounting it is the honest next step, and a mount
+		// that fails says the record and the device genuinely disagree, which is
+		// still not a reason to format.
+		return volstack.StateInactive, reading, volstack.Artifact{Devices: below.Devices}, nil
+	}
+}
+
 func (f *Filesystem) read(ctx context.Context, below volstack.Artifact) (blockdev.Reading, error) {
 	dev, ok := below.Device()
 	if !ok {
@@ -379,7 +431,10 @@ func (f *Filesystem) read(ctx context.Context, below volstack.Artifact) (blockde
 // formatOptions are the volume's own, plus whatever the filesystem being created
 // asks for on the geometry below it.
 func (f *Filesystem) formatOptions(below volstack.Artifact) []string {
-	return f.strategy().FormatOptions(append([]string{}, f.cfg.FormatOptions...), below.Geometry)
+	return f.strategy().FormatOptions(append([]string{}, f.cfg.FormatOptions...), FormatParameters{
+		Geometry:              below.Geometry,
+		ReservedBlocksPercent: f.cfg.ReservedBlocksPercent,
+	})
 }
 
 // mountFlags are the volume's own, plus whatever the filesystem requires in

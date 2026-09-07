@@ -60,6 +60,12 @@ type Volume struct {
 	// FormatOptions are passed to mkfs ahead of anything derived from the
 	// geometry underneath.
 	FormatOptions []string
+
+	// ReservedBlocksPercent is how much of the filesystem is held back for
+	// privileged processes, for a filesystem that has such a notion. Empty leaves
+	// it at that filesystem's own default, which is not what asking for zero
+	// means. How it is spelled is the filesystem's business, not the caller's.
+	ReservedBlocksPercent string
 }
 
 // VolumeGroup is the name of the group this volume's LVM layers use.
