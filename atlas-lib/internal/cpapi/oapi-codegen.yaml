@@ -8,10 +8,33 @@ generate:
   models: true
   client: true
 output-options:
-  # Patches spec bugs (e.g., the migrations-list op's missing path params)
-  # without editing the vendored openapi.json, so re-exports stay clean.
-  overlay:
-    path: overlay.yaml
+  # No overlay: nothing in the export needs patching. When something does, an
+  # OpenAPI Overlay 1.0.0 document patches it by JSONPath rather than by editing
+  # the vendored openapi.json, so a re-export stays a clean diff. Wire one back
+  # with an `overlay: {path: overlay.yaml}` key here, holding a document shaped
+  # like this, which is the one that fixed the migrations-list operation before
+  # the control plane restructured that endpoint and declared its parameters:
+  #
+  #   overlay: 1.0.0
+  #   info:
+  #     title: Fixups for the simplyblock control-plane OpenAPI export
+  #     version: 0.0.0
+  #   actions:
+  #     # This operation's URL has three path parameters and it declares one,
+  #     # so oapi-codegen rejects it. Add the two that are missing.
+  #     - target: "$.paths['/api/v2/.../volumes/{volume_id}/migrations/'].get.parameters"
+  #       update:
+  #         - name: pool_id
+  #           in: path
+  #           required: true
+  #           schema:
+  #             type: string
+  #             format: uuid
+  #
+  # An overlay is applied strictly, which cuts both ways: a selector that
+  # matches nothing fails the build, so a fixup outlives its bug loudly rather
+  # than silently, and it must define at least one action, so the file cannot be
+  # kept around empty as a placeholder.
   exclude-operation-ids:
     - redirect_legacy__get
     - redirect_legacy_cluster__full_path__get

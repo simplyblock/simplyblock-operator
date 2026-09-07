@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,36 @@ type NvmeConnectEntry struct {
 type VolumeDTO struct {
 	Id   string @json:"id"@
 	NsId int    @json:"ns_id"@
+}
+
+type MigrationDTO struct {
+	Id     string @json:"id"@
+	LvolId string @json:"lvol_id"@
+}
+
+type BatchMigrationDTO struct {
+	Id          string @json:"id"@
+	MemberCount int    @json:"member_count"@
+}
+
+type MigrationsGet200JSONResponseBody_Item struct {
+	union json.RawMessage
+}
+
+func (t MigrationsGet200JSONResponseBody_Item) AsMigrationDTO() (MigrationDTO, error) {
+	var body MigrationDTO
+	return body, nil
+}
+
+func (t MigrationsGet200JSONResponseBody_Item) AsBatchMigrationDTO() (BatchMigrationDTO, error) {
+	var body BatchMigrationDTO
+	return body, nil
+}
+
+func (t *MigrationsGet200JSONResponseBody_Item) UnmarshalJSON(b []byte) error { return nil }
+
+type MigrationsGetResponse struct {
+	JSON200 *[]MigrationsGet200JSONResponseBody_Item
 }
 `
 
@@ -53,8 +84,58 @@ func testStructs(t *testing.T) map[string]*ast.StructType {
 	if err != nil {
 		t.Fatal(err)
 	}
-	structs, _ := index(file)
+	structs, _, _ := index(file)
 	return structs
+}
+
+// testIndex is the whole of what the walk reads: the structs, the types that
+// decode themselves, and the members of every union.
+func testIndex(t *testing.T) (map[string]*ast.StructType, map[string]bool, map[string][]string) {
+	t.Helper()
+	src := strings.ReplaceAll(testClient, "@", "`")
+	file, err := parser.ParseFile(token.NewFileSet(), "cpapi.gen.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return index(file)
+}
+
+// TestResponseTypesReachesIntoAUnion. A response that can answer with either of
+// two models holds them in a union, which keeps its payload in an unexported
+// field: a walk that followed only struct fields would stop there, and the
+// models inside would decode without their rules being applied. That is not a
+// missing feature but a silent one, since the rules exist to catch a renamed
+// key and would simply never fire.
+func TestResponseTypesReachesIntoAUnion(t *testing.T) {
+	structs, unmarshalers, unions := testIndex(t)
+	types := responseTypes(structs, unmarshalers, unions)
+
+	for _, want := range []string{"MigrationDTO", "BatchMigrationDTO"} {
+		if !slices.Contains(types, want) {
+			t.Errorf("%s is inside a union response and was not reached: %v", want, types)
+		}
+	}
+	// The union decodes itself, so it is plumbing rather than a model to
+	// generate for.
+	if slices.Contains(types, "MigrationsGet200JSONResponseBody_Item") {
+		t.Errorf("the union itself was included: %v", types)
+	}
+}
+
+// TestUnionMembersComeFromTheAsMethods pins how a member is recognized, since
+// the name and the returned type having to agree is what keeps an ordinary
+// method whose name begins with "As" from being read as one.
+func TestUnionMembersComeFromTheAsMethods(t *testing.T) {
+	_, _, unions := testIndex(t)
+
+	members := unions["MigrationsGet200JSONResponseBody_Item"]
+	slices.Sort(members)
+	if !slices.Equal(members, []string{"BatchMigrationDTO", "MigrationDTO"}) {
+		t.Errorf("members = %v", members)
+	}
+	if len(unions["VolumeDTO"]) != 0 {
+		t.Errorf("a plain model was read as a union: %v", unions["VolumeDTO"])
+	}
 }
 
 func TestCompileRejects(t *testing.T) {

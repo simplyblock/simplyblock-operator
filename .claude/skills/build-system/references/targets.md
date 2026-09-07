@@ -110,15 +110,15 @@ Variables: `GOARCH` (host default), `CSI_IMAGE_REGISTRY` (`simplyblock`),
 Includes `../scripts/tools.mk`. Default goal `all` is `build test`. The only
 component with **file targets**, so make's staleness rules apply.
 
-| Target                             | Runs                                                                                                                     |
-|------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `generate`                         | the two generated files below, when out of date                                                                          |
-| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, `overlay.yaml`, `gen.go` |
-| `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`                           |
-| `build`                            | the generated files, then `go build ./...`                                                                               |
-| `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                             |
-| `lint`                             | pinned `golangci-lint run ./...`                                                                                         |
-| `vet`, `fmt`                       | `go vet` / `go fmt`                                                                                                      |
+| Target                             | Runs                                                                                                         |
+|------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `generate`                         | the two generated files below, when out of date                                                              |
+| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, and `gen.go` |
+| `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`               |
+| `build`                            | the generated files, then `go build ./...`                                                                   |
+| `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                 |
+| `lint`                             | pinned `golangci-lint run ./...`                                                                             |
+| `vet`, `fmt`                       | `go vet` / `go fmt`                                                                                          |
 
 The `oapi-codegen` version is pinned in `go.mod` through
 `internal/cpapi/tools.go`, not in the tool manifest.

@@ -6,18 +6,18 @@ stale copy is a defect a reviewer can see.
 
 ## Committed artifacts
 
-| Artifact                                                                              | Generated from                                               | Regenerate with                    | CI gate                                                        |
-|---------------------------------------------------------------------------------------|--------------------------------------------------------------|------------------------------------|----------------------------------------------------------------|
-| `operator/config/crd/bases/*.yaml`                                                    | `+kubebuilder:` markers on the API types                     | `make -C operator manifests`       | `Operator: Manifests` → `git diff --exit-code`                 |
-| `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                                 | `make -C operator manifests`       | same                                                           |
-| `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers                              | `make -C operator manifests`       | same                                                           |
-| `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                                              | `make -C operator generate`        | same                                                           |
-| `operator/dist/install.yaml`                                                          | `kustomize build config/default`                             | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
-| `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                  | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
-| `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                       | `make helm-sync`                   | same                                                           |
-| `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                    | `make helm-sync`                   | same                                                           |
-| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml` + `overlay.yaml` | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
-| `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client                     | `make -C atlas-lib generate`       | same                                                           |
+| Artifact                                                                              | Generated from                              | Regenerate with                    | CI gate                                                        |
+|---------------------------------------------------------------------------------------|---------------------------------------------|------------------------------------|----------------------------------------------------------------|
+| `operator/config/crd/bases/*.yaml`                                                    | `+kubebuilder:` markers on the API types    | `make -C operator manifests`       | `Operator: Manifests` → `git diff --exit-code`                 |
+| `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                | `make -C operator manifests`       | same                                                           |
+| `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers             | `make -C operator manifests`       | same                                                           |
+| `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                             | `make -C operator generate`        | same                                                           |
+| `operator/dist/install.yaml`                                                          | `kustomize build config/default`            | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
+| `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                 | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
+| `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                      | `make helm-sync`                   | same                                                           |
+| `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`   | `make helm-sync`                   | same                                                           |
+| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml` | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
+| `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client    | `make -C atlas-lib generate`       | same                                                           |
 
 ---
 

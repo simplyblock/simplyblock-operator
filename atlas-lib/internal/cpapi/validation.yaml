@@ -89,6 +89,23 @@ StorageNodeDTO:
   device_count: present
   secondary_node_id: present
 
+# A subsystem configured for several namespaces migrates as one group, and the
+# group is what the migration endpoints then report. member_count is what tells
+# it apart from a single volume's migration, which carries lvol_id and no member
+# count, so the two keys are each required in the shape that has them: a rename
+# of either would leave one shape decoding as the other.
+BatchMigrationDTO:
+  id: required
+  cluster_id: required
+  source_node_id: required
+  target_node_id: required
+  target_nqn: required
+  phase: required
+  status: required
+  member_count: required
+  # Empty while nothing has gone wrong.
+  error_message: present
+
 MigrationDTO:
   id: required
   lvol_id: required
