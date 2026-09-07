@@ -14,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -367,4 +369,142 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// ---------- consistency-group flag reaches the backend create ----------
+
+func TestPolicy_ConsistencyGroupFlagReachesBackendCreate(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{
+			PairRef:                "pair1",
+			EnableConsistencyGroup: ptr.To(true),
+		},
+	}
+	r, _ := newPolicyReconciler(t, pair, policy)
+
+	var created map[string]interface{}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, []interface{}{})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			if err := json.NewDecoder(req.Body).Decode(&created); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(context.Background(), policyRequest("pol")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created == nil {
+		t.Fatal("backend create was never called")
+	}
+	if got, ok := created["consistency_group"].(bool); !ok || !got {
+		t.Errorf("consistency_group in the create body = %v, want true", created["consistency_group"])
+	}
+}
+
+// An unset flag must reach the backend as an explicit false, not be omitted:
+// the backend treats the field as decided-at-creation, and an omitted key
+// relying on a server-side default is a second place the default lives.
+func TestPolicy_ConsistencyGroupDefaultsToFalseInBackendCreate(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+	}
+	r, _ := newPolicyReconciler(t, pair, policy)
+
+	var created map[string]interface{}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, []interface{}{})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			if err := json.NewDecoder(req.Body).Decode(&created); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(context.Background(), policyRequest("pol")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, ok := created["consistency_group"].(bool); !ok || got {
+		t.Errorf("consistency_group in the create body = %v, want false", created["consistency_group"])
+	}
+}
+
+// ---------- consistency-group placement surfaces in status ----------
+
+// The group pins placement to one node/LVS when its first member attaches;
+// without surfacing that in status the rule is discoverable only through
+// failed attaches of misplaced volumes. Slot events wake this reconciler, so
+// the sync runs right when membership changes.
+func TestPolicy_ConsistencyGroupPlacementSurfacesInStatus(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{
+			PairRef:                "pair1",
+			EnableConsistencyGroup: ptr.To(true),
+		},
+		Status: simplyblockv1alpha1.ReplicationPolicyStatus{
+			BackendPolicyID: "pol-backend-uuid",
+		},
+	}
+	r, cl := newPolicyReconciler(t, pair, policy)
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet &&
+			req.URL.Path == apiPathReplicationPolicies+"/pol-backend-uuid":
+			writeJSON(w, map[string]interface{}{
+				"id":                "pol-backend-uuid",
+				"policy_name":       "pol",
+				"consistency_group": true,
+				"group_node_id":     "99999999-9999-9999-9999-999999999999",
+				"group_lvs_name":    "LVS_1",
+				"group_last_seq":    7,
+			})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	if _, err := r.Reconcile(context.Background(), policyRequest("pol")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getPolicy(t, cl)
+	if got.Status.GroupNodeUUID != "99999999-9999-9999-9999-999999999999" {
+		t.Errorf("GroupNodeUUID = %q, want the pinned node", got.Status.GroupNodeUUID)
+	}
+	if got.Status.GroupLvsName != "LVS_1" {
+		t.Errorf("GroupLvsName = %q, want LVS_1", got.Status.GroupLvsName)
+	}
+	if got.Status.GroupLastSeq != 7 {
+		t.Errorf("GroupLastSeq = %d, want 7", got.Status.GroupLastSeq)
+	}
 }

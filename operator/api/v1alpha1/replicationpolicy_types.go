@@ -35,7 +35,7 @@ type ReplicationPolicySpec struct {
 	// +optional
 	Mode string `json:"mode,omitempty"`
 
-	// Interval is how often a replication snapshot is taken (e.g. "5m", "1h").
+	// Interval is how often a replication snapshot is taken (e.g., "5m" or "1h").
 	// +kubebuilder:default="5m"
 	// +optional
 	Interval string `json:"interval,omitempty"`
@@ -45,6 +45,16 @@ type ReplicationPolicySpec struct {
 	// +kubebuilder:default=3
 	// +optional
 	SnapshotRetention int32 `json:"snapshotRetention,omitempty"`
+
+	// EnableConsistencyGroup groups the policy's volumes into ONE crash-consistent
+	// unit: replication snapshots are taken as atomically frozen generations
+	// across every member, and the members fail over together. Members must share
+	// one storage node (the group pins placement on the first attached volume and
+	// rejects members created elsewhere). Decided at creation — the backend
+	// creates the group record together with the policy — hence immutable.
+	// +k8s:immutable
+	// +optional
+	EnableConsistencyGroup *bool `json:"enableConsistencyGroup,omitempty"`
 }
 
 // ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
@@ -66,7 +76,27 @@ type ReplicationPolicyStatus struct {
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
+	// GroupNodeUUID is the storage node the policy's consistency group is
+	// pinned to, set by the group's first attached member: every further
+	// member volume must be created on this node. Empty for a policy without
+	// a consistency group, or before the first member joins.
+	// +optional
+	GroupNodeUUID string `json:"groupNodeUUID,omitempty"`
+
+	// GroupLvsName is the logical volume store the consistency group is
+	// pinned to, alongside GroupNodeUUID.
+	// +optional
+	GroupLvsName string `json:"groupLvsName,omitempty"`
+
+	// GroupLastSeq is the newest completed consistency-group generation
+	// (each generation is one crash-consistent snapshot set across every
+	// member).
+	// +optional
+	GroupLastSeq int64 `json:"groupLastSeq,omitempty"`
+
 	// Conditions holds standard Kubernetes condition types.
+	// +listType=map
+	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

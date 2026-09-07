@@ -34,6 +34,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -138,6 +140,10 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	patch := client.MergeFrom(policy.DeepCopy())
 	policy.Status.SlotCount = int32(len(slotList.Items))
 	policy.Status.Ready = true
+	// Best-effort: the pinned placement appears only after the first member
+	// attaches, and slot events wake this reconciler right then. A failed
+	// read keeps the previous values rather than failing the reconcile.
+	r.syncConsistencyGroupStatus(ctx, &policy, apiClient, clusterUUID)
 	if err := r.Status().Patch(ctx, &policy, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -233,6 +239,10 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 		"interval_min":    intervalMin,
 		"mode":            policy.Spec.Mode,
 		"keep_replicated": policy.Spec.SnapshotRetention,
+		// Explicit, not omitted-when-false: the backend decides the group at
+		// policy creation, and an omitted key would leave the default living
+		// in two places.
+		"consistency_group": ptr.BoolFromOrFalse(policy.Spec.EnableConsistencyGroup),
 	}
 	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
 	if err != nil || status >= 300 {
@@ -251,7 +261,53 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 	return created.ID, nil
 }
 
-// parseDurationToMinutes converts a Go duration string (e.g. "5m", "1h") to
+// consistencyGroupDetail is the slice of the backend policy DTO the
+// consistency-group status sync reads.
+type consistencyGroupDetail struct {
+	ConsistencyGroup bool   `json:"consistency_group"`
+	GroupNodeID      string `json:"group_node_id"`
+	GroupLvsName     string `json:"group_lvs_name"`
+	GroupLastSeq     int64  `json:"group_last_seq"`
+}
+
+// syncConsistencyGroupStatus copies the group's pinned placement and newest
+// generation from the backend into status, so users can see where member
+// volumes must be placed instead of discovering the rule through failed
+// attaches. A no-op for policies without a consistency group.
+func (r *ReplicationPolicyReconciler) syncConsistencyGroupStatus(
+	ctx context.Context,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+	apiClient *webapi.Client,
+	clusterUUID string,
+) {
+	log := logf.FromContext(ctx)
+	if !ptr.BoolFromOrFalse(policy.Spec.EnableConsistencyGroup) ||
+		policy.Status.BackendPolicyID == "" {
+		return
+	}
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/%s",
+		clusterUUID, policy.Status.BackendPolicyID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", status, string(body))
+		}
+		log.Error(err, "could not read the backend policy for consistency-group status",
+			"policy", policy.Name)
+		return
+	}
+	var detail consistencyGroupDetail
+	if err := json.Unmarshal(body, &detail); err != nil {
+		log.Error(err, "could not parse the backend policy for consistency-group status",
+			"policy", policy.Name)
+		return
+	}
+	policy.Status.GroupNodeUUID = detail.GroupNodeID
+	policy.Status.GroupLvsName = detail.GroupLvsName
+	policy.Status.GroupLastSeq = detail.GroupLastSeq
+}
+
+// parseDurationToMinutes converts a Go duration string (e.g., "5m" or "1h") to
 // whole minutes, clamped to a minimum of 1.
 func parseDurationToMinutes(s string) (int, error) {
 	d, err := time.ParseDuration(s)
