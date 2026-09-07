@@ -3,10 +3,13 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/errs"
 )
 
 const (
@@ -204,6 +207,12 @@ func TestClientRefusesAMigrationOfNoKnownKind(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), testMigration) {
 		t.Errorf("the error does not say which migration it was: %v", err)
+	}
+	// A body that deserialized and carries neither key is the version skew this
+	// sentinel names, and a caller classifies it the way it classifies every
+	// other unreadable response rather than by matching on the text.
+	if !errors.Is(err, errs.ErrInvalidResponse) {
+		t.Errorf("err = %v, want it to wrap errs.ErrInvalidResponse", err)
 	}
 }
 

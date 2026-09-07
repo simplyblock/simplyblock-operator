@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
 )
 
@@ -119,9 +120,12 @@ func migrationFromJSON(what string, raw json.RawMessage) (Migration, error) {
 		}
 		return subsystemMigration(d), nil
 	default:
+		// A body that deserialized and carries neither key is the version skew
+		// errs.ErrInvalidResponse names, and it classifies the same way every
+		// other unreadable response does: retrying will not help.
 		return Migration{}, fmt.Errorf(
-			"%s: neither a volume's migration, which carries lvol_id, nor a subsystem's, "+
-				"which carries member_count", what)
+			"%w: %s: neither a volume's migration, which carries lvol_id, nor a "+
+				"subsystem's, which carries member_count", errs.ErrInvalidResponse, what)
 	}
 }
 
