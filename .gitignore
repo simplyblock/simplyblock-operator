@@ -4,3 +4,9 @@ cover.out
 bin/
 build/
 __pycache__/
+
+# Local, untracked make settings (SBCLI_DIR and the like).
+local.mk
+
+# An sbcli checkout for the OpenAPI export, where CI puts it.
+/.sbcli/

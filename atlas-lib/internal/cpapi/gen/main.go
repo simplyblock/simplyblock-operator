@@ -65,8 +65,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse %s: %v", *in, err)
 	}
-	structs, unmarshalers := index(file)
-	types := responseTypes(structs, unmarshalers)
+	structs, unmarshalers, unions := index(file)
+	types := responseTypes(structs, unmarshalers, unions)
 	if len(types) == 0 {
 		log.Fatalf("%s: found no response types — has the generated client changed shape?", *in)
 	}
@@ -101,10 +101,17 @@ func main() {
 		*out, len(types)+variants, len(compiled), variants)
 }
 
-// index returns the file's struct types by name, and the names of the types
-// that already declare an UnmarshalJSON method.
-func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map[string]bool) {
-	structs, unmarshalers = map[string]*ast.StructType{}, map[string]bool{}
+// index returns the file's struct types by name, the names of the types that
+// already declare an UnmarshalJSON method, and the members of every union type.
+//
+// A union keeps its payload in an unexported field and offers one As<Member>
+// method per shape it can hold, so those methods are the only place its members
+// are named. Without reading them the walk below stops at the union and the
+// models inside it are never seen.
+func index(file *ast.File) (
+	structs map[string]*ast.StructType, unmarshalers map[string]bool, unions map[string][]string,
+) {
+	structs, unmarshalers, unions = map[string]*ast.StructType{}, map[string]bool{}, map[string][]string{}
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
@@ -118,17 +125,47 @@ func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map
 				}
 			}
 		case *ast.FuncDecl:
-			if d.Name.Name == "UnmarshalJSON" && d.Recv != nil && len(d.Recv.List) == 1 {
-				unmarshalers[typeName(d.Recv.List[0].Type)] = true
+			if d.Recv == nil || len(d.Recv.List) != 1 {
+				continue
+			}
+			receiver := typeName(d.Recv.List[0].Type)
+			if d.Name.Name == "UnmarshalJSON" {
+				unmarshalers[receiver] = true
+			}
+			if member, ok := unionMember(d); ok {
+				unions[receiver] = append(unions[receiver], member)
 			}
 		}
 	}
-	return structs, unmarshalers
+	return structs, unmarshalers, unions
+}
+
+// unionMember reads the member type out of an As<Member>() (<Member>, error)
+// method, and reports nothing for any other method. The name and the first
+// result have to agree, so an unrelated method beginning with "As" is not
+// mistaken for one.
+func unionMember(d *ast.FuncDecl) (string, bool) {
+	name, ok := strings.CutPrefix(d.Name.Name, "As")
+	if !ok || name == "" {
+		return "", false
+	}
+	if d.Type.Params != nil && len(d.Type.Params.List) != 0 {
+		return "", false
+	}
+	if d.Type.Results == nil || len(d.Type.Results.List) != 2 {
+		return "", false
+	}
+	if typeName(d.Type.Results.List[0].Type) != name {
+		return "", false
+	}
+	return name, true
 }
 
 // responseTypes is the sorted set of model types to generate for: the success
 // payloads of every response struct, plus every model type reachable from one.
-func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]bool) []string {
+func responseTypes(
+	structs map[string]*ast.StructType, unmarshalers map[string]bool, unions map[string][]string,
+) []string {
 	found := map[string]bool{}
 	var reach func(name string)
 	reach = func(name string) {
@@ -139,6 +176,12 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 		found[name] = true
 		for _, f := range st.Fields.List {
 			reach(typeName(f.Type))
+		}
+		// A union's members are named by its As methods rather than by its
+		// fields, and they are models like any other: a response that can hold
+		// either of two shapes has to validate whichever one arrives.
+		for _, member := range unions[name] {
+			reach(member)
 		}
 	}
 	for _, st := range structs {

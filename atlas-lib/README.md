@@ -68,7 +68,7 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
-│   └── migrations.go       volume migrations: create / get / continue / cancel
+│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
 ├── statemachine/           Deterministic state machine declared as data
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
@@ -144,13 +144,21 @@ an error, so a retried `DeleteVolume` RPC needs no pre-check.
 _Today:_ `csi-driver/pkg/spdk/controllerserver.go` uses the `kube` param helpers
 but still calls the control plane through its own `pkg/util/nvmf.go` client.
 
-#### Migrate a volume to another storage node
+#### Migrate a subsystem to another storage node
 
 The operator's `VolumeMigration` reconciler. A migration is created, observed by
 phase, then either continued past its pre-created checkpoint or canceled.
 
+**A migration is addressed by subsystem, not by volume.** One subsystem exports
+several volumes on a namespaced pool, so the volume is not the thing that moves:
+a subsystem configured for several namespaces migrates as one coordinated group,
+and one configured for a single namespace migrates that volume. The control
+plane decides which from the subsystem's own namespace capacity, so a request
+names a target node and nothing about the shape, and the answer says which was
+made.
+
 ```go
-migration, err := client.CreateVolumeMigration(ctx, handle, targetNodeID)
+migration, err := client.CreateMigration(ctx, clusterID, nqn, targetNodeID)
 if err != nil {
     handleError(err)
 }
@@ -158,12 +166,18 @@ if err != nil {
 // Poll until the control plane parks the migration at its pre-created
 // checkpoint, then validate the new paths before committing to the cutover.
 for {
-    m, err := client.GetVolumeMigration(ctx, handle, migration.ID)
+    m, err := client.GetMigration(ctx, clusterID, nqn, migration.ID)
     if err != nil {
         handleError(err)
     }
-    log.Info("migration", "phase", m.Phase,
-        "snapshots", fmt.Sprintf("%d/%d", m.SnapsMigrated, m.SnapsTotal))
+    switch m.Kind {
+    case controlplane.MigrationOfVolume:
+        log.Info("migration", "phase", m.Phase,
+            "snapshots", fmt.Sprintf("%d/%d", m.SnapsMigrated, m.SnapsTotal))
+    case controlplane.MigrationOfSubsystem:
+        // A group has no single volume whose snapshots could be counted.
+        log.Info("migration", "phase", m.Phase, "members", m.MemberCount)
+    }
     if m.Phase == "pre_created" { // atlas keeps Phase a plain control-plane string
         break
     }
@@ -172,16 +186,24 @@ for {
 
 if err := validateTargetPaths(ctx); err != nil {
     // Roll back rather than cut over to paths the consumer cannot reach.
-    _ = client.CancelVolumeMigration(ctx, handle, migration.ID)
+    _ = client.CancelMigration(ctx, clusterID, nqn, migration.ID)
     handleError(err)
 }
-if err := client.ContinueVolumeMigration(ctx, handle, migration.ID); err != nil {
+if err := client.ContinueMigration(ctx, clusterID, nqn, migration.ID); err != nil {
     handleError(err)
 }
 ```
 
+`ListMigrations` returns everything one subsystem has in flight, of both kinds,
+because the control plane returns them in one list. `Kind` is decided on a field
+the other shape does not carry rather than on whether a decode succeeds: both
+shapes decode as each other, and a group read as a volume's migration is a
+migration of volume "" with no snapshots, which reads as a finished one.
+
 _Today:_ `operator/internal/controller/volumemigration_controller.go` runs
-exactly this sequence against the operator's own `internal/webapi` client.
+exactly this sequence against the operator's own `internal/webapi` client, and
+already addresses migrations by cluster and subsystem NQN, which is what these
+calls take.
 
 #### Choose or validate a placement target
 
