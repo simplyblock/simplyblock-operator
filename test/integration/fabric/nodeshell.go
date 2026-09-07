@@ -15,6 +15,7 @@ package fabric
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -185,8 +186,17 @@ func (s *Shell) Node() string { return s.node }
 // stop agreeing the first time the rule changes.
 func (s *Shell) Pod() string { return s.pod }
 
-// sanitize turns a node name — or an image reference — into something usable
-// as a pod name.
+// unnameable matches every run of characters a Kubernetes name may not hold.
+//
+// It is a class rather than a list of the separators seen so far. Enumerating
+// them is what left the at sign of a digest-pinned image out, and the name only
+// fails at the Apply that starts the shell, where it reads as the cluster
+// refusing a pod rather than as the name being malformed.
+var unnameable = regexp.MustCompile(`[^a-z0-9]+`)
+
+// sanitize turns a node name, or an image reference, into something usable as a
+// pod name: lower case, with every other character folded to a dash and the
+// dashes at either end removed, since a name has to begin and end alphanumeric.
 func sanitize(node string) string {
-	return strings.ToLower(strings.NewReplacer(".", "-", "_", "-", ":", "-", "/", "-").Replace(node))
+	return strings.Trim(unnameable.ReplaceAllString(strings.ToLower(node), "-"), "-")
 }
