@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+// Package atlas.link.v1 defines the handshake that turns an accepted network
+// connection into an identified peer link.
+//
+// It is deliberately the only thing on the wire that the link layer itself
+// owns. Everything else a link carries -- the storage services in
+// atlas/node, anything added later -- is an ordinary gRPC service registered
+// on top of an established session, in either direction.
+package atlas.link.v1;
+
+option go_package = "github.com/simplyblock/atlas/link/linkv1;linkv1";
+
+// LinkService is served by the hub (the operator) on every session it accepts.
+//
+// The direction is worth stating plainly, because it is the reverse of how the
+// rest of the link is used: the peer dials the hub, so on this one service the
+// peer is the client. That is what lets the hub authenticate it -- the peer's
+// credentials ride in this call's metadata, which a hub that only ever issued
+// calls could never see.
+service LinkService {
+  // Hello identifies a freshly established session and must be the first call
+  // on it. The hub verifies the peer's credentials (bearer token in the
+  // "authorization" metadata header), binds the session to the identity those
+  // credentials prove, and only then registers it as reachable. A session
+  // that has not said Hello within the hub's handshake timeout is closed.
+  rpc Hello(HelloRequest) returns (HelloResponse);
+}
+
+// HelloRequest is what a peer claims about itself. None of it is trusted as
+// identity: the hub derives who the peer is from its credentials and answers
+// with what it decided. A claim that contradicts the credentials is rejected
+// rather than corrected, since the disagreement means one of the two is wrong
+// and guessing which would be how a node ends up answering for another.
+message HelloRequest {
+  // kind is the role the peer is asking to register as ("node",
+  // "controller"). It is authorized against the peer's credentials -- being a
+  // legitimate peer does not make every role available.
+  string kind = 1;
+
+  // name is the peer's claimed name within its kind: the Kubernetes node name
+  // for kind "node". Checked against the credentials, never taken from here.
+  string name = 2;
+
+  // instance_uid distinguishes one process lifetime of a peer from the next
+  // (the pod UID). It is how a restarted peer supersedes the session its
+  // predecessor left half-open rather than colliding with it.
+  string instance_uid = 3;
+
+  // capabilities names the services this peer serves on the session, so the
+  // hub can tell a peer that can attach volumes from one that only reports
+  // state, and degrade instead of calling an unimplemented service.
+  repeated string capabilities = 4;
+
+  // version is the peer's atlas build version, for skew diagnostics.
+  string version = 5;
+}
+
+// HelloResponse is the identity the hub bound the session to, and what the hub
+// itself offers on it.
+message HelloResponse {
+  // kind and name are the *verified* identity -- what the hub will address
+  // this peer as. A peer should log a difference from what it claimed; it
+  // means its own view of itself is wrong.
+  string kind = 1;
+  string name = 2;
+
+  // capabilities names the services the hub serves back on this session, for
+  // peers that call the hub as well as answer it.
+  repeated string capabilities = 3;
+
+  // version is the hub's atlas build version.
+  string version = 4;
+}

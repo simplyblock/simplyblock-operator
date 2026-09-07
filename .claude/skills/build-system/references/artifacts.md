@@ -19,6 +19,8 @@ stale copy is a defect a reviewer can see.
 | `shared/openapi.json`                                                                 | the control plane's own FastAPI app, in a local sbcli checkout | `make openapi-sync`                | `Repo: Sync OpenAPI Spec` → a nightly pull request             |
 | `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml`                    | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
 | `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client                       | `make -C atlas-lib generate`       | same                                                           |
+| `atlas-lib/link/linkv1/link{,_grpc}.pb.go`                                            | `link.proto` + `buf.gen.yaml` + `buf.yaml`                     | `make -C atlas-lib generate`       | compiles in `Atlas: Test`, **no drift gate**                   |
+| `atlas-lib/storage/storagerpc/storagev1/nvme{,_grpc}.pb.go`                           | `nvme.proto` + `buf.gen.yaml` + `buf.yaml`                     | `make -C atlas-lib generate`       | same                                                           |
 
 ---
 
@@ -56,9 +58,18 @@ stale copy is a defect a reviewer can see.
   chart file that the sync script overwrites on the next run. Never hand-edit a
   file under `helm-charts/charts/simplyblock-operator/crds/` or
   `templates/roles/`.
-- **File targets can be stale.** Only `atlas-lib`'s two `.gen.go` files. Force
-  them by deleting them or by touching a prerequisite
-  (`touch shared/openapi.json`).
+- **File targets can be stale.** `atlas-lib`'s two `.gen.go` files and its four
+  `.pb.go` files. Force them by deleting them or by touching a prerequisite
+  (`touch shared/openapi.json`). For a protocol, delete the `.pb.go`: the
+  `_grpc.pb.go` half is expressed as depending on it, so one recipe rebuilds
+  both.
+- **Nothing gates the protocols.** The `.pb.go` files are committed, but no CI
+  job regenerates them and diffs, and `lint-proto` does not run in CI either. So
+  a `.proto` edited without a regeneration reaches `main` as long as the
+  previously generated code still compiles, and the mismatch surfaces only as a
+  field that silently reads as its zero value. Run
+  `make -C atlas-lib generate && git diff --exit-code` yourself when touching
+  one.
 - **`.bin` tools are cached by version.** A pinned version already present is
   never re-downloaded. Delete `.bin/<tool>*` to force it.
 - **A generator writing no diff is the success condition**, not a sign that it

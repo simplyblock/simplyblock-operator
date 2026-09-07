@@ -179,7 +179,7 @@ func TestNonMultipathNamespaces(t *testing.T) {
 	if len(sibs) != 1 || sibs[0].Namespace.Name != all[1].Namespace.Name {
 		t.Errorf("Siblings = %v, want the other path's device", devNames(sibs))
 	}
-	if ct, _ := all[0].CoTenants(context.Background()); len(ct) != 0 {
+	if ct := CoTenants(all[0], all); len(ct) != 0 {
 		t.Errorf("CoTenants = %v, want none", devNames(ct))
 	}
 	stubIdentifyMNAN(t, 1, nil)

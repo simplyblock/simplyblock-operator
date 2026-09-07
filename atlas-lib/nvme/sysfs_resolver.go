@@ -77,16 +77,7 @@ func NewSysfsDeviceResolver(cfg SysfsConfig) *SysfsDeviceResolver {
 }
 
 func (r *SysfsDeviceResolver) List(ctx context.Context) ([]Device, error) {
-	devs, err := scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
-	if err != nil {
-		return nil, err
-	}
-	// Bind every device to this resolver so a follow-up question that needs a
-	// fresh scan (Device.HasSiblings) can ask without being handed a resolver.
-	for i := range devs {
-		devs[i] = devs[i].WithResolver(r)
-	}
-	return devs, nil
+	return scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
 }
 
 func (r *SysfsDeviceResolver) ListWithSelector(ctx context.Context, sel DeviceSelector) ([]Device, error) {

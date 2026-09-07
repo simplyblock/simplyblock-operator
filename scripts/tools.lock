@@ -17,6 +17,7 @@
 # When a row exists the install is verified against it (a mismatch is fatal).
 # When a row is missing scripts/tools.sh warns and prints the computed hash,
 # unless TOOLS_STRICT=1 which makes the missing entry fatal (use this in CI).
+buf v1.72.0 module all h1:VMmGFtCLrxyS2wkpghExmhhiqJDdmc8DcwAvsGJGJ94=
 controller-gen v0.21.0 module all h1:KXDQza3bgjlPY6xLR63tI/40gzjhyUAvkCrwzd2/6cs=
 golangci-lint v2.11.4 darwin amd64 sha256:c900d4048db75d1edfd550fd11cf6a9b3008e7caa8e119fcddbc700412d63e60
 golangci-lint v2.11.4 darwin arm64 sha256:02db2a2dae8b26812e53b0688a6f617e3ef1f489790e829ea22862cf76945675
@@ -26,6 +27,8 @@ kustomize v5.7.1 darwin amd64 sha256:4a0dff80c5644df6bc8f51b342842969004cb6ba5f9
 kustomize v5.7.1 darwin arm64 sha256:073e9d16d5a235e2ff83e62d6b76edb5d962adbc33be1e4860c4b3f1f39b33b9
 kustomize v5.7.1 linux amd64 sha256:ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8
 kustomize v5.7.1 linux arm64 sha256:4261a040217df3bd6896597c3986d1465925726e4f22a945304b5233a4dcdbda
+protoc-gen-go v1.36.11 module all h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
+protoc-gen-go-grpc v1.6.2 module all h1:rgSNvqscFZ1JgV/4wH5GOsZFSFkR2Eua9As3KIr2LlM=
 setup-envtest release-0.24 module all h1:a0H3X9ZYS3umFkQSHcRg/7KUqZF4BTrG2jV731XQwx4=
 yq v4.44.3 darwin amd64 sha256:216ddfa03e7ba0e5aba00b236ec78324b5bfc49b610db254fe92310878baea20
 yq v4.44.3 darwin arm64 sha256:559a594ef7a6ebc5b81a67b7717fb3accedd266d8fa7d8352da7fec9e463f48b

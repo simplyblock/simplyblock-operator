@@ -17,12 +17,21 @@ limitations under the License.
 package spdk
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/storage"
+	"github.com/simplyblock/atlas/storage/storagerpc"
+
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
+	"github.com/spdk/spdk-csi/pkg/csilink"
 	"github.com/spdk/spdk-csi/pkg/util"
 )
 
@@ -88,7 +97,63 @@ func Run(conf *util.Config) {
 		}
 	}
 
+	// The link to the operator, when enabled. It is independent of the CSI
+	// server: the driver serves kubelet whether or not the operator is
+	// reachable, and a dropped link is reconnected rather than reported.
+	if conf.LinkEnabled {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := startLink(ctx, conf); err != nil {
+			klog.Fatalf("failed to start the operator link: %s", err)
+		}
+	}
+
 	s := csicommon.NewNonBlockingGRPCServer()
 	s.Start(conf.Endpoint, ids, cs, ns)
 	s.Wait()
+}
+
+// startLink dials the operator as whichever peer this process is.
+//
+// A node plugin serves its local NVMe state on the link — that is the point of
+// linking it — and is identified by the node it runs on. A controller plugin
+// links as itself and currently serves nothing; it is registered so the
+// operator can see it, and so services can be added without new plumbing.
+func startLink(ctx context.Context, conf *util.Config) error {
+	cfg := csilink.Config{
+		HubAddress:  conf.LinkHubAddress,
+		CAFile:      conf.LinkCAFile,
+		ServerName:  conf.LinkServerName,
+		TokenFile:   conf.LinkTokenFile,
+		InstanceUID: conf.PodUID,
+	}
+
+	switch {
+	case conf.IsNodeServer:
+		if conf.NodeID == "" {
+			return fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
+		}
+		// storage.Local reads this node through sysfs. It must be the local
+		// one: serving a remote accessor would make this node a proxy for
+		// another, which nothing wants and which doubles every round trip.
+		srv, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+		if err != nil {
+			return fmt.Errorf("node storage: %w", err)
+		}
+		cfg.ID = link.NodePeer(conf.NodeID)
+		cfg.Register = srv.Register
+		cfg.Capabilities = storagerpc.Capabilities()
+
+	case conf.IsControllerServer:
+		if conf.PodName == "" {
+			return fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
+		}
+		cfg.ID = link.ControllerPeer(conf.PodName)
+
+	default:
+		return fmt.Errorf("link needs either --node or --controller")
+	}
+
+	_, err := csilink.Start(ctx, cfg)
+	return err
 }

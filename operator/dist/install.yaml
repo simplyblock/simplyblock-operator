@@ -169,12 +169,12 @@ spec:
     schema:
       openAPIV3Schema:
         description: "BackupPolicy is the Schema for the backuppolicies API.\n\nA
-          BackupPolicy defines retention and scheduling parameters for Simplyblock\nbackups.
+          BackupPolicy defines retention and scheduling parameters for simplyblock\nbackups.
           To apply a policy to a PVC, annotate the PVC with:\n\n\tsimplyblock.io/backup-policy:
           <BackupPolicy-name>\n\nThe deprecated simplybk/backup-policy annotation
           is still honoured for\nbackwards compatibility; when both are set, simplyblock.io/backup-policy\ntakes
           precedence.\n\nThe BackupPolicy must be in the same namespace as the annotated
-          PVC.\nThe controller attaches and detaches the policy in the Simplyblock
+          PVC.\nThe controller attaches and detaches the policy in the simplyblock
           backend\nwhenever the annotation is added or removed."
         properties:
           apiVersion:
@@ -246,14 +246,14 @@ spec:
               attachedLvols:
                 description: |-
                   AttachedLvols lists the PVCs (and their lvol IDs) currently attached to
-                  this policy in the Simplyblock backend. The controller uses this to detect
+                  this policy in the simplyblock backend. The controller uses this to detect
                   and reconcile annotation additions and removals.
                 items:
                   description: AttachedLvol records a single PVC-to-lvol attachment
                     managed by this policy.
                   properties:
                     lvolID:
-                      description: LvolID is the Simplyblock logical volume UUID that
+                      description: LvolID is the simplyblock logical volume UUID that
                         this policy is attached to.
                       type: string
                     pvcName:
@@ -279,7 +279,7 @@ spec:
                 description: Phase is the high-level lifecycle state of the policy.
                 type: string
               policyID:
-                description: PolicyID is the UUID assigned to this policy by the Simplyblock
+                description: PolicyID is the UUID assigned to this policy by the simplyblock
                   backend.
                 type: string
             type: object
@@ -1539,7 +1539,7 @@ spec:
                   rule: self == oldSelf
               pvcRef:
                 description: |-
-                  PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
+                  PVCRef identifies the PVC whose backing simplyblock volume should be snapshotted and backed up.
                   Not required when SourceClusterUUID is set (imported backup).
                 properties:
                   name:
@@ -1600,7 +1600,7 @@ spec:
                   which StorageClass the restored PVC ends up using.
                 type: string
               lvolID:
-                description: LvolID is the Simplyblock volume UUID.
+                description: LvolID is the simplyblock volume UUID.
                 type: string
               lvolName:
                 description: LvolName is the backend logical volume name.
@@ -1617,7 +1617,7 @@ spec:
                   output.
                 type: string
               poolName:
-                description: PoolName is the Simplyblock pool name derived from the
+                description: PoolName is the simplyblock pool name derived from the
                   CSI volume handle.
                 type: string
               poolUUID:
@@ -4373,6 +4373,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
 - apiGroups:
   - batch
   resources:

@@ -28,6 +28,11 @@
 //	                what order: one constructor per plan the design names.
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
+//	link            gRPC between the operator and the CSI driver, over
+//	                connections the CSI driver opens.
+//	storage         One node's storage as one value (Accessor);
+//	                storage/storagerpc serves it over a link and reaches
+//	                another node's.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
 //	errs/class      Classify a failure: the gRPC status to answer with, and
 //	                whether retrying can help.
