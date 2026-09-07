@@ -63,9 +63,8 @@ preflight: ## Check the tools and privileges a run needs.
 	    if [ -n "$$held" ] || [ -n "$$orphans" ]; then \
 	      [ -n "$$held" ] && echo "warning: $$held is bound, and the provisioner's dhcpd needs it"; \
 	      [ -n "$$orphans" ] && echo "warning: helpers from an earlier run are still up: $$orphans"; \
-	      echo "  A machine left behind by an interrupted run holds a vmnet interface, and"; \
-	      echo "  macOS keeps restarting bootpd for as long as one does, which takes the"; \
-	      echo "  port the provisioner's own dhcpd binds. Sweep them: make clean-clusters"; \
+	      echo "  The provisioner runs its own dhcpd on that port and cannot share it."; \
+	      echo "  Sweep what an earlier run left behind and look again: make clean-clusters"; \
 	    fi; \
 	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only ARM on macOS"; fail=1 ;; \
