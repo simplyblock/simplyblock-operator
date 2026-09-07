@@ -22,8 +22,64 @@ prerequisites run serially. `make` with no target prints the help.
 | `operator-build-installer`             | `make -C operator build-installer`                                                    |
 | `operator-build\|test\|lint\|fmt\|vet` | `make -C operator <t>`                                                                |
 | `helm-sync`                            | `operator-manifests`, then `bash helm-charts/scripts/sync-from-operator.sh operator`  |
+| `configure`                            | `bash scripts/local-config.sh detect $(CONFIGURE_ARGS)`, which records what it finds  |
+| `openapi-diff`                         | export the spec to a temporary file, then summarize it against the committed one      |
+| `openapi-sync`                         | export over `shared/openapi.json`, then `make -C atlas-lib generate` and the suite's  |
+| `openapi-ref`                          | print which sbcli branch and commit the export would read                             |
 
 `helm-sync` exists **only** at the root, and there is no `helm-charts/Makefile`.
+
+The `openapi-*` targets export the control-plane spec from a local sbcli
+checkout. `SBCLI_DIR` locates it and **has no default**, because where another
+repository is checked out is not something this one can know: it is read from
+the environment or from an untracked `local.mk` (`-include`d at the top of the
+root Makefile), and failing that from `.sbcli` inside the repository, which is
+where CI checks sbcli out and which `.gitignore` covers. Configured nowhere, the
+targets print the ways to set it and stop.
+
+They build a virtual environment under `.bin/openapi-venv` on first use, from
+`$(SBCLI_DIR)/requirements.txt`, because the export imports the control plane's
+own FastAPI app; it is rebuilt when that requirement set moves, and
+`VENV_INTERPRETER` overrides the interpreter it is built with. Nothing connects
+to a database at import time.
+
+**The settings that belong to one machine are named by a section and a name,**
+and `scripts/local-config.sh` is the only thing that reads or writes them:
+
+```
+scripts/local-config.sh repo sbcli set ../sbcli   # record a setting
+scripts/local-config.sh repo sbcli get            # print it, or nothing
+scripts/local-config.sh repo sbcli unset          # forget it
+scripts/local-config.sh list [<section>]          # print every setting
+scripts/local-config.sh detect [--clone]          # find sbcli and record it
+```
+
+Two are read today: `repo.sbcli`, the path to an sbcli checkout, and
+`venv.interpreter`, what the openapi environment is built with. They are stored
+in the untracked `local.mk` as one make variable each (`repo.sbcli` becomes
+`REPO_SBCLI`), which is where the Makefile reads them from and is otherwise this
+script's business. Writing one rewrites its own assignment and keeps every other
+line, so settings do not overwrite each other.
+
+`detect` is what `make configure` runs. It looks in `.sbcli`, beside the
+repository, and under `~/git`, `~/src`, `~/dev`, and `~/projects`, reports the
+branch the checkout it picked is on, and takes `--clone` to fetch one into
+`.sbcli` when there is none. Run from a linked worktree it searches beside the
+main checkout as well, since a worktree lives inside the repository and its own
+neighbors are the other worktrees. Pass that flag through make as `CONFIGURE_ARGS`.
+Recording an sbcli path directly checks that it is a checkout, so a directory
+that merely has the right name is refused rather than recorded.
+
+Changing `venv.interpreter` after the environment exists does not rebuild it,
+since the stamp tracks the requirement set rather than the interpreter. Remove
+`.bin/openapi-venv` to switch interpreters.
+
+**Which ref the checkout is on is the whole meaning of the export,** so both
+targets print it first. A sibling checkout sits on whatever branch it was last
+left on, and exporting from a release branch removes the endpoints that exist
+only on `main` — `openapi-diff` writes nothing and is the way to see that before
+`openapi-sync` commits to it. CI does the same export nightly from `main` and
+proposes the drift as a pull request (`.github/workflows/repo_openapi_sync.yaml`).
 
 ## operator/Makefile
 
