@@ -54,6 +54,14 @@ type Connection struct {
 	// subsystems that export several. Zero when the control plane does not
 	// report one.
 	NSID uint32
+
+	// UUID is the namespace's own identity, which sysfs reports as the `uuid`
+	// attribute and NVMe calls the namespace UUID. For a simplyblock volume it
+	// is the lvol's UUID, and after a failover it is the clone's: unlike the NQN
+	// and the namespace id, it names the same data wherever it is being served
+	// from, which is what a lookup falls back to when the subsystem coordinates
+	// no longer find it. Empty when the control plane reports none.
+	UUID string
 	// Endpoints are in the control plane's priority order (primary,
 	// secondary, and tertiary), and that order is preserved as received.
 	// nvmeof.ConnectPaths relies on it to attach the primary path first.

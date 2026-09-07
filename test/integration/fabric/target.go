@@ -158,6 +158,55 @@ func (t *Target) AddNamespace(ctx context.Context, nsid, sizeMB int, uuid string
 	return nil
 }
 
+// GrowNamespace enlarges namespace nsid to sizeMB and makes the host see it.
+//
+// Three things have to learn the new size in order, and skipping any of them
+// leaves a device that is bigger in one place and the size it was everywhere
+// else: the sparse file, the loop device holding it, and nvmet, which reads the
+// capacity when a namespace is enabled rather than on every request.
+//
+// nvmet is told through revalidate_size where the kernel offers it, because that
+// re-reads the backing device and announces the new capacity to the host without
+// the namespace going away. Falling back to disabling and re-enabling works and
+// is worse: the namespace disappears from the host and returns, which is a
+// different event from a volume growing and exercises the wrong thing.
+//
+// Shrinking is not offered. A namespace under a mounted filesystem cannot lose
+// bytes safely, and nothing in the product asks it to.
+func (t *Target) GrowNamespace(ctx context.Context, nsid, sizeMB int) error {
+	dev, ok := t.namespaces[nsid]
+	if !ok {
+		return fmt.Errorf("namespace %d of %s was never added, so there is nothing to grow",
+			nsid, t.spec.NQN)
+	}
+	img := fmt.Sprintf("/var/tmp/nvmet/%s-ns%d.img", sanitize(t.spec.NQN), nsid)
+	nsDir := fmt.Sprintf("%s/namespaces/%d", t.subsysDir(), nsid)
+
+	script := strings.Join([]string{
+		"set -e",
+		"IMG=" + quote(img),
+		"DEV=" + quote(dev),
+		"N=" + quote(nsDir),
+		fmt.Sprintf("truncate -s %dM \"$IMG\"", sizeMB),
+		// The loop device caches the size it saw when it was attached.
+		"losetup -c \"$DEV\"",
+		"if [ -f \"$N\"/revalidate_size ]; then",
+		"	echo 1 > \"$N\"/revalidate_size",
+		"else",
+		"	echo 0 > \"$N\"/enable",
+		"	echo 1 > \"$N\"/enable",
+		"fi",
+		"blockdev --getsize64 \"$DEV\"",
+	}, "\n")
+
+	out, err := t.sh.Run(ctx, script)
+	if err != nil {
+		return fmt.Errorf("grow namespace %d of %s to %dMB on %s: %w\n%s",
+			nsid, t.spec.NQN, sizeMB, t.sh.Node(), err, out)
+	}
+	return nil
+}
+
 // DisableNamespace takes a namespace offline without removing it. The host keeps
 // the controller and loses the path, which is the difference between a
 // namespace that never existed and one that went away.
@@ -172,6 +221,36 @@ func (t *Target) DisableNamespace(ctx context.Context, nsid int) error {
 
 // NQN is the subsystem NQN.
 func (t *Target) NQN() string { return t.spec.NQN }
+
+// NamespaceDevice is the loop device backing namespace nsid on the target's
+// node, or "" when AddNamespace never created it. It is the target-side handle
+// on the namespace's bytes: writing a filesystem onto it before (or after) the
+// host connects is how a test puts real data behind the fabric.
+func (t *Target) NamespaceDevice(nsid int) string { return t.namespaces[nsid] }
+
+// UnlinkPort withdraws the subsystem from its port: the running association
+// drops, the host's controller goes into reconnecting, and — this being the
+// state the 2026-09-03 incident turned on — the host keeps the block device
+// while every read on it fails. RelinkPort is the way back.
+func (t *Target) UnlinkPort(ctx context.Context) error {
+	out, err := t.sh.Run(ctx, fmt.Sprintf("rm -f %s/subsystems/%s",
+		quote(t.portDir()), quote(t.spec.NQN)))
+	if err != nil {
+		return fmt.Errorf("unlink %s from its port on %s: %w\n%s", t.spec.NQN, t.sh.Node(), err, out)
+	}
+	return nil
+}
+
+// RelinkPort restores the subsystem on its port after UnlinkPort, so the host's
+// reconnecting controller can find it again.
+func (t *Target) RelinkPort(ctx context.Context) error {
+	out, err := t.sh.Run(ctx, fmt.Sprintf("ln -sfn %s %s/subsystems/%s",
+		quote(t.subsysDir()), quote(t.portDir()), quote(t.spec.NQN)))
+	if err != nil {
+		return fmt.Errorf("relink %s to its port on %s: %w\n%s", t.spec.NQN, t.sh.Node(), err, out)
+	}
+	return nil
+}
 
 // Endpoint is the address:port an initiator connects to.
 func (t *Target) Endpoint() (string, int) { return t.spec.Addr, t.spec.Port }

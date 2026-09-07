@@ -57,16 +57,29 @@ preflight: ## Check the tools and privileges a run needs.
 	  command -v $$t >/dev/null || { echo "missing: $$t"; fail=1; }; \
 	done; \
 	case "$$(uname -s)/$$(uname -m)" in \
-	  Darwin/arm64) ;; \
-	  Darwin/*) echo "Talos' QEMU provisioner supports only arm on macOS"; fail=1 ;; \
+	  Darwin/arm64) \
+	    held=$$(netstat -an 2>/dev/null | awk 'NF == 5 && $$4 ~ /\.67$$/ {print $$4; exit}'); \
+	    orphans=$$(pgrep -f "talosctl (loadbalancer-launch|dhcpd-launch|qemu-launch)" 2>/dev/null | tr '\n' ' '); \
+	    if [ -n "$$held" ] || [ -n "$$orphans" ]; then \
+	      [ -n "$$held" ] && echo "warning: $$held is bound, and the provisioner's dhcpd needs it"; \
+	      [ -n "$$orphans" ] && echo "warning: helpers from an earlier run are still up: $$orphans"; \
+	      echo "  The provisioner runs its own dhcpd on that port and cannot share it."; \
+	      echo "  Sweep what an earlier run left behind and look again: make clean-clusters"; \
+	    fi; \
+	    ;; \
+	  Darwin/*) echo "Talos' QEMU provisioner supports only ARM on macOS"; fail=1 ;; \
 	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
 	  *) echo "unsupported host $$(uname -s)/$$(uname -m); on Windows use WSL2" ; fail=1 ;; \
 	esac; \
 	test $$fail -eq 0 || exit 1; \
 	echo "talosctl: $$(talosctl version --client --short 2>/dev/null || talosctl version --client 2>/dev/null | head -2 | tail -1)"; \
 	if [ "$$(id -u)" -ne 0 ]; then \
-	  echo "refreshing sudo credentials (the provisioner needs root)"; \
-	  sudo -v; \
+	  if sudo -n talosctl version --client >/dev/null 2>&1; then \
+	    echo "sudo: talosctl needs no password here, so there is nothing to refresh"; \
+	  else \
+	    echo "refreshing sudo credentials (the provisioner needs root)"; \
+	    sudo -v; \
+	  fi; \
 	fi
 
 test: preflight ## Boot a cluster and run the suite.
@@ -84,23 +97,46 @@ test-short: preflight ## Run only the smoke test.
 # A run killed part-way leaves the cluster behind holding memory and a network,
 # and its root-owned helper processes reparented to init — sudo's children outlive
 # the sudo the test killed. Cluster state is kept in talosctl's default location
-# precisely so this can find them by name afterwards.
+# precisely so this can find them by name afterward.
 #
 # A create that died before writing state.yaml is the harder case: talosctl
 # cannot destroy what it cannot read, and the directory still holds the nodes'
 # sparse disk images, so it is removed directly once destroy has had its turn.
+#
+# Worse still is a create whose own failure path removed the state directory
+# while its children kept running. Nothing then names the cluster, the virtual
+# machines stay up holding their memory and the host bridge, and macOS restarts
+# bootpd for as long as one of them holds a vmnet interface. So the sweep matches
+# the processes rather than the state: every talosctl helper, qemu-launch among
+# them, and the virtual machines themselves, recognized by the cluster directory
+# on their command line so that a developer's unrelated machines are left alone.
 clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
 	@found=0; \
 	for d in $$HOME/.talos/clusters/sbi-* $$HOME/.talos/clusters/sb-integration*; do \
 	  [ -d "$$d" ] || continue; \
 	  found=1; n=$$(basename $$d); \
 	  echo "destroying $$n"; \
-	  sudo -E talosctl cluster destroy --name "$$n" || true; \
-	  [ -d "$$d" ] && { echo "  removing leftover state $$d"; sudo rm -rf "$$d"; } || true; \
+	  if sudo -E talosctl cluster destroy --name "$$n"; then \
+	    [ -d "$$d" ] && { echo "  removing leftover state $$d"; sudo rm -rf "$$d"; } || true; \
+	  else \
+	    echo "  destroy failed, leaving $$d in place: talosctl needs it to find the"; \
+	    echo "  cluster's own processes, and removing it strands them for root alone"; \
+	  fi; \
 	done; \
-	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
-	if [ -n "$$pids" ]; then \
-	  echo "killing orphaned helpers: $$pids"; \
-	  sudo kill $$pids || true; \
+	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|qemu-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
+	vms=$$(pgrep -f "qemu-system-[a-z0-9_]+ .*\.talos/clusters/(sbi-|sb-integration)" 2>/dev/null || true); \
+	all=$$(echo $$pids $$vms); \
+	if [ -n "$$all" ]; then \
+	  found=1; \
+	  echo "killing orphaned helpers: $$all"; \
+	  sudo -n kill $$all 2>/dev/null || sudo kill $$all || true; \
+	  sleep 2; \
+	  still=$$(ps -o pid= -p $$all 2>/dev/null | tr -d " " | tr "\n" " " || true); \
+	  if [ -n "$$still" ]; then \
+	    echo "  still up: $$still"; \
+	    sudo -n kill -9 $$still 2>/dev/null || sudo kill -9 $$still 2>/dev/null || { \
+	      echo "  these belong to root, and kill is not passwordless here, so they"; \
+	      echo "  need a hand: sudo kill -9 $$still"; }; \
+	  fi; \
 	fi; \
-	test $$found -eq 1 || echo "no leftover clusters found"
+	test $$found -eq 1 || echo "nothing left to clean"

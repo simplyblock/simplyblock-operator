@@ -1,0 +1,15 @@
+{
+  "name": "gpt",
+  "tool": "sgdisk",
+  "tool_version": "GPT fdisk (sgdisk) version 1.0.10",
+  "command": "sgdisk -o -n 1:0:0 -t 1:8300",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:40Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop8 PTUUID=12e447fe-1a52-45c4-90cd-07f19997906d PTTYPE=gpt",
+  "head_sha256": "b5bfdbecec97a0a991d724db1bf6bc75bfa9749fd70d9a303bf7a746563ed661",
+  "tail_sha256": "b6d37681606469bcb5d5c1453db6cd2769c6b6585924734f0854030a40ecbdfb",
+  "note": "carries a protective MBR at LBA 0 as well, which is why GPT is evaluated first"
+}

@@ -19,7 +19,12 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
 
 RUN dnf update -y  --nogpgcheck
 
-RUN dnf install -y nvme-cli iscsi-initiator-utils e2fsprogs xfsprogs util-linux kmod wget sudo rpm --nogpgcheck && \
+# lvm2 is what the node plugin's LVM layers shell out to: pvcreate, vgcreate,
+# lvcreate and the rest run in this container rather than through nsenter, so a
+# missing package is a volume that cannot be staged. It also brings
+# device-mapper, and with it the dmsetup that clears the nodes a volume leaves
+# behind when its backing device is gone.
+RUN dnf install -y nvme-cli iscsi-initiator-utils e2fsprogs xfsprogs lvm2 util-linux kmod wget sudo rpm --nogpgcheck && \
     dnf clean all
 
 # Trimmed to reduce the CVE surface picked up by the security scan. Guarded with

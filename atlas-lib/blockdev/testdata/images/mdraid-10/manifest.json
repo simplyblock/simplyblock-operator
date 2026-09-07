@@ -1,0 +1,15 @@
+{
+  "name": "mdraid-10",
+  "tool": "mdadm",
+  "tool_version": "mdadm - v4.3 - 2024-02-15 - Ubuntu 4.3-1ubuntu2.1",
+  "command": "mdadm --create --level=1 --metadata=1.0 <dev> missing",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:44Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop17 UUID=6fe5b4cb-5c3e-4847-ce63-3a0695a66e19 UUID_SUB=8d51088c-4791-bdab-1df9-ddb987e031ca LABEL=claude:capture-mdraid-10 VERSION=1.0 TYPE=linux_raid_member USAGE=raid",
+  "head_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "tail_sha256": "215f7a5931e071c38d7f957bff089aa9aaa87f09c65d2b122ac6aabd3c901286",
+  "note": "metadata 1.0: 1.0 puts the superblock in the tail region, 1.1 and 1.2 in the head"
+}

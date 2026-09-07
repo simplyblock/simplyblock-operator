@@ -1,0 +1,15 @@
+{
+  "name": "mdraid-11",
+  "tool": "mdadm",
+  "tool_version": "mdadm - v4.3 - 2024-02-15 - Ubuntu 4.3-1ubuntu2.1",
+  "command": "mdadm --create --level=1 --metadata=1.1 <dev> missing",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:45Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "",
+  "head_sha256": "ed1d505c75a0f440f9317de71a9fb55ecd725f8fdc84ab075881e2baedfa4260",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": "metadata 1.1: 1.0 puts the superblock in the tail region, 1.1 and 1.2 in the head"
+}

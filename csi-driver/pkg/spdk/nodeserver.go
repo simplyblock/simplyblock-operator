@@ -34,6 +34,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/errs/deferrers"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -54,7 +55,13 @@ import (
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
-	mounter     mount.Interface
+	mounter mount.Interface
+	// execer runs the external commands staging depends on: the blkid preflight
+	// probe and whatever SafeFormatAndMount executes. One shared, injectable
+	// runner so a test can script the probe's answers and observe exactly which
+	// commands staging chose to run — which is how the never-format contract is
+	// asserted.
+	execer      exec.Interface
 	volumeLocks *util.VolumeLocks
 	kubeClient  kubernetes.Interface
 	manager     *sbkube.Manager
@@ -66,6 +73,7 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
+		execer:            exec.New(),
 		volumeLocks:       util.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 	}
@@ -725,10 +733,54 @@ func (ns *nodeServer) stageVolume(
 	// Read the device before deciding anything about it. Staging stops here on
 	// any reading that is not a definite answer, rather than handing an
 	// uncertain device to mkfs.
-	fs, probeErr := getDiskFormat(devicePath)
-	fs, err = classifyDiskFormat(devicePath, fs, probeErr)
+	fs, err := ns.probeDiskFormat(ctx, devicePath)
 	if err != nil {
 		return err
+	}
+
+	// The probe found a filesystem: the format question is settled, and the
+	// device is mounted directly rather than through SafeFormatAndMount. That
+	// helper probes the device again itself and formats whenever its own probe
+	// reads blank, so on a fabric that degrades between the two probes it
+	// reformats a filesystem staging just positively identified — and the
+	// annotation guard below never runs on this path, because it is only
+	// consulted when the preflight reads blank. The helper also preen-repairs
+	// (fsck -a) every existing filesystem it mounts read-write, which writes to
+	// a device whose path state staging cannot judge.
+	//
+	// A filesystem that is not the one asked for stops staging here.
+	//
+	// The volume was formatted once and holds data, so the class saying something
+	// else now is somebody having changed what a class says about a volume that
+	// already exists. Neither way of reconciling that is safe. Reformatting
+	// destroys the volume, which is the failure this path exists to prevent.
+	// Mounting the one that is there works, and leaves a volume serving a
+	// filesystem nobody declared, with the disagreement in a log line and nowhere
+	// else, until whatever notices next decides to make the device match the
+	// class again — and that decision reformats.
+	//
+	// Refusing costs an outage on a volume nobody can currently mount correctly
+	// anyway, and it puts the misconfiguration in front of an operator while the
+	// data is still there.
+	if fs != "" {
+		if fs != fsType {
+			return status.Errorf(codes.FailedPrecondition,
+				"volume %s carries a %s filesystem and its class asks for %s; refusing to stage it, "+
+					"because reformatting would destroy the volume and mounting it as %s would serve "+
+					"a filesystem the class does not declare",
+				req.GetVolumeId(), fs, fsType, fs)
+		}
+		volumeContext[stagedFsTypeKey] = fs
+		if err := ns.mounter.Mount(
+			devicePath,
+			stagingPath,
+			fs,
+			stagingMountFlags(fs, req.GetVolumeCapability()),
+		); err != nil {
+			return err
+		}
+		ns.recordOnDiskFilesystem(ctx, req.GetVolumeId(), volumeContext, fs)
+		return nil
 	}
 
 	// blkid reporting nothing means either that the device carries no filesystem
@@ -737,38 +789,37 @@ func (ns *nodeServer) stageVolume(
 	// was formatted once, so this reading is a failed probe rather than a blank
 	// device, and it is mounted as what the claim says is down there.
 	//
-	// It is mounted as the recorded filesystem, not the requested one, because
-	// those disagree exactly when it matters — a volume formatted before its
-	// StorageClass changed — and mounting ext4 as XFS fails. The mount flags
-	// follow the same filesystem for the same reason: XFS needs nouuid, and
-	// deriving the flags from the request would drop it.
+	// A record that is not the filesystem asked for stops staging, for the reason
+	// the branch above stops: the volume was formatted once and holds data, so a
+	// class naming something else cannot be reconciled here. Reformatting
+	// destroys it, and mounting the recorded one serves a filesystem nobody
+	// declared until something later decides to correct the mismatch.
 	//
 	// A mount that fails here is the correct outcome and must stay one. It means
 	// the claim's record disagrees with the device, or the device is genuinely
 	// dead, and neither is a reason to format: falling back to mkfs would
 	// reinstate the data loss this branch exists to prevent.
 	mntFlags := stagingMountFlags(fsType, req.GetVolumeCapability())
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	if fs == "" {
-		annotated, err := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext)
-		if err != nil {
-			return err
+	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: ns.execer}
+	annotated, err := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext)
+	if err != nil {
+		return err
+	}
+	if annotated != "" {
+		if annotated != fsType {
+			return status.Errorf(codes.FailedPrecondition,
+				"volume %s is recorded as holding a %s filesystem and its class asks for %s; refusing to "+
+					"stage it, because reformatting would destroy the volume and mounting it as %s would "+
+					"serve a filesystem the class does not declare",
+				req.GetVolumeId(), annotated, fsType, annotated)
 		}
-		if annotated != "" {
-			if annotated != fsType {
-				klog.Warningf(
-					"volume %s: claim records a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
-					req.GetVolumeId(), annotated, fsType, devicePath, stagingPath, annotated,
-				)
-			}
-			volumeContext[stagedFsTypeKey] = annotated
-			return mounter.Mount(
-				devicePath,
-				stagingPath,
-				annotated,
-				stagingMountFlags(annotated, req.GetVolumeCapability()),
-			)
-		}
+		volumeContext[stagedFsTypeKey] = annotated
+		return mounter.Mount(
+			devicePath,
+			stagingPath,
+			annotated,
+			stagingMountFlags(annotated, req.GetVolumeCapability()),
+		)
 	}
 
 	// Record what was actually staged: a later restage remounts an existing
@@ -817,97 +868,59 @@ func (ns *nodeServer) stageVolume(
 		}
 	}
 
-	// The device now definitely carries fsType: either mkfs just put it there, or
-	// the probe found it there and the mount above would have failed on any other
-	// filesystem. Record that on the claim, so what a volume is formatted with is
-	// answerable without a node to run blkid on.
+	// The device now definitely carries fsType: mkfs just put it there — a device
+	// already carrying a filesystem returned from the probe-found branch above.
+	// Record that on the claim, so what a volume is formatted with is answerable
+	// without a node to run blkid on.
 	ns.recordOnDiskFilesystem(ctx, req.GetVolumeId(), volumeContext, fsType)
 
 	return nil
 }
 
-// unknownDiskFormat is what getDiskFormat reports for a device that carries a
-// partition table rather than a filesystem: something is on it, but not
-// something that can be mounted, and formatting it would destroy whatever it is.
-const unknownDiskFormat = "unknown data, probably partitions"
-
-// classifyDiskFormat turns a blkid probe of devicePath into the one thing
-// staging needs to know: the filesystem already on the device, empty when the
-// device is positively blank.
-//
-// It errors on every reading that is neither of those. Formatting is
-// irreversible, and both remaining readings — a probe that failed, and a
-// partition table where a filesystem was expected — leave it open whether the
-// device holds somebody's data. Staging fails there instead of formatting
-// through the doubt; the next attempt probes the device again.
-func classifyDiskFormat(devicePath, fs string, probeErr error) (string, error) {
-	if probeErr != nil {
+// probeDiskFormat reads the filesystem on devicePath through atlas's blockdev
+// prober, translating its refusals into this driver's staging language: a probe
+// that could not read the device and a partition table where a filesystem was
+// expected both leave open whether the device holds somebody's data, so staging
+// fails there instead of formatting through the doubt. The next attempt probes
+// the device again.
+func (ns *nodeServer) probeDiskFormat(ctx context.Context, devicePath string) (string, error) {
+	fs, err := blockdev.NewBlkidProberWithRunner(execRunner(ns.execer)).Format(ctx, devicePath)
+	switch {
+	case errors.Is(err, blockdev.ErrPartitionTable):
+		// Wrapped, because the prober names the table blkid reported and which
+		// one it is decides what to do about it: a GPT disk handed to the driver
+		// by mistake is a different problem from a stale DOS label on a volume
+		// that was reused.
+		return "", fmt.Errorf(
+			"refusing to stage %s, which carries a partition table rather than a filesystem: %w",
+			devicePath, err,
+		)
+	case err != nil:
 		return "", fmt.Errorf(
 			"cannot read the on-disk filesystem of %s, refusing to stage a device whose contents are unknown: %w",
-			devicePath, probeErr,
-		)
-	}
-	if fs == unknownDiskFormat {
-		return "", fmt.Errorf(
-			"device %s carries a partition table rather than a filesystem, refusing to stage it",
-			devicePath,
+			devicePath, err,
 		)
 	}
 	return fs, nil
 }
 
-func getDiskFormat(disk string) (string, error) {
-	args := []string{"-p", "-s", "TYPE", "-s", "PTTYPE", "-o", "export", disk}
-	klog.V(4).Infof("Attempting to determine if disk %q is formatted using blkid with args: (%v)", disk, args)
-	dataOut, err := osexec.Command("blkid", args...).CombinedOutput()
-	output := string(dataOut)
-	klog.V(4).Infof("Output: %q", output)
-
-	if err != nil {
-		var exit *osexec.ExitError
-		if errors.As(err, &exit) {
-			if exit.ExitCode() == 2 {
-				// Disk device is unformatted.
-				// For `blkid`, if the specified token (TYPE/PTTYPE, etc) was
-				// not found, or no (specified) devices could be identified, an
-				// exit code of 2 is returned.
-				return "", nil
+// execRunner adapts the node server's command runner to blockdev's Runner,
+// keeping blkid's exit code separate from a transport failure the way the
+// prober's contract requires. It runs without the context on purpose: the
+// underlying exec.Interface command carries no context, which preserves the
+// staging path's existing timeout behavior (none) rather than changing it here.
+func execRunner(execer exec.Interface) blockdev.Runner {
+	return func(_ context.Context, name string, args ...string) ([]byte, int, error) {
+		out, err := execer.Command(name, args...).CombinedOutput()
+		if err != nil {
+			var exit exec.ExitError
+			if errors.As(err, &exit) {
+				return out, exit.ExitStatus(), nil
 			}
+			return out, 0, err
 		}
-		klog.Errorf("Could not determine if disk %q is formatted (%v)", disk, err)
-		return "", err
+		return out, 0, nil
 	}
-
-	var fstype, pttype string
-
-	lines := strings.Split(output, "\n")
-	for _, l := range lines {
-		if len(l) <= 0 {
-			// Ignore empty line.
-			continue
-		}
-		cs := strings.Split(l, "=")
-		if len(cs) != 2 {
-			return "", fmt.Errorf("blkid returns invalid output: %s", output)
-		}
-		// TYPE is filesystem type, and PTTYPE is partition table type, according
-		// to https://www.kernel.org/pub/linux/utils/util-linux/v2.21/libblkid-docs/.
-		switch cs[0] {
-		case "TYPE":
-			fstype = cs[1]
-		case "PTTYPE":
-			pttype = cs[1]
-		}
-	}
-
-	if len(pttype) > 0 {
-		klog.V(4).Infof("Disk %s detected partition table type: %s", disk, pttype)
-		// Returns a special non-empty string as filesystem type, then kubelet
-		// will not format it.
-		return unknownDiskFormat, nil
-	}
-
-	return fstype, nil
 }
 
 // stagedFsType returns the filesystem a volume was staged with: the one

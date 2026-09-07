@@ -47,7 +47,7 @@ func TestCreateOrAttach_ExistingVolumeGroupReactivates(t *testing.T) {
 	fake := &fakeRunner{
 		out: map[string]string{
 			joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"}): "vdo-abc123",
-			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                               "vdopool abc123",
+			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                                "vdopool abc123",
 		},
 		err: map[string]error{},
 	}
@@ -74,7 +74,7 @@ func TestCreateOrAttach_OrphanedVolumeGroupIsRemovedAndRecreated(t *testing.T) {
 	fake := &fakeRunner{
 		out: map[string]string{
 			joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"}): "vdo-abc123",
-			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                               "",
+			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                                "",
 		},
 		err: map[string]error{},
 	}
@@ -214,7 +214,7 @@ func TestResolveClone_ForeignVolumeGroupIsReStamped(t *testing.T) {
 	fake := &fakeRunner{
 		out: map[string]string{
 			joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"}): "vdo-source",
-			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                               "vdopool source",
+			joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-abc123"}):                                "vdopool source",
 		},
 		err: map[string]error{},
 	}

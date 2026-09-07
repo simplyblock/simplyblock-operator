@@ -175,8 +175,7 @@ design:**` or similar, is the right place for what the picture cannot show.
 ## Observability sections
 
 Two tables, and neither is boilerplate. `design-storagecluster.md` §10 and
-`design-node-volume-stack.md` §14, the latter on the `design/volume-stack` branch,
-are the reference implementations.
+`design-node-volume-stack.md` §14 are the reference implementations.
 
 **Open with the baseline.** State whether each table is an addition to a surface
 that exists or new infrastructure, because a reviewer does something different with
