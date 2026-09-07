@@ -887,9 +887,13 @@ func (ns *nodeServer) probeDiskFormat(ctx context.Context, devicePath string) (s
 	fs, err := blockdev.NewBlkidProberWithRunner(execRunner(ns.execer)).Format(ctx, devicePath)
 	switch {
 	case errors.Is(err, blockdev.ErrPartitionTable):
+		// Wrapped, because the prober names the table blkid reported and which
+		// one it is decides what to do about it: a GPT disk handed to the driver
+		// by mistake is a different problem from a stale DOS label on a volume
+		// that was reused.
 		return "", fmt.Errorf(
-			"device %s carries a partition table rather than a filesystem, refusing to stage it",
-			devicePath,
+			"refusing to stage %s, which carries a partition table rather than a filesystem: %w",
+			devicePath, err,
 		)
 	case err != nil:
 		return "", fmt.Errorf(

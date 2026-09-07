@@ -224,3 +224,29 @@ func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
 		t.Errorf("staging mounted something anyway: %v", fm.MountPoints)
 	}
 }
+
+// TestProbeRefusalNamesThePartitionTable. A device carrying a partition table
+// is refused rather than formatted, and which table it is decides what an
+// operator does next: a GPT disk handed to the driver by mistake is a different
+// problem from a stale DOS label on a volume that was reused. The prober knows,
+// since blkid reports PTTYPE, so the refusal has to carry it rather than saying
+// only that something was there.
+func TestProbeRefusalNamesThePartitionTable(t *testing.T) {
+	for _, table := range []string{"gpt", "dos"} {
+		t.Run(table, func(t *testing.T) {
+			fe, _ := scriptedExec([]scriptedResult{{out: "PTTYPE=" + table + "\n"}})
+			ns := &nodeServer{execer: fe}
+
+			_, err := ns.probeDiskFormat(context.Background(), fakeDevice)
+			if err == nil {
+				t.Fatal("staged a device carrying a partition table")
+			}
+			if !strings.Contains(err.Error(), table) {
+				t.Errorf("the refusal does not say which table it found: %v", err)
+			}
+			if !strings.Contains(err.Error(), fakeDevice) {
+				t.Errorf("the refusal does not name the device: %v", err)
+			}
+		})
+	}
+}
