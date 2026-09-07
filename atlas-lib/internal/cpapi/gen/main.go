@@ -83,6 +83,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", *rules, err)
 	}
+	types = ruled(types, compiled)
 
 	src, err := render(file.Name.Name, *in, *rules, types, compiled)
 	if err != nil {
@@ -97,8 +98,8 @@ func main() {
 			variants++
 		}
 	}
-	fmt.Printf("%s: %d response types validate themselves, %d of them against rules (%d endpoint-scoped)\n",
-		*out, len(types)+variants, len(compiled), variants)
+	fmt.Printf("%s: %d response types validate themselves against rules (%d endpoint-scoped)\n",
+		*out, len(types)+variants, variants)
 }
 
 // index returns the file's struct types by name, the names of the types that
@@ -203,6 +204,33 @@ func responseTypes(
 	}
 	slices.Sort(types)
 	return types
+}
+
+// ruled narrows the response types to the ones something is asked of.
+//
+// A type with no rules has nothing to check: its keys are not listed and the
+// generated models carry no validate tags, so the method emitted for it would
+// decode and then validate nothing. Emitting it anyway costs a reflect walk on
+// every decode, and costs more than that in what it claims: a method whose
+// comment says it validates, on a type nothing is required of, tells the next
+// reader that drift in that response would be caught.
+//
+// Rules are what make the promise, so they are what the method follows. Adding
+// a block to validation.yaml brings the method back with it.
+func ruled(types []string, rules []rule) []string {
+	has := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		if r.base == "" { // a variant is emitted by render, from the rule itself
+			has[r.typ] = true
+		}
+	}
+	kept := make([]string, 0, len(has))
+	for _, name := range types {
+		if has[name] {
+			kept = append(kept, name)
+		}
+	}
+	return kept
 }
 
 // typeName is the name of the type an expression ultimately refers to, looking
