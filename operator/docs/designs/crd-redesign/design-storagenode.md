@@ -312,11 +312,12 @@ device field the operator writes, merging `spec.migrate.newSsdPcie` into it duri
 a migration (§3.2, §9), and a field the operator edits cannot also be the field
 holding a user's explicit list.
 
-#### Sizing is per node, and the cluster holds the value a new node is stamped with
+#### Sizing is per node, and one number of the three stays the cluster's
 
-`maxSubsystemCount`, `vcpuCount`, and `minHugePagesSize` size a node's huge pages
-and its SPDK core layout. They live on the `StorageCluster` today because the
-control plane assumes them uniform across the fleet
+`vcpuCount` and `minHugePagesSize` size a node's SPDK core layout and its
+huge-page floor, and `maxSubsystemCount` bounds how many NVMe-oF subsystems a
+node serves. All three lived on the `StorageCluster` because the control plane
+assumes them uniform across the fleet
 ([`design-storagecluster.md`](design-storagecluster.md) §3.1), and a node that
 disagrees with its peers gets a layout the cluster cannot place erasure-coding
 chunks across evenly.
@@ -327,26 +328,43 @@ time, and a node moved to a host with more cores is re-sized when it moves. For
 the duration of the roll the cluster's nodes genuinely differ, and a model that
 cannot express that forces the whole fleet to be re-sized at once or not at all.
 
-So the node carries its own effective sizing, and the cluster carries the value a
-node is stamped with when it is created:
+**Each of the three is stated once, on the cluster, and nothing below it declares
+one.** A deployment config puts all three in its cluster block and gives a node set
+no sizing of its own
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §3.1),
+so what a node holds is a stamp of what it was built with rather than a value
+somebody chose for it. That is what makes the field writable by the operator and
+by nobody else: a fleet whose nodes differ is a fleet mid-roll, never a fleet
+somebody described that way.
+
+So the node carries its own copy of the two that describe the host it runs on:
 
 ```go
-// StorageNodeSizing is what this node's huge pages and SPDK core layout were
-// sized from. It is stamped from StorageCluster.spec at creation and is equal
-// across the fleet in steady state; a rolling hardware upgrade is what makes two
-// nodes differ, and only for as long as the roll takes.
+// StorageNodeSizing is what this node's SPDK core layout and huge-page floor
+// were sized from. It is stamped from StorageCluster.spec at creation and is
+// equal across the fleet in steady state; a rolling hardware upgrade is what
+// makes two nodes differ, and only for as long as the roll takes.
 type StorageNodeSizing struct {
-	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
-	// +kubebuilder:validation:Required
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
-
 	// +kubebuilder:validation:Minimum=6
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
 	// ...
 }
 ```
+
+**`maxSubsystemCount` is not among them, because nothing about a host decides
+it.** A core count and a huge-page floor follow the machine, which is why a
+larger host is re-sized onto and why the roll produces a fleet that differs for a
+while. The subsystem cap follows the cluster: it bounds how many volumes any node
+can serve and is therefore an input to where volumes can be placed at all, so
+every node in a cluster has the same one or the cluster's placement has stopped
+treating its nodes as interchangeable. A per-node copy could only ever repeat the
+cluster's value, and the one thing it could do beyond that is disagree with it.
+
+So the node does not carry it. `StorageCluster.spec.maxSubsystemCount` is read
+when the node's configuration is generated (§5.3), which is also what makes a
+change to it reach the nodes that already exist rather than only the next one
+created ([`design-storagecluster.md`](design-storagecluster.md) §3.2).
 
 **The sizing block is immutable to users and writable by the operator**, which is
 the same enforcement `workerNode` carries and for the same reason: unmanaged
@@ -523,7 +541,6 @@ compares the node's sizing against the cluster it is joining and rejects a misma
 | Field                                                      | Rejected when                                                             |
 |------------------------------------------------------------|---------------------------------------------------------------------------|
 | `config.sizing.vcpuCount`                                  | It differs from the cluster's stamp value                                 |
-| `config.sizing.maxSubsystemCount`                          | It differs from the cluster's stamp value                                 |
 | `config.sizing.minHugePagesSize`                           | It is set and differs from the cluster's stamp value                      |
 | `config.deviceNames`                                       | An entry is of a class other than the cluster's `spec.deviceClass`        |
 | `config.pcieAllowList`, `config.pcieDenyList`, `pcieModel` | Any of them is set and the cluster's `spec.deviceClass` is `LogicalBlock` |
@@ -537,12 +554,13 @@ they match on an address a logical block device does not have, so on a
 `LogicalBlock` cluster they select nothing and rejecting them says that, where
 ignoring them would leave somebody reading a filter that never ran.
 
-**The sizing rows are three and not others, because the control plane assumes them
-uniform.** §3.1 states why: a node whose huge pages and core layout disagree with its peers gets a
-layout the cluster cannot place erasure-coding chunks across evenly. `vcpuCount` and
-`maxSubsystemCount` are `Required`, so a hand-written node states them and cannot
-inherit them by omission, which is exactly the case where a typed value silently
-disagrees with the fleet.
+**The sizing rows are two and not others, because the control plane assumes them
+uniform.** §3.1 states why: a node whose core layout and huge pages disagree with its
+peers gets a layout the cluster cannot place erasure-coding chunks across evenly.
+`vcpuCount` is `Required`, so a hand-written node states it and cannot inherit it by
+omission, which is exactly the case where a typed value silently disagrees with the
+fleet. There is no row for `maxSubsystemCount`: the node has no copy of it to
+disagree with, which is the point of leaving it on the cluster (§3.1).
 
 **The reference is the cluster's stamp value, not the siblings'.** During a rolling
 hardware upgrade the fleet is deliberately heterogeneous (§3.1), so sibling nodes
@@ -958,9 +976,11 @@ data:
     HA_JM_COUNT=3
 ```
 
-The first three keys come from the cluster and are identical in every entry,
-because the control plane assumes huge-page and core sizing uniform across the
-fleet ([`design-storagecluster.md`](design-storagecluster.md) §3.1). The rest come
+`MAX_SUBSYS_COUNT` comes from `StorageCluster.spec.maxSubsystemCount` and is
+identical in every entry, because the cap is the cluster's and no node carries a
+copy of it (§3.1). `MAX_HUGE_PAGES_SIZE` and `VCPU_COUNT` come from the node's own
+`spec.config.sizing`, which is equal across the fleet in steady state and
+deliberately unequal for the duration of a rolling hardware upgrade. The rest come
 from the node's `spec.config`.
 
 **The ConfigMap is written before the DaemonSet on every pass.** A pod that starts
@@ -969,8 +989,13 @@ against a missing or empty entry reaches the node configuration script with
 same reason, a cluster missing its required sizing fields is refused with an error
 naming them rather than written out as blanks.
 
-`StorageNode.spec.config` is the source, so the ConfigMap is derived rather than
-authoritative and can be rebuilt from the node objects at any time.
+**A change to the cluster's `maxSubsystemCount` therefore reaches every node.** The
+next pass rewrites every entry, and each node picks the new value up when it next
+restarts, which is what makes the cap a cluster-level setting rather than a stamp
+([`design-storagecluster.md`](design-storagecluster.md) §3.2).
+
+The node objects and the cluster they belong to are the source, so the ConfigMap is
+derived rather than authoritative and can be rebuilt from them at any time.
 
 ### 5.4 The address a node is reached at
 
@@ -1819,29 +1844,29 @@ delta, so that no other section has to carry it.
 
 ### 15.1 StorageNode
 
-| Registered                                              | This design                                          | Cost                                                                                                                                                                                                                   |
-|---------------------------------------------------------|------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.storageNodeSetRef`, required                      | `spec.clusterRef` plus `spec.nodeSet` (§3.1)         | Spec rename and a reparent. Blocked on §15.3                                                                                                                                                                           |
-| `spec.overrides`, `StorageNodeOverrides`                | `spec.config`, `StorageNodeConfig` (§3.1)            | Spec rename. The struct stops being an override of anything                                                                                                                                                            |
-| `spec.socketIndex`                                      | `spec.slot` (§3.1)                                   | Spec rename. The operator is its only writer, so no user-authored object sets it                                                                                                                                       |
-| `spec.overrides` rewritten from the set every reconcile | Copied once at creation (§3.1)                       | Behavioral. The node stops being a cache of a document that can be deleted                                                                                                                                             |
-| Cluster-scoped sizing, no per-node copy                 | `spec.config.sizing` (§3.1)                          | Additive on the node, and what makes a rolling hardware upgrade expressible                                                                                                                                            |
-| Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)               | Tightening. A user editing a device filter on a running node is now rejected                                                                                                                                           |
-| `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible                                                                                                         |
-| `failureDomain`, an integer index                       | A label such as `rack-b` (§3.1)                      | Spec type change on both the spec and the status field. A stored index is not a valid label, so every node that declares a domain is rewritten, and the value stops being a number whose meaning lived outside the API |
-| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                          | Spec removal. None of them reached a consumer, so nothing loses behavior                                                                                                                                               |
-| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)        | Spec rename that also inverts, which is the one mechanical rename that is wrong                                                                                                                                        |
-| No `status.phase`                                       | `StorageNodePhase` (§4.2)                            | Additive                                                                                                                                                                                                               |
-| No step field, provisioning improvising one             | `status.step` (§4.2)                                 | Status only. The optimistic-lock claim moves to the `Posting` transition                                                                                                                                               |
-| `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                       | Status removal. The persisted step is the record                                                                                                                                                                       |
-| `status.resources.devices`, a string                    | Two counts (§3.3)                                    | Status only, and it corrects a rendering that reports `total/online` against a documented `online/total`                                                                                                               |
-| No `observedGeneration`                                 | Present (§3.3)                                       | Additive                                                                                                                                                                                                               |
-| No `clusterRef` validation                              | `StorageNodeValidator` resolves it (§3.4)            | New. An immutable reference to a cluster that does not exist is refused rather than held forever                                                                                                                       |
-| Nothing checks a hand-written node's sizing             | The same webhook compares it to the cluster's (§3.4) | New. A manually configured node that disagrees with the fleet is refused instead of breaking chunk placement                                                                                                           |
-| Owned by `StorageNodeSet`                               | Owned by `StorageCluster` (§3.1)                     | An owner reference moves, which changes what a cluster delete cascades to                                                                                                                                              |
-| Polling every backend read                              | The storage-node stream (§4.4)                       | Depends on `design-sse-push-notifications.md`, on the `sse` branch                                                                                                                                                     |
-| Two event reasons                                       | The reasons in §13.1                                 | Additive                                                                                                                                                                                                               |
-| No metric                                               | The metrics in §13.2                                 | New infrastructure                                                                                                                                                                                                     |
+| Registered                                              | This design                                             | Cost                                                                                                                                                                                                                   |
+|---------------------------------------------------------|---------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.storageNodeSetRef`, required                      | `spec.clusterRef` plus `spec.nodeSet` (§3.1)            | Spec rename and a reparent. Blocked on §15.3                                                                                                                                                                           |
+| `spec.overrides`, `StorageNodeOverrides`                | `spec.config`, `StorageNodeConfig` (§3.1)               | Spec rename. The struct stops being an override of anything                                                                                                                                                            |
+| `spec.socketIndex`                                      | `spec.slot` (§3.1)                                      | Spec rename. The operator is its only writer, so no user-authored object sets it                                                                                                                                       |
+| `spec.overrides` rewritten from the set every reconcile | Copied once at creation (§3.1)                          | Behavioral. The node stops being a cache of a document that can be deleted                                                                                                                                             |
+| Cluster-scoped sizing, no per-node copy                 | `spec.config.sizing`, the two host-shaped values (§3.1) | Additive on the node, and what makes a rolling hardware upgrade expressible. `maxSubsystemCount` stays the cluster's, because nothing about a host decides it                                                          |
+| Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)                  | Tightening. A user editing a device filter on a running node is now rejected                                                                                                                                           |
+| `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                   | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible                                                                                                         |
+| `failureDomain`, an integer index                       | A label such as `rack-b` (§3.1)                         | Spec type change on both the spec and the status field. A stored index is not a valid label, so every node that declares a domain is rewritten, and the value stops being a number whose meaning lived outside the API |
+| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                             | Spec removal. None of them reached a consumer, so nothing loses behavior                                                                                                                                               |
+| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)           | Spec rename that also inverts, which is the one mechanical rename that is wrong                                                                                                                                        |
+| No `status.phase`                                       | `StorageNodePhase` (§4.2)                               | Additive                                                                                                                                                                                                               |
+| No step field, provisioning improvising one             | `status.step` (§4.2)                                    | Status only. The optimistic-lock claim moves to the `Posting` transition                                                                                                                                               |
+| `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                          | Status removal. The persisted step is the record                                                                                                                                                                       |
+| `status.resources.devices`, a string                    | Two counts (§3.3)                                       | Status only, and it corrects a rendering that reports `total/online` against a documented `online/total`                                                                                                               |
+| No `observedGeneration`                                 | Present (§3.3)                                          | Additive                                                                                                                                                                                                               |
+| No `clusterRef` validation                              | `StorageNodeValidator` resolves it (§3.4)               | New. An immutable reference to a cluster that does not exist is refused rather than held forever                                                                                                                       |
+| Nothing checks a hand-written node's sizing             | The same webhook compares it to the cluster's (§3.4)    | New. A manually configured node that disagrees with the fleet is refused instead of breaking chunk placement                                                                                                           |
+| Owned by `StorageNodeSet`                               | Owned by `StorageCluster` (§3.1)                        | An owner reference moves, which changes what a cluster delete cascades to                                                                                                                                              |
+| Polling every backend read                              | The storage-node stream (§4.4)                          | Depends on `design-sse-push-notifications.md`, on the `sse` branch                                                                                                                                                     |
+| Two event reasons                                       | The reasons in §13.1                                    | Additive                                                                                                                                                                                                               |
+| No metric                                               | The metrics in §13.2                                    | New infrastructure                                                                                                                                                                                                     |
 
 ### 15.2 StorageNodeOps
 
@@ -2045,22 +2070,19 @@ type JournalManagerSpec struct {
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
 }
 
-// StorageNodeSizing is what this node's huge pages and SPDK core layout were
+// StorageNodeSizing is what this node's SPDK core layout and huge-page floor were
 // sized from. It is stamped from StorageCluster.spec when the node is created and
 // is equal across the fleet in steady state; a rolling hardware upgrade is what
 // makes two nodes differ, and only for as long as the roll takes. The StorageNode
 // validating webhook admits a change from the operator and rejects it from
 // everyone else, because unmanaged divergence is what stops the control plane
 // placing erasure-coding chunks evenly.
+//
+// The cluster's maxSubsystemCount is not copied in here. It bounds how many
+// volumes a node can serve rather than describing the host the node runs on, so
+// it is the same for every node of a cluster and is read from the cluster when
+// the node's configuration is generated (§3.1).
 type StorageNodeSizing struct {
-	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems this node
-	// serves. It sizes huge pages, and a node that receives no value fails
-	// configuration generation rather than falling back to a default.
-	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
-	// +kubebuilder:validation:Required
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
-
 	// VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
 	// explicit core count rather than a percentage.
 	// +kubebuilder:validation:Minimum=6

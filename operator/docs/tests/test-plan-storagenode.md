@@ -214,22 +214,24 @@ File: `operator/internal/controllers/node/storagenodeset_controller_unit_test.go
 
 File: `operator/internal/controllers/node/storagenodeset_storagenode_unit_test.go`
 
-| #     | Scenario                                                                            | Type     | Test                                                                |
-|-------|-------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------|
-| U-85  | Cluster sizing values appear in a worker's env file                                 | Positive | `TestBuildPerNodeEnvFile_UsesClusterSizingValues`                   |
-| U-86  | Cluster sizing is identical in every worker's entry                                 | Positive | `TestBuildPerNodeEnvFile_ClusterSizingIdenticalAcrossWorkers`       |
-| U-87  | Every key the init container reads is present, including the empty ones             | Boundary | `TestBuildPerNodeEnvFile_ContainsAllRequiredKeys`                   |
-| U-88  | The cluster is missing its required sizing: the write is refused with a named error | Negative | `TestReconcilePerNodeConfigMap_RejectsClusterMissingRequiredSizing` |
-| U-89  | Every worker gets an entry carrying the cluster sizing                              | Positive | `TestReconcilePerNodeConfigMap_WritesClusterSizingForEveryWorker`   |
-| U-90  | Two nodes with different device filters get different entries                       | Positive | —                                                                   |
-| U-91  | A node with no `spec.config`: its entry carries the empty values, not missing keys  | Boundary | —                                                                   |
-| U-92  | A device list containing a shell metacharacter is quoted rather than interpolated   | Negative | —                                                                   |
-| U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                 | Positive | —                                                                   |
-| U-245 | A `deviceNames` entry that is a device path reaches the node as one                 | Positive | —                                                                   |
-| U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given           | Boundary | —                                                                   |
-| U-247 | `deviceNames` set alongside `pcieAllowList`: the explicit list wins (design §3.1)   | Boundary | —                                                                   |
-| U-93  | The ConfigMap is written before the DaemonSet on a fresh reconcile                  | Positive | —                                                                   |
-| U-94  | A node deleted: its entry is removed from the ConfigMap                             | Positive | —                                                                   |
+| #     | Scenario                                                                                   | Type     | Test                                                                |
+|-------|--------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------|
+| U-85  | Cluster sizing values appear in a worker's env file                                        | Positive | `TestBuildPerNodeEnvFile_UsesClusterSizingValues`                   |
+| U-86  | Cluster sizing is identical in every worker's entry                                        | Positive | `TestBuildPerNodeEnvFile_ClusterSizingIdenticalAcrossWorkers`       |
+| U-87  | Every key the init container reads is present, including the empty ones                    | Boundary | `TestBuildPerNodeEnvFile_ContainsAllRequiredKeys`                   |
+| U-88  | The cluster is missing its required sizing: the write is refused with a named error        | Negative | `TestReconcilePerNodeConfigMap_RejectsClusterMissingRequiredSizing` |
+| U-89  | Every worker gets an entry carrying the cluster sizing                                     | Positive | `TestReconcilePerNodeConfigMap_WritesClusterSizingForEveryWorker`   |
+| U-90  | Two nodes with different device filters get different entries                              | Positive | —                                                                   |
+| U-91  | A node with no `spec.config`: its entry carries the empty values, not missing keys         | Boundary | —                                                                   |
+| U-92  | A device list containing a shell metacharacter is quoted rather than interpolated          | Negative | —                                                                   |
+| U-262 | `VCPU_COUNT` and `MAX_HUGE_PAGES_SIZE` come from the node's own sizing                     | Positive | —                                                                   |
+| U-263 | Two nodes mid-roll: their entries differ in those two keys and agree on `MAX_SUBSYS_COUNT` | Boundary | —                                                                   |
+| U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                        | Positive | —                                                                   |
+| U-245 | A `deviceNames` entry that is a device path reaches the node as one                        | Positive | —                                                                   |
+| U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                  | Boundary | —                                                                   |
+| U-247 | `deviceNames` set alongside `pcieAllowList`: the explicit list wins (design §3.1)          | Boundary | —                                                                   |
+| U-93  | The ConfigMap is written before the DaemonSet on a fresh reconcile                         | Positive | —                                                                   |
+| U-94  | A node deleted: its entry is removed from the ConfigMap                                    | Positive | —                                                                   |
 
 ### Workload: Endpoints and Certificate Rotation (design §5.4)
 
@@ -459,7 +461,7 @@ admission, real `resourceVersion` semantics, and real watch delivery.
 | I-47 | `spec.clusterRef` naming a cluster with no `status.uuid`: admitted, holds with `ClusterNotReady`                               | Boundary | —    |
 | I-48 | `spec.clusterRef` naming a cluster in another namespace: the create is rejected                                                | Negative | —    |
 | I-49 | `config.sizing.vcpuCount` differing from the cluster's: the create is rejected                                                 | Negative | —    |
-| I-50 | `config.sizing.maxSubsystemCount` differing from the cluster's: rejected                                                       | Negative | —    |
+| I-50 | A node manifest setting `config.sizing.maxSubsystemCount`: pruned rather than stored                                           | Boundary | —    |
 | I-51 | `config.sizing` matching the cluster's exactly: admitted                                                                       | Positive | —    |
 | I-52 | The operator re-sizing one node mid-roll: admitted, since the identity is exempt                                               | Positive | —    |
 | I-53 | `spec.config.failureDomain` of `rack-b`: accepted                                                                              | Positive | —    |
@@ -669,11 +671,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 261       | 87      | 174         |
+| Unit        | 263       | 87      | 176         |
 | Integration | 54        | 1       | 53          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **346**   | **88**  | **258**     |
+| **Total**   | **348**   | **88**  | **260**     |
 
 Eighty-seven of the eighty-eight covered scenarios are unit tests, and they
 concentrate in three places: the workload builders, the drain's volume
@@ -706,7 +708,7 @@ not exist yet, and §6 separates the two.
 | U-64                       | A look-alike service account in another namespace                                             | The prefix match is string-based, and nothing asserts it cannot be spoofed by a namespace name                                                                                                                                                                                   |
 | U-75, U-76                 | Workload ownership by the `StorageCluster`                                                    | Planned, not built. The objects are owned by `StorageNodeSet` today, and the reparent is design §15.3                                                                                                                                                                            |
 | U-78 … U-84                | The per-slot storage-node-uuid labels                                                         | The most consequential labels in the operator, and the only covered part is the node-type label. A wrong key here breaks CSI provisioning                                                                                                                                        |
-| U-90 … U-94                | Per-node divergence in the ConfigMap                                                          | Only the cluster-uniform half is covered. The shell-quoting row matters because device names reach a sourced file                                                                                                                                                                |
+| U-90 … U-94, U-262, U-263  | Per-node divergence in the ConfigMap                                                          | Only the cluster-uniform half is covered. The shell-quoting row matters because device names reach a sourced file, and the two sizing rows keep the node's own values out of the cluster's key                                                                                   |
 | U-244 … U-247, I-40 … I-45 | The widened `deviceNames`                                                                     | Design §3.1 has the field take a PCI address and a device path in one list. Nothing implements either form yet, and `I-44` and `I-45` are what hold the item pattern                                                                                                             |
 | U-255 … U-261              | The device class the cluster fixes                                                            | Design §3.4 has the webhook compare every entry against `StorageCluster.spec.deviceClass` and refuse the PCI filters on a block cluster. Neither the field nor the comparison exists, and `U-258` is the row that keeps a mixed list out of a cluster of either class            |
 | U-116 … U-124              | Terminal re-reconcile, the acquire race, and the cluster gate                                 | The lock's happy paths are covered and its concurrent ones are not. The cluster gate applies to one action today, design §7.1 widens it                                                                                                                                          |

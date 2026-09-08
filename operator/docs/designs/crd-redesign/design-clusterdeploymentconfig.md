@@ -149,15 +149,12 @@ spec:
     name: production
     maxSubsystemCount: 20
     vcpuCount: 8
+    minHugePagesSize: 16G
     stripe:
       dataChunks: 2
       parityChunks: 1
   nodeSets:
     - name: rack-a
-      sizing:
-        maxSubsystemCount: 20
-        vcpuCount: 8
-        minHugePagesSize: 16G
       groups:
         - name: saturn
           workers: [worker-3, worker-4]
@@ -173,14 +170,30 @@ spec:
             nvme: ["0000:5e:00.0"]
 ```
 
-**Three levels of grouping, and each one earns its place.** A node set carries
-sizing, because sizing is what a node set is for
-([`design-crd-model.md`](design-crd-model.md) §9.2) and because it is what a
-rolling hardware upgrade re-scopes
-([`design-storagenode.md`](design-storagenode.md) §3.1). A group carries the
-per-node configuration that identical hardware shares, so that ten workers with
-the same NVMe layout are written once rather than ten times. A worker is a
-hostname.
+**All three sizing values sit in the cluster block, and nothing below it varies
+them.** `maxSubsystemCount`, `vcpuCount`, and `minHugePagesSize` are stated once
+for the deployment, because the control plane assumes them uniform across a
+cluster's nodes and a node that disagrees with its peers gets a huge-page and core
+layout the cluster cannot place erasure-coding chunks across evenly
+([`design-storagecluster.md`](design-storagecluster.md) §3.1). A document that let
+a node set name its own would be a document that can describe that fleet, which is
+the one thing this API should not make easy to write.
+
+Two of the three are still copied onto each node. `CreatingNodes` writes
+`vcpuCount` and `minHugePagesSize` into every `StorageNode.spec.config.sizing` it
+creates, so a node records the layout it was built with and the operator can
+re-size one node at a time during a hardware upgrade; `maxSubsystemCount` is read
+from the cluster instead and no node holds a copy
+([`design-storagenode.md`](design-storagenode.md) §3.1). Both halves are the
+expansion's, and neither is a field of this document below `spec.cluster`.
+
+**Three levels of grouping, and each one earns its place.** A node set is the
+organizational grouping, usually a rack: it names the workers a document adds or
+grows together, and each node records it in `spec.nodeSet` so that a node traces
+back to the part of the document that produced it
+([`design-crd-model.md`](design-crd-model.md) §9.2). A group carries the per-node
+configuration that identical hardware shares, so that ten workers with the same
+NVMe layout are written once rather than ten times. A worker is a hostname.
 
 The middle level is `groups` rather than `members`, because an entry is several
 workers sharing one configuration rather than one of anything.
@@ -198,9 +211,9 @@ read, and which host assumptions hold, which
 `openShiftCluster` on each node. Naming `OpenShift` once decides all four, and
 `CreatingNodes` stamps them onto every `StorageNode` it creates (§4.2).
 
-That is the same relationship `sizing` has, and it is what keeps the document
-ephemeral: the nodes carry the resolved flags, so deleting the config loses
-nothing. A group that needs one flag against its distribution's default sets that
+That is the same relationship the cluster's sizing has, and it is what keeps the
+document ephemeral: the nodes carry the resolved flags and the sizing they were
+built with, so deleting the config loses nothing. A group that needs one flag against its distribution's default sets that
 flag on the node afterward, because `environment` is a starting point and not a
 lock.
 
@@ -253,7 +266,7 @@ produces the list, and §8.1 is where they are given.
 from the cluster's `spec.storageNodes.socketsToUse` and `nodesPerSocket`
 ([`design-storagenode.md`](design-storagenode.md) §5.1), so a group of two
 workers on a two-socket layout produces four nodes, each carrying the group's
-configuration and the set's sizing.
+configuration and the cluster's sizing.
 
 ### 3.2 Immutability
 
@@ -360,7 +373,7 @@ existing cluster writes nothing: the cluster's class already holds, and a docume
 whose groups disagree with it was rejected at approval (§5.1).
 
 **`CreatingNodes` resolves the document's shorthands as it writes.** Each node
-gets its set's `sizing`, its group's devices as one `config.deviceNames` list
+gets the cluster's sizing, its group's devices as one `config.deviceNames` list
 (§3.1), and the four distribution flags `spec.environment` stands for. Nothing on
 the node refers back to the config, which is what §4.3 means by owning nothing.
 
@@ -740,11 +753,11 @@ reason when the cluster requires one
 ([`design-storagenode.md`](design-storagenode.md) §4.2) rather than guessing.
 
 A reviewer filling it in by hand has a name to reach for: a node set is the
-physical grouping the document already names, so `rack-b` is both the set's name
-and the domain its groups belong to in most deployments. Nothing copies one to the
-other, because a node set is a sizing boundary and a failure domain is a power and
-cooling boundary, and the deployments where they diverge are the ones that need
-the field.
+organizational grouping the document already names, so `rack-b` is both the set's
+name and the domain its groups belong to in most deployments. Nothing copies one to
+the other, because a node set is how a document is organized and a failure domain
+is a power and cooling boundary, and the deployments where they diverge are the
+ones that need the field.
 
 ### 8.3 The output is a draft, always
 
@@ -857,12 +870,12 @@ approval gate exists to correct.
 Nothing is migrated, because neither kind exists. What changes is which of the
 existing paths remain.
 
-| Today                                                                         | After                                                                                              |
-|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
-| Three custom resources are copied from the chart's sample and applied by hand | A config is expanded into a cluster and its nodes                                                  |
-| `StorageNodeSet.spec.nodeConfigs[worker]`                                     | `spec.nodeSets[].groups[].devices` and the interfaces beside them                                  |
-| `StorageNodeSet.spec.workerNodes`                                             | `spec.nodeSets[].groups[].workers`                                                                 |
-| Set-wide sizing on `StorageCluster`                                           | `spec.nodeSets[].sizing`, stamped per node ([`design-storagenode.md`](design-storagenode.md) §3.1) |
+| Today                                                                         | After                                                                                                                               |
+|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| Three custom resources are copied from the chart's sample and applied by hand | A config is expanded into a cluster and its nodes                                                                                   |
+| `StorageNodeSet.spec.nodeConfigs[worker]`                                     | `spec.nodeSets[].groups[].devices` and the interfaces beside them                                                                   |
+| `StorageNodeSet.spec.workerNodes`                                             | `spec.nodeSets[].groups[].workers`                                                                                                  |
+| Set-wide sizing on `StorageCluster`                                           | `spec.cluster`, one value per deployment, two of the three stamped per node ([`design-storagenode.md`](design-storagenode.md) §3.1) |
 
 **This is the last thing the `StorageNodeSet` retirement was waiting for.**
 [`design-crd-model.md`](design-crd-model.md) §9.2 names three things the set
@@ -1004,17 +1017,15 @@ type NodeGroup struct {
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
 }
 
-// NodeSet is a group of groups that share a sizing. The sizing is what a node
-// set is for, and it is what a rolling hardware upgrade re-scopes.
+// NodeSet is the organizational grouping of a deployment, usually a rack: the
+// workers a document adds or grows together. It carries no sizing, because sizing
+// is uniform across a cluster and is stated once in ClusterTemplate.
 type NodeSet struct {
 	// Name is the node set's name. It is copied to StorageNode.spec.nodeSet, so
-	// that a node can be traced back to the document that produced it.
+	// that a node can be traced back to the part of the document that produced
+	// it.
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
-
-	// Sizing is stamped onto every StorageNode this set produces.
-	// +kubebuilder:validation:Required
-	Sizing StorageNodeSizing `json:"sizing"`
 
 	// Groups are the sets of workers sharing one configuration.
 	// +kubebuilder:validation:MinItems=1
@@ -1029,6 +1040,30 @@ type ClusterTemplate struct {
 	// Name is the StorageCluster's name.
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+	// node of this cluster serves. Required, because the StorageCluster's own
+	// field is, and no StorageNode carries a copy of it (§3.1).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=75
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
+
+	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+	// this cluster. It is stated here and nowhere below, because the control
+	// plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
+	// into every StorageNode.spec.config.sizing it writes. Required, because the
+	// StorageCluster's own field is.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=6
+	VCPUCount *int32 `json:"vcpuCount"`
+
+	// MinHugePagesSize is the smallest huge-page allocation each storage node of
+	// this cluster makes ("100G", "1T"; a bare number is gigabytes). Like
+	// VCPUCount it is the cluster's and is copied onto every node the expansion
+	// writes. Omitted, each node uses the computed minimum.
+	// +optional
+	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
 	// Stripe is the erasure-coding layout.
 	// +optional

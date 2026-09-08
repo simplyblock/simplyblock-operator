@@ -51,23 +51,23 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_validate
 
 File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 
-| #    | Scenario                                                                             | Type     | Test |
-|------|--------------------------------------------------------------------------------------|----------|------|
-| U-12 | One group of two workers, one socket, one node per socket: two `StorageNode` objects | Positive | —    |
-| U-13 | The same on a two-socket layout: four objects, slots 0 and 1 per worker              | Positive | —    |
-| U-14 | `nodesPerSocket` of 2 on two sockets: four slots per worker                          | Boundary | —    |
-| U-15 | Each node carries its group's device selection                                       | Positive | —    |
-| U-16 | Each node carries its node set's sizing in `spec.config.sizing`                      | Positive | —    |
-| U-17 | Each node carries `spec.nodeSet` naming the set it was declared in                   | Positive | —    |
-| U-18 | Each node carries a controller reference to the `StorageCluster`, not to the config  | Positive | —    |
-| U-19 | Two node sets with different sizing: their nodes differ accordingly                  | Positive | —    |
-| U-20 | Re-entering `CreatingNodes` with every node present: nothing is created              | Negative | —    |
-| U-21 | Re-entering with half the nodes present: only the missing slots are created          | Positive | —    |
-| U-22 | `status.clusterRef` and `status.nodeRefs` record what was produced                   | Positive | —    |
-| U-23 | The expansion finishes without waiting for a node to be provisioned                  | Positive | —    |
-| U-24 | A cluster whose creation fails: the phase becomes `Failed` with the reason           | Negative | —    |
-| U-25 | `AwaitingCluster` holds until `status.uuid` is set                                   | Negative | —    |
-| U-26 | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance            | Boundary | —    |
+| #        | Scenario                                                                                                 | Type     | Test |
+|----------|----------------------------------------------------------------------------------------------------------|----------|------|
+| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —    |
+| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —    |
+| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —    |
+| U-15     | Each node carries its group's device selection                                                           | Positive | —    |
+| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —    |
+| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —    |
+| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —    |
+| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —    |
+| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —    |
+| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —    |
+| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —    |
+| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —    |
+| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —    |
+| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —    |
+| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —    |
 
 ### Create-Only Semantics (design §6)
 
@@ -309,6 +309,19 @@ A cluster is built out of one class of device. What CEL rejects outright is
 a cluster whose class is already immutable, so an expansion that wrote the field
 again would either be a no-op or an error, and only the first of those is correct.
 
+### Cluster-Scoped Sizing (design §3.1, §4.2)
+
+File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
+
+| #     | Scenario                                                                       | Type     | Test |
+|-------|--------------------------------------------------------------------------------|----------|------|
+| U-148 | The created cluster carries `spec.cluster.maxSubsystemCount`                   | Positive | —    |
+| U-149 | No `StorageNode` the expansion writes carries a `maxSubsystemCount` of its own | Negative | —    |
+| U-150 | Every node of every set carries the same `vcpuCount` and `minHugePagesSize`    | Boundary | —    |
+
+`U-149` is the row that keeps the cap where it belongs. A per-node copy could only
+repeat the cluster's value, and design §3.1 leaves it out for that reason.
+
 ---
 
 ## 2. Integration Tests
@@ -316,57 +329,62 @@ again would either be a no-op or an error, and only the first of those is correc
 Full reconcile loop against a real Kubernetes API server via `envtest`. The
 immutability rules are CEL and cannot be exercised any other way.
 
-| #    | Scenario                                                                                              | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | An approved config edited: rejected by the immutability rule                                          | Negative | —    |
-| I-02 | An unapproved config edited: accepted                                                                 | Positive | —    |
-| I-03 | `spec.approved` set true, then false: the withdrawal is rejected                                      | Negative | —    |
-| I-04 | `spec.approved` false, then true: accepted                                                            | Positive | —    |
-| I-05 | An approved config edited only in `metadata`: accepted, since the rule is on spec                     | Boundary | —    |
-| I-06 | `spec.nodeSets` omitted: rejected as `Required`                                                       | Negative | —    |
-| I-07 | `spec.nodeSets` empty: rejected by `MinItems`                                                         | Boundary | —    |
-| I-08 | `spec.environment` outside the enum: rejected                                                         | Negative | —    |
-| I-09 | A group with 201 workers: rejected by `MaxItems`                                                      | Boundary | —    |
-| I-10 | A group with duplicate workers: rejected by `listType=set`                                            | Negative | —    |
-| I-11 | `spec.nodeSets[].sizing` omitted: rejected as `Required`                                              | Negative | —    |
-| I-12 | `OperatorOps.spec.action` outside the enum: rejected                                                  | Negative | —    |
-| I-13 | `OperatorOps.spec.action` changed after creation: rejected as immutable                               | Negative | —    |
-| I-14 | Short names `cdc` and `oops` resolve to the same lists as the full kinds                              | Positive | —    |
-| I-15 | A full expansion against a real API server: cluster and nodes exist afterward                         | Positive | —    |
-| I-16 | Deleting the config afterward: the cluster and nodes survive                                          | Positive | —    |
-| I-17 | Two configs in two namespaces with the same name: neither reads the other                             | Negative | —    |
-| I-18 | Two configs in one namespace naming one cluster: the second is refused                                | Negative | —    |
-| I-19 | The controller's role covers every object the expansion creates                                       | Positive | —    |
-| I-20 | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                           | Negative | —    |
-| I-21 | A `devices` block with only `nvme`: accepted                                                          | Boundary | —    |
-| I-22 | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                           | Negative | —    |
-| I-23 | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                            | Negative | —    |
-| I-34 | `devices.nvme` holding a well-formed PCI address: accepted                                            | Positive | —    |
-| I-35 | `devices.nvme` holding a device path: rejected by the item pattern                                    | Negative | —    |
-| I-36 | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                          | Negative | —    |
-| I-37 | `devices.block` holding a path under `/dev`: accepted                                                 | Positive | —    |
-| I-38 | `devices.block` holding a bare device name: rejected by the item pattern                              | Negative | —    |
-| I-39 | `devices.block` holding a path outside `/dev`: rejected by the item pattern                           | Negative | —    |
-| I-24 | The webhook is registered for `create` and `update` on the kind                                       | Positive | —    |
-| I-25 | An approving apply naming a missing worker: rejected by the API server                                | Negative | —    |
-| I-26 | The same document with the worker created first: accepted                                             | Positive | —    |
-| I-27 | An invalid draft applied unapproved: accepted, and `status.message` reports it                        | Positive | —    |
-| I-28 | An edit to an approved document: rejected, and the stored object is unchanged                         | Negative | —    |
-| I-29 | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                 | Negative | —    |
-| I-30 | A group whose `devices.block` names a path: accepted                                                  | Positive | —    |
-| I-31 | `enablePartitionedDevices` outside a boolean: rejected by the schema                                  | Negative | —    |
-| I-32 | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating` | Negative | —    |
-| I-33 | Approving a config naming a partitioned device: accepted and expanded                                 | Positive | —    |
-| I-40 | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                          | Negative | —    |
-| I-41 | Two groups of one node set naming different classes: rejected by the spec's CEL rule                  | Negative | —    |
-| I-42 | Two node sets naming different classes: rejected by the same rule                                     | Negative | —    |
-| I-43 | Every group of every node set naming `block`: accepted                                                | Positive | —    |
-| I-44 | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                  | Negative | —    |
-| I-45 | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                     | Negative | —    |
-| I-46 | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                         | Positive | —    |
-| I-47 | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                      | Positive | —    |
-| I-48 | A group's `failureDomain` of `rack-b`: accepted                                                       | Positive | —    |
-| I-49 | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema              | Boundary | —    |
+| #        | Scenario                                                                                                               | Type     | Test |
+|----------|------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-01     | An approved config edited: rejected by the immutability rule                                                           | Negative | —    |
+| I-02     | An unapproved config edited: accepted                                                                                  | Positive | —    |
+| I-03     | `spec.approved` set true, then false: the withdrawal is rejected                                                       | Negative | —    |
+| I-04     | `spec.approved` false, then true: accepted                                                                             | Positive | —    |
+| I-05     | An approved config edited only in `metadata`: accepted, since the rule is on spec                                      | Boundary | —    |
+| I-06     | `spec.nodeSets` omitted: rejected as `Required`                                                                        | Negative | —    |
+| I-07     | `spec.nodeSets` empty: rejected by `MinItems`                                                                          | Boundary | —    |
+| I-08     | `spec.environment` outside the enum: rejected                                                                          | Negative | —    |
+| I-09     | A group with 201 workers: rejected by `MaxItems`                                                                       | Boundary | —    |
+| I-10     | A group with duplicate workers: rejected by `listType=set`                                                             | Negative | —    |
+| ~~I-11~~ | `spec.nodeSets[].sizing` omitted: rejected as `Required`. Withdrawn: the field is gone, and `I-52` is what replaces it | —        | —    |
+| I-12     | `OperatorOps.spec.action` outside the enum: rejected                                                                   | Negative | —    |
+| I-13     | `OperatorOps.spec.action` changed after creation: rejected as immutable                                                | Negative | —    |
+| I-14     | Short names `cdc` and `oops` resolve to the same lists as the full kinds                                               | Positive | —    |
+| I-15     | A full expansion against a real API server: cluster and nodes exist afterward                                          | Positive | —    |
+| I-16     | Deleting the config afterward: the cluster and nodes survive                                                           | Positive | —    |
+| I-17     | Two configs in two namespaces with the same name: neither reads the other                                              | Negative | —    |
+| I-18     | Two configs in one namespace naming one cluster: the second is refused                                                 | Negative | —    |
+| I-19     | The controller's role covers every object the expansion creates                                                        | Positive | —    |
+| I-20     | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                                            | Negative | —    |
+| I-21     | A `devices` block with only `nvme`: accepted                                                                           | Boundary | —    |
+| I-22     | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                                            | Negative | —    |
+| I-23     | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                                             | Negative | —    |
+| I-34     | `devices.nvme` holding a well-formed PCI address: accepted                                                             | Positive | —    |
+| I-35     | `devices.nvme` holding a device path: rejected by the item pattern                                                     | Negative | —    |
+| I-36     | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                                           | Negative | —    |
+| I-37     | `devices.block` holding a path under `/dev`: accepted                                                                  | Positive | —    |
+| I-38     | `devices.block` holding a bare device name: rejected by the item pattern                                               | Negative | —    |
+| I-39     | `devices.block` holding a path outside `/dev`: rejected by the item pattern                                            | Negative | —    |
+| I-24     | The webhook is registered for `create` and `update` on the kind                                                        | Positive | —    |
+| I-25     | An approving apply naming a missing worker: rejected by the API server                                                 | Negative | —    |
+| I-26     | The same document with the worker created first: accepted                                                              | Positive | —    |
+| I-27     | An invalid draft applied unapproved: accepted, and `status.message` reports it                                         | Positive | —    |
+| I-28     | An edit to an approved document: rejected, and the stored object is unchanged                                          | Negative | —    |
+| I-29     | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                                  | Negative | —    |
+| I-30     | A group whose `devices.block` names a path: accepted                                                                   | Positive | —    |
+| I-31     | `enablePartitionedDevices` outside a boolean: rejected by the schema                                                   | Negative | —    |
+| I-32     | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating`                  | Negative | —    |
+| I-33     | Approving a config naming a partitioned device: accepted and expanded                                                  | Positive | —    |
+| I-40     | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                                           | Negative | —    |
+| I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —    |
+| I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —    |
+| I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —    |
+| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                                   | Negative | —    |
+| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | —    |
+| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | —    |
+| I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —    |
+| I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | —    |
+| I-49     | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema                               | Boundary | —    |
+| I-50     | `spec.cluster.maxSubsystemCount` omitted on a creating document: rejected as `Required`                                | Negative | —    |
+| I-51     | A node set's `sizing` carrying `maxSubsystemCount`: pruned rather than stored                                          | Boundary | —    |
+| I-52     | A node set carrying a `sizing` block at all: pruned rather than stored                                                 | Boundary | —    |
+| I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —    |
+| I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —    |
 
 ---
 
@@ -447,20 +465,22 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 131       | 0       | 131         | 8         |
-| Integration | 49        | 0       | 49          | 0         |
+| Unit        | 133       | 0       | 133         | 9         |
+| Integration | 53        | 0       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **194**   | **0**   | **194**     | **10**    |
+| **Total**   | **200**   | **0**   | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
 neither a scenario nor a gap. Three are the adoption path design §8.1 no longer
-has, since discovery reads the cluster it runs in and makes no backend call. The
-other seven are the mixed-class deployment: a cluster is built out of one class of
-device (design §3.1), so the rows that expanded a mixed document, advised against
-it, or combined a filter with the class it does not select describe behavior the
-design replaced with a rejection.
+has, since discovery reads the cluster it runs in and makes no backend call. Seven
+are the mixed-class deployment: a cluster is built out of one class of device
+(design §3.1), so the rows that expanded a mixed document, advised against it, or
+combined a filter with the class it does not select describe behavior the design
+replaced with a rejection. The last two are the node set's sizing, which the same
+section moved to the cluster block, leaving a set with no sizing to omit or to
+differ in.
 
 Nothing is covered, and nothing can be: neither kind exists. Every row is a
 specification, and the plan's value before implementation is that it says what
@@ -491,7 +511,8 @@ against a fake client.
 | U-116 … U-131 | Environment, mixing, and re-discovery                        | Neither kind exists. These are the rows the resolved questions of design §12 turned from undecided into testable                                                                       |
 | U-132 … U-134 | Device validation before expansion                           | Neither kind exists. These replace the admission-time device check that design §5.1 hands to discovery                                                                                 |
 | U-135 … U-147 | The device class of a cluster                                | Neither kind exists. `U-140` to `U-142` are the rows that hold the stamp one-way, and `U-145` to `U-147` the comparison a schema cannot make                                           |
-| I-01 … I-49   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither. `I-40` to `I-47` are the two device-class rules, which exist only as CEL |
+| U-148 … U-150 | Cluster-scoped sizing                                        | Neither kind exists. `U-149` is the row that keeps `maxSubsystemCount` off the node, which design §3.1 and design-storagenode.md §3.1 both turn on                                     |
+| I-01 … I-54   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither. `I-40` to `I-47` are the two device-class rules, which exist only as CEL |
 | E-01 … E-16   | All end-to-end scenarios                                     | Needs a live deployment with real devices. The e2e harness under `test/` is not committed yet                                                                                          |
 | E-02          | Distinguishing the boot device                               | Design §8.2 says discovery cannot do this, so the row asserts that it reports rather than chooses. It needs real hardware                                                              |
 | M-02, M-03    | Device availability and its override, and a duplicate config | Need a worker with a mounted, a partitioned, and an idle device, and a running cluster                                                                                                 |

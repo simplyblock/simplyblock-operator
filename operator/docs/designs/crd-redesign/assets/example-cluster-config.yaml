@@ -33,19 +33,22 @@ spec:
   # names an existing cluster in spec.clusterRef and carries no spec.cluster (§6).
   cluster:
     name: production
+    # All three sizing values are the cluster's and are stated once (§3.1). The
+    # subsystem cap is read from here whenever a node's configuration is
+    # generated; the other two are copied into each StorageNode as it is created.
+    maxSubsystemCount: 100
+    vcpuCount: 15
+    minHugePagesSize: 16G
     stripe:
       dataChunks: 4
       parityChunks: 2
     enableFailureDomains: true
 
-  # One entry per group of workers that share a sizing. Sizing is stamped onto every
-  # StorageNode the set expands into (design-storagenode.md §3.1).
+  # One entry per organizational grouping of workers, usually a rack. A set carries
+  # no sizing: that is the cluster's, above, and every node this document creates is
+  # stamped with the same values (design-storagenode.md §3.1).
   nodeSets:
     - name: rack-a
-      sizing:
-        maxSubsystemCount: 100
-        vcpuCount: 15
-        minHugePagesSize: 16G
       groups:
         # NVMe devices are named by PCI address, which is the class simplyblock has
         # always accepted.
@@ -80,10 +83,6 @@ spec:
               - "0000:60:00.0"
 
     - name: rack-b
-      sizing:
-        maxSubsystemCount: 100
-        vcpuCount: 15
-        minHugePagesSize: 16G
       groups:
         - name: elon
           workers:
@@ -120,16 +119,15 @@ spec:
 
   cluster:
     name: archive
+    maxSubsystemCount: 100
+    vcpuCount: 15
+    minHugePagesSize: 16G
     stripe:
       dataChunks: 4
       parityChunks: 2
 
   nodeSets:
     - name: rack-c
-      sizing:
-        maxSubsystemCount: 100
-        vcpuCount: 15
-        minHugePagesSize: 16G
       groups:
         - name: ceres
           workers:

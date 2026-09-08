@@ -643,8 +643,8 @@ The other two edges out of the operator box:
   action inspects the workers of the Kubernetes cluster and writes what it found
   as a `ClusterDeploymentConfig`. That document describes a whole deployment in
   one object: the environment, whether it is an edge cluster, the cluster
-  template, and the node sets with their sizing and their groups of workers,
-  interfaces, and devices. An example is
+  template with the sizing every node is built to, and the node sets with their
+  groups of workers, interfaces, and devices. An example is
   [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml).
 
 **`ClusterDeploymentConfig` is ephemeral, and every kind it expands into is
@@ -1317,8 +1317,10 @@ The fleet template stops being a resource and becomes
 per-node configuration today, written into each `StorageNode` by the set's
 controller rather than edited by users. Its equivalent is a group entry under
 `nodeSets[]`, carrying the worker list, the management and data interfaces, and
-the devices. The set-wide limits are `nodeSets[].sizing`, grouped per node set
-inside the config because they are what a node set is for.
+the devices. The sizing the set carried is not grouped per set at all: it is
+uniform across a cluster, so the config states it once in `spec.cluster` and the
+expansion stamps two of the three onto every node it writes
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §3.1).
 
 **The node's parent reference changes.** `StorageNode.spec.storageNodeSetRef` is
 required today. It becomes a reference to the owning `StorageCluster`, and the
