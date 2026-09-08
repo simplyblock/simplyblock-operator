@@ -384,6 +384,18 @@ once set, which is what makes `failureDomain` fillable and then frozen. The two
 strengths and the rules controller-gen generates for each are stated in
 [`design-crd-model.md`](design-crd-model.md) §7.6.
 
+**A failure domain is a label, and `rack-b` is what one looks like.** The value
+names the physical grouping a node shares with its peers, so it is the rack, the
+zone, or the power feed somebody would say out loud, and a node set's name is
+usually exactly that. An index carried the same grouping and none of the meaning:
+two nodes in `1` are in the same domain and nothing in the API says what `1` is,
+so the mapping from the number to the rack lived in whoever wrote the manifest.
+The label is bounded by the shape a Kubernetes label value has, because the value
+is seeded from one (`topology.kubernetes.io/zone`) where the cluster carries
+topology at all
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §8.2)
+and is printed in a column of its own (§15.1).
+
 **Immutable to users, writable by the operator, by webhook.** Each of these has
 exactly one legitimate writer, so a marker would lock the operator out along with
 everyone else.
@@ -463,8 +475,8 @@ documented format of `online/total` (§15.1).
 the fio-measured NVMe-oF baseline the volume rebalancer reads, written by the
 latency controller and specified in
 [`design-auto-rebalancing.md`](../design-auto-rebalancing.md).
-`status.failureDomain` is the fault group the control plane actually assigned,
-which is not necessarily the one `spec.config.failureDomain` requested.
+`status.failureDomain` is the failure-domain label the control plane actually
+assigned, which is not necessarily the one `spec.config.failureDomain` requested.
 
 `status.observedGeneration` is the generation the rest of `status` was computed
 from, so a stale status can be told from a current one.
@@ -572,7 +584,7 @@ spec:
   nodeIndex: 0
   slot: 0
   config:
-    failureDomain: 1
+    failureDomain: rack-a
     pcieAllowList:
       - "0000:5e:00.0"
       - "0000:5f:00.0"
@@ -596,7 +608,7 @@ status:
   health: true
   hostname: worker-3
   uptime: 4d2h11m
-  failureDomain: 1
+  failureDomain: rack-a
   resources:
     cpu: 8
     memory: 100G
@@ -1807,28 +1819,29 @@ delta, so that no other section has to carry it.
 
 ### 15.1 StorageNode
 
-| Registered                                              | This design                                          | Cost                                                                                                           |
-|---------------------------------------------------------|------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| `spec.storageNodeSetRef`, required                      | `spec.clusterRef` plus `spec.nodeSet` (§3.1)         | Spec rename and a reparent. Blocked on §15.3                                                                   |
-| `spec.overrides`, `StorageNodeOverrides`                | `spec.config`, `StorageNodeConfig` (§3.1)            | Spec rename. The struct stops being an override of anything                                                    |
-| `spec.socketIndex`                                      | `spec.slot` (§3.1)                                   | Spec rename. The operator is its only writer, so no user-authored object sets it                               |
-| `spec.overrides` rewritten from the set every reconcile | Copied once at creation (§3.1)                       | Behavioral. The node stops being a cache of a document that can be deleted                                     |
-| Cluster-scoped sizing, no per-node copy                 | `spec.config.sizing` (§3.1)                          | Additive on the node, and what makes a rolling hardware upgrade expressible                                    |
-| Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)               | Tightening. A user editing a device filter on a running node is now rejected                                   |
-| `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible |
-| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                          | Spec removal. None of them reached a consumer, so nothing loses behavior                                       |
-| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)        | Spec rename that also inverts, which is the one mechanical rename that is wrong                                |
-| No `status.phase`                                       | `StorageNodePhase` (§4.2)                            | Additive                                                                                                       |
-| No step field, provisioning improvising one             | `status.step` (§4.2)                                 | Status only. The optimistic-lock claim moves to the `Posting` transition                                       |
-| `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                       | Status removal. The persisted step is the record                                                               |
-| `status.resources.devices`, a string                    | Two counts (§3.3)                                    | Status only, and it corrects a rendering that reports `total/online` against a documented `online/total`       |
-| No `observedGeneration`                                 | Present (§3.3)                                       | Additive                                                                                                       |
-| No `clusterRef` validation                              | `StorageNodeValidator` resolves it (§3.4)            | New. An immutable reference to a cluster that does not exist is refused rather than held forever               |
-| Nothing checks a hand-written node's sizing             | The same webhook compares it to the cluster's (§3.4) | New. A manually configured node that disagrees with the fleet is refused instead of breaking chunk placement   |
-| Owned by `StorageNodeSet`                               | Owned by `StorageCluster` (§3.1)                     | An owner reference moves, which changes what a cluster delete cascades to                                      |
-| Polling every backend read                              | The storage-node stream (§4.4)                       | Depends on `design-sse-push-notifications.md`, on the `sse` branch                                             |
-| Two event reasons                                       | The reasons in §13.1                                 | Additive                                                                                                       |
-| No metric                                               | The metrics in §13.2                                 | New infrastructure                                                                                             |
+| Registered                                              | This design                                          | Cost                                                                                                                                                                                                                   |
+|---------------------------------------------------------|------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.storageNodeSetRef`, required                      | `spec.clusterRef` plus `spec.nodeSet` (§3.1)         | Spec rename and a reparent. Blocked on §15.3                                                                                                                                                                           |
+| `spec.overrides`, `StorageNodeOverrides`                | `spec.config`, `StorageNodeConfig` (§3.1)            | Spec rename. The struct stops being an override of anything                                                                                                                                                            |
+| `spec.socketIndex`                                      | `spec.slot` (§3.1)                                   | Spec rename. The operator is its only writer, so no user-authored object sets it                                                                                                                                       |
+| `spec.overrides` rewritten from the set every reconcile | Copied once at creation (§3.1)                       | Behavioral. The node stops being a cache of a document that can be deleted                                                                                                                                             |
+| Cluster-scoped sizing, no per-node copy                 | `spec.config.sizing` (§3.1)                          | Additive on the node, and what makes a rolling hardware upgrade expressible                                                                                                                                            |
+| Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)               | Tightening. A user editing a device filter on a running node is now rejected                                                                                                                                           |
+| `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible                                                                                                         |
+| `failureDomain`, an integer index                       | A label such as `rack-b` (§3.1)                      | Spec type change on both the spec and the status field. A stored index is not a valid label, so every node that declares a domain is rewritten, and the value stops being a number whose meaning lived outside the API |
+| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                          | Spec removal. None of them reached a consumer, so nothing loses behavior                                                                                                                                               |
+| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)        | Spec rename that also inverts, which is the one mechanical rename that is wrong                                                                                                                                        |
+| No `status.phase`                                       | `StorageNodePhase` (§4.2)                            | Additive                                                                                                                                                                                                               |
+| No step field, provisioning improvising one             | `status.step` (§4.2)                                 | Status only. The optimistic-lock claim moves to the `Posting` transition                                                                                                                                               |
+| `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                       | Status removal. The persisted step is the record                                                                                                                                                                       |
+| `status.resources.devices`, a string                    | Two counts (§3.3)                                    | Status only, and it corrects a rendering that reports `total/online` against a documented `online/total`                                                                                                               |
+| No `observedGeneration`                                 | Present (§3.3)                                       | Additive                                                                                                                                                                                                               |
+| No `clusterRef` validation                              | `StorageNodeValidator` resolves it (§3.4)            | New. An immutable reference to a cluster that does not exist is refused rather than held forever                                                                                                                       |
+| Nothing checks a hand-written node's sizing             | The same webhook compares it to the cluster's (§3.4) | New. A manually configured node that disagrees with the fleet is refused instead of breaking chunk placement                                                                                                           |
+| Owned by `StorageNodeSet`                               | Owned by `StorageCluster` (§3.1)                     | An owner reference moves, which changes what a cluster delete cascades to                                                                                                                                              |
+| Polling every backend read                              | The storage-node stream (§4.4)                       | Depends on `design-sse-push-notifications.md`, on the `sse` branch                                                                                                                                                     |
+| Two event reasons                                       | The reasons in §13.1                                 | Additive                                                                                                                                                                                                               |
+| No metric                                               | The metrics in §13.2                                 | New infrastructure                                                                                                                                                                                                     |
 
 ### 15.2 StorageNodeOps
 
@@ -2136,15 +2149,20 @@ type StorageNodeConfig struct {
 	// +k8s:immutable
 	DriveSizeRange string `json:"driveSizeRange,omitempty"`
 
-	// FailureDomain is the fault group index this node belongs to. Required when
-	// the cluster has enableFailureDomains set, and provisioning is held with a
-	// FailureDomainMissing event until it is present. Immutable once set, which
-	// is what makes it fillable later and then frozen: chunk placement was
-	// computed from it.
-	// +kubebuilder:validation:Minimum=0
+	// FailureDomain is the label of the fault group this node belongs to
+	// ("rack-b"), naming the physical grouping it shares with its peers rather
+	// than indexing it. Required when the cluster has enableFailureDomains set,
+	// and provisioning is held with a FailureDomainMissing event until it is
+	// present. Immutable once set, which is what makes it fillable later and then
+	// frozen: chunk placement was computed from it.
+	//
+	// The value takes the shape of a Kubernetes label value, because that is what
+	// it is seeded from where a cluster carries topology labels at all.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
 	// +optional
 	// +k8s:immutable
-	FailureDomain *int32 `json:"failureDomain,omitempty"`
+	FailureDomain string `json:"failureDomain,omitempty"`
 
 	// Expand marks this node as an addition to an already-active cluster, which
 	// the control plane reads as a request to rebalance onto it rather than to
@@ -2354,10 +2372,11 @@ type StorageNodeStatus struct {
 	// +optional
 	Ports *StorageNodePorts `json:"ports,omitempty"`
 
-	// FailureDomain is the fault group the control plane actually assigned, which
-	// is not necessarily the one spec.config.failureDomain requested.
+	// FailureDomain is the failure-domain label the control plane actually
+	// assigned, which is not necessarily the one spec.config.failureDomain
+	// requested.
 	// +optional
-	FailureDomain *int32 `json:"failureDomain,omitempty"`
+	FailureDomain string `json:"failureDomain,omitempty"`
 
 	// ActiveOpsRef names the StorageNodeOps currently allowed to touch this node.
 	// Empty when none is running.
@@ -2392,7 +2411,7 @@ type StorageNodeStatus struct {
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid",priority=1
-// +kubebuilder:printcolumn:name="FD",type=integer,JSONPath=".status.failureDomain",priority=1
+// +kubebuilder:printcolumn:name="FD",type=string,JSONPath=".status.failureDomain",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // StorageNode is one backend storage node: one SPDK process bound to one NUMA

@@ -65,7 +65,7 @@ File: `operator/internal/controllers/node/storagenode_controller_unit_test.go`
 | U-09 | `enableFailureDomains` set and no fault group declared: provisioning is held         | Negative | `TestCheckFailureDomain_BlocksWhenEnabledAndNotSet`          |
 | U-10 | `enableFailureDomains` set and a fault group present: provisioning proceeds          | Positive | `TestCheckFailureDomain_AllowsWhenFailureDomainSet`          |
 | U-11 | `enableFailureDomains` unset: the fault group is not required                        | Negative | `TestCheckFailureDomain_SkipsWhenFeatureDisabled`            |
-| U-12 | A fault group of 0 is a valid group and is not read as unset                         | Boundary | —                                                            |
+| U-12 | A `failureDomain` label of `0`: a label like any other, not read as unset            | Boundary | —                                                            |
 | U-13 | Held provisioning emits `FailureDomainMissing` and issues no `POST`                  | Negative | —                                                            |
 | U-14 | The worker's storage-node API answers: the host check passes                         | Positive | `TestCheckNodeInfoReachable`                                 |
 | U-15 | The worker's storage-node API is unreachable: held, no `POST`                        | Negative | `TestStorageNodeSetReconcileUnreachableNodeInfoRequeues`     |
@@ -451,47 +451,49 @@ admission, real `resourceVersion` semantics, and real watch delivery.
 
 ### Admission and Validation (design §3.1, §3.2, §3.4, §6.1)
 
-| #    | Scenario                                                                                         | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | `spec.clusterRef` omitted at creation: rejected as `Required`                                    | Negative | —    |
-| I-02 | `spec.clusterRef` changed after creation: rejected as immutable                                  | Negative | —    |
-| I-46 | `spec.clusterRef` naming no `StorageCluster`: the create is rejected                             | Negative | —    |
-| I-47 | `spec.clusterRef` naming a cluster with no `status.uuid`: admitted, holds with `ClusterNotReady` | Boundary | —    |
-| I-48 | `spec.clusterRef` naming a cluster in another namespace: the create is rejected                  | Negative | —    |
-| I-49 | `config.sizing.vcpuCount` differing from the cluster's: the create is rejected                   | Negative | —    |
-| I-50 | `config.sizing.maxSubsystemCount` differing from the cluster's: rejected                         | Negative | —    |
-| I-51 | `config.sizing` matching the cluster's exactly: admitted                                         | Positive | —    |
-| I-52 | The operator re-sizing one node mid-roll: admitted, since the identity is exempt                 | Positive | —    |
-| I-03 | `spec.socketId` omitted at creation, set later: accepted, then frozen                            | Boundary | —    |
-| I-04 | `spec.socketId` set at creation, cleared later: rejected                                         | Boundary | —    |
-| I-05 | `spec.config.failureDomain` of -1: rejected by the minimum                                       | Boundary | —    |
-| I-06 | `spec.config.failureDomain` of 0: accepted                                                       | Boundary | —    |
-| I-07 | `spec.config.spdkSystemMemory` of `"4X"`: rejected by the pattern                                | Negative | —    |
-| I-08 | `spec.workerNode` changed by a non-operator identity: rejected by the webhook                    | Negative | —    |
-| I-09 | The webhook is unavailable: the update is rejected rather than admitted                          | Negative | —    |
-| I-10 | `spec.action` outside the enum: rejected by admission before the controller sees it              | Negative | —    |
-| I-11 | `spec.nodeRef` changed after creation: rejected as immutable                                     | Negative | —    |
-| I-12 | `spec.migrate.targetWorkerNode` changed after creation: rejected as immutable                    | Negative | —    |
-| I-13 | `spec.abort` set on a `Running` operation: accepted, since it is the mutable field               | Positive | —    |
-| I-14 | `spec.remove.systemVolumeFilterRegex` unset: defaulted by the API server                         | Boundary | —    |
-| I-15 | Short names `sn` and `snops` resolve to the same lists as the full kinds                         | Positive | —    |
-| I-29 | `spec.slot` of -1: rejected by the minimum                                                       | Boundary | —    |
-| I-30 | `spec.config` omitted at creation: rejected as `Required`                                        | Negative | —    |
-| I-31 | `spec.config.sizing` omitted at creation: rejected as `Required`                                 | Negative | —    |
-| I-32 | `spec.config.deviceNames` changed after creation: rejected as immutable                          | Negative | —    |
-| I-33 | `spec.config.journalManager` changed after creation: rejected as immutable                       | Negative | —    |
-| I-34 | `spec.config.failureDomain` unset at creation, set later: accepted, then frozen                  | Boundary | —    |
-| I-35 | `spec.config.expand` changed after creation: rejected as immutable                               | Negative | —    |
-| I-36 | `spec.config.spdkImage` changed: accepted, since a phased rollout is why it is per node          | Positive | —    |
-| I-37 | The deployment config is deleted: every node reconciles unchanged                                | Positive | —    |
-| I-38 | The deployment config's device filter is edited: existing nodes are untouched                    | Negative | —    |
-| I-39 | A node created after that edit carries the new filter                                            | Positive | —    |
-| I-40 | `spec.config.deviceNames` holding a PCI address: accepted                                        | Positive | —    |
-| I-41 | `spec.config.deviceNames` holding a device path: accepted                                        | Positive | —    |
-| I-42 | `spec.config.deviceNames` holding a bare device name: accepted, as a path under `/dev`           | Boundary | —    |
-| I-43 | `spec.config.deviceNames` holding both a PCI address and a path: accepted                        | Boundary | —    |
-| I-44 | `spec.config.deviceNames` holding a malformed PCI address: rejected by the item pattern          | Negative | —    |
-| I-45 | `spec.config.deviceNames` holding a path with a space: rejected by the item pattern              | Negative | —    |
+| #    | Scenario                                                                                                                       | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-01 | `spec.clusterRef` omitted at creation: rejected as `Required`                                                                  | Negative | —    |
+| I-02 | `spec.clusterRef` changed after creation: rejected as immutable                                                                | Negative | —    |
+| I-46 | `spec.clusterRef` naming no `StorageCluster`: the create is rejected                                                           | Negative | —    |
+| I-47 | `spec.clusterRef` naming a cluster with no `status.uuid`: admitted, holds with `ClusterNotReady`                               | Boundary | —    |
+| I-48 | `spec.clusterRef` naming a cluster in another namespace: the create is rejected                                                | Negative | —    |
+| I-49 | `config.sizing.vcpuCount` differing from the cluster's: the create is rejected                                                 | Negative | —    |
+| I-50 | `config.sizing.maxSubsystemCount` differing from the cluster's: rejected                                                       | Negative | —    |
+| I-51 | `config.sizing` matching the cluster's exactly: admitted                                                                       | Positive | —    |
+| I-52 | The operator re-sizing one node mid-roll: admitted, since the identity is exempt                                               | Positive | —    |
+| I-53 | `spec.config.failureDomain` of `rack-b`: accepted                                                                              | Positive | —    |
+| I-54 | A `failureDomain` of 64 characters, and one holding a slash: both rejected                                                     | Boundary | —    |
+| I-03 | `spec.socketId` omitted at creation, set later: accepted, then frozen                                                          | Boundary | —    |
+| I-04 | `spec.socketId` set at creation, cleared later: rejected                                                                       | Boundary | —    |
+| I-05 | `spec.config.failureDomain` of `-rack`: rejected by the label pattern                                                          | Boundary | —    |
+| I-06 | `spec.config.failureDomain` of `0`: accepted, since a digit is a valid label                                                   | Boundary | —    |
+| I-07 | `spec.config.spdkSystemMemory` of `"4X"`: rejected by the pattern                                                              | Negative | —    |
+| I-08 | `spec.workerNode` changed by a non-operator identity: rejected by the webhook                                                  | Negative | —    |
+| I-09 | The webhook is unavailable: the update is rejected rather than admitted                                                        | Negative | —    |
+| I-10 | `spec.action` outside the enum: rejected by admission before the controller sees it                                            | Negative | —    |
+| I-11 | `spec.nodeRef` changed after creation: rejected as immutable                                                                   | Negative | —    |
+| I-12 | `spec.migrate.targetWorkerNode` changed after creation: rejected as immutable                                                  | Negative | —    |
+| I-13 | `spec.abort` set on a `Running` operation: accepted, since it is the mutable field                                             | Positive | —    |
+| I-14 | `spec.remove.systemVolumeFilterRegex` unset: defaulted by the API server                                                       | Boundary | —    |
+| I-15 | Short names `sn` and `snops` resolve to the same lists as the full kinds                                                       | Positive | —    |
+| I-29 | `spec.slot` of -1: rejected by the minimum                                                                                     | Boundary | —    |
+| I-30 | `spec.config` omitted at creation: rejected as `Required`                                                                      | Negative | —    |
+| I-31 | `spec.config.sizing` omitted at creation: rejected as `Required`                                                               | Negative | —    |
+| I-32 | `spec.config.deviceNames` changed after creation: rejected as immutable                                                        | Negative | —    |
+| I-33 | `spec.config.journalManager` changed after creation: rejected as immutable                                                     | Negative | —    |
+| I-34 | `spec.config.failureDomain` unset at creation, set later: accepted, then frozen                                                | Boundary | —    |
+| I-35 | `spec.config.expand` changed after creation: rejected as immutable                                                             | Negative | —    |
+| I-36 | `spec.config.spdkImage` changed: accepted, since a phased rollout is why it is per node                                        | Positive | —    |
+| I-37 | The deployment config is deleted: every node reconciles unchanged                                                              | Positive | —    |
+| I-38 | The deployment config's device filter is edited: existing nodes are untouched                                                  | Negative | —    |
+| I-39 | A node created after that edit carries the new filter                                                                          | Positive | —    |
+| I-40 | `spec.config.deviceNames` holding a PCI address: accepted                                                                      | Positive | —    |
+| I-41 | `spec.config.deviceNames` holding a device path: accepted                                                                      | Positive | —    |
+| I-42 | `spec.config.deviceNames` holding a bare device name: accepted, as a path under `/dev`                                         | Boundary | —    |
+| I-43 | `spec.config.deviceNames` holding both a PCI address and a path: accepted by the schema, then refused by the webhook (`U-258`) | Boundary | —    |
+| I-44 | `spec.config.deviceNames` holding a malformed PCI address: rejected by the item pattern                                        | Negative | —    |
+| I-45 | `spec.config.deviceNames` holding a path with a space: rejected by the item pattern                                            | Negative | —    |
 
 ### Controller Behavior Under a Real API Server (design §4, §7, §11)
 
@@ -668,10 +670,10 @@ eviction, the kubelet, and the reboot.
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
 | Unit        | 261       | 87      | 174         |
-| Integration | 52        | 1       | 51          |
+| Integration | 54        | 1       | 53          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **344**   | **88**  | **256**     |
+| **Total**   | **346**   | **88**  | **258**     |
 
 Eighty-seven of the eighty-eight covered scenarios are unit tests, and they
 concentrate in three places: the workload builders, the drain's volume
@@ -693,7 +695,7 @@ not exist yet, and §6 separates the two.
 | #                          | Gap                                                                                           | Reason                                                                                                                                                                                                                                                                           |
 |----------------------------|-----------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-07, U-08                 | Name collision retry, and the name carrying no worker                                         | The retry path exists and is unexercised. The negative assertion about the name has never been written down                                                                                                                                                                      |
-| U-12                       | A fault group of 0 read as set rather than unset                                              | `effectiveFailureDomain` returns 0 for both today, which is the defect the row would catch                                                                                                                                                                                       |
+| U-12                       | A failure-domain label of `0` read as set rather than unset                                   | The label form retires the zero-versus-unset ambiguity the integer had, since an unset label is the empty string, and this row is what keeps a label spelled `0` from reintroducing it                                                                                           |
 | U-23, U-25 … U-27          | The parallel-add hold and the FoundationDB serialization rules                                | `isFDBWorkerBlocked` has no test reference, and it is the rule that keeps a control plane from losing quorum during an expansion                                                                                                                                                 |
 | U-28 … U-35                | The whole `Posting` claim                                                                     | Planned, not built. The guard today is `status.postedAt` plus a `List`, which the optimistic-lock claim of design §4.2 replaces                                                                                                                                                  |
 | U-38 … U-40, U-43          | Positional UUID resolution for multi-socket workers                                           | `pollUUIDFromBackend` has no test reference, and the RPC-port ordering it depends on is an assumption nothing asserts                                                                                                                                                            |
@@ -715,7 +717,7 @@ not exist yet, and §6 separates the two.
 | U-184 … U-200              | The migrate graph                                                                             | Only the configuration merge is covered. The DNS gate, the two-step restart observation, and the abort refusal are untested                                                                                                                                                      |
 | U-201 … U-216              | The whole host maintenance action                                                             | Planned, not built. It is a separate controller driving `StorageNodeSet.status.drainCoordination` today, which design §10 replaces                                                                                                                                               |
 | U-217 … U-235              | The step machine, and the three lists that have to agree                                      | Planned, not built. `atlas-lib/statemachine` has no consumer in either component yet. `U-231` to `U-233` are what the shared `KubeSnapshot` makes necessary: the step values live in the graph, in the `Enum` marker, and in the CEL rule, and only a test keeps the three level |
-| I-01 … I-15, I-46 … I-52   | Every admission rule                                                                          | Needs `envtest`, because CEL, `Required`, and defaulting are enforced by the API server and a fake client applies none of them                                                                                                                                                   |
+| I-01 … I-15, I-46 … I-54   | Every admission rule                                                                          | Needs `envtest`, because CEL, `Required`, and defaulting are enforced by the API server and a fake client applies none of them                                                                                                                                                   |
 | I-17 … I-28                | Lock behavior, cascade, and isolation under a real API server                                 | Needs `envtest` for real `resourceVersion` conflicts, real watch delivery, and real garbage collection                                                                                                                                                                           |
 | I-37 … I-39                | The deployment config's ephemerality                                                          | Nothing to test yet: `ClusterDeploymentConfig` does not exist, and the registered model rewrites `spec.overrides` from the set on every reconcile, which is the behavior design §3.1 replaces                                                                                    |
 | E-01 … E-26                | All end-to-end scenarios                                                                      | Needs a live cluster. The e2e harness under `test/` is not committed yet                                                                                                                                                                                                         |

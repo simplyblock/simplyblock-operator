@@ -69,7 +69,7 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_unit_test
 |------|----------------------------------------------------------------------------|----------|-------------------------------------------------|
 | U-09 | Readiness check fails: requeue, no `POST` issued                           | Negative | `TestStorageClusterReconcileCreationPaths`      |
 | U-10 | Creation `POST` fails and no cluster of that name exists: requeue          | Negative | `TestStorageClusterReconcileCreationPaths`      |
-| U-11 | Creation response unparseable: requeue                                     | Negative | `TestStorageClusterReconcileCreationPaths`      |
+| U-11 | Creation response unparsable: requeue                                      | Negative | `TestStorageClusterReconcileCreationPaths`      |
 | U-12 | Creation succeeds: status populated and the credentials Secret written     | Positive | `TestStorageClusterReconcileCreationPaths`      |
 | U-13 | Creation succeeds: `status.erasureCodingScheme` rendered from NDCS/NPCS    | Positive | `TestStorageClusterReconcileCreationPaths`      |
 | U-14 | Second reconciler at the same `resourceVersion`: 409, backs off, no `POST` | Negative | `TestReconcileCreateOptimisticLockPreventsRace` |

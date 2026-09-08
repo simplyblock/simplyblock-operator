@@ -115,7 +115,7 @@ File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-49     | One worker: one group of one                                                                                 | Boundary | —    |
 | U-50     | A `nodeSelector` that matches a subset: only those workers are inspected                                     | Positive | —    |
 | U-51     | A worker whose devices cannot be read: `DeviceInspectionFailed`, the run continues                           | Negative | —    |
-| U-52     | Nodes carrying `topology.kubernetes.io/zone`: it seeds `failureDomain`                                       | Positive | —    |
+| U-52     | Nodes carrying `topology.kubernetes.io/zone`: its value seeds `failureDomain` verbatim                       | Positive | —    |
 | U-53     | Nodes carrying no topology label: `failureDomain` is left unset, not guessed                                 | Negative | —    |
 | U-54     | An OpenShift cluster: `spec.environment` is `OpenShift`                                                      | Positive | —    |
 | U-55     | An unrecognized distribution: `spec.environment` is `Vanilla`                                                | Boundary | —    |
@@ -365,6 +365,8 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-45 | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                     | Negative | —    |
 | I-46 | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                         | Positive | —    |
 | I-47 | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                      | Positive | —    |
+| I-48 | A group's `failureDomain` of `rack-b`: accepted                                                       | Positive | —    |
+| I-49 | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema              | Boundary | —    |
 
 ---
 
@@ -446,10 +448,10 @@ first config.
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
 | Unit        | 131       | 0       | 131         | 8         |
-| Integration | 47        | 0       | 47          | 0         |
+| Integration | 49        | 0       | 49          | 0         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **192**   | **0**   | **192**     | **10**    |
+| **Total**   | **194**   | **0**   | **194**     | **10**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
@@ -489,7 +491,7 @@ against a fake client.
 | U-116 … U-131 | Environment, mixing, and re-discovery                        | Neither kind exists. These are the rows the resolved questions of design §12 turned from undecided into testable                                                                       |
 | U-132 … U-134 | Device validation before expansion                           | Neither kind exists. These replace the admission-time device check that design §5.1 hands to discovery                                                                                 |
 | U-135 … U-147 | The device class of a cluster                                | Neither kind exists. `U-140` to `U-142` are the rows that hold the stamp one-way, and `U-145` to `U-147` the comparison a schema cannot make                                           |
-| I-01 … I-47   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither. `I-40` to `I-47` are the two device-class rules, which exist only as CEL |
+| I-01 … I-49   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither. `I-40` to `I-47` are the two device-class rules, which exist only as CEL |
 | E-01 … E-16   | All end-to-end scenarios                                     | Needs a live deployment with real devices. The e2e harness under `test/` is not committed yet                                                                                          |
 | E-02          | Distinguishing the boot device                               | Design §8.2 says discovery cannot do this, so the row asserts that it reports rather than chooses. It needs real hardware                                                              |
 | M-02, M-03    | Device availability and its override, and a duplicate config | Need a worker with a mounted, a partitioned, and an idle device, and a running cluster                                                                                                 |

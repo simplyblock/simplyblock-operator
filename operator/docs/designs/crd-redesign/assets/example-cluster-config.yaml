@@ -56,6 +56,10 @@ spec:
           mgmtInterface: eth1
           dataInterfaces:
             - eth2
+          # Every group declares the fault group its workers share, which the
+          # cluster's enableFailureDomains makes mandatory. The label is the rack
+          # these machines are in, which is what this node set is named for.
+          failureDomain: rack-a
           devices:
             nvme:
               - "0000:5e:00.0"
@@ -70,6 +74,7 @@ spec:
           mgmtInterface: eth1
           dataInterfaces:
             - eth2
+          failureDomain: rack-a
           devices:
             nvme:
               - "0000:60:00.0"
@@ -87,9 +92,7 @@ spec:
           mgmtInterface: eth1
           dataInterfaces:
             - eth2
-          # Failure domains are declared per group, which the cluster's
-          # enableFailureDomains above makes mandatory rather than optional.
-          failureDomain: 1
+          failureDomain: rack-b
           devices:
             nvme:
               - "0000:5e:00.0"

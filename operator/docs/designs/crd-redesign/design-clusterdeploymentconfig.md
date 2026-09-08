@@ -730,10 +730,21 @@ guess at intent: two racks with identical machines are one group by that rule an
 two by any sensible operational one. A reviewer regroups.
 
 **What the failure domains are.** Rack and power topology is not in the
-Kubernetes API. Where nodes carry `topology.kubernetes.io/zone` discovery uses it
-as a starting point, and where they do not it leaves `failureDomain` unset, which
-holds provisioning with a clear reason when the cluster requires it
+Kubernetes API. Where nodes carry `topology.kubernetes.io/zone` discovery copies
+its value into `failureDomain` verbatim, which the field's label shape is what
+makes possible: a zone is called `eu-central-1a` and a rack is called `rack-b`,
+and both survive into the document as themselves
+([`design-storagenode.md`](design-storagenode.md) §3.1). Where nodes carry no
+topology label it leaves the field unset, which holds provisioning with a clear
+reason when the cluster requires one
 ([`design-storagenode.md`](design-storagenode.md) §4.2) rather than guessing.
+
+A reviewer filling it in by hand has a name to reach for: a node set is the
+physical grouping the document already names, so `rack-b` is both the set's name
+and the domain its groups belong to in most deployments. Nothing copies one to the
+other, because a node set is a sizing boundary and a failure domain is a power and
+cooling boundary, and the deployments where they diverge are the ones that need
+the field.
 
 ### 8.3 The output is a draft, always
 
@@ -971,12 +982,16 @@ type NodeGroup struct {
 	// +optional
 	Devices *DeviceSelection `json:"devices,omitempty"`
 
-	// FailureDomain is the fault group every worker in this group belongs to.
-	// Discovery leaves it unset where the Kubernetes API carries no topology,
-	// which holds provisioning with a clear reason rather than guessing.
-	// +kubebuilder:validation:Minimum=0
+	// FailureDomain is the label of the fault group every worker in this group
+	// belongs to ("rack-b"), which is usually the name of the rack, zone, or
+	// power feed they share. Discovery seeds it from topology.kubernetes.io/zone
+	// and leaves it unset where the Kubernetes API carries no topology, which
+	// holds provisioning with a clear reason rather than guessing. It expands
+	// into StorageNode.spec.config.failureDomain, whose shape it shares.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`
 	// +optional
-	FailureDomain *int32 `json:"failureDomain,omitempty"`
+	FailureDomain string `json:"failureDomain,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
@@ -1024,7 +1039,7 @@ type ClusterTemplate struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// EnableFailureDomains opts the cluster into failure-domain mode, in which
-	// every node must declare a fault group.
+	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 }

@@ -137,8 +137,9 @@ the storage fabric, and `nvmfBasePort`, `rpcBasePort`, and `snodeApiPort` the
 port ranges every node binds. `kms` names the key management service holding the
 cluster's volume encryption keys, and is a block rather than a field, which is
 the last part of this section. `enableFailureDomains` opts the cluster into
-failure-domain mode, where every node must declare a fault group so the control
-plane can spread chunks across independent ones. `enableNodeAffinity` selects
+failure-domain mode, where every node must label the fault group it belongs to
+("rack-b") so the control plane can spread chunks across independent ones
+([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` selects
 affinity-based placement for storage components. `deviceClass` names the one class
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
@@ -1686,8 +1687,8 @@ type StorageClusterSpec struct {
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
 	// EnableFailureDomains opts the cluster into failure-domain mode, where every
-	// node must declare a fault group so the control plane can spread
-	// erasure-coding chunks across independent ones.
+	// node must label the fault group it belongs to so the control plane can
+	// spread erasure-coding chunks across independent ones.
 	// +optional
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
