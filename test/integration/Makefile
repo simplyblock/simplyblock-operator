@@ -7,6 +7,13 @@
 # refreshes the credential cache first so that does not happen.
 
 SHELL := /bin/bash
+
+# The helpers a run leaves behind, as one definition for every target that looks
+# for them. The second pattern drops the pattern-matchers themselves: pgrep
+# matches any command line that merely contains the string it was given, so a
+# grep, or a monitoring script watching for these, counts as a leftover.
+ORPHANS = pgrep -f "talosctl (loadbalancer-launch|dhcpd-launch|qemu-launch)" 2>/dev/null \
+	  | xargs -I{} sh -c 'ps -o command= -p {} | grep -q "^talosctl" && echo {}' 2>/dev/null
 GO ?= go
 TIMEOUT ?= 60m
 # -count=1 defeats the test cache. Go caches a passing package result and replays
@@ -59,13 +66,23 @@ preflight: ## Check the tools and privileges a run needs.
 	case "$$(uname -s)/$$(uname -m)" in \
 	  Darwin/arm64) \
 	    held=$$(netstat -an 2>/dev/null | awk 'NF == 5 && $$4 ~ /\.67$$/ {print $$4; exit}'); \
-	    orphans=$$(pgrep -f "talosctl (loadbalancer-launch|dhcpd-launch|qemu-launch)" 2>/dev/null | tr '\n' ' '); \
-	    if [ -n "$$held" ] || [ -n "$$orphans" ]; then \
+	    orphans=$$($(ORPHANS) | tr '\n' ' '); \
+	    squatter=$$(pgrep -x bootpd 2>/dev/null | tr '\n' ' '); \
+	    if [ -n "$$held" ] || [ -n "$$orphans" ] || [ -n "$$squatter" ]; then \
 	      [ -n "$$held" ] && echo "warning: $$held is bound, and the provisioner's dhcpd needs it"; \
 	      [ -n "$$orphans" ] && echo "warning: helpers from an earlier run are still up: $$orphans"; \
-	      echo "  The provisioner runs its own dhcpd on that port and cannot share it."; \
+	      [ -n "$$squatter" ] && echo "warning: bootpd is running ($$squatter) and holds that port"; \
+	      echo "  The provisioner runs its own dhcpd on port 67 and cannot share it. A"; \
+	      echo "  running bootpd cannot be stopped by unloading its job, only killed."; \
 	      echo "  Sweep what an earlier run left behind and look again: make clean-clusters"; \
 	    fi; \
+	    grants=$$(sudo -n -l 2>/dev/null); \
+	    for want in "pkill -x bootpd" ".talos/clusters/"; do \
+	      case "$$grants" in \
+	        *"$$want"*) ;; \
+	        *) echo "warning: no passwordless sudo rule mentions \"$$want\", so an unattended run stops on it (see README.md)" ;; \
+	      esac; \
+	    done; \
 	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only ARM on macOS"; fail=1 ;; \
 	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
