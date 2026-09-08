@@ -1,0 +1,220 @@
+name: "Repo: Sync OpenAPI Spec"
+
+# shared/openapi.json is the contract atlas-lib's client, the integration suite's
+# control-plane simulator and the operator's spec-backed mock are all generated or
+# checked against. It is exported from the control plane, so it goes stale
+# silently: nothing in this repository fails when sbcli grows an endpoint, and the
+# generated code keeps compiling against endpoints that no longer exist.
+#
+# This exports it nightly and opens a pull request when it moved, so the drift
+# arrives as a reviewable change rather than as a surprise during an incident.
+
+on:
+  schedule:
+    # Early morning UTC, after a day's merges into sbcli have settled.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      sbcli_ref:
+        description: "sbcli ref to export from"
+        default: "main"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # One branch, so there is one pull request that gets updated rather than a new
+  # one every night. See the "Check whether this is already proposed" step for
+  # what keeps an unchanged export from touching it at all.
+  SYNC_BRANCH: chore/openapi-sync
+
+jobs:
+  sync:
+    name: Export and propose
+    runs-on: ubuntu-latest
+    # A fork's scheduled run would try to push a branch it does not own.
+    if: github.repository == 'simplyblock/simplyblock-operator'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out sbcli
+        uses: actions/checkout@v4
+        with:
+          repository: simplyblock-io/sbcli
+          ref: ${{ inputs.sbcli_ref || 'main' }}
+          path: .sbcli
+
+      - uses: actions/setup-python@v5
+        with:
+          # The control plane's own runtime (see sbcli docker/Dockerfile_base).
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: .sbcli/requirements.txt
+
+      # The whole requirement set, not a hand-picked subset: the export imports
+      # the FastAPI app, which imports the controllers, and what those pull in is
+      # sbcli's business rather than something to track here. No database and no
+      # FoundationDB client library are needed — nothing connects at import time.
+      - name: Install sbcli's dependencies
+        run: pip install -r .sbcli/requirements.txt
+
+      - name: Export the spec
+        id: export
+        run: |
+          cp shared/openapi.json "$RUNNER_TEMP/openapi.old.json"
+          python shared/export-openapi.py export --sbcli .sbcli --out shared/openapi.json
+
+          if git diff --quiet -- shared/openapi.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The spec is unchanged." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "sbcli_sha=$(git -C .sbcli rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The pull-request action reuses one branch, so it updates the open pull
+      # request rather than opening another — but it rewrites the title and body on
+      # every run where the branch differs from the base, and the body names the
+      # sbcli commit it was exported from. That alone would rewrite the pull
+      # request nightly and keep bumping its timestamp while nothing about the
+      # spec had changed.
+      #
+      # So compare against what is already on the branch, not only against the
+      # base, and stop here when they match: the change has been proposed and is
+      # waiting for a review, which is not news. A later export that differs from
+      # the branch does go through, and a branch closed without merging keeps this
+      # quiet about that exact change while still reporting the next one.
+      - name: Check whether this is already proposed
+        id: proposed
+        if: steps.export.outputs.changed == 'true'
+        run: |
+          if ! git fetch --depth=1 origin "$SYNC_BRANCH" 2>/dev/null; then
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "No $SYNC_BRANCH branch yet." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git show "FETCH_HEAD:shared/openapi.json" > "$RUNNER_TEMP/openapi.branch.json"
+          if cmp -s shared/openapi.json "$RUNNER_TEMP/openapi.branch.json"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "This export is already on \`$SYNC_BRANCH\`; leaving the open pull request alone." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "\`$SYNC_BRANCH\` exists but carries a different export; updating it." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Summarize the change
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
+        run: |
+          python shared/export-openapi.py summarize \
+            --old "$RUNNER_TEMP/openapi.old.json" \
+            --new shared/openapi.json > "$RUNNER_TEMP/summary.md"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-go@v5
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
+        with:
+          go-version: stable
+
+      # A pull request carrying only the spec would leave the repository
+      # inconsistent — the committed generated code would still describe the
+      # previous revision — so regenerate in the same change.
+      #
+      # Allowed to fail, because the interesting spec changes are exactly the ones
+      # that break generation: an endpoint that moved leaves an overlay patching a
+      # path that no longer exists, or a handler implementing one. When that
+      # happens the pull request still opens, carrying the spec alone and saying
+      # so, because a visible broken change beats an invisible stale one.
+      - name: Regenerate what the spec feeds
+        id: regenerate
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
+        continue-on-error: true
+        run: |
+          make -C atlas-lib generate
+          make -C test/integration generate
+
+      - name: Note that regeneration needs a human
+        if: |
+          steps.export.outputs.changed == 'true' &&
+          steps.proposed.outputs.already != 'true' &&
+          steps.regenerate.outcome == 'failure'
+        run: |
+          {
+            echo
+            echo "> [!IMPORTANT]"
+            echo "> Code generation failed against the new spec, so this change carries the"
+            echo "> spec alone. That usually means an endpoint moved and something still"
+            echo "> refers to where it was — an overlay in \`atlas-lib/internal/cpapi\` or"
+            echo "> \`test/integration/controlplane\`, or a simulator handler. Fix those, run"
+            echo "> \`make -C atlas-lib generate\` and \`make -C test/integration generate\`,"
+            echo "> and push to this branch."
+          } >> "$RUNNER_TEMP/summary.md"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Unconditionally, so the step below can run on a day with no change too: an
+      # empty body is never read in that case, and running the action anyway is
+      # what retires a proposal that has gone stale — the spec having landed some
+      # other way, or been reverted upstream — instead of leaving a pull request
+      # open against a diff that no longer exists.
+      - name: Assemble the pull-request body
+        run: |
+          {
+            echo "Exported from [simplyblock-io/sbcli@${SBCLI_SHA:0:12}](https://github.com/simplyblock-io/sbcli/commit/$SBCLI_SHA)"
+            echo "by \`.github/workflows/repo_openapi_sync.yaml\`."
+            echo
+            [ -f "$RUNNER_TEMP/summary.md" ] && cat "$RUNNER_TEMP/summary.md"
+            echo
+            echo "Regenerate locally with:"
+            echo
+            echo '```'
+            echo "python shared/export-openapi.py export --sbcli ../sbcli --out shared/openapi.json"
+            echo "make -C atlas-lib generate && make -C test/integration generate"
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+        env:
+          SBCLI_SHA: ${{ steps.export.outputs.sbcli_sha }}
+
+      # Not gated on the spec having changed: with no changes the action either does
+      # nothing or, when an open pull request no longer differs from the base,
+      # closes it and deletes the branch. It is gated on the export not already
+      # being the one on the branch, which is the case where touching the pull
+      # request would be pure noise.
+      - name: Open, update or retire the pull request
+        id: pr
+        if: steps.proposed.outputs.already != 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: ${{ env.SYNC_BRANCH }}
+          # One branch, reused: a nightly job that opened a new pull request per
+          # run would bury the one a reviewer is looking at.
+          delete-branch: true
+          title: "shared: sync openapi.json with the control plane"
+          body-path: ${{ runner.temp }}/body.md
+          commit-message: |
+            shared: sync openapi.json with the control plane
+
+            Exported from simplyblock-io/sbcli@${{ steps.export.outputs.sbcli_sha }}.
+          # Explicit, so the sbcli checkout in .sbcli and any dependency-file
+          # churn cannot ride along.
+          add-paths: |
+            shared/openapi.json
+            atlas-lib/internal/cpapi/*.gen.go
+            test/integration/controlplane/*.gen.go
+          labels: |
+            dependencies
+            openapi
+
+      - name: Report what happened
+        if: always()
+        run: |
+          case "${{ steps.pr.outputs.pull-request-operation }}" in
+            created) echo "Opened #${{ steps.pr.outputs.pull-request-number }}." ;;
+            updated) echo "Updated #${{ steps.pr.outputs.pull-request-number }}." ;;
+            closed)  echo "Retired the proposal: it no longer differs from the base branch." ;;
+            *)       echo "No change to any pull request." ;;
+          esac >> "$GITHUB_STEP_SUMMARY"

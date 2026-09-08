@@ -26,7 +26,7 @@ type NIC struct {
 	ID      string
 	Device  string
 	Address string // IPv4 address
-	NetType string // transport type, e.g. "tcp"
+	NetType string // transport type, e.g., `tcp`
 	Status  string
 }
 
@@ -53,7 +53,7 @@ func (c *Client) ListStorageNodes(ctx context.Context, clusterID string) ([]Stor
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetWithResponse(ctx, cluster)
+	resp, err := c.api.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetWithResponse(ctx, cluster, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage nodes in %s: %w", clusterID, err)
 	}
@@ -79,11 +79,11 @@ func (c *Client) GetStorageNode(ctx context.Context, clusterID, nodeID string) (
 	if err != nil {
 		return StorageNode{}, err
 	}
-	resp, err := c.api.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetWithResponse(ctx, cluster, node)
+	resp, err := c.api.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetWithResponse(ctx, cluster, node, nil)
 	if err != nil {
 		return StorageNode{}, fmt.Errorf("get storage node %s: %w", nodeID, err)
 	}
-	// Detail is untyped in the spec; the body is a StorageNodeDTO.
+	// Detail is untyped in the spec, and the body is a StorageNodeDTO.
 	d, err := decodeBody[cpapi.StorageNodeDTO]("storage node "+nodeID, resp.StatusCode(), resp.Body)
 	if err != nil {
 		return StorageNode{}, err
@@ -105,7 +105,7 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	if err != nil {
 		return nil, fmt.Errorf("list NICs for node %s: %w", nodeID, err)
 	}
-	// The /nics body is untyped in the spec; decode its documented shape.
+	// The `/nics` body is untyped in the spec, so decode its documented shape.
 	raw, err := decodeBody[[]nicEntry]("NICs for node "+nodeID, resp.StatusCode(), resp.Body)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	return out, nil
 }
 
-// nicEntry mirrors the (untyped) /nics response element keys. Being
+// nicEntry mirrors the (untyped) `/nics` response element keys. Being
 // hand-written, it carries its constraints as `validate` struct tags rather
 // than in cpapi's rule table, and validates itself on decode the same way the
 // generated DTOs do.
@@ -129,7 +129,7 @@ type nicEntry struct {
 	Status  string `json:"Status" validate:"required"`
 }
 
-// UnmarshalJSON decodes and validates one /nics entry.
+// UnmarshalJSON decodes and validates one `/nics` entry.
 func (e *nicEntry) UnmarshalJSON(data []byte) error {
 	type plain nicEntry // shed this method, so the decode below does not recurse
 	var v plain

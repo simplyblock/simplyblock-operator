@@ -48,7 +48,7 @@ else
 fi
 
 # The available gates, in execution order.
-ALL_GATES=(spelling terminology american identifiers prose voice punctuation tables)
+ALL_GATES=(spelling terminology american identifiers prose voice counterfactual punctuation tables)
 
 gate_spelling_description="Brand name spelling and casing"
 gate_spelling() {
@@ -78,6 +78,11 @@ gate_prose() {
 gate_voice_description="Impersonal voice, without addressing the reader or the author"
 gate_voice() {
   "${PYTHON}" "${SCRIPT_DIR}/check-voice.py" "${TARGETS[@]+"${TARGETS[@]}"}"
+}
+
+gate_counterfactual_description="Design stated rather than argued against alternatives that are not on the page"
+gate_counterfactual() {
+  "${PYTHON}" "${SCRIPT_DIR}/check-counterfactual.py" "${TARGETS[@]+"${TARGETS[@]}"}"
 }
 
 gate_punctuation_description="Oxford comma, semicolon, em dash, list item punctuation, and the placement of a mark"

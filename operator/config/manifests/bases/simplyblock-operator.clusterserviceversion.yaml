@@ -123,9 +123,6 @@ spec:
       - description: QosRwIops sets the read/write IOPS limit (0 = unlimited).
         displayName: Read/Write IOPS
         path: storageClassParameters.qosRwIops
-      - description: Replicate enables replication for logical volumes.
-        displayName: Replicate By Default
-        path: storageClassParameters.replicate
       statusDescriptors:
       - description: Status is the backend lifecycle status.
         displayName: Status

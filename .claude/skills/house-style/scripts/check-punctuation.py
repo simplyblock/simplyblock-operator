@@ -10,11 +10,20 @@ Reported as a warning:
 * A **missing Oxford comma**. The last item of a series is separated by a comma
   as well: "storage nodes, volumes, and snapshots".
 * A **semicolon** joining two sentences. Two full stops are easier to read, and a
-  subordinate clause is easier still.
-* An **em dash** setting off a clause. A pair of parentheses or a comma carries
-  the same aside without the interruption.
+  subordinate clause is easier still. It survives only between items of a series
+  that already carry commas.
+* An **em dash**, or a double hyphen standing in for one. Written prose uses the
+  mark far more rarely than a generated draft does, so a page dense with them
+  reads as machine-written whatever else is true of it. One of four marks is
+  nearly always the one that was meant: a colon introduces what follows, a comma
+  joins, parentheses hold an aside, and a full stop ends the sentence.
 * An **empty pair of parentheses**, usually a macro or a name that went missing.
   What belongs inside them is not something a check can know.
+
+The semicolon and the em dash are warnings because a rare sentence genuinely
+wants one, and a check cannot tell that sentence from the many that do not.
+They are not warnings because they are minor: the expected answer to one is a
+rewrite, and keeping the mark is the case that needs a reason.
 
 Reported as an error:
 
@@ -198,17 +207,19 @@ def check_oxford_comma(prose):
 ENTITY_PATTERN = re.compile(r"&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#x[0-9A-Fa-f]+);")
 
 SEMICOLON_REASON = (
-    "Semicolon between clauses, prefer two sentences or a subordinate clause"
+    "Semicolon between clauses, write two sentences or subordinate one clause"
 )
 EM_DASH_REASON = (
-    "Em dash setting off a clause, prefer parentheses or a comma"
+    "Em dash, write the mark that was meant: a colon, a comma, "
+    "parentheses, or a full stop"
 )
 
 # "--" between words is a typed em dash and reads the same way. A "--" that opens
 # a command line option is code, and the code spans are masked out already.
 DOUBLE_HYPHEN_PATTERN = re.compile(r"(?<=\s)--(?=\s)")
 DOUBLE_HYPHEN_REASON = (
-    "Double hyphen used as a dash, prefer parentheses, a comma, or two sentences"
+    "Double hyphen used as a dash, write a colon, a comma, parentheses, "
+    "or two sentences"
 )
 
 # An item of a list starts as the sentence above it left off: upper case after a

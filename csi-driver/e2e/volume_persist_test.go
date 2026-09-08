@@ -69,7 +69,7 @@ var _ = ginkgo.Describe("SPDKCSI-VOLUME-PERSIST", func() {
 
 			ginkgo.By("delete write pod without waiting for termination")
 			// Force-delete to race NodeUnpublish against the verify pod's
-			// NodePublish — this is the edge case the test is designed to hit.
+			// NodePublish. This is the edge case the test is designed to hit.
 			zero := int64(0)
 			framework.ExpectNoError(
 				f.ClientSet.CoreV1().Pods(ns).Delete(

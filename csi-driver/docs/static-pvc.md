@@ -38,7 +38,7 @@ spec:
       targetPort: "4420"
       # transport type, TCP or RDMA
       targetType: TCP
-    # volumeHandle should be same as lvol store name(uuid)
+    # volumeHandle should be the same as the lvol store name, a UUID
     volumeHandle: aa481c21-26f8-4056-87fa-cd306f69a71e
   persistentVolumeReclaimPolicy: Retain
   storageClassName: spdkcsi-sc
@@ -78,7 +78,7 @@ spec:
       targetAddr: 127.0.0.1
       targetPort: "3260"
       targetType: iscsi
-    # volumeHandle should be same as lvol store name(uuid)
+    # volumeHandle should be the same as the lvol store name, a UUID
     volumeHandle: c0cd9559-cd6e-43b6-98af-45196e41655f
   persistentVolumeReclaimPolicy: Retain
   storageClassName: spdkcsi-sc

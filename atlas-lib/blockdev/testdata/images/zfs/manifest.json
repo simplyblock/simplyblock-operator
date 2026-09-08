@@ -1,0 +1,15 @@
+{
+  "name": "zfs",
+  "tool": "zpool",
+  "tool_version": "zfs-2.2.2-0ubuntu9.5",
+  "command": "zpool create -f <pool> <dev>",
+  "device_size": 268435456,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:46Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop20 VERSION=5000 LABEL=capture-1803416 UUID=14415501025736958502 UUID_SUB=17341260510503602242 FSBLOCKSIZE=512 BLOCK_SIZE=512 ENDIANNESS=LITTLE TYPE=zfs_member USAGE=filesystem",
+  "head_sha256": "ea8a0d792de8582715143762efd385b365c4741f2c8366812a1a810b5fd4f44a",
+  "tail_sha256": "5b130666518df797d8aeff6983025ea1d98646afc1862126e4a23a6cf7f791a0",
+  "note": "vdev labels L0 and L1 in the head region, L2 and L3 in the tail"
+}

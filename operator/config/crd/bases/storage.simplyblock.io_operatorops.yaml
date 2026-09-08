@@ -1,0 +1,277 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: operatorops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: OperatorOps
+    listKind: OperatorOpsList
+    plural: operatorops
+    shortNames:
+    - oops
+    singular: operatorops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.configRef
+      name: Config
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OperatorOps is a single operation performed against the operator itself,
+          which today means a discovery run that writes a ClusterDeploymentConfig. It
+          runs to a terminal phase and stays afterward as the audit record.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              OperatorOpsSpec is one operation to perform against the operator itself.
+
+              It carries no target reference. Every other Ops kind in this group names the
+              entity it acts on; this one acts on the operator process, which is not a
+              resource in this API group, and the absent field is the signal.
+            properties:
+              abort:
+                description: |-
+                  Abort asks a running operation to stop at its next step and unwind.
+                  Whether an abort is expressible from the current step is declared by that
+                  action's graph rather than checked here. Discovery changes nothing, so an
+                  aborted run leaves behind at most the config it had already written.
+                type: boolean
+              action:
+                description: Action is the operation to perform.
+                enum:
+                - Discover
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              discover:
+                description: Discover parameterizes action Discover.
+                properties:
+                  clusterRef:
+                    description: |-
+                      ClusterRef names an existing StorageCluster the draft grows rather than
+                      creates. It is copied to the draft's own clusterRef, so that re-running
+                      discovery after an expansion produces a growth document naming the same
+                      cluster.
+                    type: string
+                  configName:
+                    description: |-
+                      ConfigName is the ClusterDeploymentConfig to write. Absent generates one
+                      from the run's timestamp, so that a second discovery never overwrites the
+                      first, which may have been reviewed and corrected.
+                    type: string
+                  deviceFilter:
+                    description: |-
+                      DeviceFilter narrows which of an inspected worker's devices reach the
+                      draft. Empty reports every device the worker advertises, including the one
+                      it boots from, which is what the approval gate then has to catch.
+                    properties:
+                      blockAllowList:
+                        description: |-
+                          BlockAllowList restricts candidates to these device paths ("/dev/sdb").
+                          This and BlockDenyList are the block class's half of the filter, and they
+                          require EnableLogicalBlockDevices for the same reason the PCI filters
+                          forbid it.
+                        items:
+                          pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      blockDenyList:
+                        description: |-
+                          BlockDenyList excludes these device paths. On a fleet that boots from
+                          /dev/sda, this is the one entry that keeps the root disk out of every group
+                          of every draft.
+                        items:
+                          pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      driveSizeRange:
+                        description: |-
+                          DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
+                          per-class filters, it applies to whichever class the run is scanning.
+                        type: string
+                      enableLogicalBlockDevices:
+                        description: |-
+                          EnableLogicalBlockDevices scans a worker's available logical block devices
+                          instead of its available NVMe devices. It selects the class rather than
+                          adding one, because the draft a run writes describes one cluster and a
+                          cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                          26.4 does not change what a discovery run reports.
+                        type: boolean
+                      enablePartitionedDevices:
+                        description: |-
+                          EnablePartitionedDevices reports devices carrying a partition table
+                          alongside the available ones, for the administrator who knows the table is
+                          stale and intends to hand the device over anyway. It is the only one of the
+                          three availability conditions that can be waived: a mounted or otherwise
+                          busy device is never reported, because simplyblock taking it would corrupt
+                          whatever is using it.
+                        type: boolean
+                      pcieAllowList:
+                        description: |-
+                          PcieAllowList restricts candidates to these PCI addresses. This and the two
+                          PCI filters below narrow the NVMe class alone, because a logical block
+                          device has no PCI address to match, so setting any of them on a run that
+                          scans the block class is rejected by the rule on this type.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      pcieDenyList:
+                        description: |-
+                          PcieDenyList excludes these PCI addresses. On a fleet that is uniform
+                          about which slot holds the boot device, this is what keeps that device out
+                          of every group of every draft.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      pcieModel:
+                        description: PcieModel restricts candidates to devices whose
+                          PCI model string matches.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: the PCI filters select NVMe devices and cannot be combined
+                        with enableLogicalBlockDevices; use blockAllowList and blockDenyList
+                      rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                        || !(has(self.pcieAllowList) || has(self.pcieDenyList) ||
+                        has(self.pcieModel))'
+                    - message: blockAllowList and blockDenyList select logical block
+                        devices and require enableLogicalBlockDevices
+                      rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                        || !(has(self.blockAllowList) || has(self.blockDenyList))
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector restricts which workers are inspected. Empty inspects every
+                      schedulable worker.
+                    type: object
+                type: object
+            required:
+            - action
+            type: object
+          status:
+            description: OperatorOpsStatus is the observed state of one operator operation.
+            properties:
+              completedAt:
+                description: CompletedAt is when it reached a terminal phase.
+                format: date-time
+                type: string
+              configRef:
+                description: ConfigRef names the ClusterDeploymentConfig a Discover
+                  run wrote.
+                type: string
+              environment:
+                description: |-
+                  Environment is the Kubernetes distribution Inspecting concluded, which
+                  Writing copies into the draft. It is recorded here as well so that a run
+                  that failed later still says what it found.
+                enum:
+                - Vanilla
+                - OpenShift
+                - Rancher
+                - K3s
+                - Talos
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the operation moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operation's own progress.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Aborted
+                type: string
+              startedAt:
+                description: StartedAt is when the operation started.
+                format: date-time
+                type: string
+              step:
+                description: Step is the position of the running action's state machine.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'']'
+              workers:
+                description: |-
+                  Workers are the workers this run is inspecting, decided once in
+                  Inspecting so that a node joining the cluster mid-run does not change
+                  what the run is about.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -4,7 +4,7 @@
 // It holds what both consumers need and neither should re-implement. Most of it
 // is node-level storage: NVMe device discovery, NVMe-oF fabric connection
 // management, NQN handling, and the mapping between a logical volume and the
-// local NVMe namespace that backs it. The rest is the vocabulary around that —
+// local NVMe namespace that backs it. The rest is the vocabulary around that:
 // the control-plane client, the classification of a failure into what a caller
 // should do about it, and the small helpers both sides would otherwise write
 // twice.
@@ -14,9 +14,36 @@
 //	nvme            Discover and look up local NVMe controllers and namespaces.
 //	nvmeof          Connect and disconnect NVMe-oF (TCP) targets.
 //	nqn             Build and parse NVMe Qualified Names.
+//	blockdev        What a Linux block device is, and what it carries: the
+//	                reading a formatting decision rests on, plus the scan that
+//	                enumerates a host's devices and decides which are free.
+//	pci             What PCI devices a machine has and which driver owns each,
+//	                so that an NVMe controller a userspace driver holds is
+//	                visible at all: it has no block device.
+//	inventory       What there is to deploy on, in one call: CPU topology and
+//	                hyperthreading, the huge pages already allocated, the
+//	                network interfaces with their link speeds, the free disks,
+//	                and which Kubernetes distribution this is. Every reading
+//	                carries its NUMA node, and the join is per node.
+//	lvm             Run Linux LVM commands scoped to a device, and answer
+//	                content-based identity questions about them.
 //	lvol            Logical-volume identity, and lvol -> NVMe device mapping.
+//	volstack        A volume's node-side stack as ordered layers, with the
+//	                runner that brings it up and the record that makes a
+//	                half-built one removable.
+//	volstack/layers The layer implementations: the fabric, the members
+//	                composite, the three LVM layers, and the filesystem.
+//	volstack/plans  Which layers a kind of volume is brought up from, and in
+//	                what order: one constructor per plan the design names.
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
+//	link            gRPC between the operator and the CSI driver, over
+//	                connections the CSI driver opens.
+//	storage         One node's storage as one value (Accessor);
+//	                storage/storagerpc serves it over a link and reaches
+//	                another node's.
+//	prometheus      Read the telemetry simplyblock exports about itself:
+//	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
 //	errs/class      Classify a failure: the gRPC status to answer with, and
 //	                whether retrying can help.
@@ -28,12 +55,12 @@
 //	ptr             Pointers to values, for the optional fields of generated
 //	                request bodies and Kubernetes types.
 //
-// Everything under internal/ — sysfs scanning, the generated control-plane API
-// client, and build metadata — is implementation detail and carries no
+// Everything under internal/ (sysfs scanning, the generated control-plane API
+// client, and build metadata) is implementation detail and carries no
 // compatibility guarantee.
 //
 // README.md next to this file carries the worked flows both consumers actually
-// perform — the idiomatic call sequence for each, a file-level index of every
+// perform: the idiomatic call sequence for each, a file-level index of every
 // package, and a note on which patterns are already wired at a live call site.
 // Read it before writing a helper.
 //

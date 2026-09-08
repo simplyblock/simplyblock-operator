@@ -137,6 +137,7 @@ func TestParseLastSnapshotAt(t *testing.T) {
 	ts := parseLastSnapshotAt("2024-01-15T10:30:00Z")
 	if ts == nil {
 		t.Fatal("expected non-nil time for valid RFC3339 string")
+		return
 	}
 	if ts.Year() != 2024 {
 		t.Errorf("year = %d, want 2024", ts.Year())

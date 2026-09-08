@@ -1,0 +1,15 @@
+{
+  "name": "luks2",
+  "tool": "cryptsetup",
+  "tool_version": "cryptsetup 2.7.0 flags: UDEV BLKID KEYRING FIPS KERNEL_CAPI HW_OPAL ",
+  "command": "cryptsetup luksFormat --type luks2",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:48:25Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop22 VERSION=2 UUID=cba583f2-913c-4451-b8bd-239705c0d0fb TYPE=crypto_LUKS USAGE=crypto",
+  "head_sha256": "6a27eb7df53696231aa6f387c34f2f4d7964b438071e042300740f4340402472",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": "sanitized: keyslot payload zeroed from offset 4096, which is key material and does not compress"
+}

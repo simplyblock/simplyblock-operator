@@ -6,18 +6,21 @@ stale copy is a defect a reviewer can see.
 
 ## Committed artifacts
 
-| Artifact                                                                              | Generated from                                               | Regenerate with                    | CI gate                                                        |
-|---------------------------------------------------------------------------------------|--------------------------------------------------------------|------------------------------------|----------------------------------------------------------------|
-| `operator/config/crd/bases/*.yaml`                                                    | `+kubebuilder:` markers on the API types                     | `make -C operator manifests`       | `Operator: Manifests` → `git diff --exit-code`                 |
-| `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                                 | `make -C operator manifests`       | same                                                           |
-| `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers                              | `make -C operator manifests`       | same                                                           |
-| `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                                              | `make -C operator generate`        | same                                                           |
-| `operator/dist/install.yaml`                                                          | `kustomize build config/default`                             | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
-| `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                  | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
-| `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                       | `make helm-sync`                   | same                                                           |
-| `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                    | `make helm-sync`                   | same                                                           |
-| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml` + `overlay.yaml` | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
-| `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client                     | `make -C atlas-lib generate`       | same                                                           |
+| Artifact                                                                              | Generated from                                                 | Regenerate with                    | CI gate                                                        |
+|---------------------------------------------------------------------------------------|----------------------------------------------------------------|------------------------------------|----------------------------------------------------------------|
+| `operator/config/crd/bases/*.yaml`                                                    | `+kubebuilder:` markers on the API types                       | `make -C operator manifests`       | `Operator: Manifests` → `git diff --exit-code`                 |
+| `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                                   | `make -C operator manifests`       | same                                                           |
+| `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers                                | `make -C operator manifests`       | same                                                           |
+| `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                                                | `make -C operator generate`        | same                                                           |
+| `operator/dist/install.yaml`                                                          | `kustomize build config/default`                               | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
+| `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                    | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
+| `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                         | `make helm-sync`                   | same                                                           |
+| `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                      | `make helm-sync`                   | same                                                           |
+| `shared/openapi.json`                                                                 | the control plane's own FastAPI app, in a local sbcli checkout | `make openapi-sync`                | `Repo: Sync OpenAPI Spec` → a nightly pull request             |
+| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml`                    | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
+| `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client                       | `make -C atlas-lib generate`       | same                                                           |
+| `atlas-lib/link/linkv1/link{,_grpc}.pb.go`                                            | `link.proto` + `buf.gen.yaml` + `buf.yaml`                     | `make -C atlas-lib generate`       | compiles in `Atlas: Test`, **no drift gate**                   |
+| `atlas-lib/storage/storagerpc/storagev1/nvme{,_grpc}.pb.go`                           | `nvme.proto` + `buf.gen.yaml` + `buf.yaml`                     | `make -C atlas-lib generate`       | same                                                           |
 
 ---
 
@@ -45,19 +48,28 @@ stale copy is a defect a reviewer can see.
 | A deepcopy compile error after adding a field                        | `zz_generated.deepcopy.go`                                                                    | `make -C operator generate`                                     |
 | An OpenShift install shows the wrong image or misses `relatedImages` | the OLM bundle                                                                                | `make -C operator bundle` (image must be pushed)                |
 | A control-plane call sends the wrong field name                      | the atlas client                                                                              | update `shared/openapi.json`, then `make -C atlas-lib generate` |
-| A Helm release does not appear in the repo index                     | `Chart.yaml` `version:` was not bumped                                                        | bump it; the release workflow triggers on that file             |
+| A Helm release does not appear in the repo index                     | `Chart.yaml` `version:` was not bumped                                                        | bump it, since the release workflow triggers on that file       |
 
 ## Staleness rules that actually bite
 
 - **Phony targets cannot be stale.** `manifests`, `generate`, `build-installer`,
   and `helm-sync` re-run unconditionally. When their output still looks wrong,
-  the input is wrong — a missing marker, a type outside `./...`, or an edit to a
+  the input is wrong: a missing marker, a type outside `./...`, or an edit to a
   chart file that the sync script overwrites on the next run. Never hand-edit a
   file under `helm-charts/charts/simplyblock-operator/crds/` or
   `templates/roles/`.
-- **File targets can be stale.** Only `atlas-lib`'s two `.gen.go` files. Force
-  them by deleting them or by touching a prerequisite
-  (`touch shared/openapi.json`).
+- **File targets can be stale.** `atlas-lib`'s two `.gen.go` files and its four
+  `.pb.go` files. Force them by deleting them or by touching a prerequisite
+  (`touch shared/openapi.json`). For a protocol, delete the `.pb.go`: the
+  `_grpc.pb.go` half is expressed as depending on it, so one recipe rebuilds
+  both.
+- **Nothing gates the protocols.** The `.pb.go` files are committed, but no CI
+  job regenerates them and diffs, and `lint-proto` does not run in CI either. So
+  a `.proto` edited without a regeneration reaches `main` as long as the
+  previously generated code still compiles, and the mismatch surfaces only as a
+  field that silently reads as its zero value. Run
+  `make -C atlas-lib generate && git diff --exit-code` yourself when touching
+  one.
 - **`.bin` tools are cached by version.** A pinned version already present is
   never re-downloaded. Delete `.bin/<tool>*` to force it.
 - **A generator writing no diff is the success condition**, not a sign that it
@@ -98,6 +110,6 @@ request that touches `operator/**`.
   artifacts are merged into one index by
   `helm-charts/scripts/merge_helm_repos.py`.
 
-The chart's `version:` is the release trigger; `appVersion:` is `latest` and the
+The chart's `version:` is the release trigger, `appVersion:` is `latest`, and the
 component image tags live in `values.yaml`, so a new operator image needs both
 the chart `values.yaml` tag and the chart `version:` bumped.

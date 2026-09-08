@@ -2,8 +2,8 @@
 // (an io.Closer's Close, or a func() error teardown/cancel) and log any error
 // instead of silently dropping it.
 //
-// Each log records the caller that scheduled the deferred call — the function,
-// file and line — so a failing cleanup (often the sign of a leak) is visible
+// Each log records the caller that scheduled the deferred call (the function,
+// file, and line) so a failing cleanup, often the sign of a leak, is visible
 // with its origin, rather than disappearing behind `defer f.Close()`.
 //
 // Typical use:
@@ -45,7 +45,7 @@ func Close(c io.Closer) {
 
 // Run invokes fn and logs any error, annotated with the caller that scheduled
 // the deferred call. A nil fn is a no-op. Use it for teardown / cancel style
-// callbacks that return an error, e.g. `defer deferrers.Run(tx.Rollback)`.
+// callbacks that return an error, e.g., `defer deferrers.Run(tx.Rollback)`.
 func Run(fn func() error) {
 	if fn == nil {
 		return

@@ -48,7 +48,7 @@ func stubMultiNamespace(t *testing.T, shared bool, err error) {
 }
 
 // device is one namespace of a subsystem holding the given nsids, with a live
-// controller — what a scan reports for an attached volume.
+// controller, which is what a scan reports for an attached volume.
 func device(nsid nvme.NamespaceID, nsids ...nvme.NamespaceID) nvme.Device {
 	sub := nvme.Subsystem{
 		ID:          "nvme-subsys0",
@@ -88,7 +88,7 @@ func TestDetachDevice_DisconnectsAnExclusiveSubsystem(t *testing.T) {
 func TestDetachDevice_KeepsASharedSubsystem(t *testing.T) {
 	c := &recordingConnector{}
 
-	// Several namespaces attached — conclusive from sysfs, no Identify needed.
+	// Several namespaces attached, conclusive from sysfs, no Identify needed.
 	out, err := DetachDevice(context.Background(), c, device(1, 1, 2, 3))
 	if err != nil {
 		t.Fatal(err)
@@ -116,15 +116,15 @@ func TestDetachDevice_KeepsSubsystemForANamespaceAboveOne(t *testing.T) {
 }
 
 // The race the capability question closes: a subsystem provisioned to be shared
-// currently holds only this volume. Enumerating neighbours would answer "none"
-// and allow a disconnect that a namespace joining a moment later — or during the
-// teardown — turns destructive.
+// currently holds only this volume. Enumerating neighbors would answer "none"
+// and allow a disconnect that a namespace joining a moment later, or during the
+// teardown, turns destructive.
 func TestDetachDevice_KeepsAShareableSubsystemWithNoCurrentCoTenants(t *testing.T) {
 	stubMultiNamespace(t, true, nil) // max_namespaces > 1, one namespace attached
 	c := &recordingConnector{}
 
 	dev := device(1, 1)
-	if tenants, err := dev.CoTenants(context.Background()); err == nil && len(tenants) != 0 {
+	if tenants := nvme.CoTenants(dev, []nvme.Device{dev}); len(tenants) != 0 {
 		t.Fatalf("fixture must have no current co-tenants, got %d", len(tenants))
 	}
 

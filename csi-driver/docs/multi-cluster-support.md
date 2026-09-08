@@ -1,11 +1,11 @@
 ### Multi Cluster Support
 
-The Simplyblock CSI driver now offers **multi-cluster support**, allowing it to connect with multiple Simplyblock clusters. Previously, the CSI driver could only connect to a single cluster.
+The Simplyblock CSI driver now offers **multi-cluster support**, allowing it to connect with multiple simplyblock clusters. Previously, the CSI driver could only connect to a single cluster.
 
 To enable interaction with multiple clusters, we rely on two building blocks:
 
-1. **Topology-aware cluster selection (`zone_cluster_map` parameter):** A StorageClass can now expose a single parameter, `zone_cluster_map`, that maps Kubernetes zones to Simplyblock cluster IDs. When a PersistentVolumeClaim is created, the CSI controller inspects the topology selected by the scheduler (using `volumeBindingMode: WaitForFirstConsumer`) and automatically provisions the volume on the mapped cluster. This enables you to present **one** StorageClass that works across all Availability Zones.
-2. **`simplyblock-csi-secret-v2` Secret:** A Kubernetes secret that stores credentials for each configured Simplyblock cluster. The driver reads this secret to establish connections on demand.
+1. **Topology-aware cluster selection (`zone_cluster_map` parameter):** A StorageClass can now expose a single parameter, `zone_cluster_map`, that maps Kubernetes zones to simplyblock cluster IDs. When a PersistentVolumeClaim is created, the CSI controller inspects the topology selected by the scheduler (using `volumeBindingMode: WaitForFirstConsumer`) and automatically provisions the volume on the mapped cluster. This enables you to present **one** StorageClass that works across all Availability Zones.
+2. **`simplyblock-csi-secret-v2` Secret:** A Kubernetes secret that stores credentials for each configured simplyblock cluster. The driver reads this secret to establish connections on demand.
 
 
 #### Adding new cluster
@@ -74,7 +74,7 @@ type: Opaque
 
 ### Using multi cluster
 
-With the `zone_cluster_map` or `region_cluster_map` parameter you can publish a single StorageClass that targets multiple Simplyblock clusters. A minimal example:
+With the `zone_cluster_map` or `region_cluster_map` parameter you can publish a single StorageClass that targets multiple simplyblock clusters. A minimal example:
 
 #### Zone-based mapping (zone → cluster)
 
@@ -102,7 +102,7 @@ allowedTopologies:
 
 #### Region-based mapping (region → cluster)
 
-Use this when your Simplyblock backend is accessible across all zones within a region, or when you want a coarser placement policy than zones.
+Use this when your simplyblock backend is accessible across all zones within a region, or when you want a coarser placement policy than zones.
 
 ```yaml
 apiVersion: storage.k8s.io/v1
@@ -126,12 +126,12 @@ allowedTopologies:
 
 > **Tip:** The keys inside `region_cluster_map` must match the region labels present on your Kubernetes nodes (typically `topology.kubernetes.io/region`). You can include as many region as needed, each pointing to the cluster ID defined in `simplyblock-csi-secret-v2`.
 
-Stateful workloads can then rely on standard pod topology hints, for example a StatefulSet with `podAntiAffinity` that spreads replicas across zones or regions. When a PVC is created, the scheduler selects the desired zone or region, the CSI driver resolves the cluster ID from the map, and the volume is provisioned on the correct Simplyblock backend.
+Stateful workloads can then rely on standard pod topology hints, for example, a StatefulSet with `podAntiAffinity` that spreads replicas across zones or regions. When a PVC is created, the scheduler selects the desired zone or region, the CSI driver resolves the cluster ID from the map, and the volume is provisioned on the correct simplyblock backend.
 
 ### Configuring Multi Storage Cluster Support
-In addition to multi-cluster connectivity via the `simplyblock-csi-secret-v2` secret, the Simplyblock Storage Controller also supports multi storage cluster configuration using a dedicated ConfigMap named `simplyblock-clusters`.
+In addition to multi-cluster connectivity via the `simplyblock-csi-secret-v2` secret, the simplyblock Storage Controller also supports multi storage cluster configuration using a dedicated ConfigMap named `simplyblock-clusters`.
 
-This ConfigMap defines all Simplyblock clusters known to the Storage Controller and can be updated dynamically to include additional clusters as your environment grows.
+This ConfigMap defines all simplyblock clusters known to the Storage Controller and can be updated dynamically to include additional clusters as your environment grows.
 
 #### Default ConfigMap
 
@@ -154,9 +154,9 @@ data:
     }
 ```
 
-- cluster_id — The UUID of the Simplyblock cluster.
+- **`cluster_id`:** the UUID of the simplyblock cluster.
 
-- workers — A list of worker nodes associated with the cluster.
+- **`workers`:** a list of worker nodes associated with the cluster.
 
 **NB:** This can be left empty if the storage controller should auto-discover or manage workers dynamically.
 

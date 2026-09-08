@@ -6,16 +6,16 @@ document you are editing.
 
 ## File naming
 
-| Kind                          | Pattern                       | Examples                                              |
-|-------------------------------|-------------------------------|-------------------------------------------------------|
-| Design doc                    | `design-<slug>.md`            | `design-node-removal-draining.md`, `design-dhchap.md` |
-| Test plan                     | `test-plan-<slug>.md`         | `test-plan-drain-remove.md`                           |
+| Kind                          | Pattern                       | Examples                                               |
+|-------------------------------|-------------------------------|--------------------------------------------------------|
+| Design doc                    | `design-<slug>.md`            | `design-storagenode.md`, `design-dhchap.md`            |
+| Test plan                     | `test-plan-<slug>.md`         | `test-plan-storagenode.md`                             |
 | Work plan                     | `work-plan-<slug>.md`         | `work-plan-drain-remove.md`, in `operator/docs/tasks/` |
-| Scenario catalog (not a plan) | `<area>-scenario-catalog.md`  | `csi-e2e-scenario-catalog.md`                         |
-| Diagrams / images             | `designs/assets/<name>.<ext>` | `assets/crd-overview.jpg`                             |
-| Long YAML examples            | `designs/<name>.yaml`         | `cluster-config.yaml`                                 |
+| Scenario catalog (not a plan) | `<area>-scenario-catalog.md`  | `csi-e2e-scenario-catalog.md`                          |
+| Diagrams / images             | `designs/assets/<name>.<ext>` | `assets/crd-overview.jpg`                              |
+| Long YAML examples            | `designs/<name>.yaml`         | `cluster-config.yaml`                                  |
 
-The slug is lowercase, hyphenated, and describes the capability — not the CRD
+The slug is lowercase, hyphenated, and describes the capability, not the CRD
 version, not the sprint, and **not the issue number**. Issues are tracked in the
 metadata block, never in the filename: a design outlives the issue that prompted
 it, usually grows to cover several, and a filename that names one of them goes
@@ -23,7 +23,7 @@ stale the moment the second arrives (and cannot be corrected without breaking
 every link to the doc).
 
 `design-issue-130-auto-rebalancing.md` predates this rule. It keeps its name for
-link stability — do not follow it for new documents.
+link stability. Do not follow it for new documents.
 
 ## Metadata block
 
@@ -36,22 +36,22 @@ Immediately under the H1, one blank line, then two-space line breaks:
 **Author:** Christoph Engelbert (noctarius)  
 **Date:** 2026-06-02 (last updated 2026-06-17)  
 **Issue(s):** https://github.com/simplyblock/simplyblock-operator/issues/131
-**Test Plan:** [`tests/test-plan-drain-remove.md`](../tests/test-plan-drain-remove.md)
+**Test Plan:** [`tests/test-plan-storagenode.md`](../tests/test-plan-storagenode.md)
 
 ---
 ```
 
 - **Status:** one of `Draft`, `Proposed`, `Accepted`, `Partially Implemented`,
   `Phase 1 Implemented`, `Implemented`, `Superseded by <doc>`.
-- **Date:** ISO `YYYY-MM-DD`. Never replace the original date; append
+- **Date:** ISO `YYYY-MM-DD`. Never replace the original date. Append
   `(last updated YYYY-MM-DD)` or `(revised YYYY-MM-DD)`.
-- **Issue** / **Related Issues** — the only place issue numbers belong. Full
+- **Issue** / **Related Issues:** the only place issue numbers belong. Full
   URLs. For several, switch to `**Related Issues:**` followed by a bullet list of
   `[#216](https://github.com/simplyblock/simplyblock-operator/issues/216) — short description`,
   and append new ones as the design grows to cover them. The H1 title names the
-  capability, not the issue — do not write `(Issue #131)` into a new title.
+  capability, not the issue, so do not write `(Issue #131)` into a new title.
 - **Test Plan:** relative link. Add it even if the plan is written in the same
-  change; it is how readers find the coverage.
+  change, because it is how readers find the coverage.
 - **Work Plan:** relative link to `../tasks/work-plan-<slug>.md`, **added by the
   `work-plan` skill when the plan is written**, not by the change that writes the
   design. A design carries no such line until it has been split, and one that was
@@ -61,7 +61,7 @@ Immediately under the H1, one blank line, then two-space line breaks:
 ## Section structure
 
 - One `## <n>. <Title>` per top-level section, numbered from 1, `---` between them.
-- Sub-sections are `### <n>.<m> <Title>`; a third level (`####`) is fine inside
+- Sub-sections are `### <n>.<m> <Title>`. A third level (`####`) is fine inside
   an algorithm or a long sub-section but should not be numbered.
 - A `## Table of Contents` lives between the metadata block (or the phasing
   overview) and section 1, as a numbered list of anchor links:
@@ -72,17 +72,23 @@ Immediately under the H1, one blank line, then two-space line breaks:
   ```
 
   The nested bullet-list form generated by editor plugins (see
-  `design-primary-node-placement.md`) is also accepted — do not convert one form
+  `design-primary-node-placement.md`) is also accepted. Do not convert one form
   to the other in an existing doc.
 - Section numbers are an API. Once published, do not renumber to insert a
-  section — append, or use a decimal sub-section.
+  section. Append, or use a decimal sub-section.
+- **Appendices follow the numbered sections**, headed
+  `## Appendix A: \`<file>.go\`` with a colon rather than a dash, one per
+  generated file. A design specifying a CRD ends with the whole type there, and
+  the numbered sections quote from it rather than repeating it. The TOC lists them
+  under an `Appendices:` bullet list after the numbered entries, because they are
+  not numbered sections and numbering them would make the next one renumber.
 - Cross-reference sections in prose as `§5.2`, `(§9)`, `see §4`.
 
 ## External prerequisites
 
-A design that depends on something this repository does not build — a control
+A design that depends on something this repository does not build (a control
 plane (`sbcli`) API, an SPDK or storage-plane capability, a Kubernetes version, a
-kernel or distribution requirement, an ecosystem component version — collects
+kernel or distribution requirement, or an ecosystem component version) collects
 **all** of them in one `## Phase 0 — External Prerequisites` table, unnumbered,
 directly under the metadata block or the phasing overview.
 
@@ -90,7 +96,7 @@ Scattering them across the sections that need them is the failure mode: the
 control-plane flag ends up in the API section, the kernel floor in a
 compatibility subsection, the Kubernetes version in a feature-gate aside, and
 nobody can answer whether the work can start. The per-section detail stays where
-it is; the table is the index, and each row points at the section that specifies
+it is. The table is the index, and each row points at the section that specifies
 it.
 
 The same table is what the test plan refers to when it declines to test a
@@ -108,10 +114,10 @@ section, completed phases carry `✅ Complete` or `✓`.
 
 ## Diagrams
 
-ASCII box diagrams, not Mermaid — they render everywhere including `less`. Two
+ASCII box diagrams, not Mermaid, because they render everywhere including `less`. Two
 recurring shapes:
 
-**Component diagram** — outer box for the Kubernetes control plane, inner boxes
+**Component diagram:** an outer box for the Kubernetes control plane, inner boxes
 per controller with numbered responsibilities, the watched CRs listed at the
 bottom, then an arrow down to a backend box listing the exact endpoints used:
 
@@ -131,7 +137,7 @@ bottom, then an arrow down to a backend box listing the exact endpoints used:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**State machine** — a vertical flow with the transition condition on the edge and
+**State machine:** a vertical flow with the transition condition on the edge and
 the action as a trailing `←` comment:
 
 ```
@@ -152,28 +158,82 @@ design:**` or similar, is the right place for what the picture cannot show.
 
 ## Recurring tables
 
-| Section                      | Columns                                        |
-|------------------------------|------------------------------------------------|
-| Backend API Requirements     | `Method \| Endpoint \| Notes`                  |
-| Kubernetes Events            | `Event \| Type \| Reason`                      |
-| Prometheus Metrics           | `Metric \| Labels \| Description`              |
-| Failure/cancellation matrix  | `Condition \| Sub-phase (or Phase) \| Result`  |
-| Configuration                | `Field \| Type \| Default \| Description`      |
-| Annotation overrides         | `Annotation \| Values \| Effect`               |
-| Open Questions (table form)  | `# \| Question \| Owner`                       |
-| Test plan — scenario matrix  | `# \| Scenario \| Type \| Test` (see below)    |
-| Test plan — planned matrix   | `# \| Scenario`                                |
-| Test plan — coverage summary | `Class \| Scenarios \| Covered \| Not covered` |
-| Test plan — gaps             | `# \| Gap \| Reason`                           |
+| Section                     | Columns                                                                |
+|-----------------------------|------------------------------------------------------------------------|
+| Backend API Requirements    | `Method \| Endpoint \| Notes`                                          |
+| Kubernetes Events           | `Event \| Type \| Reason`, plus `On` when several kinds receive events |
+| Prometheus Metrics          | `Metric \| Labels \| Description`                                      |
+| Failure/cancellation matrix | `Condition \| Sub-phase (or Phase) \| Result`                          |
+| Configuration               | `Field \| Type \| Default \| Description`                              |
+| Annotation overrides        | `Annotation \| Values \| Effect`                                       |
+| Open Questions (table form) | `# \| Question \| Owner`                                               |
+| Test plan, scenario matrix  | `# \| Scenario \| Type \| Test` (see below)                            |
+| Test plan, planned matrix   | `# \| Scenario`                                                        |
+| Test plan, coverage summary | `Class \| Scenarios \| Covered \| Not covered`                         |
+| Test plan, gaps             | `# \| Gap \| Reason`                                                   |
+
+## Observability sections
+
+Two tables, and neither is boilerplate. `design-storagecluster.md` §10 and
+`design-node-volume-stack.md` §14 are the reference implementations.
+
+**Open with the baseline.** State whether each table is an addition to a surface
+that exists or new infrastructure, because a reviewer does something different with
+each. "The CSI node plugin emits no Kubernetes events and exposes no Prometheus
+metrics. Its entire observability surface is `klog`" says the whole section is new
+work. A design adding three reasons to a controller that already emits twelve says
+the opposite.
+
+### Kubernetes events
+
+**Name the target object and say why it is that one.** An event needs a target, and
+the choice is a design decision rather than a detail: it wants an object a user owns
+and looks at, and one that outlives whatever is being reported. A pod is usually
+wrong because it is gone before anyone looks. A PVC, or the CR itself when the CR is
+the audit record, is usually right.
+
+- **The `Event` column is the condition, not a label.** `The walk is holding
+  because a peer node is not online` rather than `Peer hold`. A reader scanning the
+  column should be able to tell what happened without opening the code.
+- **`Reason` is CamelCase, one per condition and not one per variant.** When the
+  discriminator is already a field and a print column, repeating it in the reason
+  tells a reader nothing and gives anyone alerting on the condition five reasons to
+  match instead of one: `OperationSucceeded`, not `Activated`, `Expanded`,
+  `Shutdown`, `Started`, and `Restarted`.
+- **Every blocked, held, or skipped decision owes an event.** Correct behavior that
+  looks like a hang is the case that matters most, because a walk holding for a
+  degraded cluster and a controller that has stalled are indistinguishable without
+  one.
+
+### Prometheus metrics
+
+**Design the metrics rather than reporting their absence.** A section reading "no
+metrics exist for either kind" is not an observability section. A design that
+specifies behavior specifies how that behavior is observed, and a table of metrics
+nothing exports yet is a specification like any other.
+
+Names are `simplyblock_<subsystem>_<thing>[_total|_seconds]`, matching the registry
+that exists (`simplyblock_rebalancer_migrations_total`). Carry the scope label the
+neighboring metrics carry, usually `cluster`, so one dashboard covers a
+multi-cluster deployment. Shapes follow the question: a counter for outcomes by
+result, a histogram for anything whose distribution matters more than its mean, and
+a gauge for a state that is either held or not.
+
+**Close by naming the two or three metrics that are load-bearing**, and say what
+each is the alert for. A gauge that reads one while a lock is held is how a leaked
+lock gets noticed instead of reported. A histogram of time spent holding for a peer
+is what eventually decides whether the hold needs a timeout. A metric that only
+restates what a phase already says earns no such paragraph, and probably should not
+exist.
 
 ## Test scenario matrices
 
 Scenarios are **numbered matrices, not prose lists**.
 `design-issue-130-auto-rebalancing.md` §15 is the reference implementation of the
-format — adopt its table shapes, its ID scheme, and its `Type` column.
+format. Adopt its table shapes, its ID scheme, and its `Type` column.
 
 **Scenarios live in exactly one document: the test plan.** The design doc's
-`## Testing Strategy` section is a short pointer — which classes of test apply,
+`## Testing Strategy` section is a short pointer: which classes of test apply,
 where the risk concentrates, which harness is needed, and a link. It carries no
 scenario tables and no IDs. Two copies of a scenario list means one of them is
 wrong within a month, and the design doc is the copy nobody updates.
@@ -198,10 +258,10 @@ tests, `U-P2-01…` for unit tests that only exist once Phase 2 lands. Keep the
 qualifier short and define it in the sub-section's lead-in.
 
 **IDs are permanent.** Numbers are assigned once, in order, and never reused or
-renumbered — they are cited from outside the document. New scenarios append to
+renumbered, because they are cited from outside the document. New scenarios append to
 the end of their block, even when that puts them out of thematic order. An
 obsolete scenario keeps its row and is struck through with the reason
-(`~~U-14~~ superseded by U-31`); it never vacates its number.
+(`~~U-14~~ superseded by U-31`), and it never vacates its number.
 
 ### Type column
 
@@ -212,23 +272,23 @@ Every implemented-or-required scenario row carries a `Type`:
 | `Positive`   | The documented behavior under valid input and expected state                                       |
 | `Negative`   | Invalid input, error response, exclusion, or a required no-op ("nothing should happen")            |
 | `Boundary`   | Exactly at-threshold, strict-vs-inclusive comparison, zero, empty, single element, clamped maximum |
-| `Regression` | Pins a specific previously fixed defect — cite the issue or commit in the scenario text            |
+| `Regression` | Pins a specific previously fixed defect. Cite the issue or commit in the scenario text             |
 
 Use `Positive + Negative` when one row deliberately covers a family of both
-(e.g., "zero, equal, above, below baseline; negative inputs"). A matrix with no
+(e.g., "zero, equal, above, and below baseline, plus negative inputs"). A matrix with no
 `Boundary` rows is a warning sign: thresholds, empty collections, and
 single-element clusters are where these controllers actually break.
 
 Planned-but-not-yet-required scenarios (a future phase) drop the `Type` column
-and list `# | Scenario` only — the type is decided when the work is scoped.
+and list `# | Scenario` only, because the type is decided when the work is scoped.
 
 ### Grouping and lead-ins
 
 - One top-level section per test class in the test plan, marked with its state
   where it helps: `## 1. Unit Tests`, `## 4. Unit Tests — Phase 2 (Planned)`.
 - Each class section opens with one sentence naming the harness and its
-  boundaries — "Run the full controller reconciliation loop against a mock
-  backend HTTP server and a real Kubernetes API via `envtest`" — so a reader
+  boundaries ("Run the full controller reconciliation loop against a mock
+  backend HTTP server and a real Kubernetes API via `envtest`") so a reader
   knows what a row in that table costs to run.
 - Within a class, group rows into `###` tables by unit under test or functional
   area, and back-reference the design section each group verifies:
@@ -252,22 +312,34 @@ implementing test rather than deferring to a second table:
 | U-27 | Non-online status excluded               | Negative | `TestFilterEligibleVolumes_SkipsOffline` |
 | U-30 | Expired cool-down: volume eligible again | Positive | —                                        |
 
-`—` means not implemented yet; that ID must then also appear in
-`## What Is Not Yet Covered` with the reason. Verbatim function names only —
+`—` means not implemented yet, and that ID must then also appear in
+`## What Is Not Yet Covered` with the reason. Use verbatim function names only:
 grep them, never recall them. One function may satisfy several IDs (repeat it
-across the rows); a test that satisfies no listed scenario means the matrix is
+across the rows). A test that satisfies no listed scenario means the matrix is
 missing a row, so add it rather than dropping the test.
 
 Because the matrix has one home, everything else cites the ID: the design doc's
-Testing Strategy pointer, review comments, commit messages, and — optionally but
-usefully — a leading comment in the Go test itself (`// U-27: …`).
+Testing Strategy pointer, review comments, commit messages, and, optionally but
+usefully, a leading comment in the Go test itself (`// U-27: …`).
 
 ## Code and API examples
 
 - **Go** for CRD spec/status additions: real struct, real field tags, the
   kubebuilder markers (`+optional`, `+kubebuilder:validation:…`,
-  `+kubebuilder:default=…`) and the doc comments the code will carry.
-- **YAML** for CR examples, StorageClass examples, and status snapshots.
+  `+kubebuilder:default=…`) and the doc comments the code will carry. The
+  `api-design` skill owns what those markers have to say. Two of its rules reach
+  every design document: **enum values are PascalCase** for anything this API
+  group defines (`Enum=Activate;Expand;RollingRestart`), except a value naming
+  something outside it (`Enum=ext4;xfs`), and **a boolean toggle is `enableXyz` or
+  `disableXyz`**, chosen so the zero value is the default.
+- **YAML** for CR examples, StorageClass examples, and status snapshots. An
+  example is what a reader copies, so a wrong enum value in one propagates further
+  than the same value in a Go block.
+- **A Go block in a numbered section is an excerpt, and looks like one.** Bare
+  fields with their markers, never a `type X struct {` that a reader would take
+  for the whole type. The whole type is the appendix, and it is the only copy.
+  This is also what keeps `check-crds.py --design` honest, since it reads the
+  appendices alone and a truncated type in the body would parse as a real one.
 - **Pseudocode** in a fenced block for algorithms, after the prose step list.
   Steps are written as `### Step 1 — Abort conditions`, then an
   `### Algorithm Summary` block.
@@ -279,43 +351,46 @@ usefully — a leading comment in the Go test itself (`// U-27: …`).
 
 ## Prose
 
-- Third person, present tense, declarative. "The reconciler requeues" — not
+- Third person, present tense, declarative. "The reconciler requeues": not
   "we will requeue" or "the reconciler should requeue" (unless it genuinely is a
   requirement on someone else's component).
 - The document is reference documentation about a system, not a record of the
-  conversation that designed it. The `house-style` skill owns that rule; what it
+  conversation that designed it. The `house-style` skill owns that rule, and what it
   means here is no self-changelog, no deliberation narrative, and a tense that
   follows the `Status:` line.
-- Em dashes (`—`) for asides, not double hyphens.
+- An aside goes in parentheses, or the sentence is split. Neither an em dash
+  (`—`) nor a double hyphen is the mark for it, and a bold lead-in takes a
+  colon rather than a dash. See the `house-style` skill.
 - Bold lead-ins carry the weight of a claim: `**Key change:**`,
-  `**Current behaviour:**`, `**Recommended fix:**`, `**What to verify:**`.
+  `**Current behavior:**`, `**Recommended fix:**`, `**What to verify:**`.
 - Open questions take one of two forms, consistently within a doc: prose blocks
   (`**Q1: <question>**` + a paragraph) or a `| # | Question | Owner |` table.
-  Prefer the table whenever answers are owed by other teams — the Owner column
+  Prefer the table whenever answers are owed by other teams, since the Owner column
   is what makes it actionable (`SPDK/Backend team`, a person, or `—`). Resolved
   entries are struck through in place and annotated
   (`~~**IOPS per volume from REST API**~~ **Resolved.** …`, Owner `Resolved`)
   rather than deleted, so the decision history survives.
 - Distinguish clearly between what the code does today and what the design
-  proposes. Where they differ in an already-implemented doc, that is a bug report
-  — call it out rather than describing the intent as fact.
+  proposes. Where they differ in an already-implemented doc, that is a bug
+  report: call it out rather than describing the intent as fact.
 - Existing docs mix American and British spellings (`behaviour`, `prioritise`,
-  `normalisation`). Match the document you are in; never churn a doc for spelling.
-- MegaLinter's spell check runs over the repo — new technical terms go into
+  `normalisation`). Match the document you are in, and never churn a doc for
+  spelling.
+- MegaLinter's spell check runs over the repo: new technical terms go into
   `.cspell.json`'s `words` array.
 
 ## Repo landmarks to cite accurately
 
-| What                                 | Where                                                                                                  |
-|--------------------------------------|--------------------------------------------------------------------------------------------------------|
-| CRD types                            | `operator/api/v1alpha1/`                                                                               |
-| Reconcilers                          | `operator/internal/controller/`                                                                        |
-| Control-plane HTTP client            | `operator/internal/webapi/`                                                                            |
-| Unit tests (fake client + mock HTTP) | `operator/internal/controller/*_unit_test.go`                                                          |
-| Envtest-style controller tests       | `operator/internal/controller/*_controller_test.go`                                                    |
-| Integration/e2e harness              | `test/` (`test/framework`, `test/integration/suites`) — confirm the current layout before citing paths |
-| Helm chart values                    | `helm-charts/`                                                                                         |
-| CSI driver                           | `csi-driver/`                                                                                          |
+| What                                 | Where                                                                                                 |
+|--------------------------------------|-------------------------------------------------------------------------------------------------------|
+| CRD types                            | `operator/api/v1alpha1/`                                                                              |
+| Reconcilers                          | `operator/internal/controller/`                                                                       |
+| Control-plane HTTP client            | `operator/internal/webapi/`                                                                           |
+| Unit tests (fake client + mock HTTP) | `operator/internal/controller/*_unit_test.go`                                                         |
+| Envtest-style controller tests       | `operator/internal/controller/*_controller_test.go`                                                   |
+| Integration/e2e harness              | `test/` (`test/framework`, `test/integration/suites`). Confirm the current layout before citing paths |
+| Helm chart values                    | `helm-charts/`                                                                                        |
+| CSI driver                           | `csi-driver/`                                                                                         |
 
-Verify every path and every test name you cite; several existing docs contain
+Verify every path and every test name you cite. Several existing docs contain
 stale links to a `regression_test/` tree that no longer exists at that path.

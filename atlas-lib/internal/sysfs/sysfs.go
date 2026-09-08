@@ -1,9 +1,12 @@
-// Package sysfs provides low-level access to the Linux NVMe sysfs
-// hierarchy: path-layout constants and (raw and typed) attribute-reading
-// helpers. It is
-// internal so these details stay out of the public nvme API and can change
-// freely. Package nvme builds the public Subsystem/Controller/Namespace
-// model on top of it.
+// Package sysfs provides low-level access to the Linux sysfs hierarchy:
+// path-layout constants, (raw and typed) attribute-reading helpers, and the
+// device-tree questions in paths.go. It is internal so these details stay out
+// of the public APIs built over it and can change freely.
+//
+// The layout constants below are NVMe's, because that is the hierarchy the
+// public `nvme` package builds its Subsystem/Controller/Namespace model out of.
+// The readers and the path helpers are not: class/block and class/net are the
+// same shape of tree, and `blockdev` and `inventory` read them with these.
 //
 // Observed layout (NVMe-oF/TCP, multipath, kernel 5.14 / Rocky 9):
 //
@@ -23,7 +26,7 @@
 //	  ro, hidden, dev, queue/logical_block_size, ...
 //
 // Per-controller namespace legs appear as nvmeXcYnZ under the controller
-// (e.g. nvme0c0n1); the host I/O device is the subsystem-level nvmeXnY.
+// (e.g., nvme0c0n1), and the host I/O device is the subsystem-level nvmeXnY.
 package sysfs
 
 import (
@@ -57,7 +60,7 @@ func ReadAttr(elem ...string) (string, error) {
 }
 
 // List returns the entry names of the joined directory path. A missing
-// directory yields an empty slice and no error — the common case on hosts
+// directory yields an empty slice and no error, the common case on hosts
 // with no NVMe devices.
 func List(elem ...string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(elem...))
@@ -79,7 +82,7 @@ func List(elem ...string) ([]string, error) {
 // These wrap ReadAttr with the parsing sysfs values commonly need. A
 // missing or unparsable attribute falls back to the zero value (or the
 // supplied default), matching the kernel's own "absent means unset"
-// convention; callers that must distinguish absence use ReadAttr directly.
+// convention. Callers that must distinguish absence use ReadAttr directly.
 
 // String reads a sysfs attribute and returns its trimmed contents, or the
 // empty string if the attribute is missing or unreadable.
@@ -89,7 +92,7 @@ func String(elem ...string) string {
 }
 
 // Int reads a sysfs attribute as a base-10 integer, returning def if the
-// attribute is missing or unparsable (e.g. numa_node's "-1" sentinel).
+// attribute is missing or unparsable (e.g., numa_node's "-1" sentinel).
 func Int(def int, elem ...string) int {
 	s := String(elem...)
 	if s == "" {

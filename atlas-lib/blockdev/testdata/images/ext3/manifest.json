@@ -1,0 +1,15 @@
+{
+  "name": "ext3",
+  "tool": "mkfs.ext3",
+  "tool_version": "mke2fs 1.47.0 (5-Feb-2023)",
+  "command": "mkfs.ext3 -q -F",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:34Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop2 UUID=df2779eb-c057-4237-8bf7-ea130904a90d SEC_TYPE=ext2 VERSION=1.0 FSBLOCKSIZE=4096 BLOCK_SIZE=4096 FSLASTBLOCK=16384 FSSIZE=67108864 TYPE=ext3 USAGE=filesystem",
+  "head_sha256": "8634763a75792a8ee91e8cde0e56633dbe0fbedf166e7a5dbc0d2957b78f675d",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}

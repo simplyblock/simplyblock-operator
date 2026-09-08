@@ -11,7 +11,7 @@ import (
 const maxDNSLabel = 63
 
 // Short-id alphabets. Both sets are DNS-label safe (lowercase alphanumeric).
-// The first character excludes 0 so an id never leads with a zero; the
+// The first character excludes 0 so an id never leads with a zero, and the
 // remaining characters may be any lowercase letter or digit.
 //
 //	id ~= [1-9a-z][a-z0-9]*
@@ -25,7 +25,7 @@ const (
 
 // NewShortID returns a random, DNS-label-safe identifier of length n matching
 // [1-9a-z][a-z0-9]{n-1}. It is drawn from crypto/rand, so ids are unpredictable
-// but — being random rather than derived — not guaranteed unique: callers that
+// but, being random rather than derived, not guaranteed unique: callers that
 // use it in an object name should retry on a name collision. n < 1 falls back to
 // DefaultShortIDLength.
 func NewShortID(n int) string {
@@ -49,7 +49,7 @@ func NameWithID(prefix string) string {
 // NameWithIDN returns "<prefix>-<id>" where id is a random short id of length n.
 // The prefix is lowercased and, if necessary, truncated so the whole name stays
 // within the 63-character DNS-label limit. Because the id is random (not
-// derived), the result is not guaranteed unique — callers using it as an object
+// derived), the result is not guaranteed unique, and callers using it as an object
 // name should retry with a fresh call on a name collision.
 func NameWithIDN(prefix string, n int) string {
 	if n < 1 {
@@ -75,7 +75,7 @@ func NameWithIDN(prefix string, n int) string {
 func randChar(alphabet string) byte {
 	idx, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(alphabet))))
 	if err != nil {
-		// crypto/rand should never fail; degrade deterministically rather than
+		// crypto/rand should never fail, so degrade deterministically rather than
 		// panic inside a library helper.
 		return alphabet[0]
 	}

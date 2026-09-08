@@ -34,9 +34,9 @@ func IsBlockedIP(ip net.IP) bool {
 }
 
 // ValidateExternalURL rejects URLs that are unsafe to forward to the backend:
-// - scheme must be http or https
-// - host must not be a blocked IP literal (RFC-1918, loopback, link-local)
-// - hostname must resolve and all resolved IPs must not be blocked
+// - Scheme must be `http` or `https`.
+// - Host must not be a blocked IP literal (RFC-1918, loopback, link-local).
+// - Hostname must resolve, and none of the resolved IPs may be blocked.
 func ValidateExternalURL(rawURL string) error {
 	if rawURL == "" {
 		return nil

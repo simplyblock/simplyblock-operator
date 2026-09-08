@@ -42,7 +42,35 @@ controller-gen.backend = go
 controller-gen.version = v0.21.0
 controller-gen.package = sigs.k8s.io/controller-tools/cmd/controller-gen
 
+# openapi-gen generates the OpenAPI v3 definitions the aggregated metrics API
+# server requires: since server-side apply went GA, InstallAPIGroup refuses to
+# register a group without them. The version tracks the k8s.io/kube-openapi
+# pseudo-version in operator/go.mod, because the generated code and the library
+# that consumes it share a contract.
+openapi-gen.backend = go
+openapi-gen.version = v0.0.0-20260317180543-43fb72c5454a
+openapi-gen.package = k8s.io/kube-openapi/cmd/openapi-gen
+
 # setup-envtest.version is intentionally omitted: the operator derives it from
 # its go.mod (controller-runtime release branch) and passes it explicitly.
 setup-envtest.backend = go
 setup-envtest.package = sigs.k8s.io/controller-runtime/tools/setup-envtest
+
+# Protobuf toolchain for atlas-lib's gRPC link/service definitions. buf compiles
+# the .proto files in pure Go (no protoc), then drives the two code generators,
+# which it finds on PATH -- the atlas-lib Makefile puts .bin there. All three are
+# `go` backend so nothing lands in atlas-lib/go.mod: the generated code is
+# committed, so only a regeneration needs them.
+buf.backend = go
+buf.version = v1.72.0
+buf.package = github.com/bufbuild/buf/cmd/buf
+
+# protoc-gen-go must not be newer than the google.golang.org/protobuf runtime in
+# atlas-lib/go.mod -- generated code refuses to compile against an older runtime.
+protoc-gen-go.backend = go
+protoc-gen-go.version = v1.36.11
+protoc-gen-go.package = google.golang.org/protobuf/cmd/protoc-gen-go
+
+protoc-gen-go-grpc.backend = go
+protoc-gen-go-grpc.version = v1.6.2
+protoc-gen-go-grpc.package = google.golang.org/grpc/cmd/protoc-gen-go-grpc

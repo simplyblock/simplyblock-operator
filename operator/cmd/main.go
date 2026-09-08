@@ -21,10 +21,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
+
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+
+	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -40,8 +47,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/simplyblock/atlas/link"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
+	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
@@ -66,6 +78,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -121,6 +134,34 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var csiLinkEnabled bool
+	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	flag.BoolVar(&csiLinkEnabled, "csi-link", false,
+		"Serve the CSI link: the CSI node and controller pods dial the operator and hold "+
+			"the connection, and the operator issues its RPCs back down it.")
+	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
+		"The address the CSI link endpoint binds to.")
+	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
+		"The directory that contains the CSI link serving certificate. Required with --csi-link: "+
+			"peers authenticate with bearer tokens, which must not travel in the clear.")
+	flag.StringVar(&csiLinkCertName, "csi-link-cert-name", "tls.crt",
+		"The name of the CSI link serving certificate file.")
+	flag.StringVar(&csiLinkCertKey, "csi-link-cert-key", "tls.key",
+		"The name of the CSI link serving key file.")
+	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
+		"The audience the peers' projected ServiceAccount tokens must carry.")
+
+	var enableMetricsAPI bool
+	var metricsAPIPort int
+	flag.BoolVar(&enableMetricsAPI, "enable-metrics-api", true,
+		"Serve the aggregated metrics.simplyblock.io API (LogicalVolumeMetrics). "+
+			"Disable it on a cluster where the APIService is not installed.")
+	flag.IntVar(&metricsAPIPort, "metrics-api-bind-port", metricsapi.DefaultBindPort,
+		"The HTTPS port the aggregated metrics API listens on.")
+	var prometheusURL string
+	flag.StringVar(&prometheusURL, "prometheus-url", utils.DefaultPrometheusURL,
+		"Prometheus endpoint the aggregated metrics API reads capacity samples from. "+
+			"Empty serves each volume's provisioned size with no measured values.")
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -254,6 +295,89 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The CSI link, when enabled. csiPeers is the registry of linked node and
+	// controller plugins; a reconciler reaching a node goes through it, and
+	// treats link.ErrNoSession as a requeue rather than a failure.
+	var csiPeers *link.Registry
+	if csiLinkEnabled {
+		csiPeers, err = csilink.Setup(mgr, csilink.Config{
+			BindAddress:              csiLinkAddr,
+			CertFile:                 filepath.Join(csiLinkCertPath, csiLinkCertName),
+			KeyFile:                  filepath.Join(csiLinkCertPath, csiLinkCertKey),
+			Namespace:                operatorNamespace,
+			Audiences:                []string{csiLinkAudience},
+			NodeServiceAccount:       "simplyblock-csi-node-sa",
+			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to set up the CSI link")
+			os.Exit(1)
+		}
+	}
+	_ = csiPeers // handed to reconcilers as they start using it
+
+	// Control-plane SSE push subscriptions: one leader-only manager, streams
+	// driven by scopes that reconcilers register (the StorageNode controller adds
+	// a node's scope once the node is provisioned). Devices are mirrored into
+	// StorageDevice CRs via a subscription (ingest→cache) + a reconciler
+	// (cache→CR writes).
+	streamCfg, err := subscriptions.ResolveStreamConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve control-plane stream config")
+		os.Exit(1)
+	}
+	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
+	// and StorageNode objects, and two replicas writing the same object would
+	// fight over it.
+	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
+	deviceSubscription := subscriptions.NewDeviceSubscription()
+	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
+	// One stream per cluster carries every node of it, so the cluster's own
+	// controller opens the scope while the node's controller supplies the
+	// backend-id-to-object mapping the events are named by.
+	nodeSubscription := subscriptions.NewNodeSubscription()
+	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
+	// How full a node is exists only in the metrics the control plane exports,
+	// so it comes from Prometheus rather than from the API or the stream. An
+	// endpoint that cannot be reached leaves the capacity absent from the
+	// status and everything else in it correct.
+	var nodeCapacity controller.NodeCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		nodeCapacity = provider
+	}
+	if err := (&controller.StorageDeviceReconciler{
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Devices: deviceSubscription,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
+		os.Exit(1)
+	}
+	if err := mgr.Add(cpSubscriptions); err != nil {
+		setupLog.Error(err, "unable to add control-plane subscription manager")
+		os.Exit(1)
+	}
+
+	// The volume stream is a second manager rather than another subscription on
+	// the first, because it must run on every replica: it feeds no reconciler and
+	// writes nothing, and its cache answers aggregated-API reads that arrive at
+	// whichever replica the Service picked. Leader election is a property of a
+	// Runnable, so the two elections need two managers.
+	var volumeSubscription *subscriptions.VolumeSubscription
+	var volumeScopes *cpinformer.ScopeSet
+	if enableMetricsAPI {
+		replicaSubscriptions := cpinformer.NewSubscriptionManager(
+			streamCfg, ctrl.Log.WithName("cpinformer-replica"), cpinformer.EveryReplica)
+		volumeSubscription = subscriptions.NewVolumeSubscription()
+		volumeScopes = replicaSubscriptions.AddSubscription(volumeSubscription)
+		if err := mgr.Add(replicaSubscriptions); err != nil {
+			setupLog.Error(err, "unable to add the per-replica control-plane subscription manager")
+			os.Exit(1)
+		}
+	}
+
 	if err := (&controller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -263,10 +387,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorder("storagecluster-controller"),
-		Namespace: operatorNamespace,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("storagecluster-controller"),
+		Namespace:  operatorNamespace,
+		NodeScopes: nodeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
@@ -284,9 +409,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StoragePoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagepool-controller"),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes: volumeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -370,6 +496,12 @@ func main() {
 		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
+		DeviceScopes:     deviceScopes,
+		NodeRegistries: []controller.NodeObjectRegistry{
+			deviceSubscription, nodeSubscription,
+		},
+		Nodes:    nodeSubscription,
+		Capacity: nodeCapacity,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -380,6 +512,30 @@ func main() {
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
+		os.Exit(1)
+	}
+	// The distribution a cluster runs is concluded partly from the API groups it
+	// registers, and a run without this client concludes it from the nodes
+	// alone rather than failing.
+	operatorOpsDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client; "+
+			"a discovery run will read the distribution from the nodes alone")
+	}
+
+	// The discovery run's probe Jobs run the operator's own image, so that a Job
+	// cannot be a version out of step with the operator that created it. The
+	// image is read from the environment rather than from the running pod,
+	// because a pod may name its image by a tag the registry has since moved and
+	// what a Job needs is the reference the operator was deployed with.
+	if err := (&deployment.OperatorOpsReconciler{
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
+		Discovery:  operatorOpsDiscovery,
+		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterOpsReconciler{
@@ -409,7 +565,7 @@ func main() {
 			APIClient: webapi.NewClient(),
 			K8sClient: mgr.GetClient(),
 		},
-		// Resolves each storage node's data-network IP (/nics) for the fio baseline;
+		// Resolves each storage node's data-network IP (the NICs endpoint) for the fio baseline;
 		// independent of the provisioner, so it is set for both prod and test paths.
 		APIClient: webapi.NewClient(),
 	}).SetupWithManager(mgr); err != nil {
@@ -496,6 +652,18 @@ func main() {
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 	}()
+
+	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
+	// cache above, joined to the claims that name them.
+	if enableMetricsAPI {
+		err := metricsapi.Install(
+			mgr, operatorNamespace, metricsAPIPort, volumeSubscription, prometheusURL,
+		)
+		if err != nil {
+			setupLog.Error(err, "unable to install the aggregated metrics API")
+			os.Exit(1)
+		}
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

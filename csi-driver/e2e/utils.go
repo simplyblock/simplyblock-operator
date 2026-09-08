@@ -26,9 +26,9 @@ import (
 )
 
 var (
-	// nameSpace is the value from CSI_NAMESPACE env — used only for
+	// nameSpace is the value from the CSI_NAMESPACE environment variable, used only for
 	// system-level checks (controller/node readiness) and the global log
-	// watcher in e2e.go.  Test helpers accept an explicit ns parameter so
+	// watcher in e2e.go. Test helpers accept an explicit ns parameter so
 	// each It block is isolated in its own framework-managed namespace.
 	nameSpace         string
 	storageClassName  string
@@ -46,7 +46,7 @@ const (
 	// stale operator-created one.
 	scParamClusterID = "cluster_id"
 
-	// scParamMaxNamespacePerSubsys, set to "1", gives a volume its own
+	// scParamMaxNamespacePerSubsys, set to `1`, gives a volume its own
 	// NVMe-oF subsystem so its NQN (and PV "model" attribute) carry its own
 	// lvol id instead of a shared subsystem's master lvol id.
 	scParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
@@ -98,7 +98,7 @@ func init() {
 }
 
 // newTestFramework creates a Ginkgo e2e framework and registers a BeforeEach
-// that labels the framework-managed namespace as pod-security "privileged".
+// that labels the framework-managed namespace as pod-security `privileged`.
 // This is required because framework.NewDefaultFramework creates namespaces
 // with the "restricted" PodSecurity profile enforced, which blocks our test
 // pods (alpine, running as root, no securityContext).
@@ -144,7 +144,7 @@ func applyTemplateWithStorageClass(ns, path string) error {
 }
 
 // ---------------------------------------------------------------------------
-// Deploy helpers — each takes the target namespace as first argument so that
+// Deploy helpers. Each takes the target namespace as its first argument so that
 // parallel It blocks are isolated from one another.
 // ---------------------------------------------------------------------------
 
@@ -179,7 +179,7 @@ func deployMultiPvcs(ns string) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete helpers — best-effort; log but do not fail on error so that a
+// Delete helpers, best-effort: they log but do not fail on error so that a
 // cleanup hiccup does not shadow a legitimate test failure.
 // ---------------------------------------------------------------------------
 
@@ -243,7 +243,7 @@ func deleteMultiPvcsAndTestPodWithMultiPvcs(ns string) {
 // components, not test resources, so they use the global nameSpace /
 // systemNamespace rather than a per-It namespace.
 //
-//nolint:unparam // e2e helper; timeout kept for call-site readability
+//nolint:unparam // e2e helper, timeout kept for call-site readability
 func waitForControllerReady(c kubernetes.Interface, timeout time.Duration) error {
 	ns := nameSpace
 	if operatorMode {
@@ -263,7 +263,7 @@ func waitForControllerReady(c kubernetes.Interface, timeout time.Duration) error
 	return nil
 }
 
-//nolint:unparam // e2e helper; timeout kept for call-site readability
+//nolint:unparam // e2e helper, timeout kept for call-site readability
 func waitForNodeServerReady(c kubernetes.Interface, timeout time.Duration) error {
 	ns := nameSpace
 	if operatorMode {
@@ -284,7 +284,7 @@ func waitForNodeServerReady(c kubernetes.Interface, timeout time.Duration) error
 }
 
 // waitForTestPodReady polls until podName in ns is Running with every
-// container reporting Ready, or until timeout.  It returns immediately with
+// container reporting Ready, or until timeout. It returns immediately with
 // an error if the pod enters a terminal phase (Failed/Succeeded).
 func waitForTestPodReady(c kubernetes.Interface, timeout time.Duration, ns, podName string) error {
 	err := wait.PollUntilContextTimeout(context.Background(), 3*time.Second, timeout, true,
@@ -459,7 +459,7 @@ func resizePVC(c kubernetes.Interface, ns, pvcName string, newSize resource.Quan
 	})
 }
 
-//nolint:unparam // e2e helper; size kept for call-site readability
+//nolint:unparam // e2e helper, size kept for call-site readability
 func createPVC(c kubernetes.Interface, ns, pvcName, scName string, size int64) error {
 	_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(context.Background(), &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pvcName},
@@ -530,7 +530,7 @@ func execCommandInPod(f *framework.Framework, cmd, ns string, opt *metav1.ListOp
 // match otherwise). Use it inside polling assertions where the pod may be
 // mid-restart or its volume momentarily unreadable.
 //
-//nolint:unparam // shared helper; stdout is part of the (stdout, stderr, err) contract
+//nolint:unparam // shared helper, stdout is part of the (stdout, stderr, err) contract
 func execCommandInPodE(f *framework.Framework, cmd, ns string, opt *metav1.ListOptions) (string, string, error) {
 	podList, err := e2epod.PodClientNS(f, ns).List(context.Background(), *opt)
 	if err != nil {
@@ -757,7 +757,7 @@ func createStorageClassWithParams(c kubernetes.Interface, scName string, extraPa
 }
 
 // createStorageClassWithParamsAndLabels is like createStorageClassWithParams but
-// also sets metadata labels on the StorageClass (e.g. the guardian
+// also sets metadata labels on the StorageClass (e.g., the guardian
 // auto-restart-on-pathloss opt-in).
 func createStorageClassWithParamsAndLabels(
 	c kubernetes.Interface,
@@ -804,7 +804,7 @@ func liveClusterID(f *framework.Framework) string {
 }
 
 // createFilesystemTestPod creates a single alpine pod that mounts pvcName as a
-// filesystem at /spdkvol, labelled app=appLabel. It mirrors templates/testpod.yaml
+// filesystem at /spdkvol, labeled app=appLabel. It mirrors templates/testpod.yaml
 // but lets callers point the PVC at a test-owned StorageClass.
 func createFilesystemTestPod(c kubernetes.Interface, ns, podName, appLabel, pvcName string) error {
 	_, err := c.CoreV1().Pods(ns).Create(context.Background(), &corev1.Pod{
@@ -906,7 +906,7 @@ func createPodForPVC(c kubernetes.Interface, ns, podName, pvcName string) error 
 	return err
 }
 
-// deletePodByName deletes a pod by name; logs but does not fail on error.
+// deletePodByName deletes a pod by name. It logs but does not fail on error.
 func deletePodByName(c kubernetes.Interface, ns, podName string) {
 	if err := c.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{}); err != nil {
 		framework.Logf("failed to delete pod %s: %v", podName, err)
@@ -914,14 +914,15 @@ func deletePodByName(c kubernetes.Interface, ns, podName string) {
 }
 
 // ---------------------------------------------------------------------------
-// Reconnect helpers — shared by the SPDKCSI-RECONNECT-* specs.
+// Reconnect helpers, shared by the SPDKCSI-RECONNECT-* specs.
 // ---------------------------------------------------------------------------
 
 // poolNameForTests resolves the storage pool the reconnect tests should use for
-// directly-created (unmanaged) volumes. It prefers E2E_SB_POOL, then the
+// directly created (unmanaged) volumes. It prefers E2E_SB_POOL, then the
 // pool_name of the StorageClass under test (guaranteed to exist on this
-// cluster), then POOL_NAME. It never returns "" — as a last resort it falls back
-// to "testing1" so misconfiguration surfaces as a clear "pool not found".
+// cluster), then POOL_NAME. It never returns an empty string: as a last resort
+// it falls back
+// to `testing1` so misconfiguration surfaces as a clear `pool not found`.
 func poolNameForTests(c kubernetes.Interface) string {
 	if p := os.Getenv("E2E_SB_POOL"); p != "" {
 		return p

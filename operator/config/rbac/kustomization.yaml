@@ -24,6 +24,12 @@ resources:
 # StorageClusters and Pools in their namespace, and nothing outside it.
 - aggregate_view_role.yaml
 - aggregate_edit_role.yaml
+# The aggregated metrics API: the two bindings that let it delegate
+# authentication and authorization to the kube-apiserver, and the view
+# aggregation that lets a namespace tenant read their own volumes' capacity.
+- metrics_apiserver_auth_delegator_binding.yaml
+- metrics_apiserver_extension_reader_binding.yaml
+- metrics_apiserver_aggregate_view_role.yaml
 # The Kubebuilder scaffold also produces "Admin", "Editor" and "Viewer" ClusterRoles
 # for the remaining CRDs below. Those are not consumed by the operator itself.
 # They will be replaced with aggregation roles in a follow-up; until then they

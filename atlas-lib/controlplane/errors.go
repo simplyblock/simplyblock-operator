@@ -14,7 +14,7 @@ import (
 // The status is kept as a value rather than folded into a message because what a
 // caller should do next depends on it: 503 is worth retrying, 400 never is. That
 // decision belongs to the shared classifier (package errs/class), which reads the
-// status through the HTTPStatus method — so classifying a status the client has
+// status through the HTTPStatus method, so classifying a status the client has
 // never seen before needs no change here.
 //
 // Where a status has a sentinel meaning, StatusError unwraps to it, so callers
@@ -23,11 +23,11 @@ import (
 //	404 -> errs.ErrNotFound
 //	409 -> errs.ErrAlreadyExists
 type StatusError struct {
-	// Op names the resource or operation that failed, e.g. `storage node "abc"`.
+	// Op names the resource or operation that failed, e.g., `storage node "abc"`.
 	Op string
 	// StatusCode is the HTTP status the control plane returned.
 	StatusCode int
-	// Body is the response body, trimmed — usually the control plane's own
+	// Body is the response body, trimmed, and usually the control plane's own
 	// error message.
 	Body string
 }
@@ -46,7 +46,7 @@ func (e *StatusError) Error() string {
 func (e *StatusError) HTTPStatus() int { return e.StatusCode }
 
 // Unwrap returns the atlas sentinel this status stands for, or nil when it has
-// none — so errors.Is(err, errs.ErrNotFound) holds for a 404 without the caller
+// none, so errors.Is(err, errs.ErrNotFound) holds for a 404 without the caller
 // knowing anything about HTTP.
 func (e *StatusError) Unwrap() error {
 	switch e.StatusCode {
@@ -59,7 +59,7 @@ func (e *StatusError) Unwrap() error {
 }
 
 // respError turns a non-success control-plane response into a *StatusError. what
-// names the resource or operation, e.g. `storage node "abc"`.
+// names the resource or operation, e.g., `storage node "abc"`.
 func respError(what string, code int, body []byte) error {
 	return &StatusError{
 		Op:         what,

@@ -1,0 +1,28 @@
+{{- if .Values.csiLink.enabled }}
+# The endpoint the CSI node and controller pods dial to reach the operator.
+#
+# The connection runs this way round on purpose: nothing listens on a node, so
+# the deployment needs no per-node ingress, no address discovery, and no
+# NetworkPolicy beyond a pod reaching a Service. The operator issues its RPCs
+# back down the connection the CSI pod opened.
+#
+# The Service selects every operator replica, not only the leader — a follower
+# accepts the connection and answers the handshake with Unavailable, and the
+# agent redials until it lands on the replica that is leading.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.csiLink.serviceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: simplyblock-operator
+spec:
+  type: ClusterIP
+  selector:
+    app: simplyblock-operator
+  ports:
+    - name: csi-link
+      port: {{ .Values.csiLink.port }}
+      targetPort: csi-link
+      protocol: TCP
+{{- end }}

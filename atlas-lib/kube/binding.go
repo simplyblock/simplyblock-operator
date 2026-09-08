@@ -9,12 +9,12 @@ import (
 
 // Binding is the resolved cross-resource view of one logical volume: its
 // identity plus the Kubernetes objects currently representing it. Zero
-// values mean "not bound / not attached".
+// values mean "not bound / not attached."
 type Binding struct {
 	VolumeHandle          lvol.VolumeHandle    // == PV.Spec.CSI.VolumeHandle
 	PersistentVolumeName  string               // PersistentVolumeName name
-	PersistentVolumeClaim types.NamespacedName // bound claim; zero if unbound
-	Node                  string               // node it is attached to; empty if none
+	PersistentVolumeClaim types.NamespacedName // bound claim, zero if unbound
+	Node                  string               // node it is attached to, empty if none
 	Attached              bool                 // VolumeAttachment reports Status.Attached
 }
 

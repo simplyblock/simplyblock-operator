@@ -28,7 +28,7 @@ var _ = ginkgo.Describe("SPDKCSI-CLONE", func() {
 		writeDataToPod(f, ns, &testPodLabel, "Data that needs to be stored", "/spdkvol/test")
 
 		// The clone API requires the source PVC to not be in use while cloning
-		// on some backends.  Delete the test pod and wait for full termination
+		// on some backends. Delete the test pod and wait for full termination
 		// before creating the clone so there is no ambiguity about which pod
 		// the label selector resolves to during verification.
 		ginkgo.By("delete source test pod before cloning")

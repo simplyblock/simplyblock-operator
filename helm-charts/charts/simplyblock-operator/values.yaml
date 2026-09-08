@@ -58,10 +58,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
-  mgmtAPI:
-    repository: quay.io/simplyblock-io/python
-    tag: "3.9-slim"
-    pullPolicy: Always
 serviceAccount:
   # Specifies whether a serviceAccount should be created
   create: true
@@ -118,9 +114,6 @@ csiConfig:
 csiSecret:
   simplybk:
     secret:
-  simplybkPvc:
-    crypto_key1: N2IzNjk1MjY4ZTJhNjYxMWEyNWFjNGIxZWUxNWYyN2Y5YmY2ZWE5NzgzZGFkYTY2YTRhNzMwZWJmMDQ5MmJmZA==
-    crypto_key2: Nzg1MDU2MzZjODEzM2Q5YmU0MmUzNDdmODI3ODViODFhODc5Y2Q4MTMzMDQ2ZjhmYzBiMzZmMTdiMDc4YWQwYw==
 
 logicalVolume:
   pool_name: testing1
@@ -129,12 +122,9 @@ logicalVolume:
   qos_r_mbytes: "0"
   qos_w_mbytes: "0"
   max_size: "0"
-  compression: "False"
   encryption: "False"
-  replicate: "False"
   numDataChunks: "1"
   numParityChunks: "1"
-  lvol_priority_class: "0"
   max_namespace_per_subsys: "1"
   tune2fs_reserved_blocks: "0"
   fabric: tcp
@@ -149,11 +139,6 @@ benchmarks: 0
 # FIXME: this will not work if there are group of nodes with different AMI types like: AL2, AL2023
 # AL2_x86_64: eth0
 # AL2023_x86_64_STANDARD: ens5
-
-# not recommended to use it in production, use it only for testing purposes
-# automatic cluster activate is disabled by default because of core isolation
-# set this to true if you want to activate the cluster automatically after the NDCS + NPCS + 1 storage nodes ares up and running.
-autoClusterActivate: false 
 
 node:
   serviceAccountAuth:
@@ -260,8 +245,93 @@ controlplane:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
       pullPolicy: IfNotPresent
+      # Alert rules derived from the control plane's cluster event log rather
+      # than from Thanos. The event log carries what the metrics cannot: the
+      # transition a node, device, or cluster made, and therefore whether an
+      # operator asked for it. Reading it needs a REST data source, which is
+      # what the Infinity plugin below provides.
+      eventAlerts:
+        enabled: false
+        # Every rule reads the newest `logLimit` records of the event log and
+        # folds them into the current state of each node, device, and cluster.
+        # A limit too low silently heals an alert whose opening transition has
+        # scrolled out of the window, so raise it on a cluster that produces
+        # events quickly; every rule evaluation pays for it in one request.
+        logLimit: 1000
+        # How often the rules run, and how long a condition must hold before it
+        # notifies. Both are Grafana durations.
+        interval: 1m
+        for: 1m
+        plugin:
+          # The Grafana image this chart deploys is a plain upstream mirror with
+          # no plugins in it, and /var/lib/grafana is an emptyDir, so the plugin
+          # is fetched on every pod start. Grafana's entrypoint reads
+          # GF_INSTALL_PLUGINS as a URL, a semicolon, and an install folder.
+          #
+          # 2.12.2 is the last Infinity release whose grafanaDependency
+          # (>=9.5.15) admits the Grafana 10.0.12 pinned above; every release
+          # still in the plugin catalog requires >=10.4.8. Moving Grafana
+          # forward is what unpins this.
+          url: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/2.12.2/download"
+          # Set to true once the plugin is baked into the Grafana image, which
+          # is what an air-gapped or restart-sensitive install wants: the
+          # download is ~74 MB and repeats on every pod start.
+          preinstalled: false
       endpoint: ""
-      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+      # Receivers Grafana provisions into the "grafana-alerts" contact point.
+      # Every enabled channel is notified for every simplyblock alert. With none
+      # of them enabled, no contact point and no notification policy are
+      # provisioned, and Grafana's own default policy stays in place.
+      #
+      # The credentials below are rendered into the simplyblock-grafana-alerting
+      # ConfigMap, so read access to the release namespace is read access to
+      # them.
+      notifications:
+        slack:
+          enabled: false
+          # Incoming webhook URL of the channel the alerts are posted to.
+          url: ""
+        teams:
+          # Microsoft Teams, through an incoming webhook or a workflow URL.
+          enabled: false
+          url: ""
+        pagerduty:
+          enabled: false
+          # Integration key of an Events API v2 service.
+          integrationKey: ""
+          # One of info, warning, error, or critical.
+          severity: "critical"
+          # Optional PagerDuty event fields, left to PagerDuty's defaults when
+          # empty. Every one of them accepts a Grafana notification template.
+          class: ""
+          component: ""
+          group: ""
+        opsgenie:
+          enabled: false
+          apiKey: ""
+          # https://api.eu.opsgenie.com/v2/alerts for accounts in the EU region.
+          apiUrl: "https://api.opsgenie.com/v2/alerts"
+          # Close the Opsgenie alert when the Grafana alert resolves.
+          autoClose: true
+          # Derive the Opsgenie priority from an og_priority alert label.
+          overridePriority: false
+          # How alert labels are carried over: tags, details, or both.
+          sendTagsAs: "tags"
+        webhook:
+          # Generic receiver, sent Grafana's own alert JSON payload unmodified.
+          enabled: false
+          url: ""
+          # POST or PUT.
+          httpMethod: "POST"
+          # Basic authentication. Left out of the request when username is empty.
+          username: ""
+          password: ""
+          # Authorization header, as an alternative to basic authentication:
+          # scheme "Bearer" with the token as the credentials, for example.
+          authorizationScheme: ""
+          authorizationCredentials: ""
+          # Cap on the alerts in a single notification. 0 sends all of them.
+          maxAlerts: 0
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
@@ -367,6 +437,54 @@ controlplane:
 operator:
   enabled: true
   openShiftCluster: true
+
+# The CSI link: the CSI node and controller pods dial the operator and hold the
+# connection open, so the operator can query a node's storage state without
+# anything listening on the node. Off by default; it needs a serving
+# certificate, which is why it is not simply on.
+csiLink:
+  enabled: false
+
+  # Port the operator listens on, and the Service that fronts it.
+  port: 9500
+
+  # Secret holding the operator's serving certificate (keys tls.crt / tls.key).
+  # Its SANs must cover the service name below. With cert-manager, point a
+  # Certificate at this Secret.
+  certSecret: simplyblock-csi-link-cert
+
+  # Name the CSI pods verify against that certificate, and dial.
+  serviceName: simplyblock-csi-link
+
+  # CA bundle that signs the certificate, as a ConfigMap key. Leave the
+  # ConfigMap empty to fall back to the system roots (only right for a
+  # publicly rooted certificate).
+  caConfigMap: simplyblock-csi-link-ca
+  caKey: ca.crt
+
+  # Audience the CSI pods' projected tokens carry, and the operator requires. A
+  # token bound to no particular audience is one anything holding it can replay
+  # against the operator.
+  audience: simplyblock-csi-link
+# The aggregated metrics API, served by the operator at
+# metrics.simplyblock.io/v1alpha1. It publishes LogicalVolumeMetrics: the space
+# each logical volume actually occupies, read with
+# `kubectl get lvm -n <namespace>` and confined to a tenant's own claims by
+# ordinary namespaced RBAC.
+#
+# Disabling it removes the APIService, the Service, and the delegated-auth
+# bindings, and starts the operator with --enable-metrics-api=false. Nothing else
+# depends on it: no reconciler reads the readings, and no volume behaves
+# differently when it is off.
+metricsAPI:
+  enabled: true
+  # The container port the kube-apiserver is proxied to. Change it only on a
+  # conflict; the Service and the APIService follow this value.
+  port: 6443
+  # Where the capacity samples are read from. A logical volume's used size is
+  # not in the control plane's own API, only in the metrics it exports, so an
+  # empty value serves each volume's provisioned size and nothing measured.
+  prometheusURL: http://simplyblock-prometheus:9090
 
 mongodb-kubernetes:
   name: "simplyblock-mongodb"

@@ -1,0 +1,55 @@
+# The smallest discovery run that does anything.
+#
+# It inspects every schedulable worker no StorageNode already runs on, probes
+# each one, and writes a ClusterDeploymentConfig named discovered-<this run> in
+# Draft. It changes nothing else: the draft is inert until somebody sets
+# spec.approved on it.
+#
+#   kubectl apply -f storage_v1alpha2_operatorops.yaml
+#   kubectl get oops discover-now -w
+#   kubectl get cdc
+#
+# A narrowed run looks like the commented block at the bottom.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-now
+  namespace: simplyblock
+spec:
+  action: Discover
+---
+# The same run, narrowed to the workers and devices somebody intends to use.
+#
+# The filters are inputs to the run and are not written into the draft: what
+# lands there is the explicit device list they produced, so re-running the
+# filter later against changed hardware cannot change what a reviewer already
+# approved.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-rack-b
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    # The document to write. Absent, the run names it after itself, so that a
+    # second discovery never overwrites the first.
+    configName: rack-b-draft
+
+    # Only these workers are inspected. Empty inspects every schedulable one.
+    nodeSelector:
+      simplyblock.io/storage: "true"
+
+    deviceFilter:
+      # The slot the fleet boots from, kept out of every group of the draft.
+      pcieDenyList:
+        - "0000:00:1f.0"
+
+      # Only the disks of the size this deployment was bought for.
+      driveSizeRange: 1T-4T
+
+      # Report disks carrying a stale partition table alongside the free ones.
+      # It is the only availability condition that can be waived: a mounted or
+      # otherwise busy device is never reported, because simplyblock taking it
+      # would corrupt whatever is using it.
+      enablePartitionedDevices: true

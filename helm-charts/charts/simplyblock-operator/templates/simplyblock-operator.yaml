@@ -51,6 +51,19 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            {{- if .Values.csiLink.enabled }}
+            - --csi-link
+            - --csi-link-bind-address=:{{ .Values.csiLink.port }}
+            - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
+            - --csi-link-audience={{ .Values.csiLink.audience }}
+            {{- end }}
+            {{- if .Values.metricsAPI.enabled }}
+            - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
+            - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}
+            {{- else }}
+            # No APIService routes to it, so do not open the port at all.
+            - --enable-metrics-api=false
+            {{- end }}
           env:
             - name: WATCH_NAMESPACE
               valueFrom:
@@ -62,6 +75,14 @@ spec:
                   fieldPath: spec.nodeName
             - name: SIMPLYBLOCK_REBALANCER_IMAGE
               value: "{{ .Values.image.rebalancer.repository }}:{{ .Values.image.rebalancer.tag | default .Values.image.operator.tag }}"
+            # The worker probe a discovery run creates as a Job per worker. It is
+            # this same image: the probe binary ships in it beside the manager, so
+            # a Job cannot be a version out of step with the operator that created
+            # it. The operator cannot read this off its own pod, because a pod's
+            # spec names whatever tag it was deployed with and a registry may have
+            # moved it since.
+            - name: SB_NODEPROBE_IMAGE
+              value: "{{ .Values.image.operator.repository }}:{{ .Values.image.operator.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:
@@ -80,9 +101,27 @@ spec:
             # (including /tmp) is read-only, so this must be a writable volume.
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: webhook-certs
+            {{- if .Values.csiLink.enabled }}
+            - mountPath: /etc/simplyblock/csi-link-certs
+              name: csi-link-certs
+              readOnly: true
+            {{- end }}
+            {{- if .Values.metricsAPI.enabled }}
+            # Same arrangement as the webhook cert above, for the same reason:
+            # cert-controller writes the aggregated API's serving cert only into
+            # its Secret and then waits for it to appear here.
+            - mountPath: /tmp/k8s-metrics-apiserver/serving-certs
+              name: metrics-apiserver-certs
+            {{- end }}
             {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
+          {{- if .Values.csiLink.enabled }}
+          ports:
+            - containerPort: {{ .Values.csiLink.port }}
+              name: csi-link
+              protocol: TCP
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -95,6 +134,12 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- if .Values.metricsAPI.enabled }}
+          ports:
+            - name: metrics-api
+              containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+          {{- end }}
       volumes:
         # Self-signed mode (cert-controller) only writes the serving cert to the
         # webhook-server-cert Secret, so that Secret must be mounted here for the
@@ -103,6 +148,15 @@ spec:
         # optional:true lets the pod start before the operator creates/populates it.
         # In cert-manager mode the operator writes the issued cert to disk itself,
         # so a writable emptyDir is required there instead.
+        {{- if .Values.csiLink.enabled }}
+        # The link carries bearer tokens, so it is TLS-only. The Secret is
+        # supplied by the deployer (a cert-manager Certificate, say); its SANs
+        # must cover .Values.csiLink.serviceName, which is the name the CSI
+        # pods verify against.
+        - name: csi-link-certs
+          secret:
+            secretName: {{ .Values.csiLink.certSecret }}
+        {{- end }}
         - name: webhook-certs
           {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
           emptyDir: {}
@@ -111,6 +165,14 @@ spec:
             secretName: webhook-server-cert
             optional: true
           {{- end }}
+        {{- if .Values.metricsAPI.enabled }}
+        # optional:true lets the pod start before the operator has created and
+        # populated the Secret; kubelet syncs the files in once it exists.
+        - name: metrics-apiserver-certs
+          secret:
+            secretName: metrics-apiserver-cert
+            optional: true
+        {{- end }}
         {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
         {{- end }}

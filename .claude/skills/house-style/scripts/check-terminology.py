@@ -431,8 +431,16 @@ def expected_spelling(found):
 # because the phrase is a proper name rather than a use of the term. "Arm" is the
 # company and "ARM" is the architecture, and every file carrying the upstream
 # Apache header names the company.
+#
+# A Go package clause is the second such phrase. The name behind "package" is an
+# identifier the compiler resolves, and godoc mandates it verbatim as the opening
+# words of a package comment, so "Package nvme discovers ..." cannot be written
+# any other way and backticks around it would reach pkg.go.dev as literal
+# characters. The rule the list already states covers it: a name is spelled the
+# way its owner spells it, and the owner here is the package.
 EXEMPT_PHRASES = [
     re.compile(r"\bArm\s+(?:Limited|Ltd\.?|Holdings)\b"),
+    re.compile(r"\b[Pp]ackage\s+[a-z][a-z0-9]*\b"),
 ]
 
 

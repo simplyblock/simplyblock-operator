@@ -2,36 +2,72 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
-	"github.com/simplyblock/atlas/lvol"
 )
 
-// VolumeMigration is a migration of a volume between storage nodes.
-type VolumeMigration struct {
-	ID            string
+// MigrationKind is what one migration moves.
+//
+// The control plane decides it rather than the caller: a subsystem configured
+// for several namespaces migrates as one coordinated group, and one configured
+// for a single namespace migrates that volume. A request therefore names a
+// target node and nothing about the shape, and the answer says which was made.
+type MigrationKind string
+
+const (
+	// MigrationOfVolume moves one volume, and reports its snapshot progress.
+	MigrationOfVolume MigrationKind = "volume"
+
+	// MigrationOfSubsystem moves every namespace of one subsystem together, and
+	// reports how many members that is rather than any one volume's progress.
+	MigrationOfSubsystem MigrationKind = "subsystem"
+)
+
+// Migration is a migration between storage nodes, of either kind.
+//
+// The two shapes are one type because they arrive from one endpoint, in one
+// list, under one id, and a caller that asked for a migration by id cannot know
+// in advance which came back. Kind says which, and the fields it does not apply
+// to are the zero value.
+type Migration struct {
+	Kind MigrationKind
+
+	ID           string
+	SourceNodeID string
+	TargetNodeID string
+	Phase        string
+	Status       string
+	ErrorMessage string
+
+	// LvolID and the progress counters describe a volume's migration, and are
+	// empty for a subsystem's: a group has no single volume whose snapshots
+	// could be counted.
 	LvolID        string
-	SourceNodeID  string
-	TargetNodeID  string
-	Phase         string
-	Status        string
-	ErrorMessage  string
 	RetryCount    int
 	MaxRetries    int
 	SnapsMigrated int
 	SnapsTotal    int
+
+	// TargetNQN, MemberCount, and ClusterID describe a subsystem's migration:
+	// the subsystem the members land on, and how many there are.
+	TargetNQN   string
+	MemberCount int
+	ClusterID   string
 }
 
-func volumeMigrationFromDTO(d cpapi.MigrationDTO) VolumeMigration {
-	return VolumeMigration{
+func volumeMigration(d cpapi.MigrationDTO) Migration {
+	return Migration{
+		Kind:          MigrationOfVolume,
 		ID:            d.Id.String(),
-		LvolID:        d.LvolId,
 		SourceNodeID:  d.SourceNodeId,
 		TargetNodeID:  d.TargetNodeId,
 		Phase:         d.Phase,
 		Status:        d.Status,
 		ErrorMessage:  d.ErrorMessage,
+		LvolID:        d.LvolId,
 		RetryCount:    d.RetryCount,
 		MaxRetries:    d.MaxRetries,
 		SnapsMigrated: d.SnapsMigrated,
@@ -39,52 +75,115 @@ func volumeMigrationFromDTO(d cpapi.MigrationDTO) VolumeMigration {
 	}
 }
 
-// ListVolumeMigrations returns the migrations of the volume identified by h.
-func (c *Client) ListVolumeMigrations(ctx context.Context, h lvol.VolumeHandle) ([]VolumeMigration, error) {
-	cluster, pool, volume, err := h.Split()
+func subsystemMigration(d cpapi.BatchMigrationDTO) Migration {
+	return Migration{
+		Kind:         MigrationOfSubsystem,
+		ID:           d.Id.String(),
+		SourceNodeID: d.SourceNodeId,
+		TargetNodeID: d.TargetNodeId,
+		Phase:        d.Phase,
+		Status:       d.Status,
+		ErrorMessage: d.ErrorMessage,
+		TargetNQN:    d.TargetNqn,
+		MemberCount:  d.MemberCount,
+		ClusterID:    d.ClusterId,
+	}
+}
+
+// migrationFromJSON reads whichever shape arrived.
+//
+// The kind is decided on a field the other shape does not have rather than on
+// whether a decode succeeds, because both decode: JSON ignores the fields it
+// does not recognize and zeroes the ones it does not find, so a group read as a
+// volume's migration is a migration of volume "" with no snapshots, which reads
+// as a finished one.
+func migrationFromJSON(what string, raw json.RawMessage) (Migration, error) {
+	var probe struct {
+		LvolID      *string `json:"lvol_id"`
+		MemberCount *int    `json:"member_count"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return Migration{}, fmt.Errorf("%s: decode migration: %w", what, err)
+	}
+
+	switch {
+	case probe.LvolID != nil:
+		var d cpapi.MigrationDTO
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return Migration{}, fmt.Errorf("%s: decode a volume's migration: %w", what, err)
+		}
+		return volumeMigration(d), nil
+	case probe.MemberCount != nil:
+		var d cpapi.BatchMigrationDTO
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return Migration{}, fmt.Errorf("%s: decode a subsystem's migration: %w", what, err)
+		}
+		return subsystemMigration(d), nil
+	default:
+		// A body that deserialized and carries neither key is the version skew
+		// errs.ErrInvalidResponse names, and it classifies the same way every
+		// other unreadable response does: retrying will not help.
+		return Migration{}, fmt.Errorf(
+			"%w: %s: neither a volume's migration, which carries lvol_id, nor a "+
+				"subsystem's, which carries member_count", errs.ErrInvalidResponse, what)
+	}
+}
+
+// ListMigrations returns the migrations of the subsystem with the given NQN,
+// of both kinds, as the control plane returns them.
+func (c *Client) ListMigrations(ctx context.Context, clusterID, nqn string) ([]Migration, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGetWithResponse(ctx, cluster, pool, volume)
+	resp, err := c.api.ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGetWithResponse(
+		ctx, cluster, nqn)
 	if err != nil {
-		return nil, fmt.Errorf("list migrations for volume %s: %w", h, err)
+		return nil, fmt.Errorf("list migrations of subsystem %s: %w", nqn, err)
 	}
-	ds, err := payload("migrations for volume "+string(h), resp.JSON200, resp.StatusCode(), resp.Body)
+	what := "migrations of subsystem " + nqn
+	raws, err := decodeBody[[]json.RawMessage](what, resp.StatusCode(), resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]VolumeMigration, 0, len(*ds))
-	for _, d := range *ds {
-		out = append(out, volumeMigrationFromDTO(d))
+	out := make([]Migration, 0, len(raws))
+	for _, raw := range raws {
+		m, err := migrationFromJSON(what, raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
 
-// GetVolumeMigration returns a single migration of the volume identified by h.
-// It wraps errs.ErrNotFound when the migration does not exist.
-func (c *Client) GetVolumeMigration(ctx context.Context, h lvol.VolumeHandle, migrationID string) (VolumeMigration, error) {
-	cluster, pool, volume, err := h.Split()
+// GetMigration returns one migration of the subsystem with the given NQN. It
+// wraps errs.ErrNotFound when the migration does not exist.
+func (c *Client) GetMigration(ctx context.Context, clusterID, nqn, migrationID string) (Migration, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
 	migration, err := parseUUID("migration id", migrationID)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
-	resp, err := c.api.ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGetWithResponse(ctx, cluster, pool, volume, migration)
+	resp, err := c.api.ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGetWithResponse(
+		ctx, cluster, nqn, migration)
 	if err != nil {
-		return VolumeMigration{}, fmt.Errorf("get migration %s: %w", migrationID, err)
+		return Migration{}, fmt.Errorf("get migration %s: %w", migrationID, err)
 	}
-	d, err := payload("migration "+migrationID, resp.JSON200, resp.StatusCode(), resp.Body)
+	what := "migration " + migrationID
+	raw, err := decodeBody[json.RawMessage](what, resp.StatusCode(), resp.Body)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
-	return volumeMigrationFromDTO(*d), nil
+	return migrationFromJSON(what, raw)
 }
 
-// CancelVolumeMigration cancels a migration of the volume identified by h.
-func (c *Client) CancelVolumeMigration(ctx context.Context, h lvol.VolumeHandle, migrationID string) error {
-	cluster, pool, volume, err := h.Split()
+// CancelMigration cancels a migration, of either kind.
+func (c *Client) CancelMigration(ctx context.Context, clusterID, nqn, migrationID string) error {
+	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
 		return err
 	}
@@ -92,17 +191,18 @@ func (c *Client) CancelVolumeMigration(ctx context.Context, h lvol.VolumeHandle,
 	if err != nil {
 		return err
 	}
-	resp, err := c.api.ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDeleteWithResponse(ctx, cluster, pool, volume, migration)
+	resp, err := c.api.ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDeleteWithResponse(
+		ctx, cluster, nqn, migration)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)
 	}
 	return migrationActionResult("cancel migration "+migrationID, resp.StatusCode(), resp.Body)
 }
 
-// ContinueVolumeMigration resumes a paused (e.g. pre-created) migration of the
-// volume identified by h.
-func (c *Client) ContinueVolumeMigration(ctx context.Context, h lvol.VolumeHandle, migrationID string) error {
-	cluster, pool, volume, err := h.Split()
+// ContinueMigration resumes a paused migration, of either kind, which is what a
+// pre-created one is until something takes the next step.
+func (c *Client) ContinueMigration(ctx context.Context, clusterID, nqn, migrationID string) error {
+	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
 		return err
 	}
@@ -110,41 +210,43 @@ func (c *Client) ContinueVolumeMigration(ctx context.Context, h lvol.VolumeHandl
 	if err != nil {
 		return err
 	}
-	resp, err := c.api.ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePostWithResponse(
-		ctx, cluster, pool, volume, migration, cpapi.UnderscoreContinueParams{})
+	resp, err := c.api.ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostWithResponse(
+		ctx, cluster, nqn, migration, cpapi.UnderscoreContinueParams{})
 	if err != nil {
 		return fmt.Errorf("continue migration %s: %w", migrationID, err)
 	}
 	return migrationActionResult("continue migration "+migrationID, resp.StatusCode(), resp.Body)
 }
 
-// CreateVolumeMigration starts migrating the volume identified by h to the
-// target storage node and returns the created migration.
-func (c *Client) CreateVolumeMigration(ctx context.Context, h lvol.VolumeHandle, targetNodeID string) (VolumeMigration, error) {
-	cluster, pool, volume, err := h.Split()
+// CreateMigration starts migrating the subsystem with the given NQN to the
+// target storage node and returns the migration that was created, whichever
+// kind the control plane made of it.
+func (c *Client) CreateMigration(ctx context.Context, clusterID, nqn, targetNodeID string) (Migration, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
 	target, err := parseUUID("target node id", targetNodeID)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
-	body := cpapi.UnderscoreMigrationParams{TargetNodeId: target}
-	resp, err := c.api.ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostWithResponse(ctx, cluster, pool, volume, nil, body)
+	// No response-format parameter: the control plane's own default is the full
+	// body, which is the migration this returns.
+	resp, err := c.api.ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostWithResponse(
+		ctx, cluster, nqn, nil, cpapi.UnderscoreMigrationParams{TargetNodeId: target})
 	if err != nil {
-		return VolumeMigration{}, fmt.Errorf("create migration for volume %s: %w", h, err)
+		return Migration{}, fmt.Errorf("create migration for subsystem %s: %w", nqn, err)
 	}
-	// The create endpoint returns the full MigrationDTO body (untyped in the
-	// spec's response, so decode it here).
-	d, err := decodeBody[cpapi.MigrationDTO]("create migration for volume "+string(h), resp.StatusCode(), resp.Body)
+	what := "create migration for subsystem " + nqn
+	raw, err := decodeBody[json.RawMessage](what, resp.StatusCode(), resp.Body)
 	if err != nil {
-		return VolumeMigration{}, err
+		return Migration{}, err
 	}
-	return volumeMigrationFromDTO(d), nil
+	return migrationFromJSON(what, raw)
 }
 
 // migrationActionResult treats any 2xx as success for the fire-and-forget
-// cancel/continue actions (their bodies are untyped in the spec).
+// cancel and continue actions, whose bodies are untyped in the spec.
 func migrationActionResult(what string, code int, body []byte) error {
 	if code >= 200 && code < 300 {
 		return nil

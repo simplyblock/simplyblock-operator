@@ -5,7 +5,7 @@ Simplyblock logical volumes support encryption at rest by leveraging the
 Accel framework, which uses AES‑XTS internally.
 
 Encryption is opted into per volume by setting `encryption: "True"` on the
-StorageClass. Key management is handled entirely by the storage cluster —
+StorageClass. Key management is handled entirely by the storage cluster, and
 the CSI driver never sees or transports key material, and PVCs do not need
 to reference a Kubernetes Secret.
 
@@ -30,5 +30,5 @@ spec:
   ...
 ```
 
-How the cluster sources keys (e.g. HashiCorp Vault, an internal KMS, etc.)
+How the cluster sources keys (e.g., HashiCorp Vault, an internal KMS, etc.)
 is an operator‑side configuration concern and transparent to CSI users.

@@ -9,17 +9,16 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/lvol"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
-
-	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
 )
 
-// nvme list-subsys -o json output (subset of fields we need). The command
-// returns a top-level array, one entry per host.
+// The subsystem listing the suite parses, reduced to the fields it needs. The
+// listing is a top-level array, one entry per host.
 type nvmeSubsysHost struct {
 	Subsystems []nvmeSubsystem `json:"Subsystems"`
 }
@@ -31,8 +30,13 @@ type nvmeSubsystem struct {
 }
 
 type nvmePath struct {
-	Name     string `json:"Name"` // controller, e.g. "nvme0"
-	State    string `json:"State"`
+	Name  string `json:"Name"` // controller, e.g., "nvme0"
+	State string `json:"State"`
+	// Address is the transport endpoint as nvme-cli prints it, a comma-separated
+	// list of key=value pairs, such as traddr=192.168.10.112,trsvcid=4426.
+	// It is what a test needs to reach the endpoint behind a path, rather than
+	// just name the controller in front of it.
+	Address  string `json:"Address"`
 	ANAState string `json:"ANAState"`
 }
 
@@ -181,14 +185,14 @@ func lvolIDForPVC(c kubernetes.Interface, ns, pvcName string) string {
 	// The NVMe-oF subsystem NQN is built from the lvol's "model" UUID. With
 	// max_namespace_per_subsys=1 that equals the volume handle's VolumeID, but
 	// with >1 several volumes share one subsystem whose NQN carries the primary
-	// lvol's model — so the handle's VolumeID won't appear in the NQN. Match on
+	// lvol's model, so the handle's VolumeID will not appear in the NQN. Match on
 	// the model from the PV's volume attributes, falling back to the handle.
 	if attrs := pv.Spec.CSI.VolumeAttributes; attrs != nil {
 		if model := attrs["model"]; model != "" {
 			return model
 		}
 	}
-	vh, ok := volumehandle.Parse(pv.Spec.CSI.VolumeHandle)
+	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	gomega.Expect(ok).To(gomega.BeTrue(), "parse volume handle %q", pv.Spec.CSI.VolumeHandle)
 	return vh.VolumeID
 }
@@ -254,7 +258,7 @@ func waitForSubsystem(f *framework.Framework, podName, container, lvolID string)
 	gomega.Eventually(func() *nvmeSubsystem {
 		lastSubsys = execInPod(f, driverNamespace(), podName, container, "nvme list-subsys -o json")
 		lastList = execInPod(f, driverNamespace(), podName, container, "nvme list")
-		subs, _ := parseSubsystems(lastSubsys) // ignore parse errors here; raw is logged on timeout
+		subs, _ := parseSubsystems(lastSubsys) // ignore parse errors here, since raw is logged on timeout
 		found = subsystemForLvol(subs, lvolID)
 		return found
 	}, time.Minute, 3*time.Second).ShouldNot(gomega.BeNil(),

@@ -14,7 +14,7 @@ const dupUUID = "792e184c-43d5-40ba-b497-3b645347cf1d"
 // staleFixture is the node-migration shape: the volume has been reconnected to
 // a new storage node, giving a second subsystem for the same NQN, while the old
 // subsystem lingers with a connecting controller and an inaccessible path. The
-// stale one is nvme-subsys0, so scan order favours exactly the wrong device.
+// stale one is nvme-subsys0, so scan order favors exactly the wrong device.
 func staleFixture(t *testing.T) string {
 	t.Helper()
 	stale, fresh := "class/nvme-subsystem/nvme-subsys0", "class/nvme-subsystem/nvme-subsys1"
@@ -45,7 +45,7 @@ func staleFixture(t *testing.T) string {
 	})
 }
 
-// Controllers and ANA legs must follow the subsystem that owns them; matching
+// Controllers and ANA legs must follow the subsystem that owns them. Matching
 // on the NQN alone would give each of two same-NQN subsystems both controllers
 // and both legs, making the stale one look as healthy as the fresh one.
 func TestScanKeepsDuplicateSubsystemsApart(t *testing.T) {
@@ -97,7 +97,7 @@ func TestPickPrefersLiveSubsystem(t *testing.T) {
 		t.Fatalf("ListWithSelector = %d devices, want both the stale and the fresh one", len(all))
 	}
 
-	// Both By* keys are satisfied by either device; the reachable one wins,
+	// Both By* keys are satisfied by either device, and the reachable one wins,
 	// even though the stale head comes first in scan order.
 	byNS, err := r.ByNamespace(ctx, dupNQN, 1)
 	if err != nil {
@@ -117,7 +117,7 @@ func TestPickPrefersLiveSubsystem(t *testing.T) {
 	}
 
 	// ByDevicePath names one device outright, so it must still return the
-	// stale one when asked for it — reachability ranks, it does not filter.
+	// stale one when asked for it: reachability ranks, it does not filter.
 	stale, err := r.ByDevicePath(ctx, "/dev/nvme0n1")
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestNonMultipathNamespaces(t *testing.T) {
 	if len(sibs) != 1 || sibs[0].Namespace.Name != all[1].Namespace.Name {
 		t.Errorf("Siblings = %v, want the other path's device", devNames(sibs))
 	}
-	if ct, _ := all[0].CoTenants(context.Background()); len(ct) != 0 {
+	if ct := CoTenants(all[0], all); len(ct) != 0 {
 		t.Errorf("CoTenants = %v, want none", devNames(ct))
 	}
 	stubIdentifyMNAN(t, 1, nil)

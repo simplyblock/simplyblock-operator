@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -37,6 +38,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -45,7 +47,7 @@ const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 
-	dhchapNodeLabelParam = "dhchap_node_label" // read by paramDHCHAPNodeLabel in csi-driver/pkg/spdk/controllerserver.go
+	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/internal/csi/controller/params.go
 )
 
 // StoragePoolReconciler reconciles a StoragePool object
@@ -53,6 +55,10 @@ type StoragePoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// VolumeScopes, if set, receives this pool's (cluster, pool) scope so the
+	// control-plane SSE manager streams its volumes into the cache the aggregated
+	// metrics API reads. Optional (nil in tests).
+	VolumeScopes *cpinformer.ScopeSet
 }
 
 // StoragePoolDTO mirrors the new API's storage pool response format.
@@ -84,7 +90,7 @@ type legacyPoolAPIResponse struct {
 }
 
 // toDTO converts the legacy response to the canonical StoragePoolDTO.
-// Fields absent from the DTO format (e.g. qos_host) are not carried over.
+// Fields absent from the DTO format (e.g., qos_host) are not carried over.
 func (r *legacyPoolAPIResponse) toDTO() StoragePoolDTO {
 	return StoragePoolDTO{
 		ID:           r.UUID,
@@ -99,8 +105,8 @@ func (r *legacyPoolAPIResponse) toDTO() StoragePoolDTO {
 }
 
 // parsePoolAPIResponse parses raw JSON into a StoragePoolDTO. It tries the DTO format first
-// (detected by the "id" field), then falls back to the legacy format (detected by the "uuid"
-// field). Returns an error if neither format is recognised.
+// (detected by the `id` field), then falls back to the legacy format (detected by the
+// `uuid` field). Returns an error if neither format is recognized.
 func parsePoolAPIResponse(data []byte) (StoragePoolDTO, error) {
 	var probe struct {
 		ID   string `json:"id"`
@@ -137,7 +143,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// Reconcile is part of the main Kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
 // the StoragePool object against the actual cluster state, and then
@@ -205,6 +211,11 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleStoragePoolCreation(ctx, storagePoolCR, apiClient, clusterUUID)
 	}
 
+	// Pool is ready: register its scope so the SSE manager streams its volumes.
+	if r.VolumeScopes != nil {
+		r.VolumeScopes.Add(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
+
 	if err := r.createStorageClassIfNotExists(ctx, storagePoolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -249,6 +260,9 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 func (r *StoragePoolReconciler) handleStoragePoolDeletion(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if r.VolumeScopes != nil && storagePoolCR.Status.UUID != "" {
+		r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
 	if utils.ContainsString(storagePoolCR.Finalizers, utils.FinalizerStoragePool) {
 		if storagePoolCR.Status.UUID != "" {
 			// Backend pool exists — delete it first.
@@ -349,12 +363,13 @@ func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, storageP
 }
 
 // createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
-// needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
-// AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
-// perform here. StoragePool.Spec.StorageClassParameters (and DHCHAP, which controls
-// AllowedTopologies) are marked +k8s:immutable for the same reason — the API server rejects
-// edits to them once set, so this function never needs to reconcile drift.
+// needed. It is intentionally create-only, not create-or-update: a StorageClass's Parameters
+// are immutable in the Kubernetes API itself, so there is no "update" to perform here.
+// StoragePool.Spec.StorageClassParameters and DHCHAP are marked +k8s:immutable for the same
+// reason, so this function never needs to reconcile drift.
 func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, clusterUUID string) error {
+	dhchapGated := storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0
+
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
@@ -381,19 +396,11 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
-	if storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0 {
-		nodeLabelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
-		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
-			{
-				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
-					{
-						Key:    nodeLabelKey,
-						Values: []string{"allowed"},
-					},
-				},
-			},
-		}
-		params[dhchapNodeLabelParam] = nodeLabelKey // CreateVolume can't derive this key on its own (#403)
+	if dhchapGated {
+		// CreateVolume turns this into the PV's nodeAffinity (dhchapAllowedNodeSegment, #403).
+		// Deliberately no matching AllowedTopologies term: CSINode topology keys are frozen at
+		// csi-node registration, so a pool label written later fails every PVC (#484).
+		params[dhchapNodeSelectorParam] = poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -421,10 +428,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["qos_rw_mbytes"] = p.QosRwMbytes
 	dst["qos_r_mbytes"] = p.QosRMbytes
 	dst["qos_w_mbytes"] = p.QosWMbytes
-	dst["compression"] = p.Compression
 	dst["encryption"] = boolStr(p.Encryption)
-	dst["replicate"] = boolStr(p.Replicate)
-	dst["lvol_priority_class"] = p.LvolPriorityClass
 	dst["fabric"] = p.Fabric
 	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
 	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks
@@ -509,7 +513,7 @@ func (r *StoragePoolReconciler) syncStoragePoolHosts(
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
 		}
-		desired = append(desired, fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID))
+		desired = append(desired, nqn.Host(string(node.UID)))
 	}
 
 	// Fetch current backend state to use as applied list.

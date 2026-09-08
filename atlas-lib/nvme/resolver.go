@@ -2,7 +2,7 @@ package nvme
 
 import "context"
 
-// SubsystemResolver enumerates and finds NVMe subsystems — the unit a
+// SubsystemResolver enumerates and finds NVMe subsystems, the unit a
 // logical volume maps to (one subsystem, its controller paths and
 // namespaces). It is an interface so callers can fake it in tests without
 // touching /sys.
@@ -35,7 +35,7 @@ type DeviceResolver interface {
 	// "/dev/nvme0n1" (the subsystem multipath head).
 	ByDevicePath(ctx context.Context, devicePath string) (Device, error)
 	// ByNamespace returns the device identified by its subsystem NQN and
-	// namespace id (NSID) — the precise coordinates of one namespace when a
+	// namespace id (NSID), the precise coordinates of one namespace when a
 	// subsystem exports several.
 	ByNamespace(ctx context.Context, nqn string, nsid NamespaceID) (Device, error)
 }

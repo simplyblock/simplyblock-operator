@@ -9,11 +9,11 @@ import (
 )
 
 // SysfsConfig configures the sysfs-backed resolvers. The zero value is
-// valid and uses the conventional /sys and /dev locations; override the
+// valid and uses the conventional /sys and /dev locations. Override the
 // roots to point the resolvers at a fixture tree in tests.
 type SysfsConfig struct {
-	SysRoot string // sysfs mount point; default "/sys"
-	DevRoot string // device-node directory; default "/dev"
+	SysRoot string // sysfs mount point, `/sys` by default
+	DevRoot string // device-node directory, `/dev` by default
 }
 
 func (c SysfsConfig) sysRoot() string {
@@ -77,16 +77,7 @@ func NewSysfsDeviceResolver(cfg SysfsConfig) *SysfsDeviceResolver {
 }
 
 func (r *SysfsDeviceResolver) List(ctx context.Context) ([]Device, error) {
-	devs, err := scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
-	if err != nil {
-		return nil, err
-	}
-	// Bind every device to this resolver so a follow-up question that needs a
-	// fresh scan (Device.HasSiblings) can ask without being handed a resolver.
-	for i := range devs {
-		devs[i] = devs[i].WithResolver(r)
-	}
-	return devs, nil
+	return scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
 }
 
 func (r *SysfsDeviceResolver) ListWithSelector(ctx context.Context, sel DeviceSelector) ([]Device, error) {
@@ -109,10 +100,10 @@ func (r *SysfsDeviceResolver) ByNamespace(ctx context.Context, nqn string, nsid 
 	return r.pick(ctx, DeviceSelector{NQN: nqn, NSID: nsid})
 }
 
-// pick returns the most reachable match for sel — the single-result shape of the
+// pick returns the most reachable match for sel, the single-result shape of the
 // By* lookups, whose keys are all selector fields. Several matches mean a stale
 // subsystem beside a fresh one, or one device per path with native multipath
-// off; ranking beats scan order, which favors the older instance. It is a
+// off. Ranking beats scan order, which favors the older instance. It is a
 // preference only and still returns an unreachable device over none. Callers
 // that must not be handed a wrong device judge the whole set through
 // ListWithSelector (nvmeof.WaitForDevice does).

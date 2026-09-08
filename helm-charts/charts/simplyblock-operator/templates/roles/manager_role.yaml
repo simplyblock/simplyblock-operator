@@ -97,6 +97,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apiregistration.k8s.io
+  resources:
+  - apiservices
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - daemonsets
@@ -108,6 +118,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
 - apiGroups:
   - batch
   resources:
@@ -191,6 +207,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - operatorops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -198,6 +215,7 @@ rules:
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedevices
   - storagenodeops
   - storagenodes
   - storagenodesets
@@ -218,6 +236,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -239,7 +258,9 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
+  - clusterdeploymentconfigs/status
   - controlplanes/status
+  - operatorops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -247,6 +268,7 @@ rules:
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedevices/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
@@ -257,3 +279,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - clusterdeploymentconfigs
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch

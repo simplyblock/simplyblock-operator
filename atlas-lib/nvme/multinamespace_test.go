@@ -58,7 +58,7 @@ func TestSubsystemIsMultiNamespace_ConclusiveFromSysfs(t *testing.T) {
 }
 
 func TestSubsystemIsMultiNamespace_IdentifyFallback(t *testing.T) {
-	// The ambiguous case: one namespace at NSID 1 — must consult MNAN.
+	// The ambiguous case: one namespace at NSID 1, which must consult MNAN.
 	s := Subsystem{
 		ID:          "nvme-subsys0",
 		Controllers: []Controller{liveCtrl()},

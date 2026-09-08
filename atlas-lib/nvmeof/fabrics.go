@@ -16,7 +16,7 @@ import (
 const (
 	// fabricsDevice is the kernel NVMe-oF connect interface: writing a
 	// comma-separated options line to it creates a controller and reading
-	// back yields "instance=N,cntlid=M".
+	// back yields `instance=N,cntlid=M`.
 	fabricsDevice = "/dev/nvme-fabrics"
 	// deleteControllerAttr, under a controller's sysfs dir, tears the
 	// controller down when "1" is written to it.
@@ -38,8 +38,8 @@ const (
 // back through a nvme.SubsystemResolver (for IsConnected, for waiting until a
 // fresh controller is live, and to locate the controllers to disconnect).
 //
-// It is Linux-only in practice — the fabrics device and sysfs attributes
-// exist only there — and surfaces the underlying file error elsewhere.
+// It is Linux-only in practice, since the fabrics device and sysfs attributes
+// exist only there, and surfaces the underlying file error elsewhere.
 type FabricsConnector struct {
 	connector
 }
@@ -99,7 +99,7 @@ func fabricsOptions(t Target, cHostNQN, cHostID string) (string, error) {
 	if t.FastIOFailTMOSec != nil {
 		fmt.Fprintf(&b, ",fast_io_fail_tmo=%d", *t.FastIOFailTMOSec)
 	}
-	// tls is a bare boolean token, like nvme-cli's --tls.
+	// `tls` is a bare boolean token, like nvme-cli's `--tls`.
 	if t.TLS {
 		b.WriteString(",tls")
 	}
@@ -137,7 +137,7 @@ func writeFabricsDevice(_ context.Context, options string) (string, error) {
 }
 
 // writeSysfs writes val to an existing sysfs attribute (no create, no
-// truncate — the canonical way to poke a kernel attribute).
+// truncate), which is the canonical way to poke a kernel attribute.
 func writeSysfs(path, val string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {

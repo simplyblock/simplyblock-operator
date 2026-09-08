@@ -38,7 +38,7 @@ import (
 
 // payloadField matches the fields a generated response struct exposes for a
 // success body: JSON200, JSON201, … Error bodies (JSON422) are deliberately
-// not validated — a strict decode there would mask the error it carries.
+// not validated, because a strict decode there would mask the error it carries.
 var payloadField = regexp.MustCompile(`^JSON2[0-9]{2}$`)
 
 // goTypeName matches an exported Go type name, which is what an endpoint-scoped
@@ -46,7 +46,7 @@ var payloadField = regexp.MustCompile(`^JSON2[0-9]{2}$`)
 var goTypeName = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 
 const (
-	// presentRule means "this key must appear in the body"; it is checked
+	// presentRule means "this key must appear in the body." It is checked
 	// against the raw body rather than by the validator.
 	presentRule = "present"
 	// asKey names the Go type an endpoint-scoped variant compiles to. It is
@@ -65,8 +65,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse %s: %v", *in, err)
 	}
-	structs, unmarshalers := index(file)
-	types := responseTypes(structs, unmarshalers)
+	structs, unmarshalers, unions := index(file)
+	types := responseTypes(structs, unmarshalers, unions)
 	if len(types) == 0 {
 		log.Fatalf("%s: found no response types — has the generated client changed shape?", *in)
 	}
@@ -83,6 +83,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", *rules, err)
 	}
+	types = ruled(types, compiled)
 
 	src, err := render(file.Name.Name, *in, *rules, types, compiled)
 	if err != nil {
@@ -97,14 +98,21 @@ func main() {
 			variants++
 		}
 	}
-	fmt.Printf("%s: %d response types validate themselves, %d of them against rules (%d endpoint-scoped)\n",
-		*out, len(types)+variants, len(compiled), variants)
+	fmt.Printf("%s: %d response types validate themselves against rules (%d endpoint-scoped)\n",
+		*out, len(types)+variants, variants)
 }
 
-// index returns the file's struct types by name, and the names of the types
-// that already declare an UnmarshalJSON method.
-func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map[string]bool) {
-	structs, unmarshalers = map[string]*ast.StructType{}, map[string]bool{}
+// index returns the file's struct types by name, the names of the types that
+// already declare an UnmarshalJSON method, and the members of every union type.
+//
+// A union keeps its payload in an unexported field and offers one As<Member>
+// method per shape it can hold, so those methods are the only place its members
+// are named. Without reading them the walk below stops at the union and the
+// models inside it are never seen.
+func index(file *ast.File) (
+	structs map[string]*ast.StructType, unmarshalers map[string]bool, unions map[string][]string,
+) {
+	structs, unmarshalers, unions = map[string]*ast.StructType{}, map[string]bool{}, map[string][]string{}
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
@@ -118,17 +126,47 @@ func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map
 				}
 			}
 		case *ast.FuncDecl:
-			if d.Name.Name == "UnmarshalJSON" && d.Recv != nil && len(d.Recv.List) == 1 {
-				unmarshalers[typeName(d.Recv.List[0].Type)] = true
+			if d.Recv == nil || len(d.Recv.List) != 1 {
+				continue
+			}
+			receiver := typeName(d.Recv.List[0].Type)
+			if d.Name.Name == "UnmarshalJSON" {
+				unmarshalers[receiver] = true
+			}
+			if member, ok := unionMember(d); ok {
+				unions[receiver] = append(unions[receiver], member)
 			}
 		}
 	}
-	return structs, unmarshalers
+	return structs, unmarshalers, unions
+}
+
+// unionMember reads the member type out of an As<Member>() (<Member>, error)
+// method, and reports nothing for any other method. The name and the first
+// result have to agree, so an unrelated method beginning with "As" is not
+// mistaken for one.
+func unionMember(d *ast.FuncDecl) (string, bool) {
+	name, ok := strings.CutPrefix(d.Name.Name, "As")
+	if !ok || name == "" {
+		return "", false
+	}
+	if d.Type.Params != nil && len(d.Type.Params.List) != 0 {
+		return "", false
+	}
+	if d.Type.Results == nil || len(d.Type.Results.List) != 2 {
+		return "", false
+	}
+	if typeName(d.Type.Results.List[0].Type) != name {
+		return "", false
+	}
+	return name, true
 }
 
 // responseTypes is the sorted set of model types to generate for: the success
 // payloads of every response struct, plus every model type reachable from one.
-func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]bool) []string {
+func responseTypes(
+	structs map[string]*ast.StructType, unmarshalers map[string]bool, unions map[string][]string,
+) []string {
 	found := map[string]bool{}
 	var reach func(name string)
 	reach = func(name string) {
@@ -139,6 +177,12 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 		found[name] = true
 		for _, f := range st.Fields.List {
 			reach(typeName(f.Type))
+		}
+		// A union's members are named by its As methods rather than by its
+		// fields, and they are models like any other: a response that can hold
+		// either of two shapes has to validate whichever one arrives.
+		for _, member := range unions[name] {
+			reach(member)
 		}
 	}
 	for _, st := range structs {
@@ -152,7 +196,7 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 	types := make([]string, 0, len(found))
 	for name := range found {
 		// A response struct reached through a payload field (they nest) is
-		// plumbing, not a model; the union types decode themselves.
+		// plumbing, not a model, and the union types decode themselves.
 		if unmarshalers[name] || strings.HasSuffix(name, "Response") {
 			continue
 		}
@@ -160,6 +204,33 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 	}
 	slices.Sort(types)
 	return types
+}
+
+// ruled narrows the response types to the ones something is asked of.
+//
+// A type with no rules has nothing to check: its keys are not listed and the
+// generated models carry no validate tags, so the method emitted for it would
+// decode and then validate nothing. Emitting it anyway costs a reflect walk on
+// every decode, and costs more than that in what it claims: a method whose
+// comment says it validates, on a type nothing is required of, tells the next
+// reader that drift in that response would be caught.
+//
+// Rules are what make the promise, so they are what the method follows. Adding
+// a block to validation.yaml brings the method back with it.
+func ruled(types []string, rules []rule) []string {
+	has := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		if r.base == "" { // a variant is emitted by render, from the rule itself
+			has[r.typ] = true
+		}
+	}
+	kept := make([]string, 0, len(has))
+	for _, name := range types {
+		if has[name] {
+			kept = append(kept, name)
+		}
+	}
+	return kept
 }
 
 // typeName is the name of the type an expression ultimately refers to, looking
@@ -183,13 +254,13 @@ func typeName(expr ast.Expr) string {
 
 // rule is one type's compiled rules: validator tags by Go field name, and the
 // JSON keys that must be present in the body. For an endpoint-scoped variant,
-// base is the schema it is a flavour of and endpoint is where it comes from;
-// both are empty for a schema's own rules.
+// base is the schema it is a flavor of and endpoint is where it comes from.
+// Both are empty for a schema's own rules.
 type rule struct {
 	typ      string
 	tags     map[string]string
 	keys     []string
-	order    []string          // field names, in the order their keys appear in the yaml
+	order    []string          // field names, in the order their keys appear in the YAML
 	wire     map[string]string // Go field to the wire key it came from, for messages
 	base     string
 	endpoint string
@@ -210,7 +281,7 @@ type spec struct {
 	Paths map[string]map[string]json.RawMessage `json:"paths"`
 }
 
-// readSpec reads the spec — the authority on what the control plane's models
+// readSpec reads the spec, the authority on what the control plane's models
 // are called, which of their properties it promises to send, and which
 // endpoints exist to scope a rule to.
 func readSpec(path string) (spec, error) {
@@ -272,7 +343,7 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 			continue
 		}
 		// Without the base's block there is nothing to merge, and the variant
-		// would quietly enforce only its own rules — the shared ones would look
+		// would quietly enforce only its own rules, and the shared ones would look
 		// inherited and not be. An empty `<schema>: {}` says "no shared rules"
 		// deliberately.
 		base, ok := bases[b.schema]
@@ -296,7 +367,7 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 }
 
 // parseBlocks reads the rules file into blocks, keeping the file's order, which
-// keeps the generated output stable and reviewable against the yaml.
+// keeps the generated output stable and reviewable against the YAML.
 func parseBlocks(rulesYAML []byte) ([]block, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(rulesYAML, &doc); err != nil {
@@ -381,9 +452,9 @@ func compileRules(b block, name string, structs map[string]*ast.StructType, doc 
 // with this endpoint's applied on top, under the Go type its `as` names.
 //
 // The endpoint has to exist in the spec, but the spec cannot confirm that it
-// answers with this schema — the endpoints whose promises diverge from the
+// answers with this schema, because the endpoints whose promises diverge from the
 // shared model are exactly the ones FastAPI declares no response model for. The
-// association is this client's claim; what generation checks is that everything
+// association is this client's claim. What generation checks is that everything
 // the claim names is still there.
 func compileVariant(b block, base rule, structs map[string]*ast.StructType, doc spec, specPath string) (rule, error) {
 	method, path, ok := strings.Cut(b.endpoint, " ")
@@ -459,7 +530,7 @@ func fieldForKey(st *ast.StructType, key string) (field string, ok bool) {
 	return "", false
 }
 
-// jsonName is the key a struct tag's json entry decodes from.
+// jsonName is the key a struct tag's `json` entry decodes from.
 func jsonName(tag string) string {
 	_, value, ok := strings.Cut(tag, `json:"`)
 	if !ok {
@@ -521,7 +592,7 @@ var responseRules = []responseRule{
 {{range .Variants}}
 // {{.Type}} is a {{.Base}} as answered by {{.Endpoint}}, which promises more
 // than the shared model does. Same fields, own identity, so it can carry its
-// own rules; convert to {{.Base}} where the difference does not matter.
+// own rules. Convert to {{.Base}} where the difference does not matter.
 type {{.Type}} {{.Base}}
 {{end}}{{range .Decoders}}
 // UnmarshalJSON decodes and validates a {{.}}.

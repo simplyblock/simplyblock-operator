@@ -8,28 +8,28 @@ import (
 	"github.com/simplyblock/atlas/internal/sysfs"
 )
 
-// nsNameRE matches a block-namespace directory such as "nvme0n1". It
-// deliberately excludes per-controller legs ("nvme0c0n1") and the generic
-// char namespace ("ng0n1"); the host I/O device is the subsystem-level one.
+// nsNameRE matches a block-namespace directory such as `nvme0n1`. It
+// deliberately excludes per-controller legs (`nvme0c0n1`) and the generic
+// char namespace (`ng0n1`), and the host I/O device is the subsystem-level one.
 var nsNameRE = regexp.MustCompile(`^nvme\d+n\d+$`)
 
-// legNameRE matches a per-controller namespace leg such as "nvme0c1n1" —
-// the ANA-bearing path under a controller directory.
+// legNameRE matches a per-controller namespace leg such as `nvme0c1n1`, the
+// ANA-bearing path under a controller directory.
 var legNameRE = regexp.MustCompile(`^nvme\d+c\d+n\d+$`)
 
-// ctrlNameRE matches a controller entry such as "nvme0". The kernel links
+// ctrlNameRE matches a controller entry such as `nvme0`. The kernel links
 // every controller into its subsystem's directory, which is how a controller
 // is tied to the subsystem it fronts.
 var ctrlNameRE = regexp.MustCompile(`^nvme\d+$`)
 
 // legHeadRE splits a leg name into the head it serves and the controller it
-// runs over: "nvme0c1n1" -> head "nvme0" + "n1", i.e. head device "nvme0n1"
-// reached via controller "nvme1".
+// runs over: `nvme0c1n1` -> head `nvme0` + `n1`, i.e., head device `nvme0n1`
+// reached via controller `nvme1`.
 var legHeadRE = regexp.MustCompile(`^(nvme\d+)c\d+(n\d+)$`)
 
 // legHead returns the name of the namespace head a leg serves, or "" if leg is
-// not a leg name. Two subsystems can front the same NQN — a stale one the
-// kernel has yet to reap next to a fresh one — and their namespaces then have
+// not a leg name. Two subsystems can front the same NQN (a stale one the
+// kernel has yet to reap next to a fresh one) and their namespaces then have
 // the same NSID, so NSID alone cannot say which head a leg belongs to.
 func legHead(leg string) string {
 	m := legHeadRE.FindStringSubmatch(leg)
@@ -88,7 +88,7 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 
 		// Attach each ANA path to the namespace head it serves. The head is
 		// named by the leg itself, so two subsystems fronting one NQN keep
-		// their own ANA view instead of inheriting each other's paths — which
+		// their own ANA view instead of inheriting each other's paths, which
 		// is what lets a caller tell a live subsystem from a stale one.
 		for i := range s.Namespaces {
 			for _, p := range paths {
@@ -98,8 +98,9 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 			}
 		}
 
-		// Without a multipath head (nvme_core.multipath=0) the namespaces are
-		// each controller's own block devices instead, so collect those too.
+		// A namespace can also be owned by a controller rather than by a
+		// subsystem head, which is how a stale controller surfaces, so
+		// collect those too.
 		s.Namespaces = append(s.Namespaces, controllerNamespaces(s, devRoot)...)
 
 		subs = append(subs, s)
@@ -142,7 +143,7 @@ func subsystemControllers(s Subsystem, entries []string, ctrls []Controller) []C
 }
 
 // controllerNamespaces returns the namespaces owned by s's controllers rather
-// than by s itself — the layout when native NVMe multipath is off
+// than by s itself, the layout when native NVMe multipath is off
 // (nvme_core.multipath=0): the kernel builds no subsystem-level head, and each
 // controller exposes its own block device for a namespace, so one volume
 // reached over several paths becomes several devices sharing a namespace UUID
@@ -274,8 +275,8 @@ func scanNamespace(base, devRoot, name string) Namespace {
 	}
 }
 
-// parseAddress parses an NVMe-oF "address" attribute such as
-// "traddr=192.168.10.69,trsvcid=4426,src_addr=192.168.10.67".
+// parseAddress parses an NVMe-oF `address` attribute such as
+// `traddr=192.168.10.69,trsvcid=4426,src_addr=192.168.10.67`.
 func parseAddress(s string) Address {
 	var a Address
 	for kv := range strings.SplitSeq(s, ",") {

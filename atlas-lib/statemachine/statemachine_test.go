@@ -77,7 +77,7 @@ func mustTransition(t *testing.T, sm *Machine[st], to st) {
 	}
 }
 
-// arm puts the machine in `on` with a one minute deadline and returns it.
+// `armed` puts the machine in `on` with a one-minute deadline and returns it.
 func armed(t *testing.T) *Machine[st] {
 	t.Helper()
 	sm := newTest(t, (&hook{timeout: time.Minute}).fn)
@@ -153,7 +153,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 }
 
 func TestNewAcceptsTerminalAndSelfEdges(t *testing.T) {
-	// A nil To and an empty To are both terminal; a self-edge is legal.
+	// A nil To and an empty To are both terminal, and a self-edge is legal.
 	sm, err := New(context.Background(), Config[st]{
 		Initial: off,
 		States: map[st]StateDef[st]{
@@ -204,8 +204,8 @@ func TestConfigIsDeeplyCopied(t *testing.T) {
 	cfg := graph(nil)
 
 	// Keep a reference to the exact To slice New will clone. It has to be taken
-	// before New, and before the map entry holding it is replaced below —
-	// reaching for cfg.States[off].To afterwards would find a different slice.
+	// before New, and before the map entry holding it is replaced below, because
+	// reaching for cfg.States[off].To afterward would find a different slice.
 	offEdges := cfg.States[off].To
 	if len(offEdges) == 0 || offEdges[0] != off {
 		t.Fatalf("setup: off's edges are %v, expected them to start with %v", offEdges, off)
@@ -243,7 +243,7 @@ func TestConfigIsDeeplyCopied(t *testing.T) {
 }
 
 func TestNonStringStateType(t *testing.T) {
-	// The machine is generic over any comparable; ints and structs are as valid
+	// The machine is generic over any comparable. Ints and structs are as valid
 	// as strings, and the zero value is a perfectly good state.
 	type phase int
 	const (
@@ -306,7 +306,7 @@ func TestTransitionRunsHookWithBothEndpoints(t *testing.T) {
 
 func TestTransitionWithoutHook(t *testing.T) {
 	sm := newTest(t, nil)
-	// off has no hook at all; entering it must still succeed.
+	// off has no hook at all, and entering it must still succeed.
 	mustTransition(t, sm, off)
 	if sm.CurrentState() != off {
 		t.Errorf("CurrentState() = %v", sm.CurrentState())
@@ -401,7 +401,7 @@ func TestHookErrorLeavesMachineUntouched(t *testing.T) {
 	h := &hook{timeout: time.Hour, err: sentinel}
 	sm := newTest(t, h.fn)
 
-	// The hook asks for an hour and then fails; neither may take effect.
+	// The hook asks for an hour and then fails. Neither may take effect.
 	err := sm.TransitionTo(context.Background(), on)
 
 	if !errors.Is(err, sentinel) {
@@ -423,7 +423,7 @@ func TestHookErrorLeavesMachineUntouched(t *testing.T) {
 
 func TestHookErrorPreservesExistingDeadline(t *testing.T) {
 	// A failed transition must not disturb the deadline of the state the machine
-	// is stuck in: off -> on arms a minute, then on -> ready fails.
+	// is stuck in: off -> on sets a one-minute deadline, then on -> ready fails.
 	sm, err := New(context.Background(), Config[st]{
 		Initial: off,
 		States: map[st]StateDef[st]{
@@ -769,7 +769,7 @@ func TestCallerContextDoesNotBoundTheState(t *testing.T) {
 		// The caller's own budget is far shorter than the state's.
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		mustTransition2(t, sm, on, callCtx)
-		cancel() // the request is over; the state must not be
+		cancel() // the request is over, the state must not be
 
 		if err := sm.Context().Err(); err != nil {
 			t.Fatalf("the caller's cancel killed the state context: %v", err)
@@ -796,9 +796,9 @@ func mustTransition2(t *testing.T, sm *Machine[st], to st, ctx context.Context) 
 	}
 }
 
-func TestAlreadyCancelledCallerContextStillTransitions(t *testing.T) {
+func TestAlreadyCanceledCallerContextStillTransitions(t *testing.T) {
 	// The call context bounds the hook, and this hook does not consult it, so
-	// the transition succeeds. Documented behaviour, worth pinning down.
+	// the transition succeeds. Documented behavior, worth pinning down.
 	sm := newTest(t, (&hook{}).fn)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -856,7 +856,7 @@ func TestParentCancellationClosesMachine(t *testing.T) {
 
 func TestParentDeadlineIsNotAStateTimeout(t *testing.T) {
 	// The base context expiring means the machine is done, not that the current
-	// state ran out of time — the distinction TimeoutReached exists to make.
+	// state ran out of time, which is the distinction TimeoutReached exists to make.
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -1026,7 +1026,7 @@ func TestSnapshotWithoutDeadline(t *testing.T) {
 }
 
 func TestRestoreExpiredDeadlineFiresImmediately(t *testing.T) {
-	// The controller was down while the phase ran out of time; it must find out
+	// The controller was down while the phase ran out of time, and it must find out
 	// on its first pass back.
 	synctest.Test(t, func(t *testing.T) {
 		sm := newTest(t, nil)
@@ -1071,7 +1071,7 @@ func TestRestoreRejectsUnknownState(t *testing.T) {
 }
 
 func TestRestoreRejectsZeroStateWhenUndeclared(t *testing.T) {
-	// The controller idiom: an empty subPhase is not a state, it means "fresh".
+	// The controller idiom: an empty subPhase is not a state, it means "fresh."
 	sm := newTest(t, nil)
 	if err := sm.Restore(Snapshot[st]{}); !errors.Is(err, ErrUnknownState) {
 		t.Fatalf("err = %v, want ErrUnknownState for an empty state", err)
@@ -1229,5 +1229,87 @@ func TestStatesIteratesWholeGraph(t *testing.T) {
 	// Early return from the iterator must not misbehave.
 	for range sm.States() {
 		break
+	}
+}
+
+// --- NewFromSnapshot -----------------------------------------------------------
+
+func TestNewFromSnapshotRestoresStateAndDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		deadline := time.Now().Add(time.Hour)
+		sm, err := NewFromSnapshot(context.Background(), graph(nil),
+			Snapshot[st]{State: on, Deadline: deadline})
+		if err != nil {
+			t.Fatalf("NewFromSnapshot: %v", err)
+		}
+		defer sm.Close()
+
+		if got := sm.CurrentState(); got != on {
+			t.Errorf("CurrentState() = %v, want %v", got, on)
+		}
+		got, ok := sm.Deadline()
+		if !ok {
+			t.Fatal("NewFromSnapshot dropped the deadline")
+		}
+		if !got.Equal(deadline) {
+			t.Errorf("Deadline() = %v, want %v", got, deadline)
+		}
+		if !sm.CanTransitionTo(rdy) {
+			t.Error("restored machine lost its outgoing edges")
+		}
+	})
+}
+
+func TestNewFromSnapshotZeroStateStartsAtInitial(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), graph(nil), Snapshot[st]{})
+	if err != nil {
+		t.Fatalf("NewFromSnapshot: %v", err)
+	}
+	defer sm.Close()
+
+	if got := sm.CurrentState(); got != off {
+		t.Errorf("CurrentState() = %v, want the initial state %v", got, off)
+	}
+	if _, ok := sm.Deadline(); ok {
+		t.Error("a fresh machine came back with a deadline")
+	}
+}
+
+func TestNewFromSnapshotRejectsUnknownState(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), graph(nil), Snapshot[st]{State: undeclared})
+	if !errors.Is(err, ErrUnknownState) {
+		t.Fatalf("err = %v, want ErrUnknownState", err)
+	}
+	if sm != nil {
+		t.Error("a rejected NewFromSnapshot returned a machine")
+	}
+}
+
+func TestNewFromSnapshotRejectsBadConfig(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), Config[st]{
+		Initial: off,
+		States:  map[st]StateDef[st]{off: {To: []st{undeclared}}},
+	}, Snapshot[st]{State: off})
+	if !errors.Is(err, ErrUnknownState) {
+		t.Fatalf("err = %v, want ErrUnknownState", err)
+	}
+	if sm != nil {
+		t.Error("a rejected NewFromSnapshot returned a machine")
+	}
+}
+
+func TestNewFromSnapshotRunsNoHook(t *testing.T) {
+	h := &hook{timeout: time.Minute}
+	sm, err := NewFromSnapshot(context.Background(), graph(h.fn), Snapshot[st]{State: on})
+	if err != nil {
+		t.Fatalf("NewFromSnapshot: %v", err)
+	}
+	defer sm.Close()
+
+	if h.calls != 0 {
+		t.Errorf("NewFromSnapshot ran the entry hook %d times", h.calls)
+	}
+	if _, ok := sm.Deadline(); ok {
+		t.Error("NewFromSnapshot armed the hook's deadline instead of the snapshot's")
 	}
 }

@@ -38,6 +38,16 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o manager cmd/main.go
 
+# The worker probe ships in this image rather than in one of its own, so that
+# the Job a discovery run creates cannot be a version out of step with the
+# operator that created it: the operator names its own image for the Job.
+#
+# CGO is off for it, unlike the manager. The probe reads sysfs and procfs and
+# issues ioctls through golang.org/x/sys and does no crypto at all, so it has
+# nothing to gain from BoringCrypto and nothing to link against.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
+
 # Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
 # ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
 FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
@@ -59,7 +69,15 @@ LABEL name="simplyblock-operator" \
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
+# On PATH, because the probe Job names it by name rather than by path.
+COPY --from=builder /workspace/simplyblock-nodeprobe /usr/local/bin/simplyblock-nodeprobe
 COPY LICENSE /licenses/LICENSE
+
+# The manager runs unprivileged as this user. The probe pod overrides it: it
+# runs as root because a container's device cgroup denies opening block devices
+# otherwise, and because the host's mount table is PID 1's and readable by the
+# user PID 1 runs as. See internal/nodeprobe/job.go for what that buys and what
+# bounds it.
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

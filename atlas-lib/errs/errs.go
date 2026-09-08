@@ -19,7 +19,7 @@ var (
 	// current transport, kernel, or configuration.
 	ErrUnsupported = errors.New("unsupported")
 	// ErrInvalidResponse is returned when a control-plane response
-	// deserializes but does not carry what the client needs from it —
+	// deserializes but does not carry what the client needs from it,
 	// typically a version skew between the API and the spec the client was
 	// generated from (a renamed or dropped field). Retrying will not help.
 	ErrInvalidResponse = errors.New("invalid control-plane response")

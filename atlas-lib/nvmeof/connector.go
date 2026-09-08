@@ -33,26 +33,26 @@ type Target struct {
 	HostID  string // hostid
 
 	// Optional connection tunables. A zero value is omitted from the connect
-	// request, deferring to the kernel default; the timeouts are pointers
+	// request, deferring to the kernel default. The timeouts are pointers
 	// because 0 (fail I/O immediately) is a meaningful value.
-	HostIface         string // host_iface — bind to a source interface
-	NrIOQueues        int    // nr_io_queues — number of I/O queue pairs
+	HostIface         string // `host_iface`, bind to a source interface
+	NrIOQueues        int    // `nr_io_queues`, number of I/O queue pairs
 	ReconnectDelaySec int    // reconnect_delay
 	KeepAliveTMOSec   int    // keep_alive_tmo
 	CtrlLossTMOSec    *int   // ctrl_loss_tmo
 	FastIOFailTMOSec  *int   // fast_io_fail_tmo
 
 	// TLS requests an encrypted connection. The kernel needs a pre-shared
-	// key for the host/subsystem NQN pair in its keyring; the connect fails
+	// key for the host/subsystem NQN pair in its keyring, and the connect fails
 	// if none is installed.
-	TLS bool // tls
+	TLS bool // `tls`
 
 	// DHCHAPSecret and DHCHAPCtrlSecret authenticate the connect: the first
 	// proves the host to the target, the second the target back to the host
 	// (bidirectional DHCHAP). Both are empty for an unauthenticated subsystem.
 	//
 	// A secret belongs to one (host, subsystem) pair, so it is only valid
-	// together with the HostNQN it was issued for — see lvol.ForHost, which is
+	// together with the HostNQN it was issued for. See lvol.ForHost, which is
 	// how the control plane is told which host to answer for.
 	//
 	// These are credentials: they must not be logged, and no error in this
@@ -62,7 +62,7 @@ type Target struct {
 }
 
 // TargetOption overrides one connect parameter on every target Targets
-// builds. Endpoint identity — NQN, transport, address, port — is not
+// builds. Endpoint identity (NQN, transport, address, and port) is not
 // overridable: that is what identifies the path, and rewriting it would attach
 // something other than what the control plane answered.
 type TargetOption func(*Target)
@@ -116,7 +116,7 @@ func WithKeepAliveTMOSec(sec int) TargetOption {
 
 // WithCtrlLossTMOSec sets how long the kernel keeps retrying a lost controller
 // before giving up (ctrl_loss_tmo). 0 fails I/O immediately, -1 retries
-// forever; both are meaningful, which is why this is an explicit option rather
+// forever. Both are meaningful, which is why this is an explicit option rather
 // than a zero value.
 func WithCtrlLossTMOSec(sec int) TargetOption {
 	return func(t *Target) { t.CtrlLossTMOSec = ptr.To(sec) }
@@ -131,7 +131,7 @@ func WithFastIOFailTMOSec(sec int) TargetOption {
 
 // WithTLS forces transport encryption on or off, overriding what the control
 // plane asked for. Enabling it requires a pre-shared key for the
-// host/subsystem NQN pair in the kernel keyring; disabling it when the control
+// host/subsystem NQN pair in the kernel keyring. Disabling it when the control
 // plane asked for TLS attaches the volume in the clear.
 func WithTLS(enabled bool) TargetOption {
 	return func(t *Target) { t.TLS = enabled }
@@ -140,13 +140,13 @@ func WithTLS(enabled bool) TargetOption {
 // Targets turns a control-plane connection into the ordered target list
 // ConnectPaths expects: one target per endpoint, in the order the control
 // plane returned them, so the primary path stays first. Endpoints are mapped
-// one to one — none are dropped, merged or reordered — so what the control
+// one to one, with none dropped, merged, or reordered, so what the control
 // plane answered is what gets attached, in its order.
 //
 // Each target's identity (NQN, transport, address, port) and its connect
 // tunables come from the connection, since the control plane picks them per
 // path. The options then override the tunables and supply what the control
-// plane cannot know — this node's host identity, or a local policy such as a
+// plane cannot know, such as this node's host identity or a local policy like a
 // fixed ctrl_loss_tmo. With no options the control plane's parameters are used
 // as they are, and the connector falls back to the node's /etc/nvme identity.
 //
@@ -193,12 +193,12 @@ type Connector interface {
 	// idempotent and must attach the paths it can even when a
 	// higher-priority one is unavailable.
 	ConnectPaths(ctx context.Context, targets []Target) ([]PathResult, error)
-	// Disconnect detaches the subsystem identified by nqn, releasing paths
+	// Disconnect detaches the subsystem identified by `nqn`, releasing paths
 	// that cannot serve I/O before the optimized one. It must be
 	// idempotent (no error if already disconnected).
 	Disconnect(ctx context.Context, nqn string) error
-	// DisconnectController detaches a single controller — one path of a
-	// multipath subsystem — leaving the subsystem's other paths, and every
+	// DisconnectController detaches a single controller, one path of a
+	// multipath subsystem, leaving the subsystem's other paths, and every
 	// namespace they serve, in place. It is what repairing one broken path
 	// needs: Disconnect would take the working paths down with it, and on a
 	// shared subsystem every co-tenant volume too.
@@ -207,7 +207,7 @@ type Connector interface {
 	// error, which matters because ctrl is a snapshot and the kernel may
 	// have reaped it in the meantime.
 	DisconnectController(ctx context.Context, ctrl nvme.Controller) error
-	// IsConnected reports whether a live controller exists for nqn.
+	// IsConnected reports whether a live controller exists for `nqn`.
 	IsConnected(ctx context.Context, nqn string) (bool, error)
 }
 
@@ -217,8 +217,8 @@ type Connector interface {
 //
 // Only two operations are mechanism-specific, and they are the two fields below.
 // Both FabricsConnector and CLIConnector are this machinery with those two
-// filled in — neither is built out of the other, because neither is a special
-// case of the other; they are two ways of issuing the same two operations.
+// filled in. Neither is built out of the other, because neither is a special
+// case of the other: they are two ways of issuing the same two operations.
 type connector struct {
 	subs        nvme.SubsystemResolver
 	hostNQN     string
@@ -228,7 +228,7 @@ type connector struct {
 
 	// attach establishes one path and returns whatever the mechanism reports.
 	// It takes the Target rather than a rendered options line because not every
-	// mechanism speaks the fabrics-device format — nvme-cli wants flags — and a
+	// mechanism speaks the fabrics-device format (nvme-cli wants flags), and a
 	// backend forced to parse our own rendering back into fields would be the
 	// long way round.
 	attach func(ctx context.Context, t Target) (string, error)
@@ -244,7 +244,7 @@ type Option func(*connector)
 // WithPathTimeout bounds how long a single path of a multipath connect may
 // take to reach a live state before ConnectPaths records it as failed and
 // moves on to the next path in priority order. Zero or less means no per-path
-// bound — a path may then wait out the caller's whole context.
+// bound, so a path may then wait out the caller's whole context.
 func WithPathTimeout(d time.Duration) Option {
 	return func(c *connector) { c.pathTimeout = d }
 }
@@ -289,13 +289,13 @@ func (c *connector) Connect(ctx context.Context, t Target) error {
 	return results[0].Err
 }
 
-// Disconnect removes every controller fronting nqn by writing its
+// Disconnect removes every controller fronting `nqn` by writing its
 // delete_controller attribute. It is idempotent: a subsystem that is already
 // absent is not an error. For a multi-namespace subsystem this detaches the
 // paths shared by every namespace on it.
 //
-// Controllers are released in ANA order — inaccessible and non-optimized
-// paths first, the optimized path last (see disconnectOrder) — so I/O still
+// Controllers are released in ANA order, inaccessible and non-optimized
+// paths first and the optimized path last (see disconnectOrder), so I/O still
 // in flight keeps the best path available until the end. The writes are
 // sequential and each one tears its controller down before the next is
 // issued, so the order is the order the kernel sees.
@@ -324,12 +324,12 @@ func (c *connector) Disconnect(ctx context.Context, nqn string) error {
 }
 
 // DisconnectController tears down the single controller ctrl describes, leaving
-// the subsystem's other paths — and every namespace they serve — attached.
+// the subsystem's other paths, and every namespace they serve, attached.
 //
 // It is the narrow counterpart to Disconnect, and the difference is not
 // cosmetic: on a subsystem shared by several volumes, Disconnect takes every
 // co-tenant's block device with it, so repairing one broken path has to be able
-// to say "this controller, and nothing else".
+// to say "this controller, and nothing else."
 //
 // A controller the kernel has already reaped is not an error: ctrl is a snapshot
 // and the race is expected, so a vanished sysfs path counts as done.
@@ -352,7 +352,7 @@ func (c *connector) deleteController(ctrl nvme.Controller) error {
 	return c.deleteCtrl(ctrl)
 }
 
-// IsConnected reports whether a live controller exists for nqn.
+// IsConnected reports whether a live controller exists for `nqn`.
 func (c *connector) IsConnected(ctx context.Context, nqn string) (bool, error) {
 	s, err := c.subs.ByNQN(ctx, nqn)
 	if errors.Is(err, errs.ErrNotFound) {
@@ -404,14 +404,14 @@ func endpoint(t Target) string {
 
 // hostIdentity resolves the (hostnqn, hostid) a connect presents, from the
 // target's identity and the node's file-seeded default. Either may come back
-// empty, which means "send neither, and let the mechanism take the node's".
+// empty, which means "send neither, and let the mechanism take the node's."
 //
 // The two are resolved together rather than field by field, and that is the
 // whole point of this function. The kernel enforces a strict 1:1 between them:
 // once a hostid is associated with a hostnqn it refuses any later connect
 // pairing that same hostid with a different one ("found same hostid ... but
 // different hostnqn"). Falling back per field breaks that as soon as a target
-// names its own hostnqn — the common case for an access-controlled volume,
+// names its own hostnqn, the common case for an access-controlled volume,
 // whose host NQN is derived per node rather than read from /etc/nvme/hostnqn.
 // The hostid would still come from /etc/nvme/hostid, which any plain volume on
 // that node has already bound to the node's default hostnqn, and the kernel
@@ -428,9 +428,9 @@ func endpoint(t Target) string {
 // A host NQN naming no UUID, with no explicit HostID beside it, is an error
 // rather than a connect with the hostid left off. Leaving it off does not mean
 // "no hostid": nvme-cli then reads /etc/nvme/hostid and the kernel writes its
-// own default into the fabrics connect, which is the mismatched pairing above
-// — so the quiet path is the broken one, and it breaks later, on a different
-// volume, in a message naming neither this target nor this NQN.
+// own default into the fabrics connect, which is the mismatched pairing above.
+// The quiet path is therefore the broken one, and it breaks later, on a
+// different volume, in a message naming neither this target nor this NQN.
 func hostIdentity(t Target, fileNQN, fileID string) (hostNQN, hostID string, err error) {
 	if t.HostNQN == "" {
 		return fileNQN, orElse(t.HostID, fileID), nil
@@ -447,8 +447,8 @@ func hostIdentity(t Target, fileNQN, fileID string) (hostNQN, hostID string, err
 	return t.HostNQN, id, nil
 }
 
-// readTrim reads a one-line file, e.g. /etc/nvme/hostnqn, and returns "" when
-// it is absent — an unset host identity is a fallback, not a failure.
+// readTrim reads a one-line file, e.g., /etc/nvme/hostnqn, and returns "" when
+// it is absent, because an unset host identity is a fallback, not a failure.
 func readTrim(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {

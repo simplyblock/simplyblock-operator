@@ -1,0 +1,56 @@
+# The identity a worker probe writes its report as.
+#
+# It is a Role and not a ClusterRole, and it grants two verbs on one kind in one
+# namespace, because that is the whole of what the probe does to the cluster: it
+# reads the machine it runs on and writes one ConfigMap. It needs no read access
+# to nodes (the kubelet tells it which node it landed on through its own pod
+# spec), none to the run that created it (the owner reference travels as
+# environment), and no get on ConfigMaps either — a create that comes back
+# AlreadyExists is what tells it the Job retried, and update is what it does
+# about that.
+#
+# The privilege the probe does need is not here. It is in the pod's security
+# context, which internal/nodeprobe/job.go sets and justifies: privileged, so
+# that the device cgroup does not deny it every disk on the machine.
+{{- if .Values.rbac.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-nodeprobe-sa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: simplyblock-nodeprobe-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+rules:
+  # One report per worker per run, created once and replaced if the Job retried
+  # its pod. No get, no list, no delete: reading the reports and cleaning them
+  # up is the operator's, and a probe that could delete them could delete
+  # another worker's.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: simplyblock-nodeprobe-rolebinding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-nodeprobe-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: simplyblock-nodeprobe-role
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

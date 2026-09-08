@@ -6,9 +6,9 @@ import (
 )
 
 // StorageClass parameters, VolumeContext, and PublishContext are all
-// map[string]string; these helpers read a typed value with a default so the
+// map[string]string, and these helpers read a typed value with a default so the
 // operator and CSI driver parse them the same way. A missing or empty value
-// yields the default; a present-but-unparsable value yields the default and an
+// yields the default, and a present-but-unparsable value yields the default and an
 // error (a misconfigured parameter should surface, not be silently ignored).
 
 // StringParam returns params[key], or def when the key is absent or empty.

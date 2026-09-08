@@ -1,0 +1,169 @@
+# Integration suite: boots a Talos cluster in QEMU and runs the tests against it.
+#
+# `make test` needs root, because talosctl's QEMU provisioner builds the guest
+# network (a CNI bridge on Linux, vmnet on macOS). The harness elevates talosctl
+# itself rather than the test process, so the sudo prompt lands in the middle of a
+# run — where `go test` has captured stdout and it is invisible. `preflight`
+# refreshes the credential cache first so that does not happen.
+
+SHELL := /bin/bash
+
+# The helpers a run leaves behind, as one definition for every target that looks
+# for them.
+#
+# Two questions, because either alone is wrong. pgrep -f finds a command line
+# that names a helper, which is also true of a grep or of a monitoring script
+# watching for one. So each candidate is then asked what it actually is, and
+# only a talosctl counts.
+#
+# That question is put to ucomm rather than to comm or the command line, both of
+# which carry however the binary was invoked: talosctl reached through PATH
+# reads as `talosctl`, and the same binary named outright reads as
+# `/opt/homebrew/bin/talosctl`, which Config.TalosctlPath permits. ucomm is the
+# executable's own name either way.
+ORPHANS = pgrep -f "talosctl (loadbalancer-launch|dhcpd-launch|qemu-launch)" 2>/dev/null \
+	  | xargs -I{} sh -c 'case "$$(ps -o ucomm= -p {} 2>/dev/null | tr -d " ")" in \
+	      talosctl) echo {} ;; esac' 2>/dev/null
+GO ?= go
+TIMEOUT ?= 60m
+# -count=1 defeats the test cache. Go caches a passing package result and replays
+# its whole transcript, so a run that booted nothing prints the same green output
+# as one that did — with only "(cached)" to tell them apart. For a suite whose
+# entire purpose is to exercise a real kernel, that is worse than no result.
+TEST_FLAGS ?= -v -count=1
+
+# Unset by default: the suite derives a per-process cluster name so two runs on
+# one machine cannot fight over the same network. Set it to pin a name when a run
+# has to be identifiable from outside.
+CLUSTER_NAME ?=
+CLUSTER_ENV := $(if $(CLUSTER_NAME),SB_CLUSTER_NAME=$(CLUSTER_NAME),)
+
+.DEFAULT_GOAL := help
+.PHONY: help build vet fmt lint test test-defects test-short preflight clean-clusters \
+	generate generate-check
+
+help: ## Show this help.
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+build: ## Compile the harness.
+	$(GO) build ./...
+
+vet: ## Vet the harness.
+	$(GO) vet ./...
+
+fmt: ## Format the harness.
+	$(GO) fmt ./...
+
+lint: ## Lint the harness.
+	golangci-lint run ./...
+
+generate: ## Regenerate the control-plane simulator from the OpenAPI spec.
+	$(GO) generate ./...
+
+# The generated files are committed, so a spec change nobody regenerated would
+# leave the simulator answering the previous revision's endpoints. This makes
+# that a failure rather than a surprise.
+generate-check: generate ## Fail if the committed generated files are stale.
+	@git diff --exit-code -- . \
+	  || { echo "generated files are stale: run 'make generate' and commit the result"; exit 1; }
+
+preflight: ## Check the tools and privileges a run needs.
+	@fail=0; \
+	for t in talosctl qemu-img kubectl; do \
+	  command -v $$t >/dev/null || { echo "missing: $$t"; fail=1; }; \
+	done; \
+	case "$$(uname -s)/$$(uname -m)" in \
+	  Darwin/arm64) \
+	    held=$$(netstat -an 2>/dev/null | awk 'NF == 5 && $$4 ~ /\.67$$/ {print $$4; exit}'); \
+	    orphans=$$($(ORPHANS) | tr '\n' ' '); \
+	    squatter=$$(pgrep -x bootpd 2>/dev/null | tr '\n' ' '); \
+	    if [ -n "$$held" ] || [ -n "$$orphans" ] || [ -n "$$squatter" ]; then \
+	      [ -n "$$held" ] && echo "warning: $$held is bound, and the provisioner's dhcpd needs it"; \
+	      [ -n "$$orphans" ] && echo "warning: helpers from an earlier run are still up: $$orphans"; \
+	      [ -n "$$squatter" ] && echo "warning: bootpd is running ($$squatter) and holds that port"; \
+	      echo "  The provisioner runs its own dhcpd on port 67 and cannot share it. A"; \
+	      echo "  running bootpd cannot be stopped by unloading its job, only killed."; \
+	      echo "  Sweep what an earlier run left behind and look again: make clean-clusters"; \
+	    fi; \
+	    grants=$$(sudo -n -l 2>/dev/null); \
+	    for want in "pkill -x bootpd" "talos/clusters/"; do \
+	      case "$$grants" in \
+	        *"$$want"*) ;; \
+	        *) echo "warning: no passwordless sudo rule mentions $$want, so an unattended run stops on it (see README.md)" ;; \
+	      esac; \
+	    done; \
+	    ;; \
+	  Darwin/*) echo "Talos' QEMU provisioner supports only ARM on macOS"; fail=1 ;; \
+	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
+	  *) echo "unsupported host $$(uname -s)/$$(uname -m); on Windows use WSL2" ; fail=1 ;; \
+	esac; \
+	test $$fail -eq 0 || exit 1; \
+	echo "talosctl: $$(talosctl version --client --short 2>/dev/null || talosctl version --client 2>/dev/null | head -2 | tail -1)"; \
+	if [ "$$(id -u)" -ne 0 ]; then \
+	  if sudo -n talosctl version --client >/dev/null 2>&1; then \
+	    echo "sudo: talosctl needs no password here, so there is nothing to refresh"; \
+	  else \
+	    echo "refreshing sudo credentials (the provisioner needs root)"; \
+	    sudo -v; \
+	  fi; \
+	fi
+
+test: preflight ## Boot a cluster and run the suite.
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
+	  $(GO) test $(TEST_FLAGS) -timeout $(TIMEOUT) ./...
+
+test-defects: preflight ## Force the NVMe-oF defects and check atlas names them.
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
+	  $(GO) test $(TEST_FLAGS) -timeout 40m -run TestDefect ./suites/
+
+test-short: preflight ## Run only the smoke test.
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
+	  $(GO) test $(TEST_FLAGS) -timeout 15m -run TestSmoke ./suites/
+
+# A run killed part-way leaves the cluster behind holding memory and a network,
+# and its root-owned helper processes reparented to init — sudo's children outlive
+# the sudo the test killed. Cluster state is kept in talosctl's default location
+# precisely so this can find them by name afterward.
+#
+# A create that died before writing state.yaml is the harder case: talosctl
+# cannot destroy what it cannot read, and the directory still holds the nodes'
+# sparse disk images, so it is removed directly once destroy has had its turn.
+#
+# Worse still is a create whose own failure path removed the state directory
+# while its children kept running. Nothing then names the cluster, the virtual
+# machines stay up holding their memory and the host bridge, and macOS restarts
+# bootpd for as long as one of them holds a vmnet interface. So the sweep matches
+# the processes rather than the state: every talosctl helper, qemu-launch among
+# them, and the virtual machines themselves, recognized by the cluster directory
+# on their command line so that a developer's unrelated machines are left alone.
+clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
+	@found=0; \
+	for d in $$HOME/.talos/clusters/sbi-* $$HOME/.talos/clusters/sb-integration*; do \
+	  [ -d "$$d" ] || continue; \
+	  found=1; n=$$(basename $$d); \
+	  echo "destroying $$n"; \
+	  if sudo -E talosctl cluster destroy --name "$$n"; then \
+	    [ -d "$$d" ] && { echo "  removing leftover state $$d"; sudo rm -rf "$$d"; } || true; \
+	  else \
+	    echo "  destroy failed, leaving $$d in place: talosctl needs it to find the"; \
+	    echo "  cluster's own processes, and removing it strands them for root alone"; \
+	  fi; \
+	done; \
+	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|qemu-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
+	vms=$$(pgrep -f "qemu-system-[a-z0-9_]+ .*\.talos/clusters/(sbi-|sb-integration)" 2>/dev/null || true); \
+	all=$$(echo $$pids $$vms); \
+	if [ -n "$$all" ]; then \
+	  found=1; \
+	  echo "killing orphaned helpers: $$all"; \
+	  sudo -n kill $$all 2>/dev/null || sudo kill $$all || true; \
+	  sleep 2; \
+	  still=$$(ps -o pid= -p $$all 2>/dev/null | tr -d " " | tr "\n" " " || true); \
+	  if [ -n "$$still" ]; then \
+	    echo "  still up: $$still"; \
+	    sudo -n kill -9 $$still 2>/dev/null || sudo kill -9 $$still 2>/dev/null || { \
+	      echo "  these belong to root, and kill is not passwordless here, so they"; \
+	      echo "  need a hand: sudo kill -9 $$still"; }; \
+	  fi; \
+	fi; \
+	test $$found -eq 1 || echo "nothing left to clean"

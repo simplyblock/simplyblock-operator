@@ -23,7 +23,7 @@ var _ = ginkgo.Describe("SPDKCSI-DELETION", func() {
 		ginkgo.By("create PVC and test pod")
 		deployPVC(ns)
 		deployTestPod(ns)
-		// Register cleanup for the failure path; in the success path we
+		// Register cleanup for the failure path. In the success path the test
 		// delete explicitly below so we can observe the PV lifecycle.
 		ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 

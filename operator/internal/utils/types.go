@@ -110,9 +110,15 @@ type StorageNodeSetAddParams struct {
 	CRPlural            string   `json:"cr_plural,omitempty"`
 	Format4K            bool     `json:"format_4k,omitempty"`
 	SpdkSystemMemory    string   `json:"spdk_sys_mem,omitempty"`
-	// FailureDomain assigns this node to a failure-domain group (integer ≥ 1).
-	// Required when the cluster has EnableFailureDomain=true; omit (zero value) otherwise.
-	FailureDomain int `json:"failure_domain,omitempty"`
+	// FailureDomain assigns this node to a failure-domain group (integer ≥ 0).
+	// Required when the cluster has EnableFailureDomain=true; nil (never sent)
+	// otherwise. A pointer, not a plain int: domain 0 is a valid group index
+	// (nodeFailureDomains allows >= 0), so a plain int with `omitempty` would
+	// have silently dropped the field for every domain-0 node instead of
+	// sending 0 -- the backend then saw no failure_domain at all and the
+	// node never came online (2026-08-27 incident, found live redeploying
+	// with domains numbered from 0).
+	FailureDomain *int `json:"failure_domain,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
 }

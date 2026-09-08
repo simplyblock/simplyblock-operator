@@ -28,14 +28,14 @@ the named techniques that resolve it.
 | Smell                                             | Here                                                                                                                      | Pass | Techniques                                                                            |
 |---------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|------|---------------------------------------------------------------------------------------|
 | **Long Method**                                   | 22 functions over 100 lines in the controllers, longest 183                                                               | 6    | Extract Method, Decompose Conditional, Replace Temp with Query                        |
-| **Large Class**                                   | 14 controller files over 600 lines; `storagenodeops_controller.go` at 1,696                                               | 7    | Extract Class, Move Method                                                            |
+| **Large Class**                                   | 14 controller files over 600 lines, with `storagenodeops_controller.go` at 1,696                                          | 7    | Extract Class, Move Method                                                            |
 | **Primitive Obsession**                           | 7 `Phase string` fields that should be `<Kind>Phase`, and three functions that split a volume handle out of a bare string | 8    | Replace Data Value with Object, Replace Magic Number with Symbolic Constant           |
 | **Long Parameter List**                           | `StartMigration` takes 8 parameters, `onAllSocketNodesOnline` 7, and four more take 6                                     | 5    | Introduce Parameter Object, Preserve Whole Object, Replace Parameter with Method Call |
-| **Data Clumps**                                   | `ctx, apiClient, clusterUUID, snCR` travel together; `apiClient` is a parameter in 17 files                               | 5, 8 | Introduce Parameter Object, Extract Class                                             |
+| **Data Clumps**                                   | `ctx, apiClient, clusterUUID, snCR` travel together, and `apiClient` is a parameter in 17 files                           | 5, 8 | Introduce Parameter Object, Extract Class                                             |
 | **Switch Statements**                             | 12 hand-rolled switches on a phase across 7 controllers                                                                   | 3, 8 | Replace Conditional with a declared state graph (`atlas-lib/statemachine`)            |
 | **Temporary Field**                               | a struct field set only during one operation                                                                              | 8    | Extract Class, or move it to CR status where a restart can read it                    |
 | **Divergent Change**                              | one file changing for unrelated reasons: reconciler, state machine, and topology in one                                   | 7    | Extract Class, Move Method                                                            |
-| **Shotgun Surgery**                               | `apiClient()` in 5 controllers; the storage-node ClusterRole in 3 places                                                  | 4    | Move Method, Extract Class, `extract-to-atlas-lib`                                    |
+| **Shotgun Surgery**                               | `apiClient()` in 5 controllers, and the storage-node ClusterRole in 3 places                                              | 4    | Move Method, Extract Class, `extract-to-atlas-lib`                                    |
 | **Duplicate Code**                                | `find-twins.sh` reports it exactly                                                                                        | 4    | Extract Method, Move Method, Substitute Algorithm                                     |
 | **Dead Code**                                     | `waitForNodeInfoReachable`, reached only from tests                                                                       | 1    | delete it                                                                             |
 | **Comments**                                      | prose restating the statement below it                                                                                    | 2    | Extract Method with a name that says it, then delete the comment                      |
@@ -45,7 +45,7 @@ the named techniques that resolve it.
 | **Inappropriate Intimacy**                        | reaching past a package's public surface                                                                                  | 7    | Move Method, Hide Method (unexport)                                                   |
 | **Message Chains**                                | `a.B().C().D()`, each link a nil panic waiting                                                                            | 5    | Hide Delegate, Extract Method                                                         |
 | **Middle Man**                                    | `operator/internal/webapi` wrapping what `atlas-lib/controlplane` already does                                            | 3    | Remove Middle Man                                                                     |
-| **Alternative Classes with Different Interfaces** | two NVMe-oF connect implementations; two control-plane clients                                                            | 3, 4 | Substitute Algorithm, then delete one                                                 |
+| **Alternative Classes with Different Interfaces** | two NVMe-oF connect implementations, and two control-plane clients                                                        | 3, 4 | Substitute Algorithm, then delete one                                                 |
 | **Incomplete Library Class**                      | an `atlas-lib` helper that is unexported, so a consumer copied it                                                         | 3    | export it in place. See `extract-to-atlas-lib`                                        |
 
 **Why Long Parameter List is a correctness smell here, not a style one.**
@@ -58,9 +58,9 @@ node.
 **The clearest example in the repository.** Three functions in three controllers
 each take a colon-separated string and return four values:
 
-- `persistentvolumeclaim_controller.go:309` — `splitCSIVolumeHandle`, returning `ok bool`
-- `replicationslot_controller.go:410` — `splitVolumeHandle`, returning `ok bool`
-- `storagebackup_controller.go:859` — `parseSimplyblockVolumeHandle`, returning `error`
+- `persistentvolumeclaim_controller.go:309`: `splitCSIVolumeHandle`, returning `ok bool`
+- `replicationslot_controller.go:410`: `splitVolumeHandle`, returning `ok bool`
+- `storagebackup_controller.go:859`: `parseSimplyblockVolumeHandle`, returning `error`
 
 That is four smells in one place. Primitive Obsession, because the handle is a
 string rather than a type. Duplicate Code, because there are three of them.
@@ -89,7 +89,7 @@ Grouped as the catalog groups them, in their Go form.
 | Extract Variable                  | a named local for a subexpression, which is often the cheapest way to explain a condition        |
 | Inline Temp                       | delete a local assigned once and used once                                                       |
 | Replace Temp with Query           | a small method instead of a field or local holding a derived value, so it cannot go stale        |
-| Split Temporary Variable          | one variable per meaning. A reused `err` is fine; a reused `count` is two counts                 |
+| Split Temporary Variable          | one variable per meaning. A reused `err` is fine, a reused `count` is two counts                 |
 | Remove Assignments to Parameters  | Go passes by value, so this bites on slices, maps, and pointers, where the caller sees the write |
 | Replace Method with Method Object | move a long function's parameters and locals onto a struct, then make the steps its methods      |
 | Substitute Algorithm              | replace the body wholesale with a clearer one. The pass that most needs the behavior gate        |
@@ -152,16 +152,16 @@ Only one of the twelve survives the translation:
 Left out deliberately. If one of these looks applicable, the mechanism being
 reached for is probably a hierarchy that does not exist.
 
-| Excluded                                                                                                                                                                                                      | Why                                                                                                    |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
-| Pull Up / Push Down Field, Method, Constructor Body; Extract Subclass, Extract Superclass; Collapse Hierarchy; Form Template Method; Replace Inheritance with Delegation; Replace Delegation with Inheritance | Go has no inheritance. Embedding is composition and does not behave like a base class                  |
-| Replace Conditional with Polymorphism; Replace Type Code with Subclasses, with State/Strategy; Replace Subclass with Fields                                                                                   | the same. A dispatch table, a map of funcs, or `atlas-lib/statemachine` is the Go answer               |
-| Refused Bequest, Parallel Inheritance Hierarchies                                                                                                                                                             | smells of hierarchies                                                                                  |
-| Replace Error Code with Exception; Replace Exception with Test                                                                                                                                                | Go has no exceptions. The useful inversion is below                                                    |
-| Self Encapsulate Field, Encapsulate Field, Remove Setting Method                                                                                                                                              | getters and setters over every field are not idiomatic Go                                              |
-| Replace Constructor with Factory Method                                                                                                                                                                       | already the norm: `New…` returning an interface or a configured struct                                 |
-| Change Value to Reference, Change Reference to Value, Duplicate Observed Data, Change Unidirectional Association to Bidirectional and back                                                                    | object-graph and ORM shaped. Pointer versus value in Go is a mutability and copying decision, not this |
-| Data Class (smell)                                                                                                                                                                                            | a struct that is only data is idiomatic here. `nvme.Device` is one on purpose                          |
+| Excluded                                                                                                                                                                                                           | Why                                                                                                    |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| Pull Up and Push Down Field, Method, or Constructor Body, Extract Subclass, Extract Superclass, Collapse Hierarchy, Form Template Method, Replace Inheritance with Delegation, Replace Delegation with Inheritance | Go has no inheritance. Embedding is composition and does not behave like a base class                  |
+| Replace Conditional with Polymorphism, Replace Type Code with Subclasses or with State/Strategy, Replace Subclass with Fields                                                                                      | the same. A dispatch table, a map of funcs, or `atlas-lib/statemachine` is the Go answer               |
+| Refused Bequest, Parallel Inheritance Hierarchies                                                                                                                                                                  | smells of hierarchies                                                                                  |
+| Replace Error Code with Exception, Replace Exception with Test                                                                                                                                                     | Go has no exceptions. The useful inversion is below                                                    |
+| Self Encapsulate Field, Encapsulate Field, Remove Setting Method                                                                                                                                                   | getters and setters over every field are not idiomatic Go                                              |
+| Replace Constructor with Factory Method                                                                                                                                                                            | already the norm: `New…` returning an interface or a configured struct                                 |
+| Change Value to Reference, Change Reference to Value, Duplicate Observed Data, Change Unidirectional Association to Bidirectional and back                                                                         | object-graph and ORM shaped. Pointer versus value in Go is a mutability and copying decision, not this |
+| Data Class (smell)                                                                                                                                                                                                 | a struct that is only data is idiomatic here. `nvme.Device` is one on purpose                          |
 
 ## What Go needs that the catalog does not name
 

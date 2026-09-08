@@ -1,0 +1,16 @@
+# The control-plane simulator, generated from the same spec the operator and
+# atlas-lib's client are generated from.
+#
+# Both the models and the server interface: the models so the wire format is the
+# spec's rather than one hand-copied from it, and the interface so the compiler
+# is what notices when the control plane grows a path or renames one. A
+# hand-written mux would answer the endpoints it knew about and silently ignore
+# the rest.
+package: cpsim
+output: cpsim.gen.go
+generate:
+  models: true
+  std-http-server: true
+output-options:
+  overlay:
+    path: overlay.yaml

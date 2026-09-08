@@ -27,7 +27,9 @@ GOLANGCI_LINT  ?= $(BIN_DIR)/golangci-lint
 KUSTOMIZE      ?= $(BIN_DIR)/kustomize
 CONTROLLER_GEN ?= $(BIN_DIR)/controller-gen
 ENVTEST        ?= $(BIN_DIR)/setup-envtest
+OPENAPI_GEN    ?= $(BIN_DIR)/openapi-gen
 YQ             ?= $(BIN_DIR)/yq
+BUF            ?= $(BIN_DIR)/buf
 
 # ── Install targets ──────────────────────────────────────────────────────────
 # Each is phony and defers to tools.sh, which is idempotent: it re-installs only
@@ -46,6 +48,10 @@ kustomize: ## Install kustomize (manifest-pinned) into .bin.
 controller-gen: ## Install controller-gen (manifest-pinned) into .bin.
 	@"$(TOOLS_SH)" install controller-gen
 
+.PHONY: openapi-gen
+openapi-gen: ## Install openapi-gen (manifest-pinned) into .bin.
+	@"$(TOOLS_SH)" install openapi-gen
+
 .PHONY: yq
 yq: ## Install yq (manifest-pinned) into .bin.
 	@"$(TOOLS_SH)" install yq
@@ -53,3 +59,11 @@ yq: ## Install yq (manifest-pinned) into .bin.
 .PHONY: envtest
 envtest: ## Install setup-envtest into .bin ($(ENVTEST_VERSION) from the caller).
 	@"$(TOOLS_SH)" install setup-envtest $(ENVTEST_VERSION)
+
+# buf shells out to the two protoc-gen-* plugins and finds them on PATH, so all
+# three install together -- buf alone cannot generate anything.
+.PHONY: buf
+buf: ## Install buf and the protoc-gen-go plugins (manifest-pinned) into .bin.
+	@"$(TOOLS_SH)" install buf
+	@"$(TOOLS_SH)" install protoc-gen-go
+	@"$(TOOLS_SH)" install protoc-gen-go-grpc
