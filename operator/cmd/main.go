@@ -35,6 +35,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -77,8 +78,14 @@ type serverGroupsGetter interface {
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// The conversion webhook's CA bundle is injected into the CRDs that declare a
+	// converted kind, so the manager's client has to know that kind.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
+	// v1alpha2 is the storage version and the shape every controller reads for the
+	// kinds that have one. v1alpha1 stays registered because the conversion webhook
+	// has to decode it.
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -655,6 +662,17 @@ func main() {
 	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
 	go func() {
 		<-webhookReady
+		// The conversion webhook serves every kind that declares more than one
+		// version, from the one /convert path, dispatching on the payload's
+		// apiVersion. It is registered first because it is in the read path for
+		// those kinds: until it answers, a `kubectl get` on them fails rather
+		// than returning a stale shape.
+		if err := internalwebhook.SetupConversionWebhooks(mgr); err != nil {
+			setupLog.Error(err, "unable to register the CRD conversion webhook")
+			os.Exit(1)
+		}
+		setupLog.Info("registered CRD conversion webhook")
+
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")

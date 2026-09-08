@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,7 +33,7 @@ const (
 )
 
 // certManagerProvisioner runs when SB_TLS_PROVIDER=cert-manager. It creates a
-// cert-manager Certificate for the webhook Service, then materialises the issued
+// cert-manager Certificate for the webhook Service, then materializes the issued
 // Secret onto disk (utils.WebhookCertDir) and injects the CA bundle into the
 // MutatingWebhookConfiguration — the same responsibilities cert-controller's
 // rotator handles in self-signed mode, but sourced from cert-manager. It keeps
@@ -200,6 +201,47 @@ func (p *certManagerProvisioner) injectCABundle(ctx context.Context, ca []byte) 
 		}
 	}
 
+	if err := p.injectCABundleIntoCRDs(ctx, ca); err != nil {
+		return err
+	}
+
 	p.lastCA = ca
+	return nil
+}
+
+// injectCABundleIntoCRDs sets the conversion webhook's caBundle on every CRD that
+// declares a converted kind. Without it the API server refuses to call the
+// conversion webhook, which makes the kind unreadable rather than merely
+// unconverted.
+//
+// A CRD that is absent, or that carries no webhook conversion strategy, is
+// skipped rather than treated as an error: the operator and its CRDs are applied
+// by separate steps, so the operator has to tolerate starting before the CRDs it
+// converts exist.
+func (p *certManagerProvisioner) injectCABundleIntoCRDs(ctx context.Context, ca []byte) error {
+	for _, name := range ConvertedKindCRDNames() {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := p.apiReader.Get(ctx, types.NamespacedName{Name: name}, &crd); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("get crd %s: %w", name, err)
+		}
+
+		if crd.Spec.Conversion == nil || crd.Spec.Conversion.Webhook == nil ||
+			crd.Spec.Conversion.Webhook.ClientConfig == nil {
+			continue
+		}
+		clientConfig := crd.Spec.Conversion.Webhook.ClientConfig
+		if bytes.Equal(clientConfig.CABundle, ca) {
+			continue
+		}
+
+		patch := client.MergeFrom(crd.DeepCopy())
+		clientConfig.CABundle = ca
+		if err := p.client.Patch(ctx, &crd, patch); err != nil {
+			return fmt.Errorf("patch crd %s conversion caBundle: %w", name, err)
+		}
+	}
 	return nil
 }

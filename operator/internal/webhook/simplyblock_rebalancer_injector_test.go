@@ -9,6 +9,7 @@ import (
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -32,6 +33,11 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
+	}
+	// The conversion webhook's CA bundle is injected into CRDs, so the fake
+	// client has to know that kind too.
+	if err := apiextensionsv1.AddToScheme(s); err != nil {
+		t.Fatalf("add apiextensions scheme: %v", err)
 	}
 	return s
 }

@@ -23,20 +23,16 @@ const (
 	// volume that is actively replicating snapshots to the target cluster.
 	ReplicationBackendStateReplicating = "replicating"
 
-	ClusterActionActivate           = "activate"
-	ClusterActionExpand             = "expand"
-	ClusterActionShutdown           = "shutdown"
-	ClusterActionStart              = "start"
-	ClusterActionRestart            = "restart"
-	ClusterActionNodeRollingRestart = "node-rolling-restart"
+	// The StorageCluster action names used to live here as untyped strings. They
+	// are now the StorageClusterOpsAction enum on the API type, which is where an
+	// enum's values belong, and the v1alpha1 spellings survive only in that
+	// version's conversion table.
 
-	// StorageNode action names.
-	NodeActionShutdown = "shutdown"
-	NodeActionRestart  = "restart"
-	NodeActionSuspend  = "suspend"
-	NodeActionResume   = "resume"
-	NodeActionRemove   = "remove"
-	NodeActionMigrate  = "migrate"
+	// The StorageNode action names moved to the StorageNodeOpsAction enum for the
+	// same reason the cluster ones did. Leaving them here as untyped strings was
+	// actively dangerous once the values were recased: an untyped constant
+	// compares against the named type without complaint, so a stale "remove"
+	// tested against StorageNodeOpsActionRemove compiles and is never equal.
 
 	// NodeRollingRestart per-node phases
 	NodeRollingRestartPhaseSnodeRefresh     = "snode-refresh"

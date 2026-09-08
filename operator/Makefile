@@ -75,8 +75,12 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	@# controller-gen has no marker for spec.conversion, so the stanza is written
+	@# back after every regeneration. It runs before crd-embed so that the copy the
+	@# upgrade tool carries is the one with the stanza in it.
+	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
 	$(MAKE) crd-embed
 
 # The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and

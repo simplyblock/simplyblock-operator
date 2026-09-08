@@ -1066,6 +1066,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: controlplanes.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: ControlPlane
@@ -1148,6 +1158,97 @@ spec:
                 enum:
                 - Initializing
                 - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: Initializing while FDB is not ready; Available once the control
+        plane is operational
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: Human-readable status detail
+      jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ControlPlane is a singleton resource (one per namespace, named "simplyblock")
+          that reflects the readiness of the simplyblock control plane. It is created
+          automatically by the Helm chart and should not be created or deleted manually.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ControlPlaneSpec holds configuration for the singleton ControlPlane
+              resource.
+            properties:
+              source:
+                description: |-
+                  Source says where the control plane comes from. It replaces the top-level
+                  image field of v1alpha1, which conflated the control plane's own image with
+                  the default every StorageNodeSet inherited.
+                properties:
+                  managed:
+                    description: Managed is the control plane the operator installs
+                      and owns.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the container image used for the simplyblock control-plane
+                          workloads (e.g., quay.io/simplyblock-io/simplyblock:26.2.2).
+                          Must reference one of the trusted registries (`quay.io/simplyblock-io`, `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning (@sha256:...) is recommended.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                    type: object
+                type: object
+            type: object
+          status:
+            description: |-
+              ControlPlaneStatus reflects the observed readiness of the simplyblock
+              control plane (FDB + management API).
+            properties:
+              lastChecked:
+                description: LastChecked is the timestamp of the most recent FDB health
+                  probe.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message contains a human-readable explanation of the current phase,
+                  for example, the FDB error returned by the health endpoint.
+                type: string
+              phase:
+                description: |-
+                  Phase is Initializing while the control plane is not yet healthy,
+                  and Available once the FDB health check passes.
+                enum:
+                - Initializing
+                - Available
                 type: string
             type: object
         type: object
@@ -2600,6 +2701,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storagebackups.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageBackup
@@ -2777,6 +2888,179 @@ spec:
         - spec
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.pvcRef.name
+      name: PVC
+      type: string
+    - jsonPath: .status.backupID
+      name: BackupID
+      type: string
+    - jsonPath: .status.snapshotName
+      name: Snapshot
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: StorageBackup is the Schema for the storagebackups API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StorageBackup
+            properties:
+              clusterRef:
+                description: ClusterRef names the StorageCluster this backup belongs
+                  to.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              pvcRef:
+                description: |-
+                  PVCRef identifies the PVC whose backing simplyblock volume should be snapshotted and backed up.
+                  Not required when SourceClusterUUID is set (imported backup).
+                properties:
+                  name:
+                    description: Name is the PVC name.
+                    type: string
+                  namespace:
+                    description: Namespace overrides the backup resource namespace
+                      for the PVC lookup.
+                    type: string
+                required:
+                - name
+                type: object
+              snapshotName:
+                description: SnapshotName optionally overrides the internally created
+                  snapshot name.
+                type: string
+              sourceClusterUUID:
+                description: |-
+                  SourceClusterUUID, when non-empty, marks this StorageBackup as imported from another cluster.
+                  The StorageBackup controller will not create snapshots or backups for imported resources.
+                  Set by the BackupImport controller; do not set manually.
+                type: string
+            required:
+            - clusterRef
+            type: object
+          status:
+            description: status defines the observed state of StorageBackup
+            properties:
+              allowedHosts:
+                description: AllowedHosts contains the allowed host metadata returned
+                  by the backup API.
+                items:
+                  additionalProperties:
+                    type: string
+                  type: object
+                type: array
+              apiStatus:
+                description: APIStatus is the raw status returned by the backup API.
+                type: string
+              backupID:
+                description: BackupID is the backend backup UUID.
+                type: string
+              clusterUUID:
+                description: ClusterUUID is the backend cluster UUID.
+                type: string
+              completedAt:
+                description: CompletedAt is when the backup completed.
+                format: date-time
+                type: string
+              createdAt:
+                description: CreatedAt is when the backup was created.
+                format: date-time
+                type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the source PersistentVolume (e.g., `ext4`,
+                  `xfs`), captured at backup time so a restore can preserve it regardless of
+                  which StorageClass the restored PVC ends up using.
+                type: string
+              lvolID:
+                description: LvolID is the simplyblock volume UUID.
+                type: string
+              lvolName:
+                description: LvolName is the backend logical volume name.
+                type: string
+              message:
+                description: Message contains the latest reconciliation detail or
+                  error.
+                type: string
+              nodeID:
+                description: NodeID is the source storage node UUID.
+                type: string
+              phase:
+                description: Phase is the high-level backup lifecycle shown in kubectl
+                  output.
+                type: string
+              poolName:
+                description: PoolName is the simplyblock pool name derived from the
+                  CSI volume handle.
+                type: string
+              poolUUID:
+                description: PoolUUID is the backend pool UUID.
+                type: string
+              prevBackupID:
+                description: PrevBackupID links the previous backup in the chain.
+                type: string
+              pvName:
+                description: PVName is the bound PV name.
+                type: string
+              pvcNamespace:
+                description: PVCNamespace is the resolved PVC namespace.
+                type: string
+              s3ID:
+                description: S3ID is the backend S3 object identifier.
+                format: int64
+                type: integer
+              size:
+                description: Size is the backup size in bytes.
+                format: int64
+                type: integer
+              snapshotID:
+                description: SnapshotID is the internally created snapshot UUID used
+                  for the backup request.
+                type: string
+              snapshotName:
+                description: SnapshotName is the snapshot name used for the backup
+                  request.
+                type: string
+              sourceClusterUUID:
+                description: |-
+                  SourceClusterUUID is set for imported backups; identifies the cluster that originally
+                  created the backup. When non-empty and different from the restore target cluster UUID,
+                  BackupRestore will automatically perform source-switch operations around the restore.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}
@@ -2788,6 +3072,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusterops.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageClusterOps
@@ -2926,6 +3220,149 @@ spec:
                 - Succeeded
                 - Failed
                 type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend POST has been sent for this operation.
+                  Guards against duplicate backend calls on retry.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageClusterOps is a one-shot operational CR targeting a single StorageCluster.
+          Analogous to a Kubernetes Job — it drives a cluster-level operation (Activate, Expand,
+          Shutdown, Restart, RollingRestart) to completion and records the result. Only one
+          StorageClusterOps can be active per cluster at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - Activate
+                - Expand
+                - Shutdown
+                - Start
+                - Restart
+                - RollingRestart
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              clusterRef:
+                description: ClusterRef is the name of the target StorageCluster.
+                  Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              rollingRestart:
+                description: |-
+                  RollingRestart configures behavior specific to the RollingRestart action.
+                  Ignored for all other actions.
+                properties:
+                  refreshSNodeAPI:
+                    description: |-
+                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
+                    type: boolean
+                type: object
+            required:
+            - action
+            - clusterRef
+            type: object
+          status:
+            description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              rollingRestart:
+                description: |-
+                  RollingRestart tracks per-node progress for the RollingRestart action.
+                  Nil for all other actions.
+                properties:
+                  nodePhase:
+                    description: |-
+                      NodePhase is the current step for the node being restarted:
+                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+                    type: string
+                  pendingNodes:
+                    description: PendingNodes is the ordered list of node UUIDs still
+                      to be restarted.
+                    items:
+                      type: string
+                    type: array
+                  phaseTriggered:
+                    description: PhaseTriggered indicates the API call for the current
+                      NodePhase was already sent.
+                    type: boolean
+                  processedNodes:
+                    description: ProcessedNodes is the list of node UUIDs already
+                      restarted.
+                    items:
+                      type: string
+                    type: array
+                type: object
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time
@@ -3754,6 +4191,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodeops.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageNodeOps
@@ -3911,6 +4358,177 @@ spec:
                 type: string
               subPhase:
                 description: SubPhase tracks the active drain step when action=remove
+                  and phase=Running.
+                enum:
+                - Validating
+                - Suspending
+                - Migrating
+                - Verifying
+                - Removing
+                - Preparing
+                - Restarting
+                - Promoting
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend action POST has been sent (used during
+                  Suspending to avoid duplicate POSTs across reconcile iterations).
+                type: boolean
+              volumesMigrated:
+                description: VolumesMigrated is the count of volumes successfully
+                  migrated (drain only).
+                type: integer
+              volumesPending:
+                description: VolumesPending is the count of volumes awaiting migration
+                  (drain only).
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeRef
+      name: Node
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.subPhase
+      name: SubPhase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageNodeOps is a one-shot operational CR targeting a single StorageNode.
+          Analogous to a Kubernetes Job — it drives an action (Shutdown, Restart, Suspend,
+          Resume, Remove, Migrate) to completion and records the result. Only one
+          StorageNodeOps can be active per StorageNode at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageNodeOpsSpec defines the desired state of a StorageNodeOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - Shutdown
+                - Restart
+                - Suspend
+                - Resume
+                - Remove
+                - Migrate
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              force:
+                description: Force enables forced execution where the backend supports
+                  it.
+                type: boolean
+              migrate:
+                description: Migrate parameterizes action Migrate and is ignored by
+                  the others.
+                properties:
+                  newSsdPcie:
+                    description: |-
+                      NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                      during a migration. Passed through to the control-plane restart as
+                      new_ssd_pcie.
+                    items:
+                      type: string
+                    type: array
+                  targetWorkerNode:
+                    description: |-
+                      TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                      relocated onto.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - targetWorkerNode
+                type: object
+              nodeRef:
+                description: NodeRef is the name of the target StorageNode. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              reattachVolume:
+                description: |-
+                  ReattachVolume reattaches volumes during the node restart.
+                  Applicable when action=Restart or action=Migrate.
+                type: boolean
+              remove:
+                description: Remove parameterizes action Remove and is ignored by
+                  the others.
+                properties:
+                  systemVolumeFilterRegex:
+                    description: |-
+                      SystemVolumeFilterRegex is a Go regular expression matched against backend
+                      volume names. Matching volumes are treated as system volumes: excluded from
+                      drain migration and deleted inline during the Verifying phase.
+                      Defaults to `^sb-fio-baseline-.*`.
+                    type: string
+                type: object
+            required:
+            - action
+            - nodeRef
+            type: object
+          status:
+            description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              subPhase:
+                description: SubPhase tracks the active drain step when action=Remove
                   and phase=Running.
                 enum:
                 - Validating
@@ -5758,6 +6376,26 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - controlplanes.storage.simplyblock.io
+  - storagebackups.storage.simplyblock.io
+  - storageclusterops.storage.simplyblock.io
+  - storagenodeops.storage.simplyblock.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - apiregistration.k8s.io
   resources:
