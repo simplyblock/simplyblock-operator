@@ -15,9 +15,11 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	mount "k8s.io/mount-utils"
+	k8smount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
 	testingexec "k8s.io/utils/exec/testing"
+
+	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
 // fakeDevice stands in for the NVMe-oF block device staging operates on, and
@@ -100,8 +102,8 @@ func TestStageNeverFormatsWhenPreflightFoundFilesystem(t *testing.T) {
 		{out: ""}, // the mkfs the unfixed code runs next
 		{out: ""}, // spare scripting for any further command
 	})
-	fm := mount.NewFakeMounter(nil)
-	ns := &nodeServer{mounter: fm, execer: fe}
+	fm := k8smount.NewFakeMounter(nil)
+	ns := &nodeServer{mounter: mount.NewWith(fm, fe)}
 
 	stagingPath := stagingDir(t)
 	volumeContext := map[string]string{}
@@ -155,8 +157,8 @@ func TestStageRefusesAFilesystemTheClassDidNotAskFor(t *testing.T) {
 		{out: ""},           // spare scripting, in case anything else runs
 		{out: ""},
 	})
-	fm := mount.NewFakeMounter(nil)
-	ns := &nodeServer{mounter: fm, execer: fe}
+	fm := k8smount.NewFakeMounter(nil)
+	ns := &nodeServer{mounter: mount.NewWith(fm, fe)}
 
 	stagingPath := stagingDir(t)
 	volumeContext := map[string]string{}
@@ -195,9 +197,8 @@ func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
 		{out: ""},
 		{out: ""},
 	})
-	fm := mount.NewFakeMounter(nil)
-	ns.mounter = fm
-	ns.execer = fe
+	fm := k8smount.NewFakeMounter(nil)
+	ns.mounter = mount.NewWith(fm, fe)
 
 	req := stageRequest(extFS)
 	req.VolumeId = pvcTestHandle
@@ -222,31 +223,5 @@ func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
 	}
 	if len(fm.MountPoints) != 0 {
 		t.Errorf("staging mounted something anyway: %v", fm.MountPoints)
-	}
-}
-
-// TestProbeRefusalNamesThePartitionTable. A device carrying a partition table
-// is refused rather than formatted, and which table it is decides what an
-// operator does next: a GPT disk handed to the driver by mistake is a different
-// problem from a stale DOS label on a volume that was reused. The prober knows,
-// since blkid reports PTTYPE, so the refusal has to carry it rather than saying
-// only that something was there.
-func TestProbeRefusalNamesThePartitionTable(t *testing.T) {
-	for _, table := range []string{"gpt", "dos"} {
-		t.Run(table, func(t *testing.T) {
-			fe, _ := scriptedExec([]scriptedResult{{out: "PTTYPE=" + table + "\n"}})
-			ns := &nodeServer{execer: fe}
-
-			_, err := ns.probeDiskFormat(context.Background(), fakeDevice)
-			if err == nil {
-				t.Fatal("staged a device carrying a partition table")
-			}
-			if !strings.Contains(err.Error(), table) {
-				t.Errorf("the refusal does not say which table it found: %v", err)
-			}
-			if !strings.Contains(err.Error(), fakeDevice) {
-				t.Errorf("the refusal does not name the device: %v", err)
-			}
-		})
 	}
 }

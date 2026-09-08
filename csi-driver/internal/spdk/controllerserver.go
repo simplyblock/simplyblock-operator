@@ -133,12 +133,6 @@ type controllerServer struct {
 	kubeClient kubernetes.Interface
 }
 
-type spdkVolume struct {
-	clusterID string
-	lvolID    string
-	poolID    string
-}
-
 type spdkSnapshot struct {
 	clusterID  string
 	poolID     string
@@ -545,7 +539,7 @@ func (cs *controllerServer) DeleteVolume(
 	}
 
 	// Invalid format means the volume was never created by this driver - treat as already deleted.
-	if _, err := parseVolumeID(volumeID); err != nil {
+	if _, err := parseVolumeHandle(volumeID); err != nil {
 		klog.Warningf("invalid volume ID format, treating as already deleted: %s", volumeID)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
@@ -600,15 +594,15 @@ func (cs *controllerServer) ValidateVolumeCapabilities(
 		return nil, status.Error(codes.InvalidArgument, "volume capabilities are required")
 	}
 
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "volume %q not found: %v", volumeID, err)
 	}
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if _, err := sbclient.VolumeInfo(ctx, spdkVol.lvolID, ""); err != nil {
+	if _, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, ""); err != nil {
 		return nil, classifyValidateVolumeCapabilitiesError(err)
 	}
 
@@ -692,18 +686,18 @@ func (cs *controllerServer) CreateSnapshot(
 
 	snapshotName := req.GetName()
 	klog.Infof("CreateSnapshot : snapshotName=%s", snapshotName)
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		klog.Errorf("failed to get spdk volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid source volume ID %q: %v", volumeID, err)
 	}
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volSize, err := sbclient.GetVolumeSize(ctx, spdkVol.lvolID)
+	volSize, err := sbclient.GetVolumeSize(ctx, spdkVol.VolumeID)
 	klog.Infof("CreateSnapshot : volSize=%s", volSize)
 	if err != nil {
 		klog.Errorf("failed to get volume info, volumeID: %s err: %v", volumeID, err)
@@ -715,7 +709,7 @@ func (cs *controllerServer) CreateSnapshot(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	snapshotID, err := sbclient.CreateSnapshot(ctx, spdkVol.lvolID, snapshotName)
+	snapshotID, err := sbclient.CreateSnapshot(ctx, spdkVol.VolumeID, snapshotName)
 	klog.Infof("CreateSnapshot : snapshotID=%s", snapshotID)
 	if err != nil {
 		d := classifyCreateSnapshotError(err)
@@ -723,7 +717,7 @@ func (cs *controllerServer) CreateSnapshot(
 			// 409: the snapshot already exists. Reconcile — if it is ours (same
 			// source) return it as success (CSI idempotency); if it belongs to a
 			// different source, it is a genuine name conflict.
-			return reconcileExistingSnapshot(ctx, sbclient, spdkVol.lvolID, snapshotName)
+			return reconcileExistingSnapshot(ctx, sbclient, spdkVol.VolumeID, snapshotName)
 		}
 		klog.Errorf("failed to create snapshot, volumeID: %s snapshotName: %s err: %v", volumeID, snapshotName, err)
 		return nil, d
@@ -733,7 +727,7 @@ func (cs *controllerServer) CreateSnapshot(
 	snapshotData := csi.Snapshot{
 		SizeBytes:      size,
 		SnapshotId:     snapshotID,
-		SourceVolumeId: spdkVol.lvolID,
+		SourceVolumeId: spdkVol.VolumeID,
 		CreationTime:   creationTime,
 		ReadyToUse:     true,
 	}
@@ -1005,20 +999,16 @@ func (cs *controllerServer) createVolume(
 	return &vol, nil
 }
 
-func parseVolumeID(csiVolumeID string) (*spdkVolume, error) {
-	// csiVolumeID format: {clusterUUID}:{poolUUIDOrName}:{lvolUUID}
-	// e.g. 8ffac363-0c46-4714-a71b-f9c0b58a1269:df34f16c-...:8e2dcb9d-...
-	// The pool segment is a name on volumes provisioned before the v2 API
-	// migration, which is why it is carried as written and resolved later.
-	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolumeID))
+// parseVolumeHandle decomposes a CSI volume id, which is a volume handle:
+// {clusterUUID}:{poolUUIDOrName}:{lvolUUID}. The pool segment is a name on
+// volumes provisioned before the v2 API migration, which is why it is carried
+// as written and resolved against the control plane later.
+func parseVolumeHandle(csiVolumeID string) (*lvol.Handle, error) {
+	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolumeID))
 	if !ok {
 		return nil, fmt.Errorf("invalid volume handle %q (expected {clusterID}:{poolID}:{lvolID})", csiVolumeID)
 	}
-	return &spdkVolume{
-		clusterID: vh.ClusterID,
-		poolID:    vh.PoolRef,
-		lvolID:    vh.VolumeID,
-	}, nil
+	return &handle, nil
 }
 
 func parseSnapshotID(csiSnapshotID string) (*spdkSnapshot, error) {
@@ -1040,11 +1030,11 @@ func (cs *controllerServer) publishVolume(
 	volumeID string,
 	sbclient controlplane.ClusterAPI,
 ) (map[string]string, error) {
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return nil, err
 	}
-	err = sbclient.PublishVolume(ctx, spdkVol.lvolID)
+	err = sbclient.PublishVolume(ctx, spdkVol.VolumeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1052,36 +1042,36 @@ func (cs *controllerServer) publishVolume(
 	// hostNQN is not available in the controller path; pass empty string.
 	// If the volume has allowed_hosts configured, this call will fail and the
 	// node will re-fetch connection info at NodeStageVolume time using its own NQN.
-	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.lvolID, "")
+	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, "")
 	if err != nil {
-		klog.Warningf("failed to get volume info for %s (will be fetched at stage time): %v", spdkVol.lvolID, err)
+		klog.Warningf("failed to get volume info for %s (will be fetched at stage time): %v", spdkVol.VolumeID, err)
 		return map[string]string{}, nil
 	}
 	return volumeInfo, nil
 }
 
 func (cs *controllerServer) deleteVolume(ctx context.Context, volumeID string) error {
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return err
 	}
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return err
 	}
-	return sbclient.DeleteVolume(ctx, spdkVol.lvolID)
+	return sbclient.DeleteVolume(ctx, spdkVol.VolumeID)
 }
 
 func (cs *controllerServer) unpublishVolume(ctx context.Context, volumeID string) error {
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return err
 	}
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return err
 	}
-	return sbclient.UnpublishVolume(ctx, spdkVol.lvolID)
+	return sbclient.UnpublishVolume(ctx, spdkVol.VolumeID)
 }
 
 func (cs *controllerServer) ControllerExpandVolume(
@@ -1104,19 +1094,19 @@ func (cs *controllerServer) ControllerExpandVolume(
 	// Simplyblock backends are GiB aligned, so we round up to GiB.
 	capacityBytes := alignToGiBBytes(updatedSize)
 
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID %q: %v", volumeID, err)
 	}
 
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return nil, err
 	}
 
-	err = sbclient.ResizeVolume(ctx, spdkVol.lvolID, capacityBytes)
+	err = sbclient.ResizeVolume(ctx, spdkVol.VolumeID, capacityBytes)
 	if err != nil {
-		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.lvolID, err)
+		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
 		return nil, classifyControllerExpandVolumeError(err)
 	}
 	return &csi.ControllerExpandVolumeResponse{
@@ -1233,18 +1223,18 @@ func (cs *controllerServer) ControllerGetVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	spdkVol, err := parseVolumeID(volumeID)
+	spdkVol, err := parseVolumeHandle(volumeID)
 	if err != nil {
 		return nil, err
 	}
 
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.lvolID, "")
+	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, "")
 	if err != nil {
 		klog.Errorf("failed to get spdkVol for %s: %v", volumeID, err)
 
@@ -1262,7 +1252,7 @@ func (cs *controllerServer) ControllerGetVolume(
 	}
 
 	volume := &csi.Volume{
-		VolumeId:      spdkVol.lvolID,
+		VolumeId:      spdkVol.VolumeID,
 		VolumeContext: volumeInfo,
 	}
 
@@ -1393,13 +1383,13 @@ func (cs *controllerServer) handleVolumeSource(
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
 	}
 
-	spdkVol, err := parseVolumeID(srcVolumeID)
+	spdkVol, err := parseVolumeHandle(srcVolumeID)
 	if err != nil {
 		klog.Errorf("failed to get spdk volume, srcVolumeID: %s err: %v", srcVolumeID, err)
 		return nil, status.Errorf(codes.NotFound, "source volume %q not found: %v", srcVolumeID, err)
 	}
 	// Volume clone goes to the same pool as the source volume.
-	sbclient, err := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID)
+	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)
@@ -1408,7 +1398,7 @@ func (cs *controllerServer) handleVolumeSource(
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
 	klog.Infof("CloneVolume : cloneName=%s", cloneName)
-	volumeID, err := sbclient.CloneVolume(ctx, spdkVol.lvolID, cloneName, newSize, pvcFullName)
+	volumeID, err := sbclient.CloneVolume(ctx, spdkVol.VolumeID, cloneName, newSize, pvcFullName)
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning volume: %v", err)
@@ -1423,7 +1413,7 @@ func (cs *controllerServer) handleVolumeSource(
 			vol.VolumeId = fmt.Sprintf("%s:%s:%s", sbclient.ClusterID(), sbclient.PoolID(), existingUUID)
 			return vol, nil
 		}
-		volumeID, err = sbclient.CloneVolume(ctx, spdkVol.lvolID, cloneName, newSize, pvcFullName)
+		volumeID, err = sbclient.CloneVolume(ctx, spdkVol.VolumeID, cloneName, newSize, pvcFullName)
 		if err != nil {
 			klog.Errorf("error re-cloning volume after cleanup: %v", err)
 			return nil, err

@@ -22,26 +22,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	osexec "os/exec"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
-
-	"path/filepath"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/simplyblock/atlas/blockdev"
-	"github.com/simplyblock/atlas/errs/deferrers"
 	"github.com/simplyblock/atlas/nqn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
-	mount "k8s.io/mount-utils"
-	"k8s.io/utils/exec"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,18 +45,18 @@ import (
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	"github.com/simplyblock/csi-driver/internal/initiator"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	"github.com/simplyblock/csi-driver/internal/mount"
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
-	mounter mount.Interface
-	// execer runs the external commands staging depends on: the blkid preflight
-	// probe and whatever SafeFormatAndMount executes. One shared, injectable
-	// runner so a test can script the probe's answers and observe exactly which
-	// commands staging chose to run — which is how the never-format contract is
-	// asserted.
-	execer      exec.Interface
+	// mounter performs the node-local half of staging: reading a device,
+	// formatting and mounting it, and managing the path it is mounted on. It is
+	// injectable so a test can script the probe's answers and observe exactly
+	// which commands staging chose to run, which is how the never-format
+	// contract is asserted.
+	mounter     *mount.Mounter
 	volumeLocks *csicommon.VolumeLocks
 	kubeClient  kubernetes.Interface
 	manager     *sbkube.Manager
@@ -77,8 +67,7 @@ type nodeServer struct {
 func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*nodeServer, error) {
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
-		mounter:           mount.New(""),
-		execer:            exec.New(),
+		mounter:           mount.New(),
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 	}
@@ -248,7 +237,7 @@ func (ns *nodeServer) NodeGetVolumeStats(
 		}, nil
 	}
 
-	sizeBytes, err := getBlockSizeBytes(volumePath)
+	sizeBytes, err := mount.BlockSizeBytes(volumePath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get block size for %q: %v", volumePath, err)
 	}
@@ -322,7 +311,7 @@ func (ns *nodeServer) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // use this directory to persistently store VolumeContext
 	stagingTargetPath := getStagingTargetPath(req)
 
-	isStaged, err := ns.isStaged(stagingTargetPath)
+	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
 		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -331,7 +320,7 @@ func (ns *nodeServer) NodeStageVolume(
 		// A staged volume whose backing NVMe-oF device was lost leaves a dead
 		// (EIO) mount that isStaged still reports as staged. Repair it in place
 		// instead of short-circuiting.
-		if !ns.stagingMountDead(stagingTargetPath) {
+		if !ns.mounter.IsDead(stagingTargetPath) {
 			klog.Warning("volume already staged")
 			return &csi.NodeStageVolumeResponse{}, nil
 		}
@@ -357,21 +346,21 @@ func (ns *nodeServer) NodeStageVolume(
 		}
 	}
 
-	if spdkVol, err := parseVolumeID(volumeID); err == nil {
-		vc["poolID"] = spdkVol.poolID
+	if spdkVol, err := parseVolumeHandle(volumeID); err == nil {
+		vc["poolID"] = spdkVol.PoolRef
 
 		// Re-fetch connection info from the backend when:
 		// - the volume was provisioned against a pool with allowed_hosts (nqn/targetType empty), or
 		// - the volume may have been failed over (always refresh so the backend can redirect
 		//   to the clone and return target_lvol_id for correct device lookup).
-		if sbcClient, clientErr := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
-			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.lvolID, vc["hostNQN"])
+		if sbcClient, clientErr := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef); clientErr == nil {
+			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.VolumeID, vc["hostNQN"])
 			if infoErr != nil {
 				if errors.Is(infoErr, controlplane.ErrVolumeNotFound) {
 					// Source volume was deleted (migration with --delete-source).
 					// Query the replication relationship to find the active volume
 					// on the target cluster and redirect to it.
-					connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.lvolID, volumeID, vc)
+					connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
 				}
 				if connInfo == nil {
 					klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
@@ -426,7 +415,7 @@ func (ns *nodeServer) NodeUnstageVolume(
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := getStagingTargetPath(req)
 
-	err := ns.deleteMountPoint(stagingTargetPath) // idempotent
+	err := ns.mounter.Remove(stagingTargetPath) // idempotent
 	if err != nil {
 		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", stagingTargetPath, err)
 		return nil, status.Errorf(codes.Internal, "unstage volume %s failed: %s", volumeID, err)
@@ -495,15 +484,15 @@ func (ns *nodeServer) NodeUnpublishVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	err := ns.deleteMountPoint(req.GetTargetPath()) // idempotent
+	err := ns.mounter.Remove(req.GetTargetPath()) // idempotent
 	if err != nil {
 		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", req.GetTargetPath(), err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	if ns.guardian != nil {
-		if spdkVol, err := parseVolumeID(volumeID); err == nil {
-			ns.guardian.RegisterUnpublish(spdkVol.lvolID, req.TargetPath)
+		if spdkVol, err := parseVolumeHandle(volumeID); err == nil {
+			ns.guardian.RegisterUnpublish(spdkVol.VolumeID, req.TargetPath)
 		} else {
 			klog.Warningf("NodeUnpublishVolume: could not parse volume ID %q for Guardian tracking: %v", volumeID, err)
 		}
@@ -583,14 +572,13 @@ func (ns *nodeServer) NodeExpandVolume(
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 
-	resizer := mount.NewResizeFs(exec.New())
-	needsResize, err := resizer.NeedResize(devicePath, volumeMountPath)
+	needsResize, err := ns.mounter.NeedsResize(devicePath, volumeMountPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to check if volume %s needs resizing: %v", volumeID, err)
 	}
 
 	if needsResize {
-		resized, err := resizer.Resize(devicePath, volumeMountPath)
+		resized, err := ns.mounter.Resize(devicePath, volumeMountPath)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to resize volume %s: %v", volumeID, err)
 		}
@@ -607,106 +595,6 @@ func (ns *nodeServer) NodeExpandVolume(
 	}
 
 	return &csi.NodeExpandVolumeResponse{}, nil
-}
-
-// defaultXFSStripeUnit and defaultXFSStripeWidth are the fallback mkfs.xfs
-// stripe geometry used when the StorageClass does not override xfs_su/xfs_sw.
-// These are a starting point based on initial testing, not a computed value
-// derived from cluster NDCS (which did not reliably improve performance).
-const (
-	defaultXFSStripeUnit  = "16k"
-	defaultXFSStripeWidth = "1"
-)
-
-// xfsStripeOptions returns mkfs.xfs format options that set the stripe geometry
-// from the StorageClass-provided xfs_su/xfs_sw parameters, falling back to
-// defaultXFSStripeUnit/defaultXFSStripeWidth when unset. Both parameters must
-// be set together; if only one is set, the defaults are used instead.
-func xfsStripeOptions(volumeContext map[string]string) []string {
-	su := volumeContext["xfs_su"]
-	sw := volumeContext["xfs_sw"]
-	switch {
-	case su == "" && sw == "":
-		su, sw = defaultXFSStripeUnit, defaultXFSStripeWidth
-	case su == "" || sw == "":
-		klog.Warningf(
-			"xfsStripeOptions: xfs_su and xfs_sw must both be set; got xfs_su=%q xfs_sw=%q, falling back to defaults su=%s,sw=%s", //nolint:lll // unwrappable string/log/signature
-			su,
-			sw,
-			defaultXFSStripeUnit,
-			defaultXFSStripeWidth,
-		)
-		su, sw = defaultXFSStripeUnit, defaultXFSStripeWidth
-	}
-	if swVal, err := strconv.Atoi(sw); err != nil || swVal <= 0 {
-		klog.Warningf("xfsStripeOptions: xfs_sw must be a positive integer, got %q, skipping stripe alignment", sw)
-		return nil
-	}
-	return []string{"-d", fmt.Sprintf("su=%s,sw=%s", su, sw), "-l", fmt.Sprintf("su=%s", su)}
-}
-
-// xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
-// new XFS volumes are created with. xfsprogs ships it; the container image only has
-// to contain a matching xfsprogs. Kept in sync with the assertion in
-// deploy/image/Dockerfile_base.
-const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
-
-// xfsFeatureOptions returns the mkfs.xfs option that pins the on-disk feature set to
-// what the oldest supported host kernel can mount.
-//
-// mkfs.xfs derives feature bits from its own defaults and never asks the running
-// kernel what it supports, so a newer xfsprogs happily writes a filesystem that the
-// host then refuses to mount. The el10 base defaults to parent=1 (parent pointers),
-// which implies EXCHRANGE and yields sb_features_incompat=0xeb, while RHEL/Rocky 9
-// kernels accept only 0xb:
-//
-//	XFS (nvme0n1): Superblock has unknown incompatible features (0xc0) enabled.
-//	XFS (nvme0n1): Filesystem cannot be safely mounted by this kernel.
-//	XFS (nvme0n1): SB validate failed with error -22.
-//
-// Unlike the ext4 equivalent there is no repair path: XFS features can only be added,
-// never removed, and such a filesystem cannot be mounted even read-only. Prevention
-// is the only option.
-//
-// lts_5.15.conf is chosen over the closer lts_6.x baselines because it sits below the
-// floor of every el9 minor instead of tracking vendor backports -- 9.5 accepts 0xb
-// while 9.8 additionally accepts EXCHRANGE and NREXT64. The options compose with
-// xfsStripeOptions: stripe geometry lives in sb_unit/sb_width/sb_logsunit and is
-// independent of the feature words.
-//
-// An unusable config file is a warning rather than an error: mkfs.xfs treats an
-// unreadable -c options= path as fatal, so failing open keeps an image that predates
-// this pin able to format volumes at all, which is the safer failure for the el9
-// image whose built-in defaults already produce 0xb.
-func xfsFeatureOptions() []string {
-	if err := checkXFSFormatConfig(); err != nil {
-		klog.Warningf(
-			"xfsFeatureOptions: %s unusable (%v); formatting with mkfs.xfs built-in defaults, which on a newer xfsprogs may produce a filesystem this kernel cannot mount", //nolint:lll // unwrappable string/log/signature
-			xfsFormatConfigPath,
-			err,
-		)
-		return nil
-	}
-	return []string{"-c", "options=" + xfsFormatConfigPath}
-}
-
-// checkXFSFormatConfig reports whether mkfs.xfs will actually be able to consume the
-// pinned config.
-func checkXFSFormatConfig() error {
-	f, err := os.Open(xfsFormatConfigPath)
-	if err != nil {
-		return err
-	}
-	defer deferrers.Close(f)
-
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("not a regular file (mode %s)", info.Mode())
-	}
-	return nil
 }
 
 // must be idempotent
@@ -726,7 +614,7 @@ func (ns *nodeServer) stageVolume(
 		return nil
 	}
 
-	mounted, err := ns.createMountPoint(stagingPath)
+	mounted, err := ns.mounter.EnsureDirectory(stagingPath)
 	if err != nil {
 		return err
 	}
@@ -738,7 +626,7 @@ func (ns *nodeServer) stageVolume(
 	// Read the device before deciding anything about it. Staging stops here on
 	// any reading that is not a definite answer, rather than handing an
 	// uncertain device to mkfs.
-	fs, err := ns.probeDiskFormat(ctx, devicePath)
+	fs, err := ns.mounter.Probe(ctx, devicePath)
 	if err != nil {
 		return err
 	}
@@ -805,7 +693,6 @@ func (ns *nodeServer) stageVolume(
 	// dead, and neither is a reason to format: falling back to mkfs would
 	// reinstate the data loss this branch exists to prevent.
 	mntFlags := stagingMountFlags(fsType, req.GetVolumeCapability())
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: ns.execer}
 	annotated, err := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext)
 	if err != nil {
 		return err
@@ -819,7 +706,7 @@ func (ns *nodeServer) stageVolume(
 				req.GetVolumeId(), annotated, fsType, annotated)
 		}
 		volumeContext[stagedFsTypeKey] = annotated
-		return mounter.Mount(
+		return ns.mounter.Mount(
 			devicePath,
 			stagingPath,
 			annotated,
@@ -832,44 +719,17 @@ func (ns *nodeServer) stageVolume(
 	// is once the annotation has overridden it.
 	volumeContext[stagedFsTypeKey] = fsType
 
-	formatOptions := []string{}
-	if fsType == "xfs" {
-		formatOptions = append(formatOptions, xfsFeatureOptions()...)
-		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
-	}
+	formatOptions := mount.FormatOptions(fsType, volumeContext)
 
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
 	klog.Infof("formatOptions %v", formatOptions)
-	err = mounter.FormatAndMountSensitiveWithFormatOptions(
-		devicePath,
-		stagingPath,
-		fsType,
-		mntFlags,
-		nil,
-		formatOptions,
-	)
-	if err != nil {
+	if err := ns.mounter.FormatAndMount(devicePath, stagingPath, fsType, mntFlags, formatOptions); err != nil {
 		return err
 	}
 
 	if fsType == "ext4" {
-		reserved := volumeContext["tune2fs_reserved_blocks"]
-		if reserved != "" {
-			cmd := osexec.Command("tune2fs", "-m", reserved, devicePath)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				klog.Errorf(
-					"Failed to apply tune2fs -m %s on %s: %v\nOutput: %s",
-					reserved,
-					devicePath,
-					err,
-					string(output),
-				)
-				return fmt.Errorf("tune2fs failed: %w", err)
-			}
-			klog.Infof("Applied tune2fs -m %s on %s", reserved, devicePath)
-		} else {
-			klog.Infof("No tune2fs_reserved_blocks set; skipping tune2fs adjustment")
+		if err := mount.ApplyExt4Reserved(devicePath, volumeContext["tune2fs_reserved_blocks"]); err != nil {
+			return err
 		}
 	}
 
@@ -880,52 +740,6 @@ func (ns *nodeServer) stageVolume(
 	ns.recordOnDiskFilesystem(ctx, req.GetVolumeId(), volumeContext, fsType)
 
 	return nil
-}
-
-// probeDiskFormat reads the filesystem on devicePath through atlas's blockdev
-// prober, translating its refusals into this driver's staging language: a probe
-// that could not read the device and a partition table where a filesystem was
-// expected both leave open whether the device holds somebody's data, so staging
-// fails there instead of formatting through the doubt. The next attempt probes
-// the device again.
-func (ns *nodeServer) probeDiskFormat(ctx context.Context, devicePath string) (string, error) {
-	fs, err := blockdev.NewBlkidProberWithRunner(execRunner(ns.execer)).Format(ctx, devicePath)
-	switch {
-	case errors.Is(err, blockdev.ErrPartitionTable):
-		// Wrapped, because the prober names the table blkid reported and which
-		// one it is decides what to do about it: a GPT disk handed to the driver
-		// by mistake is a different problem from a stale DOS label on a volume
-		// that was reused.
-		return "", fmt.Errorf(
-			"refusing to stage %s, which carries a partition table rather than a filesystem: %w",
-			devicePath, err,
-		)
-	case err != nil:
-		return "", fmt.Errorf(
-			"cannot read the on-disk filesystem of %s, refusing to stage a device whose contents are unknown: %w",
-			devicePath, err,
-		)
-	}
-	return fs, nil
-}
-
-// execRunner adapts the node server's command runner to blockdev's Runner,
-// keeping blkid's exit code separate from a transport failure the way the
-// prober's contract requires. It runs without the context on purpose: the
-// underlying exec.Interface command carries no context, which preserves the
-// staging path's existing timeout behavior (none) rather than changing it here.
-func execRunner(execer exec.Interface) blockdev.Runner {
-	return func(_ context.Context, name string, args ...string) ([]byte, int, error) {
-		out, err := execer.Command(name, args...).CombinedOutput()
-		if err != nil {
-			var exit exec.ExitError
-			if errors.As(err, &exit) {
-				return out, exit.ExitStatus(), nil
-			}
-			return out, 0, err
-		}
-		return out, 0, nil
-	}
 }
 
 // stagedFsType returns the filesystem a volume was staged with: the one
@@ -951,14 +765,6 @@ const (
 	stagedFsTypeKey = "stagedFsType"
 )
 
-// supportedOnDiskFilesystems are the filesystems this driver formats and mounts.
-// The annotation is writable by anyone who can edit the claim, so a value
-// outside this set is ignored rather than passed on to mkfs.
-var supportedOnDiskFilesystems = map[string]bool{
-	"ext4": true,
-	"xfs":  true,
-}
-
 // persistentVolumeClaimForVolume returns the PersistentVolumeClaim that owns the
 // given CSI volume.
 //
@@ -978,12 +784,12 @@ func (ns *nodeServer) persistentVolumeClaimForVolume(
 	name := strings.TrimSpace(volumeContext[CSIStorageNameKey])
 
 	if namespace == "" || name == "" {
-		spdkVol, err := parseVolumeID(volumeID)
+		spdkVol, err := parseVolumeHandle(volumeID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve claim for volume %s: %w", volumeID, err)
 		}
 
-		pv, err := ns.manager.PersistentVolumeByLogicalVolumeID(ctx, spdkVol.lvolID)
+		pv, err := ns.manager.PersistentVolumeByLogicalVolumeID(ctx, spdkVol.VolumeID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve claim for volume %s: %w", volumeID, err)
 		}
@@ -1028,7 +834,7 @@ func (ns *nodeServer) annotatedFilesystem(
 	if fsType == "" {
 		return "", nil
 	}
-	if !supportedOnDiskFilesystems[fsType] {
+	if !mount.Supported(fsType) {
 		klog.Warningf(
 			"claim %s/%s asks for on-disk filesystem %q, which this driver does not create; refusing to stage it",
 			pvc.Namespace, pvc.Name, fsType,
@@ -1107,12 +913,7 @@ func fsTypeOrDefault(volCap *csi.VolumeCapability) string {
 // because a claim annotation can have overridden what the capability asked for.
 func stagingMountFlags(fsType string, volCap *csi.VolumeCapability) []string {
 	flags := append([]string{}, volCap.GetMount().GetMountFlags()...)
-
-	if fsType == "xfs" {
-		// XFS refuses to mount two filesystems with the same UUID; nouuid lets a
-		// volume and its clone/restored snapshot mount on the same node.
-		flags = append(flags, "nouuid")
-	}
+	flags = append(flags, mount.FlagsFor(fsType)...)
 
 	switch volCap.GetAccessMode().GetMode() {
 	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
@@ -1128,64 +929,6 @@ func stagingMountFlags(fsType string, volCap *csi.VolumeCapability) []string {
 	return flags
 }
 
-// stagingMountDead reports whether stagingPath is a dead/corrupted mount — the
-// state left behind when total NVMe-oF path loss makes the kernel remove the
-// backing device. Such a mount returns ENOTCONN/ESTALE/EIO on access, which
-// mount.IsCorruptedMnt detects.
-func (ns *nodeServer) stagingMountDead(stagingPath string) bool {
-	if _, err := ns.mounter.IsMountPoint(stagingPath); err != nil {
-		return mount.IsCorruptedMnt(err)
-	}
-	// IsMountPoint can still succeed on a mount whose device just vanished;
-	// a stat of the path then fails with an EIO-class error.
-	fi, err := os.Stat(stagingPath)
-	if err != nil {
-		return mount.IsCorruptedMnt(err)
-	}
-	// Some filesystems (notably ext4) do NOT shut down when their backing block
-	// device is removed on total NVMe-oF path loss — unlike XFS, which goes EIO
-	// and is caught above. IsMountPoint and stat then both succeed from cache, so
-	// the dead mount looks healthy and never gets restaged. Detect it by checking
-	// that the block device backing the mount still exists: the mountpoint's
-	// st_dev gives the device major:minor, and once the kernel removes the device
-	// /sys/dev/block/<major>:<minor> disappears. A later reconnect gets a NEW
-	// major:minor, but this mount stays bound to the old (gone) one until it is
-	// restaged, so this never false-positives on a healthy, read-only, or full fs.
-	return backingBlockDeviceGone(fi)
-}
-
-// backingBlockDeviceGone reports whether the block device that backs the mounted
-// filesystem described by fi no longer exists in sysfs. It returns false for
-// filesystems with an anonymous super-block device (tmpfs/overlay/etc.), which
-// have no /sys/dev/block entry to check.
-func backingBlockDeviceGone(fi os.FileInfo) bool {
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return false
-	}
-	dev := uint64(st.Dev) //nolint:unconvert // st.Dev is uint64 on linux/amd64, int32 elsewhere
-	if unix.Major(dev) == 0 {
-		return false
-	}
-	_, err := os.Stat(fmt.Sprintf("/sys/dev/block/%d:%d", unix.Major(dev), unix.Minor(dev)))
-	return os.IsNotExist(err)
-}
-
-// forceUnmountStaging detaches a dead staging mount. A lazy unmount (umount -l)
-// is used because a normal unmount can hang or fail when the backing device is
-// gone. The staging directory itself is preserved for the remount.
-func (ns *nodeServer) forceUnmountStaging(stagingPath string) error {
-	out, err := osexec.Command("umount", "-l", stagingPath).CombinedOutput()
-	if err != nil {
-		msg := strings.ToLower(string(out))
-		if strings.Contains(msg, "not mounted") || strings.Contains(msg, "not found") {
-			return nil
-		}
-		return fmt.Errorf("lazy unmount %s: %w (%s)", stagingPath, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 // healVolumeBeforePublish repairs a volume whose backing NVMe-oF device was lost
 // (total path loss) before it is bind-mounted into a (replacement) pod. For
 // filesystem volumes it restages the dead staging mount; for block volumes it
@@ -1199,7 +942,7 @@ func (ns *nodeServer) healVolumeBeforePublish(ctx context.Context, req *csi.Node
 		return ns.ensureDeviceConnected(ctx, req.GetVolumeId(), stagingParentPath)
 	case volCap.GetMount() != nil:
 		stagingTargetPath := getStagingTargetPath(req)
-		if ns.stagingMountDead(stagingTargetPath) {
+		if ns.mounter.IsDead(stagingTargetPath) {
 			return ns.restageVolume(ctx, req.GetVolumeId(), stagingTargetPath, stagingParentPath, volCap)
 		}
 	}
@@ -1269,7 +1012,7 @@ func (ns *nodeServer) restageVolume(
 		return fmt.Errorf("lookup volume context: %w", err)
 	}
 
-	if err := ns.forceUnmountStaging(stagingTargetPath); err != nil {
+	if err := ns.mounter.ForceUnmount(stagingTargetPath); err != nil {
 		return fmt.Errorf("unmount dead staging mount: %w", err)
 	}
 
@@ -1282,7 +1025,7 @@ func (ns *nodeServer) restageVolume(
 		return fmt.Errorf("reconnect device: %w", err)
 	}
 
-	if _, err := ns.createMountPoint(stagingTargetPath); err != nil {
+	if _, err := ns.mounter.EnsureDirectory(stagingTargetPath); err != nil {
 		return fmt.Errorf("recreate staging dir: %w", err)
 	}
 	// Plain Mount, not FormatAndMount: the volume already holds a filesystem and
@@ -1298,21 +1041,6 @@ func (ns *nodeServer) restageVolume(
 	}
 	klog.Infof("restaged volume %s on fresh device %s", volumeID, devicePath)
 	return nil
-}
-
-// isStaged if stagingPath is a mount point, it means it is already staged, and vice versa
-func (ns *nodeServer) isStaged(stagingPath string) (bool, error) {
-	isMount, err := ns.mounter.IsMountPoint(stagingPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		} else if mount.IsCorruptedMnt(err) {
-			return true, nil
-		}
-		klog.Warningf("check is stage error: %v", err)
-		return false, err
-	}
-	return isMount, nil
 }
 
 // must be idempotent
@@ -1341,18 +1069,18 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 
 		fsType = ""
 
-		if err := ns.ensureCleanTargetPath(targetPath); err != nil {
+		if err := ns.mounter.EnsureCleanTarget(targetPath); err != nil {
 			return status.Errorf(codes.Internal, "Could not cleanup mount target %q: %v", targetPath, err)
 		}
 
-		if err = ns.MakeFile(targetPath); err != nil {
+		if err = ns.mounter.EnsureFile(targetPath); err != nil {
 			if removeErr := os.Remove(targetPath); removeErr != nil {
 				return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)
 			}
 			return status.Errorf(codes.Internal, "Could not create file %q: %v", targetPath, err)
 		}
 	} else if req.GetVolumeCapability().GetMount() != nil {
-		mounted, err := ns.createMountPoint(targetPath)
+		mounted, err := ns.mounter.EnsureDirectory(targetPath)
 		if err != nil {
 			return err
 		}
@@ -1367,83 +1095,6 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
 }
 
-// create mount point if not exists, return whether already mounted
-func (ns *nodeServer) createMountPoint(path string) (bool, error) {
-	isMount, err := ns.mounter.IsMountPoint(path)
-	if os.IsNotExist(err) {
-		isMount = false
-		err = os.MkdirAll(path, 0o755)
-	}
-	if isMount {
-		klog.Infof("%s already mounted", path)
-	}
-	return isMount, err
-}
-
-// unmount and delete mount point, must be idempotent
-func (ns *nodeServer) deleteMountPoint(path string) error {
-	isMount, err := ns.mounter.IsMountPoint(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			klog.Infof("%s already deleted", path)
-			return nil
-		} else if mount.IsCorruptedMnt(err) {
-			klog.Warningf("Corrupted mount point detected at %s", path)
-			isMount = true
-		} else {
-			klog.Errorf("Error checking mount point %s: %v", path, err)
-			return err
-		}
-	}
-
-	if isMount {
-		err = ns.mounter.Unmount(path)
-		if err != nil {
-			return err
-		}
-	}
-	return os.RemoveAll(path)
-}
-
-func (ns *nodeServer) MakeFile(path string) error {
-	// Create file
-	newFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0750)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", path, err)
-	}
-	if err := newFile.Close(); err != nil {
-		return fmt.Errorf("failed to close file %s: %w", path, err)
-	}
-	return nil
-}
-
-// ensureCleanTargetPath makes sure targetPath is not a mountpoint and is removed.
-// idempotent
-func (ns *nodeServer) ensureCleanTargetPath(targetPath string) error {
-	isMount, err := ns.mounter.IsMountPoint(targetPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if mount.IsCorruptedMnt(err) {
-			isMount = true
-		} else {
-			return err
-		}
-	}
-
-	if isMount {
-		if err := ns.mounter.Unmount(targetPath); err != nil {
-			_ = osexec.Command("umount", "-l", targetPath).Run()
-		}
-	}
-
-	if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
 func getStagingTargetPath(req interface{}) string {
 	switch vr := req.(type) {
 	case *csi.NodeStageVolumeRequest:
@@ -1456,43 +1107,4 @@ func getStagingTargetPath(req interface{}) string {
 		klog.Warningf("invalid request %T", vr)
 	}
 	return ""
-}
-
-func getBlockSizeBytes(volumePath string) (uint64, error) {
-	if size, err := ioctlBlkGetSize64(volumePath); err == nil && size > 0 {
-		return size, nil
-	}
-
-	rp, err := filepath.EvalSymlinks(volumePath)
-	if err == nil && rp != "" && rp != volumePath {
-		if size, err2 := ioctlBlkGetSize64(rp); err2 == nil && size > 0 {
-			return size, nil
-		}
-	}
-
-	return 0, fmt.Errorf("BLKGETSIZE64 ioctl failed for %q", volumePath)
-}
-
-func ioctlBlkGetSize64(path string) (uint64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer deferrers.Close(f)
-
-	// blkGetSize64 is the Linux BLKGETSIZE64 ioctl code.
-	// It returns the total size (in bytes) of a block device.
-	var blkGetSize64 = 0x80081272
-
-	var size uint64
-	_, _, errno := unix.Syscall(
-		unix.SYS_IOCTL, //nolint:staticcheck // SA1019: Linux target; direct ioctl syscall is intended
-		f.Fd(),
-		uintptr(blkGetSize64),
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if errno != 0 {
-		return 0, errno
-	}
-	return size, nil
 }

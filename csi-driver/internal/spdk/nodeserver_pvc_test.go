@@ -8,7 +8,6 @@ package spdk
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
-	testingexec "k8s.io/utils/exec/testing"
 
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
@@ -205,41 +203,6 @@ func TestAnnotatedFilesystem_NoClaim(t *testing.T) {
 // that, and must therefore fail staging rather than fall through to mkfs. The
 // probe itself lives in atlas's blockdev package now; what this pins is the
 // driver's boundary — that every refusal the prober raises still fails staging.
-func TestProbeDiskFormat(t *testing.T) {
-	cases := []struct {
-		name      string
-		result    scriptedResult
-		want      string
-		wantError bool
-	}{
-		{name: "blank device", result: scriptedResult{err: &testingexec.FakeExitError{Status: 2}}, want: ""},
-		{name: "already formatted", result: scriptedResult{out: "TYPE=ext4\n"}, want: "ext4"},
-		{name: "unreadable device", result: scriptedResult{err: errors.New("blkid: broken pipe")}, wantError: true},
-		{name: "partition table, no filesystem", result: scriptedResult{out: "PTTYPE=dos\n"}, wantError: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fe, _ := scriptedExec([]scriptedResult{tc.result})
-			ns := &nodeServer{execer: fe}
-
-			got, err := ns.probeDiskFormat(context.Background(), "/dev/nvme9n1")
-			if tc.wantError {
-				if err == nil {
-					t.Fatalf("probeDiskFormat(%s) = %q, nil, want an error", tc.name, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("probeDiskFormat(%s): unexpected error %v", tc.name, err)
-			}
-			if got != tc.want {
-				t.Fatalf("probeDiskFormat(%s) = %q, want %q", tc.name, got, tc.want)
-			}
-		})
-	}
-}
-
 // patchedFilesystems returns the on-disk-filesystem value of every claim patch
 // the node server sent, in order, so a test can assert both what was written and
 // that nothing was written at all.

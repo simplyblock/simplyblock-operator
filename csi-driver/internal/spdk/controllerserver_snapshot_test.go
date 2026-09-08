@@ -108,13 +108,13 @@ func TestCreateSnapshot_ControlPlaneErrorMapping(t *testing.T) {
 		mock := newMockSBCLI()
 		defer mock.Close()
 		src := seedSnapshotSource(mock)
-		parsed, _ := parseVolumeID(src)
+		parsed, _ := parseVolumeHandle(src)
 		existingID := uuid.New().String()
 		mock.mu.Lock()
 		mock.snapshots[existingID] = &mockSnapshot{
 			UUID:    existingID,
 			Name:    snapName,
-			VolUUID: parsed.lvolID,
+			VolUUID: parsed.VolumeID,
 			Size:    1 << 30,
 		}
 		mock.strictSnapshotNameConflict = true
@@ -357,13 +357,13 @@ func TestCreateVolumeFromSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 
 	// A source snapshot the clone reads from.
 	srcVolID := createSourceVolume(t, cs, "pvc-clone-source")
-	src, err := parseVolumeID(srcVolID)
+	src, err := parseVolumeHandle(srcVolID)
 	if err != nil {
 		t.Fatalf("parse source volume ID: %v", err)
 	}
 	snapID := uuid.New().String()
 	mock.mu.Lock()
-	mock.snapshots[snapID] = &mockSnapshot{UUID: snapID, Name: "src-snap", VolUUID: src.lvolID, Size: 1 << 30}
+	mock.snapshots[snapID] = &mockSnapshot{UUID: snapID, Name: "src-snap", VolUUID: src.VolumeID, Size: 1 << 30}
 	mock.mu.Unlock()
 	csiSnapshotID := sanityClusterID + ":" + sanityPoolUUID + ":" + snapID
 
