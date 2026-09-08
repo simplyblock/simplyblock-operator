@@ -16,7 +16,7 @@
 // in Draft. Whether that document becomes a cluster is the reviewer's decision
 // and a different controller's job.
 
-package controller
+package deployment
 
 import (
 	"context"

@@ -8,7 +8,7 @@
 // chart did not set them fails with a sentence rather than with a pod that
 // cannot pull.
 
-package controller
+package deployment
 
 import (
 	"fmt"

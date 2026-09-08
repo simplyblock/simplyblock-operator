@@ -11,7 +11,7 @@
 // probe writes, which is the contract between the two halves, so these tests
 // exercise the reconciler against exactly what it will read in a cluster.
 
-package controller
+package deployment
 
 import (
 	"context"

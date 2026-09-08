@@ -52,6 +52,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -527,12 +528,12 @@ func main() {
 	// image is read from the environment rather than from the running pod,
 	// because a pod may name its image by a tag the registry has since moved and
 	// what a Job needs is the reference the operator was deployed with.
-	if err := (&controller.OperatorOpsReconciler{
+	if err := (&deployment.OperatorOpsReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
 		Discovery:  operatorOpsDiscovery,
-		ProbeImage: os.Getenv(controller.NodeProbeImageEnv),
+		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
