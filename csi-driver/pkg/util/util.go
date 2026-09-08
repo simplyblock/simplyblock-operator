@@ -17,16 +17,12 @@ limitations under the License.
 package util
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
@@ -78,179 +74,6 @@ func FromEnv(env, def string) string {
 		return s
 	}
 	return def
-}
-
-// a trivial trylock implementation
-type TryLock struct {
-	locked int32
-}
-
-// acquire lock w/o waiting, return true if acquired, false otherwise
-func (lock *TryLock) Lock() bool {
-	// golang CAS forces sequential consistent memory order
-	return atomic.CompareAndSwapInt32(&lock.locked, 0, 1)
-}
-
-// release lock
-func (lock *TryLock) Unlock() {
-	// golang atomic store forces release memory order
-	atomic.StoreInt32(&lock.locked, 0)
-}
-
-var (
-	nvmeReDeviceSysFileName = regexp.MustCompile(`nvme(\d+)n(\d+)|nvme(\d+)c(\d+)n(\d+)`)
-	nvmeReDeviceName        = regexp.MustCompile(`c(\d+)`)
-)
-
-// getNvmeDeviceName checks the contents of given uuidFilePath for matching with
-// nvmeModel. If it matches then returns the appropriate device name like nvme0n1
-func getNvmeDeviceName(uuidFilePath, nvmeModel string) (string, error) {
-	uuidContent, err := os.ReadFile(uuidFilePath)
-	if err != nil {
-		// a uuid file could be removed because of Disconnect() operation at the same time when doing ReadFile
-		klog.Errorf("open uuid file uuidFilePath (%s) error: %s", uuidFilePath, err)
-		return "", err
-	}
-
-	if strings.TrimSpace(string(uuidContent)) == nvmeModel {
-		// Obtain the part nvme*c*n* or nvme*n* from the file path, eg, nvme0c0n1
-		deviceSysFileName := nvmeReDeviceSysFileName.FindString(uuidFilePath)
-		// Remove c* from (nvme*c*n*), eg, c0
-		return nvmeReDeviceName.ReplaceAllString(deviceSysFileName, ""), nil
-	}
-
-	return "", errors.New("does not match")
-}
-
-func CheckIfNvmeDeviceExists(nvmeModel string, ignorePaths map[string]struct{}) (string, error) {
-	uuidFilePaths, err := filepath.Glob("/sys/bus/pci/devices/*/nvme/nvme*/nvme*n*/uuid")
-	if err != nil {
-		return "", fmt.Errorf("obtain uuid files error: %w", err)
-	}
-
-	// The content of uuid file should be in the form of, eg,
-	// "b9e38b18-511e-429d-9660-f665fa7d63d0\n", which is also the volumeId.
-	for _, filePath := range uuidFilePaths {
-		if ignorePaths != nil {
-			if _, visited := ignorePaths[filePath]; visited {
-				continue
-			}
-			ignorePaths[filePath] = struct{}{}
-		}
-		deviceName, err := getNvmeDeviceName(filePath, nvmeModel)
-		if err != nil {
-			klog.Infof("Ignoring err: %v", err)
-		}
-		if deviceName != "" {
-			return deviceName, nil
-		}
-	}
-	return "", os.ErrNotExist
-}
-
-// detectNvemeDeviceName detects the device name in sysfs for given nvmeModel
-func detectNvmeDeviceName(nvmeModel string) (string, error) {
-	uuidFilePathsReadFlag := make(map[string]struct{})
-
-	// Set 20 seconds timeout at maximum to try to find the exact device name for SMA Nvme
-	for second := 0; second < 20; second++ {
-		deviceName, err := CheckIfNvmeDeviceExists(nvmeModel, uuidFilePathsReadFlag)
-		if err != nil {
-			klog.Infof("detect nvme device '%s': %v", nvmeModel, err)
-		} else {
-			return deviceName, nil
-		}
-		// Wait a second before retry
-		time.Sleep(time.Second)
-	}
-
-	return "", os.ErrDeadlineExceeded
-}
-
-// get the Nvme block device
-func GetNvmeDeviceName(ctx context.Context, nvmeModel, bdf string) (string, error) {
-	var deviceName string
-	var err error
-	if bdf != "" {
-		var uuidFilePath string
-		// find the uuid file path for the nvme device based on the bdf
-		uuidFilePath, err = waitForDeviceReady(
-			ctx,
-			fmt.Sprintf("/sys/bus/pci/devices/%s/nvme/nvme*/nvme*n*/uuid", bdf),
-			20,
-			time.Second,
-		)
-		if err != nil {
-			return "", fmt.Errorf("failed find device at %s: %w", uuidFilePath, err)
-		}
-		klog.Infof("uuidFilePath is %s", uuidFilePath)
-		deviceName, err = getNvmeDeviceName(uuidFilePath, nvmeModel)
-	} else {
-		deviceName, err = detectNvmeDeviceName(nvmeModel)
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to find nvme device name: %w", err)
-	}
-
-	deviceGlob := "/dev/" + deviceName
-
-	return waitForDeviceReady(ctx, deviceGlob, 20, time.Second)
-}
-
-// GetVirtioBlkDevice returns a block device available at the
-// given bdf path. If wait is true then it wait till a device
-// appear at the bdf path.
-func GetVirtioBlkDeviceName(ctx context.Context, bdf string, wait bool) (string, error) {
-	// The parent dir path of the block device for VirtioBlk should be
-	// in the form of "/sys/bus/pci/devices/0000:01:01.0/virtio2/block"
-	sysBusGlob := fmt.Sprintf("/sys/bus/pci/devices/%s/virtio*/block", bdf)
-	var deviceParentDirPath string
-	var err error
-	if wait {
-		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 20, time.Second)
-	} else {
-		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 0, time.Second)
-	}
-	if err != nil {
-		klog.Errorf("could not find the deviceParentDirPath (%s): %s", sysBusGlob, err)
-		return "", err
-	}
-
-	// open the parent dir and read the dir for block device for VirtioBlk,
-	// eg, in the form of "vda", which is exactly the device name.
-	deviceName, err := os.ReadDir(deviceParentDirPath)
-	if err != nil {
-		klog.Errorf("could not open the deviceParentDirPath (%s): %s", sysBusGlob, err)
-		return "", err
-	}
-	if len(deviceName) != 1 {
-		return "", fmt.Errorf("the deviceParentDirPath (%s) has wrong content (%s)", sysBusGlob, deviceName)
-	}
-
-	// wait for the block device ready for VirtioBlk, eg, in the form of "/dev/vda"
-	deviceGlob := "/dev/" + deviceName[0].Name()
-
-	return waitForDeviceReady(ctx, deviceGlob, 20, time.Second)
-}
-
-// GetAvailablePhysicalFunction returns next available Pf and Vf by checking
-// into sysfs for existing NVMe PCIe devices
-func GetAvailablePhysicalFunction(kvmBridgeCount int) (pf, vf uint32, err error) {
-	for pf = 1; pf <= uint32(kvmBridgeCount); pf++ {
-		for vf = 0; vf < 32; vf++ { // Assumption is that each PCI bridge supports
-			devicePaths, err := filepath.Glob(fmt.Sprintf("/sys/bus/pci/devices/0000:%02x:%02x.*", pf, vf))
-			if err != nil {
-				return 0, 0, fmt.Errorf("sysfs failure: %w", err)
-			}
-			if devicePaths == nil {
-				// No matching NVMe files found in sysfs, hence use
-				// the first available pf/vf
-				return pf - 1, vf, nil
-			}
-		}
-	}
-
-	return 0, 0, os.ErrNotExist
 }
 
 // ConvertInterfaceToMap converts an interface to a map[string]string

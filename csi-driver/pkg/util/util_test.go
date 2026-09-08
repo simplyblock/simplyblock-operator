@@ -19,53 +19,10 @@ package util_test
 
 import (
 	"os"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/spdk/spdk-csi/pkg/util"
 )
-
-func TestTryLockSequential(t *testing.T) {
-	var tryLock util.TryLock
-
-	// acquire lock
-	if !tryLock.Lock() {
-		t.Fatalf("failed to acquire lock")
-	}
-	// acquire a locked lock should fail
-	if tryLock.Lock() {
-		t.Fatalf("acquired a locked lock")
-	}
-	// acquire a released lock should succeed
-	tryLock.Unlock()
-	if !tryLock.Lock() {
-		t.Fatal("failed to acquire a release lock")
-	}
-}
-
-func TestTryLockConcurrent(t *testing.T) {
-	var tryLock util.TryLock
-	var wg sync.WaitGroup
-	var lockCount int32
-	const taskCount = 50
-
-	// only one task should acquire the lock
-	for i := 0; i < taskCount; i++ {
-		wg.Add(1)
-		go func() {
-			if tryLock.Lock() {
-				atomic.AddInt32(&lockCount, 1)
-			}
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-
-	if lockCount != 1 {
-		t.Fatal("concurrency test failed")
-	}
-}
 
 func TestVolumeContext(t *testing.T) {
 	volumeContextFileName := "volumeContext.json"
