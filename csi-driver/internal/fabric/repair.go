@@ -1,4 +1,10 @@
-package util
+// Package fabric repairs the NVMe-oF states a plain connect cannot see.
+//
+// It is a leaf of the node-local data path: it takes an NQN and what the
+// control plane says should be attached, and it answers whether it tore
+// anything down. Both the attach path and the connection monitor call it, and
+// it calls neither back.
+package fabric
 
 import (
 	"context"
@@ -13,6 +19,8 @@ import (
 
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
+
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // Repair of the fabric states a plain connect cannot see.
@@ -390,7 +398,7 @@ func describeCoTenants(nss []nvme.Namespace) string {
 
 // targetsFromConnections turns the control plane's answer into the target list
 // Inspect compares the attached controllers against.
-func targetsFromConnections(nqn string, conns []*LvolConnectResp) []nvmeof.Target {
+func targetsFromConnections(nqn string, conns []*controlplane.LvolConnectResp) []nvmeof.Target {
 	targets := make([]nvmeof.Target, 0, len(conns))
 	for _, c := range conns {
 		if c == nil {
@@ -410,7 +418,7 @@ func targetsFromConnections(nqn string, conns []*LvolConnectResp) []nvmeof.Targe
 	return targets
 }
 
-// repairFabric diagnoses this volume's subsystem and repairs what policy allows,
+// RepairAttach diagnoses this volume's subsystem and repairs what policy allows,
 // reporting whether anything was actually torn down — the only case where
 // retrying the attach can produce a different answer.
 //
@@ -418,8 +426,8 @@ func targetsFromConnections(nqn string, conns []*LvolConnectResp) []nvmeof.Targe
 // produce a device has no business deciding an endpoint is stale, and the two
 // defects that matter at attach time — a subsystem exporting no namespace, and a
 // duplicate head — need no endpoint comparison at all.
-func (nvmf *initiatorNVMf) repairFabric(ctx context.Context) bool {
-	sel := nvme.DeviceSelector{NQN: nvmf.nqn, NSID: nvme.NamespaceID(nvmf.nsId)}
+func RepairAttach(ctx context.Context, subsystemNQN string, nsID int) bool {
+	sel := nvme.DeviceSelector{NQN: subsystemNQN, NSID: nvme.NamespaceID(nsID)}
 	_, actions := defaultRepairer.healSubsystem(ctx, sel, nil)
 	for _, a := range actions {
 		if a.repaired {
@@ -429,7 +437,7 @@ func (nvmf *initiatorNVMf) repairFabric(ctx context.Context) bool {
 	return false
 }
 
-// healMonitoredVolume is the connection monitor's repair hook, for the state its
+// HealMonitoredVolume is the connection monitor's repair hook, for the state its
 // path counting can see but its reconnect cannot fix: a controller that is
 // connected while contributing no path to the namespace head. `nvme connect`
 // refuses it with "already connected", so the monitor re-issues a connect that
@@ -438,7 +446,7 @@ func (nvmf *initiatorNVMf) repairFabric(ctx context.Context) bool {
 // The volume is selected by lvol UUID rather than by namespace id: the monitor
 // already resolved it from /sys/block/<dev>/uuid, and on a shared subsystem it
 // is what tells this volume from its co-tenants without deriving anything.
-func healMonitoredVolume(ctx context.Context, nqn, lvolID string, conns []*LvolConnectResp) {
+func HealMonitoredVolume(ctx context.Context, nqn, lvolID string, conns []*controlplane.LvolConnectResp) {
 	sel := nvme.DeviceSelector{NQN: nqn, UUID: lvolID}
 	_, actions := defaultRepairer.healSubsystem(ctx, sel, targetsFromConnections(nqn, conns))
 	for _, a := range actions {

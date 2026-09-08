@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/simplyblock/csi-driver/internal/util"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 func TestClassifyControlPlaneError_HTTPStatuses(t *testing.T) {
@@ -58,7 +58,7 @@ func TestClassifyControlPlaneError_HTTPStatuses(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("HTTP_%d", tc.status), func(t *testing.T) {
-			err := &util.HTTPError{Method: "POST", StatusCode: tc.status, Message: "boom"}
+			err := &controlplane.HTTPError{Method: "POST", StatusCode: tc.status, Message: "boom"}
 			got := classifyControlPlaneError(err)
 			if got.Code != tc.wantCode {
 				t.Errorf("HTTP %d: code = %s, want %s", tc.status, got.Code, tc.wantCode)
@@ -78,7 +78,7 @@ func TestClassifyControlPlaneError_NoClientErrorIsRetryable(t *testing.T) {
 	// are RPCSpecific and non-retryable at the generic layer.)
 	retryable4xx := map[int]bool{408: true, 429: true}
 	for status := 400; status < 500; status++ {
-		got := classifyControlPlaneError(&util.HTTPError{StatusCode: status})
+		got := classifyControlPlaneError(&controlplane.HTTPError{StatusCode: status})
 		if got.Retryable && !retryable4xx[status] {
 			t.Errorf("HTTP %d must not be retryable (code %s)", status, got.Code)
 		}

@@ -15,11 +15,15 @@ type VolumeHandle struct {
 var NilVolumeHandle = VolumeHandle{}
 
 // uuidRegex matches a standard UUID (8-4-4-4-12 hex, with hyphens). Compiled
-// once at package scope so isUUID stays allocation-free per call.
+// once at package scope so IsUUID stays allocation-free per call.
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// isUUID reports whether s is a standard UUID (8-4-4-4-12 hex, with hyphens).
-func isUUID(s string) bool {
+// IsUUID reports whether s is a standard UUID (8-4-4-4-12 hex, with hyphens).
+//
+// Exported because the same question is asked outside handle parsing: a pool
+// reference is either a UUID or a name, and a namespace's sysfs uuid attribute
+// is only trusted when it is one.
+func IsUUID(s string) bool {
 	return uuidRegex.MatchString(s)
 }
 
@@ -34,7 +38,7 @@ func Parse(handle string) (VolumeHandle, bool) {
 		return NilVolumeHandle, false
 	}
 	clusterID, poolID, lvolID := ids[0], ids[1], ids[2]
-	if !isUUID(clusterID) || poolID == "" || !isUUID(lvolID) {
+	if !IsUUID(clusterID) || poolID == "" || !IsUUID(lvolID) {
 		return NilVolumeHandle, false
 	}
 	return VolumeHandle{clusterID, poolID, lvolID}, true

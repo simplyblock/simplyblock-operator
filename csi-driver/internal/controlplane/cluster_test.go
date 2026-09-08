@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // whitebox tests for TLS mode parsing and transport construction in nvmf.go
-package util
+package controlplane
 
 import (
 	"crypto/ecdsa"

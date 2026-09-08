@@ -48,9 +48,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	"github.com/simplyblock/csi-driver/internal/guardian"
+	"github.com/simplyblock/csi-driver/internal/initiator"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
-	"github.com/simplyblock/csi-driver/internal/util"
+	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
 type nodeServer struct {
@@ -62,10 +66,10 @@ type nodeServer struct {
 	// commands staging chose to run — which is how the never-format contract is
 	// asserted.
 	execer      exec.Interface
-	volumeLocks *util.VolumeLocks
+	volumeLocks *csicommon.VolumeLocks
 	kubeClient  kubernetes.Interface
 	manager     *sbkube.Manager
-	guardian    *util.Guardian
+	guardian    *guardian.Guardian
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
@@ -74,7 +78,7 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		execer:            exec.New(),
-		volumeLocks:       util.NewVolumeLocks(),
+		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 	}
 
@@ -89,15 +93,15 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 	ns.manager = manager
 
 	nodeName := ns.Driver.GetNodeID()
-	gcfg := util.NewDefaultGuardianConfig(nodeName)
-	guardian, gerr := util.StartGuardian(context.Background(), gcfg, manager)
+	gcfg := guardian.NewDefaultConfig(nodeName)
+	podGuardian, gerr := guardian.Start(context.Background(), gcfg, manager)
 	if gerr != nil {
 		klog.Errorf("failed to start guardian: %v", gerr)
 	} else {
-		ns.guardian = guardian
+		ns.guardian = podGuardian
 	}
 
-	go util.MonitorConnection(func(lvolID string) {
+	go reconnect.MonitorConnection(func(lvolID string) {
 		if ns.guardian != nil {
 			ns.guardian.MarkBrokenLvol(lvolID)
 		}
@@ -267,7 +271,7 @@ func (ns *nodeServer) NodeGetVolumeStats(
 // connection info from the target. Returns nil if redirection is not possible.
 func (ns *nodeServer) redirectToActiveVolume(
 	ctx context.Context,
-	srcClient util.ClusterAPI,
+	srcClient controlplane.ClusterAPI,
 	srcLvolID, volumeID string,
 	vc map[string]string,
 ) map[string]string {
@@ -284,7 +288,7 @@ func (ns *nodeServer) redirectToActiveVolume(
 			volumeID, targetClusterID, targetPoolID, activeLvolID)
 		return nil
 	}
-	tgtClient, err := util.NewsimplyBlockClient(ctx, targetClusterID, targetPoolID)
+	tgtClient, err := clusters.Client(ctx, targetClusterID, targetPoolID)
 	if err != nil {
 		klog.Warningf("target cluster %s not in secret file for deleted volume %s: %v",
 			targetClusterID, volumeID, err)
@@ -337,7 +341,7 @@ func (ns *nodeServer) NodeStageVolume(
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	var initiator util.SpdkCsiInitiator
+	var nvmeInitiator initiator.Initiator
 	vc := req.GetVolumeContext()
 
 	vc["stagingParentPath"] = stagingParentPath
@@ -359,10 +363,10 @@ func (ns *nodeServer) NodeStageVolume(
 		// - the volume was provisioned against a pool with allowed_hosts (nqn/targetType empty), or
 		// - the volume may have been failed over (always refresh so the backend can redirect
 		//   to the clone and return target_lvol_id for correct device lookup).
-		if sbcClient, clientErr := util.NewsimplyBlockClient(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
+		if sbcClient, clientErr := clusters.Client(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
 			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.lvolID, vc["hostNQN"])
 			if infoErr != nil {
-				if errors.Is(infoErr, util.ErrVolumeNotFound) {
+				if errors.Is(infoErr, controlplane.ErrVolumeNotFound) {
 					// Source volume was deleted (migration with --delete-source).
 					// Query the replication relationship to find the active volume
 					// on the target cluster and redirect to it.
@@ -378,20 +382,20 @@ func (ns *nodeServer) NodeStageVolume(
 		}
 	}
 
-	initiator, err = util.NewSpdkCsiInitiator(vc)
+	nvmeInitiator, err = initiator.New(vc)
 	if err != nil {
 		klog.Errorf("failed to create spdk initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	devicePath, err := initiator.Connect(ctx) // idempotent
+	devicePath, err := nvmeInitiator.Connect(ctx) // idempotent
 	if err != nil {
 		klog.Errorf("failed to connect initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	defer func() {
 		if err != nil {
-			initiator.Disconnect(ctx) //nolint:errcheck // ignore error
+			nvmeInitiator.Disconnect(ctx) //nolint:errcheck // ignore error
 		}
 	}()
 	if err = ns.stageVolume(ctx, devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
@@ -402,7 +406,7 @@ func (ns *nodeServer) NodeStageVolume(
 	vc["devicePath"] = devicePath
 	// stash VolumeContext to stagingParentPath (useful during Unstage as it has no
 	// VolumeContext passed to the RPC as per the CSI spec)
-	err = util.StashVolumeContext(req.GetVolumeContext(), stagingParentPath)
+	err = stashVolumeContext(req.GetVolumeContext(), stagingParentPath)
 	if err != nil {
 		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -427,24 +431,24 @@ func (ns *nodeServer) NodeUnstageVolume(
 		return nil, status.Errorf(codes.Internal, "unstage volume %s failed: %s", volumeID, err)
 	}
 
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
 		klog.Errorf("failed to lookup volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	initiator, err := util.NewSpdkCsiInitiator(volumeContext)
+	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
 		klog.Errorf("failed to create spdk initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cleanupCancel()
-	err = initiator.Disconnect(cleanupCtx) // idempotent
+	err = nvmeInitiator.Disconnect(cleanupCtx) // idempotent
 	if err != nil {
 		klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if err := util.CleanUpVolumeContext(stagingParentPath); err != nil {
+	if err := cleanUpVolumeContext(stagingParentPath); err != nil {
 		klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -558,7 +562,7 @@ func (ns *nodeServer) NodeExpandVolume(
 	volumeMountPath := req.GetVolumePath()
 
 	stagingParentPath := req.GetStagingTargetPath()
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
 	}
@@ -1205,7 +1209,7 @@ func (ns *nodeServer) healVolumeBeforePublish(ctx context.Context, req *csi.Node
 // gone away. The by-id device path is stable across reconnects, so only the
 // connection needs re-establishing (no mount). Idempotent.
 func (ns *nodeServer) ensureDeviceConnected(ctx context.Context, volumeID, stagingParentPath string) error {
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
 		return fmt.Errorf("lookup volume context: %w", err)
 	}
@@ -1214,17 +1218,17 @@ func (ns *nodeServer) ensureDeviceConnected(ctx context.Context, volumeID, stagi
 	}
 
 	klog.Warningf("block volume %s device is gone; reconnecting NVMe-oF", volumeID)
-	initiator, err := util.NewSpdkCsiInitiator(volumeContext)
+	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
 		return fmt.Errorf("new initiator: %w", err)
 	}
-	devicePath, err := initiator.Connect(ctx) // idempotent
+	devicePath, err := nvmeInitiator.Connect(ctx) // idempotent
 	if err != nil {
 		return fmt.Errorf("reconnect device: %w", err)
 	}
 	if volumeContext["devicePath"] != devicePath {
 		volumeContext["devicePath"] = devicePath
-		if err := util.StashVolumeContext(volumeContext, stagingParentPath); err != nil {
+		if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
 			klog.Warningf("ensureDeviceConnected: re-stash volume context for %s: %v", volumeID, err)
 		}
 	}
@@ -1259,7 +1263,7 @@ func (ns *nodeServer) restageVolume(
 		stagingTargetPath,
 	)
 
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
 		return fmt.Errorf("lookup volume context: %w", err)
 	}
@@ -1268,11 +1272,11 @@ func (ns *nodeServer) restageVolume(
 		return fmt.Errorf("unmount dead staging mount: %w", err)
 	}
 
-	initiator, err := util.NewSpdkCsiInitiator(volumeContext)
+	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
 		return fmt.Errorf("new initiator: %w", err)
 	}
-	devicePath, err := initiator.Connect(ctx) // idempotent: re-establishes the lost device
+	devicePath, err := nvmeInitiator.Connect(ctx) // idempotent: re-establishes the lost device
 	if err != nil {
 		return fmt.Errorf("reconnect device: %w", err)
 	}
@@ -1288,7 +1292,7 @@ func (ns *nodeServer) restageVolume(
 	}
 
 	volumeContext["devicePath"] = devicePath
-	if err := util.StashVolumeContext(volumeContext, stagingParentPath); err != nil {
+	if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
 		klog.Warningf("restageVolume: failed to re-stash volume context for %s: %v", volumeID, err)
 	}
 	klog.Infof("restaged volume %s on fresh device %s", volumeID, devicePath)
@@ -1318,7 +1322,7 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 
 	if req.GetVolumeCapability().GetBlock() != nil {
 		stagingParentPath := req.GetStagingTargetPath()
-		volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+		volumeContext, err := lookupVolumeContext(stagingParentPath)
 		if err != nil {
 			return status.Errorf(
 				codes.Internal,

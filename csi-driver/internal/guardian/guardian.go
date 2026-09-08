@@ -1,11 +1,17 @@
-package util
+// Package guardian restarts the pods whose volumes lost every NVMe-oF path.
+//
+// It is the last resort of the node-side data path: when a volume's device is
+// gone and the reconnect loop cannot bring it back, the workload holding a dead
+// mount will not recover on its own. The guardian decides whether restarting it
+// is allowed — the pod has to have opted in, its cluster has to be serving, and
+// pods sharing a subsystem have to move together — and then does it.
+package guardian
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,12 +32,14 @@ import (
 
 	atlaskube "github.com/simplyblock/atlas/kube"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+
+	"github.com/simplyblock/csi-driver/internal/clusters"
 )
 
 // defaultBrokenLvolGracePeriod is the default value for BrokenLvolGracePeriod.
 const defaultBrokenLvolGracePeriod = 90 * time.Second
 
-type GuardianConfig struct {
+type Config struct {
 	NodeName         string
 	PollInterval     time.Duration
 	RestartBackoff   time.Duration
@@ -60,9 +68,21 @@ type GuardianConfig struct {
 	DeviceResolver atlasnvme.DeviceResolver
 }
 
-// NewDefaultGuardianConfig returns sane defaults.
-func NewDefaultGuardianConfig(nodeName string) GuardianConfig {
-	return GuardianConfig{
+// parseDurationFromEnv reads a duration from environment variable key, falling
+// back to def when it is unset or unparsable.
+func parseDurationFromEnv(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		klog.Warningf("Guardian: invalid duration %s=%q, using default %s", key, v, def)
+	}
+	return def
+}
+
+// NewDefaultConfig returns sane defaults.
+func NewDefaultConfig(nodeName string) Config {
+	return Config{
 		NodeName:         nodeName,
 		PollInterval:     5 * time.Minute,
 		RestartBackoff:   10 * time.Minute,
@@ -117,7 +137,7 @@ type LvolState struct {
 // Guardian tracks which pod uses which lvol and restarts affected pods
 // ONLY after cluster becomes active again.
 type Guardian struct {
-	cfg GuardianConfig
+	cfg Config
 
 	// Kubernetes cache manager shared with the rest of the node plugin. It
 	// serves PV/PVC reads from a watch-backed cache and transparently falls
@@ -200,11 +220,11 @@ func (g *Guardian) loadState() {
 	)
 }
 
-// StartGuardian starts the guardian loop in a goroutine. The cache manager is
+// Start starts the guardian loop in a goroutine. The cache manager is
 // shared with the rest of the node plugin so the guardian reads PV/PVC state
 // from memory rather than issuing a Get per PVC per pod on every poll; it falls
 // back to the API transparently, and a nil manager degrades to API-only reads.
-func StartGuardian(ctx context.Context, cfg GuardianConfig, manager *sbkube.Manager) (*Guardian, error) {
+func Start(ctx context.Context, cfg Config, manager *sbkube.Manager) (*Guardian, error) {
 	if cfg.NodeName == "" {
 		return nil, fmt.Errorf("guardian requires NodeName")
 	}
@@ -369,15 +389,15 @@ func (g *Guardian) loop(ctx context.Context) {
 
 //nolint:gocyclo // TODO: decompose tick() into smaller helpers to reduce complexity
 func (g *Guardian) tick(ctx context.Context) {
-	clusters, err := g.loadClusterSecret()
-	if err != nil || len(clusters.Clusters) == 0 {
+	secret, err := g.loadClusterSecret()
+	if err != nil || len(secret.Clusters) == 0 {
 		return
 	}
 
 	brokenAt, podsByLvol, clusterByLvol := g.snapshotBrokenLvols()
 
 	earliestBroken := earliestBrokenPerCluster(brokenAt, clusterByLvol)
-	activeNow := g.evaluateClusterStatuses(clusters, earliestBroken)
+	activeNow := g.evaluateClusterStatuses(secret, earliestBroken)
 	if len(activeNow) == 0 {
 		return
 	}
@@ -405,14 +425,13 @@ func (g *Guardian) tick(ctx context.Context) {
 	locks.ViaLock(&g.mu, g.persistLocked)
 }
 
-func (g *Guardian) loadClusterSecret() (ClustersInfo, error) {
-	secretFile := FromEnv("SPDKCSI_SECRET", "/etc/spdkcsi-secret/secret.json")
-	var clusters ClustersInfo
-	if err := ParseJSONFile(secretFile, &clusters); err != nil {
+func (g *Guardian) loadClusterSecret() (clusters.Info, error) {
+	info, err := clusters.Load()
+	if err != nil {
 		klog.Errorf("Guardian: parse clusters secret failed: %v", err)
-		return ClustersInfo{}, err
+		return clusters.Info{}, err
 	}
-	return clusters, nil
+	return info, nil
 }
 
 // snapshotBrokenLvols copies the subset of g.lvols needed for a tick under
@@ -468,7 +487,7 @@ func earliestBrokenPerCluster(brokenAt map[string]time.Time, clusterByLvol map[s
 // the BrokenLvolGracePeriod before making API calls. It updates
 // g.clusterWasInactive to track active↔inactive transitions and returns the
 // set of cluster IDs that are currently active.
-func (g *Guardian) evaluateClusterStatuses(clusters ClustersInfo, earliestBroken map[string]time.Time) map[string]bool {
+func (g *Guardian) evaluateClusterStatuses(info clusters.Info, earliestBroken map[string]time.Time) map[string]bool {
 	var clusterWasInactive map[string]bool
 	locks.ViaLock(&g.mu, func() {
 		clusterWasInactive = make(map[string]bool, len(g.clusterWasInactive))
@@ -479,7 +498,7 @@ func (g *Guardian) evaluateClusterStatuses(clusters ClustersInfo, earliestBroken
 
 	activeNow := make(map[string]bool)
 
-	for _, c := range clusters.Clusters {
+	for _, c := range info.Clusters {
 		cid := c.ClusterID
 		if cid == "" {
 			continue
@@ -875,24 +894,11 @@ func (g *Guardian) coordinatedSubsystemRestart(
 }
 
 func (g *Guardian) isClusterActiveByID(clusterID string) (ok bool, realStatus string, err error) {
-	client, err := NewsimplyBlockClient(context.Background(), clusterID, "")
+	client, err := clusters.Client(context.Background(), clusterID, "")
 	if err != nil {
 		return false, "", err
 	}
-
-	raw, err := client.API.do(context.Background(), http.MethodGet, client.API.v2cluster(), nil)
-	if err != nil {
-		return false, "", err
-	}
-
-	var status ClusterStatus
-	if err := json.Unmarshal(raw, &status); err != nil {
-		return false, "", err
-	}
-
-	realStatus = strings.ToLower(strings.TrimSpace(status.Status))
-	ok = (realStatus == "active" || realStatus == "degraded")
-	return ok, realStatus, nil
+	return client.ClusterStatus(context.Background())
 }
 
 func (g *Guardian) listRunningPodsOnNode(ctx context.Context, nodeName string) (*v1.PodList, error) {

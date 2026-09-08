@@ -1,20 +1,12 @@
-/*
-Copyright (c) Arm Limited and Contributors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package util
+// Where a staged volume's context is kept, and the capacity rounding the
+// controller service publishes with.
+//
+// The CSI spec passes VolumeContext to NodeStageVolume and to nothing after it,
+// so the node service writes it beside the staging path and reads it back on
+// unstage, publish, and expand. Capacity is rounded to whole GiB because the
+// control plane provisions in GiB, and a volume reported smaller than it was
+// asked for fails the external-provisioner's own check.
+package spdk
 
 import (
 	"encoding/json"
@@ -23,18 +15,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
-	"k8s.io/klog"
 )
 
 // file name in which volume context is stashed.
 const volumeContextFileName = "volume-context.json"
 
 const (
-	MIB = int64(1024 * 1024)
-	GIB = MIB * 1024
+	mib = int64(1024 * 1024)
+	gib = mib * 1024
 )
 
 func ParseJSONFile(fileName string, result interface{}) error {
@@ -52,19 +42,14 @@ func ParseJSONFile(fileName string, result interface{}) error {
 	return json.Unmarshal(bytes, result)
 }
 
-// ToMiB rounds up bytes to megabytes
-func ToMiB(bytes int64) int64 {
-	return (bytes + MIB - 1) / MIB
+// toGiB rounds up bytes to gigabytes
+func toGiB(bytes int64) int64 {
+	return (bytes + gib - 1) / gib
 }
 
-// ToGiB rounds up bytes to gigabytes
-func ToGiB(bytes int64) int64 {
-	return (bytes + GIB - 1) / GIB
-}
-
-// AlignToGiBBytes rounds bytes up to the next GiB boundary and returns bytes.
-func AlignToGiBBytes(bytes int64) int64 {
-	return ToGiB(bytes) * GIB
+// alignToGiBBytes rounds bytes up to the next GiB boundary and returns bytes.
+func alignToGiBBytes(bytes int64) int64 {
+	return toGiB(bytes) * gib
 }
 
 // ${env:-def}
@@ -76,8 +61,8 @@ func FromEnv(env, def string) string {
 	return def
 }
 
-// ConvertInterfaceToMap converts an interface to a map[string]string
-func ConvertInterfaceToMap(data interface{}) (map[string]string, error) {
+// convertInterfaceToMap converts an interface to a map[string]string
+func convertInterfaceToMap(data interface{}) (map[string]string, error) {
 	dataMap, ok := data.(map[string]interface{})
 	if !ok {
 		return nil, errors.New("the data is not a map[string]interface{}")
@@ -141,32 +126,22 @@ func cleanUpContext(folder, fileName string) error {
 	return nil
 }
 
-// StashVolumeContext stashes volume context into the volumeContextFileName at the passed in path, in
+// stashVolumeContext stashes volume context into the volumeContextFileName at the passed in path, in
 // JSON format.
-func StashVolumeContext(volumeContext map[string]string, path string) error {
+func stashVolumeContext(volumeContext map[string]string, path string) error {
 	return stashContext(volumeContext, path, volumeContextFileName)
 }
 
-// LookupVolumeContext read and returns stashed volume context at passed in path
-func LookupVolumeContext(path string) (map[string]string, error) {
+// lookupVolumeContext read and returns stashed volume context at passed in path
+func lookupVolumeContext(path string) (map[string]string, error) {
 	data, err := lookupContext(path, volumeContextFileName)
 	if err != nil {
 		return nil, err
 	}
-	return ConvertInterfaceToMap(data)
+	return convertInterfaceToMap(data)
 }
 
-// CleanUpVolumeContext cleans up any stashed volume context at passed in path.
-func CleanUpVolumeContext(path string) error {
+// cleanUpVolumeContext cleans up any stashed volume context at passed in path.
+func cleanUpVolumeContext(path string) error {
 	return cleanUpContext(path, volumeContextFileName)
-}
-
-func parseDurationFromEnv(key string, def time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-		klog.Warningf("Guardian: invalid duration %s=%q, using default %s", key, v, def)
-	}
-	return def
 }

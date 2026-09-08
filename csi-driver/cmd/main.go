@@ -22,8 +22,8 @@ import (
 
 	"k8s.io/klog"
 
+	"github.com/simplyblock/csi-driver/internal/config"
 	"github.com/simplyblock/csi-driver/internal/spdk"
-	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 	driverVersion = "0.1.0"
 )
 
-var conf = util.Config{
+var conf = config.Config{
 	DriverVersion: driverVersion,
 }
 

@@ -14,7 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+// ClusterClient: the control-plane client scoped to one cluster, and
+// optionally to one storage pool. It is what every caller outside this
+// package holds; the endpoint methods it delegates to are in client.go.
+package controlplane
 
 import (
 	"context"
@@ -42,6 +45,9 @@ const (
 	defaultTLSKey    = "/etc/simplyblock/tls/tls.key"
 
 	namespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+	// cfgRPCTimeoutSeconds bounds every control-plane HTTP request.
+	cfgRPCTimeoutSeconds = 120
 )
 
 type tlsMode int
@@ -105,6 +111,11 @@ type ClusterClient struct {
 
 func (c *ClusterClient) ClusterID() string { return c.API.ClusterID }
 func (c *ClusterClient) PoolID() string    { return c.poolID }
+
+// ScopeToPool binds this client to one storage pool, so a volume operation
+// need not scan every pool to find its volume. It is set once, immediately
+// after construction, by whoever resolved the pool reference.
+func (c *ClusterClient) ScopeToPool(poolID string) { c.poolID = poolID }
 
 // poolForVolume returns the pool ID for lvolID. If this client is already
 // scoped to a pool, that pool ID is returned immediately. Otherwise all pools

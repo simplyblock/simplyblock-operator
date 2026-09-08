@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
-	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -111,8 +111,8 @@ func TestSanity(t *testing.T) {
 	// Write secret file pointing at the mock server.
 	secretDir := t.TempDir()
 	secretFile := filepath.Join(secretDir, "secret.json")
-	secretData, _ := json.Marshal(util.ClustersInfo{
-		Clusters: []util.ClusterConfig{{
+	secretData, _ := json.Marshal(clusters.Info{
+		Clusters: []clusters.Config{{
 			ClusterID:       sanityClusterID,
 			ClusterEndpoint: mock.URL(),
 			ClusterSecret:   sanitySecret,

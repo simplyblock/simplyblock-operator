@@ -14,7 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+// Package controlplane is the CSI driver's client for the simplyblock
+// control-plane v2 REST API: the HTTP transport, the request paths, and the
+// response types every caller works in. It is a leaf, and knows nothing about
+// CSI, Kubernetes, or the node's fabric.
+//
+// This file holds the transport and the endpoints. cluster.go holds the
+// cluster-scoped client callers actually hold.
+package controlplane
 
 import (
 	"bytes"
@@ -30,6 +37,8 @@ import (
 
 	"github.com/simplyblock/atlas/errs/deferrers"
 	"k8s.io/klog"
+
+	"github.com/simplyblock/csi-driver/internal/nqn"
 )
 
 // errors deserve special care
@@ -341,7 +350,7 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 	for _, r := range result {
 		connections = append(connections, connectionInfo{IP: r.IP, Port: r.Port})
 	}
-	_, model := getLvolIDFromNQN(result[0].Nqn)
+	_, model := nqn.LvolIDFromNQN(result[0].Nqn)
 	connectionsData, err := json.Marshal(connections)
 	if err != nil {
 		return nil, err

@@ -14,11 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
-
-const (
-	cfgRPCTimeoutSeconds = 120
-)
+// Package config holds the CSI driver's parsed command-line configuration. It
+// is a leaf: the flags are bound in cmd/, and every other package reads the
+// struct without reaching back for anything else.
+package config
 
 // Config stores parsed command line parameters
 type Config struct {

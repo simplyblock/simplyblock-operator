@@ -1,5 +1,5 @@
 // whitebox test of the reconnect PV-ownership gate
-package util
+package reconnect
 
 import (
 	"testing"

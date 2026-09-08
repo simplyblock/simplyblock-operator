@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/simplyblock/csi-driver/internal/util"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // createSourceVolume provisions a normal volume through the controller and
@@ -65,7 +65,7 @@ func assertControlPlaneErrorMapping(
 			mock.mu.Lock()
 			mock.injectStatus = func(*http.Request) int { return s }
 			mock.mu.Unlock()
-			check(t, &util.HTTPError{StatusCode: s}, invoke(t, context.Background(), mock))
+			check(t, &controlplane.HTTPError{StatusCode: s}, invoke(t, context.Background(), mock))
 		})
 	}
 

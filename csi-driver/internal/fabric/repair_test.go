@@ -1,4 +1,4 @@
-package util
+package fabric
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
+
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // Detection is atlas's and is tested there, including against real kernel state.
@@ -307,7 +309,7 @@ func TestRepair_RefusesADefectWithNoRemedy(t *testing.T) {
 }
 
 func TestTargetsFromConnections(t *testing.T) {
-	conns := []*LvolConnectResp{
+	conns := []*controlplane.LvolConnectResp{
 		{Nqn: repairTestNQN, IP: "10.0.0.1", Port: 4420, TargetType: "TCP"},
 		nil, // the API has produced these; a nil must not panic or become a target
 		{Nqn: repairTestNQN, IP: "10.0.0.2", Port: 4421},
@@ -347,7 +349,7 @@ func TestHealSubsystem_RepairsAnOrphanedController(t *testing.T) {
 	r.subs = fakeSubs{sub: sub}
 	r.devs = fakeDevs{devices: []nvme.Device{{Namespace: ns, Subsystem: sub}}}
 
-	targets := targetsFromConnections(repairTestNQN, []*LvolConnectResp{
+	targets := targetsFromConnections(repairTestNQN, []*controlplane.LvolConnectResp{
 		{IP: "10.0.0.1", Port: 4420}, {IP: "10.0.0.2", Port: 4420},
 	})
 	defects, actions := r.healSubsystem(context.Background(),
@@ -385,7 +387,7 @@ func TestHealSubsystem_HealthyVolumeIsUntouched(t *testing.T) {
 	r.subs = fakeSubs{sub: sub}
 	r.devs = fakeDevs{devices: []nvme.Device{{Namespace: ns, Subsystem: sub}}}
 
-	targets := targetsFromConnections(repairTestNQN, []*LvolConnectResp{
+	targets := targetsFromConnections(repairTestNQN, []*controlplane.LvolConnectResp{
 		{IP: "10.0.0.1", Port: 4420}, {IP: "10.0.0.2", Port: 4420},
 	})
 	defects, actions := r.healSubsystem(context.Background(),

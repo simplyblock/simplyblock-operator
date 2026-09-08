@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/simplyblock/csi-driver/internal/util"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // outcome is what a handler observes from a classifiedError: the gRPC code the
@@ -177,7 +177,7 @@ func TestRPCErrorClassifiers(t *testing.T) {
 						want = rpcSpecificBug
 					}
 				}
-				assert(t, &util.HTTPError{StatusCode: code}, want, fmt.Sprintf("HTTP %d", code))
+				assert(t, &controlplane.HTTPError{StatusCode: code}, want, fmt.Sprintf("HTTP %d", code))
 			}
 
 			// Every generic transport failure, inherited unchanged.
@@ -191,7 +191,7 @@ func TestRPCErrorClassifiers(t *testing.T) {
 // TestClassifyRPCErrorFunctions checks every per-RPC classify function delegates
 // to its classifier (and thereby exercises all of them).
 func TestClassifyRPCErrorFunctions(t *testing.T) {
-	err := &util.HTTPError{StatusCode: 404}
+	err := &controlplane.HTTPError{StatusCode: 404}
 	cases := []struct {
 		name       string
 		fn         func(error) classifiedError
@@ -221,7 +221,7 @@ func TestClassifyRPCErrorFunctions(t *testing.T) {
 // TestClassifiedError_MessagePreserved checks the underlying message survives for
 // diagnostics.
 func TestClassifiedError_MessagePreserved(t *testing.T) {
-	underlying := &util.HTTPError{Method: "POST", StatusCode: 400, Message: "bad thing"}
+	underlying := &controlplane.HTTPError{Method: "POST", StatusCode: 400, Message: "bad thing"}
 	if d := classifyCreateVolumeError(underlying); d.Error() != underlying.Error() {
 		t.Errorf("Error() = %q, want %q", d.Error(), underlying.Error())
 	}

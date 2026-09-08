@@ -6,7 +6,7 @@
 // matcher would only ever test the fake. The main fixture reproduces
 // /dev/disk/by-id of a simplyblock CSI node hosting three multi-namespace
 // subsystems next to the node's local NVMe, LVM, and SCSI devices.
-package util
+package initiator
 
 import (
 	"context"

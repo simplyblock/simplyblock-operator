@@ -14,26 +14,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package csicommon
 
 import (
-	"sync"
+	"testing"
+	"time"
 )
 
-// VolumeLocks simple locks that can be acquired by volumeID
-type VolumeLocks struct {
-	mutexes sync.Map
-}
-
-// NewVolumeLocks returns new VolumeLocks.
-func NewVolumeLocks() *VolumeLocks {
-	return &VolumeLocks{}
-}
-
-// Lock obtain the lock corresponding to the volumeID
-func (vl *VolumeLocks) Lock(volumeID string) func() {
-	value, _ := vl.mutexes.LoadOrStore(volumeID, &sync.Mutex{})
-	mtx, _ := value.(*sync.Mutex) //nolint:errcheck // will not fail to convert
-	mtx.Lock()
-	return func() { mtx.Unlock() }
+func TestIDLocker(t *testing.T) {
+	t.Parallel()
+	fakeID := "fake-id"
+	locks := NewVolumeLocks()
+	// acquire lock for fake-id
+	start := time.Now()
+	unlock := locks.Lock(fakeID)
+	go func() {
+		time.Sleep(1 * time.Second)
+		unlock()
+	}()
+	unlock2 := locks.Lock(fakeID)
+	unlock2()
+	duration := time.Since(start)
+	// time.Sleep() might not be very accurate,
+	// using 900 milliseconds to check the test would be more stable.
+	if duration.Milliseconds() < 900 {
+		t.Errorf("lock was required before it was released")
+	}
 }

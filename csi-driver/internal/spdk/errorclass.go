@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/simplyblock/csi-driver/internal/util"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
 // controlPlaneErrorClass is the CSI-level classification of a control-plane
@@ -91,12 +91,12 @@ func classifyControlPlaneError(err error) controlPlaneErrorClass {
 // never fire.
 func httpStatusOf(err error) int {
 	switch {
-	case errors.Is(err, util.ErrVolumeNotFound), errors.Is(err, util.ErrSnapshotNotFound):
+	case errors.Is(err, controlplane.ErrVolumeNotFound), errors.Is(err, controlplane.ErrSnapshotNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, util.ErrVolumeExists), errors.Is(err, util.ErrSnapshotExists):
+	case errors.Is(err, controlplane.ErrVolumeExists), errors.Is(err, controlplane.ErrSnapshotExists):
 		return http.StatusConflict
 	}
-	var httpErr *util.HTTPError
+	var httpErr *controlplane.HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.StatusCode
 	}

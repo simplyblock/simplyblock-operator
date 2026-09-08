@@ -7,62 +7,73 @@
 
 ## Status
 
-Steps 1 and 2 of *Sequencing* below have landed: the dead code is gone, `pkg/`
-is `internal/`, and the module is `github.com/simplyblock/csi-driver`. Steps 3
-to 6 are still proposals. The tables and paths below describe the tree as it now
-stands.
+Steps 1 to 3 of *Sequencing* below have landed: the dead code is gone, `pkg/` is
+`internal/`, the module is `github.com/simplyblock/csi-driver`, and `util` has
+been dissolved into the layered packages proposed here. Steps 4 to 6 are still
+proposals.
 
 ## Where the tree stands today
 
-Four packages hold every line of non-test production code, and two of them hold
-most of it:
+`internal/util` no longer exists. What remains of the original problem is
+`internal/spdk`, which steps 4 and 5 divide:
 
-| Package               | Files | Non-test LOC | What is in it                                                                                                                                                             |
-|-----------------------|-------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `internal/util`       | 8     | 4,675        | Control-plane REST client, NVMe-oF initiator, ANA path reconciliation, fabric repair, the pod guardian, per-volume locks, the CLI config struct, and a `util.go` grab bag |
-| `internal/spdk`       | 6     | 3,538        | The three CSI services, driver bootstrap, topology and cluster selection, mkfs and mount, and control-plane error classification                                          |
-| `internal/csi-common` | 6     | 649          | A vendored fork of the upstream `csi-common` helpers                                                                                                                      |
-| `internal/kubernetes` | 4     | 342          | An informer-backed PV/PVC reader, plus a `volumehandle` subpackage                                                                                                        |
-| `internal/csilink`    | 1     | 124          | The link agent that dials the operator                                                                                                                                    |
+| Package                            | Files | Non-test LOC | What is in it                                                                                                                                               |
+|------------------------------------|-------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `internal/spdk`                    | 7     | 3,676        | The three CSI services, driver bootstrap, topology and cluster selection, mkfs and mount, control-plane error classification, and the staged volume context |
+| `internal/guardian`                | 1     | 1,325        | The coordinated pod-restart guardian                                                                                                                        |
+| `internal/controlplane`            | 3     | 1,230        | The simplyblock v2 REST client, its response types, and the node-side queries                                                                               |
+| `internal/initiator`               | 2     | 841          | Connect, disconnect, device resolution, the nvme-cli primitives, and the device-presence record                                                             |
+| `internal/csi-common`              | 7     | 688          | The vendored upstream `csi-common` helpers, plus `VolumeLocks`                                                                                              |
+| `internal/reconnect`               | 1     | 570          | The monitor loop, ANA path reconciliation, and subsystem reconnect                                                                                          |
+| `internal/fabric`                  | 1     | 460          | Defect-driven NVMe-oF repair                                                                                                                                |
+| `internal/kubernetes`              | 3     | 285          | The informer-backed PV and PVC reader                                                                                                                       |
+| `internal/clusters`                | 1     | 189          | The cluster secret, and the control-plane client factory                                                                                                    |
+| `internal/csilink`                 | 1     | 124          | The link agent that dials the operator                                                                                                                      |
+| `internal/kubernetes/volumehandle` | 1     | 61           | CSI volume handle parsing                                                                                                                                   |
+| `internal/config`                  | 1     | 54           | The parsed command-line configuration                                                                                                                       |
+| `internal/nqn`                     | 1     | 40           | NQN identity parsing                                                                                                                                        |
 
-Two files carry a quarter of the component between them — `controllerserver.go`
-at 1,505 lines and `nodeserver.go` at 1,493 — and a third, `initiator.go`, is
-1,524. `internal/util` alone is larger than the whole of `operator/internal/csilink`,
-`metrics`, `tlsutil`, and `utils` combined.
+The layering below is now the compiler's to enforce, and it holds: `config`,
+`nqn`, and `volumehandle` import nothing of this module's; `controlplane`,
+`kubernetes`, and `clusters` import only those; `fabric`, `initiator`, and
+`reconnect` import only layers beneath them; `guardian`, `csilink`, and
+`csi-common` sit beside them; and `spdk` is the only package reaching across
+everything, which is what an assembly package is for.
 
-The problem is not file size on its own. It is that neither large package has a
-subject. `internal/util` is not "utilities" in any sense a reader can use: it is the
-control plane, the data path, and a Kubernetes controller in one import path,
-which is why `internal/spdk` imports it eleven times and why an initiator change and
-a guardian change touch the same package. `internal/spdk` is named after a dependency
-the driver no longer talks to directly — the SPDK JSON-RPC path is gone, and
-what the package now contains is the CSI service surface.
+`internal/spdk` is still named after a dependency the driver no longer talks to
+directly — the SPDK JSON-RPC path is gone, and what the package contains is the
+CSI service surface. Two of its files carry most of it: `controllerserver.go` at
+1,492 lines and `nodeserver.go` at 1,497.
 
-The consequences are concrete:
+What the split has already bought:
 
-- **No enforced direction.** `internal/util` imports `internal/kubernetes`, and
-  `internal/spdk` imports both. Nothing prevents the control-plane client from
-  reaching for a Kubernetes informer, or the initiator from growing a dependency
-  on CSI request types; the compiler has no boundary to defend.
-- **A lint exclusion inherited from the operator now bites.** `.golangci.yml`
-  exempted `internal/*` from `dupl` and `lll`, a rule that matched nothing
-  while there was no `internal/` and would have silenced both linters across
-  the whole component the moment there was one. The code passes both without
-  it, so step 2 deleted the rule.
-- **Tests are named after files, not behaviors.** `controllerserver_volume_test.go`,
+- **Direction the compiler defends.** The control-plane client can no longer
+  reach for a Kubernetes informer, and the initiator cannot grow a dependency on
+  CSI request types, because neither import would compile.
+- **Per-package coverage.** Two blurred numbers became thirteen: `volumehandle`
+  100%, `kubernetes` 90%, `fabric` 76%, `clusters` 66%, `spdk` 43%, `initiator`
+  32%, `controlplane` 32%, `guardian` 29%, `reconnect` 13%. The last of those is
+  the honest measure of how little of the repair loop is tested, which the old
+  `util` package's 34% hid.
+- **One reader of the cluster secret.** `clusters` owns the file; the three call
+  sites that each parsed it independently now share a loader.
+
+What it has not yet bought, and steps 4 and 5 address:
+
+- **Tests named after files, not behaviors.** `controllerserver_volume_test.go`,
   `controllerserver_snapshot_test.go`, `controllerserver_placement_test.go`, and
   `controllerserver_provisioner_test.go` are four test files against one
-  1,505-line file, which is the shape a package wants to be.
+  1,492-line file, which is the shape a package wants to be.
 - **The staging path is untestable in isolation.** `stageVolume`, the mkfs and
   mount logic, the filesystem annotation guard, and the XFS option builders are
   methods on `*nodeServer`, so exercising them means constructing a CSI node
   service.
 
-## The proposed layout
+## The layout
 
-`internal/` replaces `pkg/`, and the two large packages divide along the layers
-that already exist in the code but are not expressed in it. Four layers, with
-imports pointing only downward:
+The two large packages divide along the layers that already existed in the code
+but were not expressed in it. Four layers, with imports pointing only downward.
+Everything below layer 4 is built; layer 4 is what steps 4 and 5 still owe:
 
 ```text
 csi-driver/
@@ -84,7 +95,8 @@ csi-driver/
     csilink/                    the link agent that dials the operator
 
     ── layer 2: the node-local data path ─────────────────────────────────
-    initiator/                  connect, disconnect, and device resolution
+    initiator/                  connect, disconnect, device resolution, the
+                                nvme-cli primitives, device presence
     reconnect/                  subsystem reconnect, ANA path reconciliation,
                                 and the monitor loop
     fabric/                     defect-driven NVMe-oF repair
@@ -94,8 +106,9 @@ csi-driver/
     config/                     the parsed command-line configuration
     clusters/                   the cluster secret, and the client factory
     controlplane/               the simplyblock REST client
-    kube/                       PV and PVC reads
+    kubernetes/                 PV and PVC reads
     volumeid/                   CSI volume and snapshot handle parsing
+    nqn/                        NQN identity parsing
 
   e2e/                          unchanged; `internal/` is importable from here
 ```
@@ -105,63 +118,88 @@ working without a shim.
 
 ### Layer 1 — leaves
 
-**`internal/config`** takes `internal/util/config.go` unchanged. The `Config` struct
-is command-line state and has nothing to do with the rest of `util`; moving it
-also lets `cmd/main.go` bind its flags without importing anything from the data
-path. The flag registration itself can move here too, leaving `main.go` as
+**`internal/config`** took `util/config.go` unchanged, minus the RPC timeout
+constant, which was never configuration and moved to `controlplane` where its
+only reader is. The flag registration can still move here, leaving `main.go` as
 nothing but `config.Parse()` and `driver.Run()`.
 
-**`internal/controlplane`** takes `internal/util/jsonrpc.go` and `internal/util/nvmf.go`:
+**`internal/nqn`** was not in the original plan. It holds `LvolIDFromNQN` and
+`HostIDFromHostNQN`, which three layers call on strings from three different
+sources: the control plane's connect response, the kernel's `list-subsys`
+output, and a Kubernetes node UID. Filing them under any one of those layers
+would have made the other two import it upward. atlas-lib's `nqn` package
+already does this work, so the package is a placeholder that step 6 deletes.
+
+**`internal/controlplane`** took `util/jsonrpc.go` and `util/nvmf.go`:
 `APIClient`, `ClusterClient`, `Connection`, the v2 path builders, `HTTPError`,
-and the response DTOs (`LvolResp`, `SnapshotResp`, `StoragePool`,
-`LvolConnectResp`, `ReplicationRelationship`, `MasterLvol`). This is the one
-package in the current tree that is already internally coherent; it is simply
-filed under the wrong name. See *Overlap with atlas-lib* below — this package
-should eventually not exist at all.
+and the response types (`LvolResp`, `SnapshotResp`, `StoragePool`,
+`LvolConnectResp`, `ReplicationRelationship`, `MasterLvol`). It was the one
+package already internally coherent; it was simply filed under the wrong name.
 
-**`internal/clusters`** takes the secret-shaped half of `initiator.go`:
-`ClusterConfig`, `ClustersInfo`, `NewsimplyBlockClient`, `resolvePoolUUID`, and
-the `SPDKCSI_SECRET` / `SPDKCSI_API_TOKEN_PATH` resolution. Today, three call
-sites parse that secret file independently — `NewsimplyBlockClient`,
-`Guardian.loadClusterSecret`, and `controllerserver.ListClusters` — each with
-its own `FromEnv("SPDKCSI_SECRET", …)` and its own error handling. One package
-gives them one loader and one place to add caching, and `ListClusters` stops
-being an exported function on the controller service.
+It also gained a `queries.go`. Three callers used to reach through
+`client.API.do` at a hand-built path — the connection monitor for a volume's
+node placement, the initiator for its endpoints, the guardian for cluster status
+— which compiled only while all of them shared one package file. Each is now a
+method that names the question it asks, so the transport stays unexported. See
+*Overlap with atlas-lib* below: this package should eventually not exist at all.
 
-**`internal/kube`** takes `internal/kubernetes` as it stands: `Manager`, the PV and
-PVC readers, and the informer indexes.
+**`internal/clusters`** took the secret-shaped half of `initiator.go`:
+`ClusterConfig` and `ClustersInfo` (now `Config` and `Info`),
+`NewsimplyBlockClient` (now `Client`), `resolvePoolUUID`, and the
+`SPDKCSI_SECRET` / `SPDKCSI_API_TOKEN_PATH` resolution. Three call sites parsed
+that file independently — the client factory, `Guardian.loadClusterSecret`, and
+`controllerserver.ListClusters` — each with its own environment default and its
+own error handling. They share `clusters.Load` now, `ListClusters` became
+`clusters.List` and stopped being an exported function on the controller
+service, and there is one place to add caching.
 
-**`internal/volumeid`** merges `internal/kubernetes/volumehandle` with
+**`internal/kubernetes`** stays as it is: `Manager`, the PV and PVC readers, and
+the informer indexes. Renaming it to `kube` buys nothing on its own and is left
+to step 6, which replaces it with `atlas/kube.InformerResolver` outright.
+
+**`internal/volumeid`** (step 4) merges `internal/kubernetes/volumehandle` with
 `parseVolumeID`, `parseSnapshotID`, `spdkVolume`, and `spdkSnapshot` from
 `controllerserver.go`. Handle parsing is used by the controller service, the
 node service, and the PV indexes; it is not a Kubernetes concern and does not
-belong under a package named for Kubernetes.
+belong under a package named for Kubernetes. Step 3 exported
+`volumehandle.IsUUID` as a down payment: `clusters` and `initiator` each carried
+their own UUID predicate, one a regex and one a hand-rolled loop, and both now
+call the one that has a test.
 
 ### Layer 2 — the node-local data path
 
-**`internal/initiator`** takes the connect and disconnect half of
-`initiator.go`: the `SpdkCsiInitiator` interface, `initiatorNVMf`,
-`NewSpdkCsiInitiator`, the `/dev/disk/by-id` glob and match helpers
-(`namespaceDeviceGlob`, `matchNamespaceDevice`, `waitForDeviceReady`,
-`resolveToSameDevice`, `waitForDeviceGone`), `disconnectDevicePath`, and the
-`nvme-cli` exec wrappers. Roughly `initiator.go:319–910`.
+**`internal/initiator`** took the connect and disconnect half of the old
+`initiator.go`: the interface (now `Initiator`), `initiatorNVMf`, the
+constructor (now `New`), the `/dev/disk/by-id` glob and match helpers, and the
+`nvme-cli` wrappers. The types and primitives the monitor also needs are
+exported — `Path`, `Subsystem`, `SubsystemResponse`, `DeviceInfo`,
+`NVMeDevices`, `SubsystemsForDevice`, `ConnectViaNVMe`, `ParseAddress` — rather
+than copied, which is the whole reason `reconnect` sits above it rather than
+beside it.
 
-**`internal/reconnect`** takes the rest: `MonitorConnection`,
+The device-presence record moved with them, into `presence.go`, behind
+`MarkDevicePresent`, `ForgetDevice`, and `PruneMissingDevices`. It was three
+package-level maps and a mutex that both halves wrote to directly; that only
+worked while they shared a package. It is also the one place that can tell a
+volume lost every path, since the kernel removes the device and reports nothing.
+
+**`internal/reconnect`** took the rest: `MonitorConnection`,
 `reconnectSubsystems`, `recoverPathsWithANA`, `reconcileOptimizedPath`,
 `reconcileNonOptimizedPaths`, `resolveExpectedPathCount`, `filterByANA`,
-`missingEndpoints`, and the reachability probes. Roughly
-`initiator.go:913–1520`. This is a background reconciliation loop with a circuit
-breaker, not a connect primitive, and it is the part of the file that the
-migration and failover post-mortems keep coming back to; it deserves its own
-package and its own tests.
+`missingEndpoints`, `NodeHostNQN`, and the reachability probes. This is a
+background reconciliation loop with a circuit breaker, not a connect primitive,
+and it is the part of the old file the migration and failover post-mortems keep
+coming back to. Its coverage now reads separately, at 13%.
 
-**`internal/fabric`** takes `nvmerepair.go`. One coupling has to be broken
-first: `repairFabric` is currently a method on `initiatorNVMf`, and
-`healMonitoredVolume` is called from the monitor loop. Both become functions
-taking the NQN, the volume ID, and the connections — which is all they use — so
-`fabric` depends on nothing above it and both callers depend on `fabric`.
+**`internal/fabric`** took `nvmerepair.go`. One coupling had to be broken first:
+`repairFabric` was a method on `initiatorNVMf` and `healMonitoredVolume` was
+called from the monitor loop. Both are functions now — `RepairAttach` and
+`HealMonitoredVolume` — taking the NQN, the volume ID, and the connections:
+exactly what
+they already used, so `fabric` depends on nothing above it and both callers
+depend on `fabric`.
 
-**`internal/mount`** takes the filesystem half of `nodeserver.go`:
+**`internal/mount`** (step 4) takes the filesystem half of `nodeserver.go`:
 `stageVolume`'s mkfs and mount body, `probeDiskFormat`, `stagedFsType`,
 `fsTypeOrDefault`, `stagingMountFlags`, `supportedOnDiskFilesystems`, the XFS
 stripe and feature option builders, `checkXFSFormatConfig`, `stagingMountDead`,
@@ -179,13 +217,15 @@ the mount primitives, not a mount primitive itself.
 
 ### Layer 3 — Kubernetes-shaped daemons
 
-**`internal/guardian`** takes `guardian.go` whole. It already is a package in
-everything but name: 1,319 lines, one type, its own persisted state file, its
-own config struct, and its own event vocabulary. It is also the clearest
-argument that `internal/util` is not a utility package.
+**`internal/guardian`** took `guardian.go` whole. It already was a package in
+everything but name: 1,325 lines, one type, its own persisted state file, its
+own config struct, and its own event vocabulary. It was also the clearest
+argument that `util` was not a utility package. `GuardianConfig`,
+`StartGuardian`, and `NewDefaultGuardianConfig` lost the prefix the package name
+now carries.
 
-**`internal/csilink`** is `internal/csilink` unchanged, and keeps the name it shares
-with `operator/internal/csilink`.
+**`internal/csilink`** is unchanged, and keeps the name it shares with
+`operator/internal/csilink`.
 
 ### Layer 4 — the CSI surface
 
@@ -237,21 +277,22 @@ service does not launch two background daemons.
 client, and the capability lists. It is the only package that imports across
 layers, which is exactly what an assembly package is for.
 
-### What `internal/util/util.go` becomes
+### What `util/util.go` became
 
-Nothing survives as a shared utility. The file breaks up entirely:
+Nothing survived as a shared utility. The file broke up entirely:
 
-| Symbol                                                                                                                                                | Destination                                                                                              |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| `StashVolumeContext`, `LookupVolumeContext`, `CleanUpVolumeContext`, `stashContext`, `lookupContext`, `cleanUpContext`, `ConvertInterfaceToMap`       | `internal/csi/node` (only the node service stages a volume context)                                      |
-| `ParseJSONFile`, `FromEnv`                                                                                                                            | `internal/clusters` (its only remaining callers read the secret)                                         |
-| `ToMiB`, `ToGiB`, `AlignToGiBBytes`, `GIB`                                                                                                            | `internal/csi/controller` (only sizing in `CreateVolume` and `ControllerExpandVolume`)                   |
-| `parseDurationFromEnv`                                                                                                                                | wherever its caller lands                                                                                |
-| `TryLock`                                                                                                                                             | **delete** — no non-test caller                                                                          |
-| `getNvmeDeviceName`, `detectNvmeDeviceName`, `CheckIfNvmeDeviceExists`, `GetNvmeDeviceName`, `GetVirtioBlkDeviceName`, `GetAvailablePhysicalFunction` | **delete** — SPDK vhost and virtio-blk leftovers from the upstream fork, with no caller outside the file |
+| Symbol                                                                                                                                                | Destination                                                                                                                                                   |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `StashVolumeContext`, `LookupVolumeContext`, `CleanUpVolumeContext`, `stashContext`, `lookupContext`, `cleanUpContext`, `ConvertInterfaceToMap`       | `internal/spdk/volumecontext.go`, unexported — only the node service stages a volume context, and step 5 carries the file into `internal/csi/node`            |
+| `ParseJSONFile`, `FromEnv`                                                                                                                            | `internal/clusters` (its only remaining callers read the secret)                                                                                              |
+| `ToGiB`, `AlignToGiBBytes`, `GIB`, `MIB`                                                                                                              | `internal/spdk/volumecontext.go`, unexported — only sizing in `CreateVolume` and `ControllerExpandVolume`; step 5 carries them into `internal/csi/controller` |
+| `parseDurationFromEnv`                                                                                                                                | `internal/guardian` — its only caller                                                                                                                         |
+| `TryLock`, `ToMiB`                                                                                                                                    | **deleted** — no non-test caller                                                                                                                              |
+| `getNvmeDeviceName`, `detectNvmeDeviceName`, `CheckIfNvmeDeviceExists`, `GetNvmeDeviceName`, `GetVirtioBlkDeviceName`, `GetAvailablePhysicalFunction` | **deleted** in step 1 — SPDK vhost and virtio-blk leftovers from the upstream fork, with no caller outside the file                                           |
 
-`VolumeLocks` from `idlocker.go` is used by both CSI services and moves to
-`internal/csi/common` alongside the other shared service scaffolding.
+`VolumeLocks` from `idlocker.go` is used by both CSI services and moved to
+`internal/csi-common` alongside the other shared service scaffolding, which
+step 5 renames to `internal/csi/common`.
 
 ## Overlap with atlas-lib
 
@@ -306,10 +347,14 @@ without the next:
    lint exclusion was deleted rather than allowed to take effect, and the
    `csi-driver/pkg/...` pointers in `atlas-lib/README.md`, the operator's design
    documents and test plans, and two operator source comments were repointed.
-3. **Split `internal/util`:** into `config`, `controlplane`, `clusters`,
-   `initiator`, `reconnect`, `fabric`, and `guardian`. This is the largest step
-   and the one that ends the grab bag; it is also where the `repairFabric`
-   method has to become a function.
+3. **Split `internal/util` (done):** into `config`, `controlplane`, `clusters`,
+   `initiator`, `reconnect`, `fabric`, and `guardian`, plus an `nqn` leaf the
+   original plan did not foresee. The package is gone. `repairFabric` and
+   `healMonitoredVolume` became functions, the device-presence maps became an
+   API, three raw `client.API.do` call sites became named control-plane methods,
+   and `volumehandle.IsUUID` replaced two hand-rolled UUID predicates. No
+   behavior changed: the same 155 test functions run, and the same 597 cases
+   pass, before and after.
 4. **Extract `internal/mount`:** from `nodeserver.go`, and `internal/volumeid`
    from `controllerserver.go` and `internal/kubernetes`. Both are extractions of
    pure logic and should come with the tests that were previously impossible.

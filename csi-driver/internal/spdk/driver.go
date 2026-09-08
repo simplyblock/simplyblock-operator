@@ -30,12 +30,12 @@ import (
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
 	"github.com/simplyblock/csi-driver/internal/csilink"
-	"github.com/simplyblock/csi-driver/internal/util"
 )
 
-func Run(conf *util.Config) {
+func Run(conf *config.Config) {
 	var (
 		cd  *csicommon.CSIDriver
 		ids *identityServer
@@ -119,7 +119,7 @@ func Run(conf *util.Config) {
 // linking it — and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing; it is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *util.Config) error {
+func startLink(ctx context.Context, conf *config.Config) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,

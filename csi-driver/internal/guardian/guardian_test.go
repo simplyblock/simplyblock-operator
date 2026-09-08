@@ -1,5 +1,5 @@
 // White-box tests for coordinatedSubsystemRestart and its gate logic.
-package util
+package guardian
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func boolPtr(b bool) *bool { return &b }
 
 func newTestGuardian(cs *fake.Clientset) *Guardian {
 	return &Guardian{
-		cfg: GuardianConfig{
+		cfg: Config{
 			OptInLabelKey:   testOptInKey,
 			OptInLabelValue: testOptInValue,
 			RestartBackoff:  10 * time.Minute,

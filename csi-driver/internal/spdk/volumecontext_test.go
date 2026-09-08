@@ -15,13 +15,11 @@ limitations under the License.
 */
 
 // blackbox test of util package
-package util_test
+package spdk
 
 import (
 	"os"
 	"testing"
-
-	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 func TestVolumeContext(t *testing.T) {
@@ -38,27 +36,27 @@ func TestVolumeContext(t *testing.T) {
 		"key2": "value2",
 	}
 
-	err = util.StashVolumeContext(volumeContext, dir)
+	err = stashVolumeContext(volumeContext, dir)
 	if err != nil {
-		t.Fatalf("StashVolumeContext returned error: %v", err)
+		t.Fatalf("stashVolumeContext returned error: %v", err)
 	}
 
-	returnedContext, err := util.LookupVolumeContext(dir)
+	returnedContext, err := lookupVolumeContext(dir)
 	if err != nil {
-		t.Fatalf("LookupVolumeContext returned error: %v", err)
+		t.Fatalf("lookupVolumeContext returned error: %v", err)
 	}
 
 	if volumeContext["key1"] != returnedContext["key1"] || volumeContext["key2"] != returnedContext["key2"] {
-		t.Fatalf("LookupVolumeContext returned unexpected value: got %v, want %v", returnedContext, volumeContext)
+		t.Fatalf("lookupVolumeContext returned unexpected value: got %v, want %v", returnedContext, volumeContext)
 	}
 
-	err = util.CleanUpVolumeContext(dir)
+	err = cleanUpVolumeContext(dir)
 	if err != nil {
-		t.Fatalf("CleanUpVolumeContext returned error: %v", err)
+		t.Fatalf("cleanUpVolumeContext returned error: %v", err)
 	}
 
 	_, err = os.Stat(dir + "/" + volumeContextFileName)
 	if !os.IsNotExist(err) {
-		t.Fatalf("CleanUpVolumeContext failed to cleanup volume context stash")
+		t.Fatalf("cleanUpVolumeContext failed to cleanup volume context stash")
 	}
 }

@@ -9,8 +9,8 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
-	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 const testDriverName = "test.csi.simplyblock.io"
@@ -21,8 +21,8 @@ func writeMockSecret(t *testing.T, mock *mockSBCLI) {
 	t.Helper()
 	secretDir := t.TempDir()
 	secretFile := filepath.Join(secretDir, "secret.json")
-	secretData, _ := json.Marshal(util.ClustersInfo{
-		Clusters: []util.ClusterConfig{{
+	secretData, _ := json.Marshal(clusters.Info{
+		Clusters: []clusters.Config{{
 			ClusterID:       sanityClusterID,
 			ClusterEndpoint: mock.URL(),
 			ClusterSecret:   sanitySecret,

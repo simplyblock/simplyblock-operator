@@ -114,8 +114,8 @@ func TestIsUUID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isUUID(tc.in); got != tc.want {
-				t.Fatalf("isUUID(%q) = %v, want %v", tc.in, got, tc.want)
+			if got := IsUUID(tc.in); got != tc.want {
+				t.Fatalf("IsUUID(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}
