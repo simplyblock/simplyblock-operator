@@ -15,10 +15,12 @@
 // operator/docs/designs/crd-redesign/design-clusterdeploymentconfig.md, whose
 // Appendix A is this file.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 
 	"github.com/simplyblock/atlas/statemachine"
 )
@@ -86,6 +88,8 @@ const (
 type DeviceSelection struct {
 	// NVMe names NVMe devices by PCI address ("0000:5e:00.0").
 	// +kubebuilder:validation:items:Pattern=`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$`
+	// +kubebuilder:validation:items:MaxLength=32
+	// +kubebuilder:validation:MaxItems=128
 	// +listType=set
 	// +optional
 	NVMe []string `json:"nvme,omitempty"`
@@ -95,6 +99,8 @@ type DeviceSelection struct {
 	// path in one list. It is the alternative to NVMe rather than a companion of
 	// it: the two classes are not mixed within a cluster.
 	// +kubebuilder:validation:items:Pattern=`^/dev/[a-zA-Z0-9._/-]+$`
+	// +kubebuilder:validation:items:MaxLength=255
+	// +kubebuilder:validation:MaxItems=128
 	// +listType=set
 	// +optional
 	Block []string `json:"block,omitempty"`
@@ -106,9 +112,11 @@ type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Workers are the Kubernetes worker hostnames in this group.
+	// +kubebuilder:validation:items:MaxLength=253
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=200
 	// +listType=set
@@ -116,10 +124,13 @@ type NodeGroup struct {
 	Workers []string `json:"workers"`
 
 	// MgmtInterface is the management network interface the storage nodes bind.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	MgmtInterface string `json:"mgmtInterface,omitempty"`
 
 	// DataInterfaces are the data-plane network interfaces.
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
@@ -141,12 +152,13 @@ type NodeGroup struct {
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
+	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
-	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
+	JournalManager *v1alpha1.JournalManagerSpec `json:"journalManager,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -157,10 +169,12 @@ type NodeSet struct {
 	// that a node can be traced back to the part of the document that produced
 	// it.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Groups are the sets of workers sharing one configuration.
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
 	Groups []NodeGroup `json:"groups"`
 }
@@ -171,6 +185,7 @@ type NodeSet struct {
 type ClusterTemplate struct {
 	// Name is the StorageCluster's name.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
@@ -194,14 +209,16 @@ type ClusterTemplate struct {
 	// this cluster makes: 100G or 1T, where a bare number is gigabytes. Like
 	// VCPUCount it is the cluster's and is copied onto every node the expansion
 	// writes. Omitted, each node uses the computed minimum.
+	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
 	// Stripe is the erasure-coding layout.
 	// +optional
-	Stripe *StripeSpec `json:"stripe,omitempty"`
+	Stripe *v1alpha1.StripeSpec `json:"stripe,omitempty"`
 
 	// FabricType is the storage fabric.
+	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
 
@@ -246,6 +263,7 @@ type ClusterDeploymentConfigSpec struct {
 	// Absent means the document creates the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
+	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 
@@ -254,7 +272,13 @@ type ClusterDeploymentConfigSpec struct {
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
 	// NodeSets are the nodes the deployment is made of.
+	//
+	// The upper bound is what makes the device-class rule above estimable: the
+	// API server costs a CEL rule against the largest value the schema permits,
+	// and a list with no bound is costed as unbounded, which the rule's nested
+	// all() then multiplies past the budget.
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
 	NodeSets []NodeSet `json:"nodeSets"`
 }

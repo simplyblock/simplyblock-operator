@@ -50,6 +50,7 @@ import (
 	"github.com/simplyblock/atlas/link"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -76,6 +77,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

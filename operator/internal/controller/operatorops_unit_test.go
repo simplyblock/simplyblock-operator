@@ -32,6 +32,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -51,20 +52,23 @@ func opsScheme(t *testing.T) *runtime.Scheme {
 	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	return scheme
 }
 
 // discoverRun is an OperatorOps asking for a discovery run.
-func discoverRun(spec *simplyblockv1alpha1.DiscoverSpec) *simplyblockv1alpha1.OperatorOps {
-	return &simplyblockv1alpha1.OperatorOps{
+func discoverRun(spec *simplyblockv1alpha2.DiscoverSpec) *simplyblockv1alpha2.OperatorOps {
+	return &simplyblockv1alpha2.OperatorOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       opsName,
 			Namespace:  opsNamespace,
 			Generation: 1,
 			Finalizers: []string{operatorOpsFinalizer},
 		},
-		Spec: simplyblockv1alpha1.OperatorOpsSpec{
-			Action:   simplyblockv1alpha1.OperatorOpsActionDiscover,
+		Spec: simplyblockv1alpha2.OperatorOpsSpec{
+			Action:   simplyblockv1alpha2.OperatorOpsActionDiscover,
 			Discover: spec,
 		},
 	}
@@ -163,7 +167,7 @@ func newRunner(t *testing.T, objects ...client.Object) *runner {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
-		WithStatusSubresource(&simplyblockv1alpha1.OperatorOps{}).
+		WithStatusSubresource(&simplyblockv1alpha2.OperatorOps{}).
 		Build()
 
 	return &runner{
@@ -178,7 +182,7 @@ func newRunner(t *testing.T, objects ...client.Object) *runner {
 }
 
 // step reconciles once and returns the run as it stands afterward.
-func (r *runner) step() (ctrl.Result, *simplyblockv1alpha1.OperatorOps) {
+func (r *runner) step() (ctrl.Result, *simplyblockv1alpha2.OperatorOps) {
 	r.t.Helper()
 	result, err := r.reconciler.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: opsName, Namespace: opsNamespace},
@@ -187,7 +191,7 @@ func (r *runner) step() (ctrl.Result, *simplyblockv1alpha1.OperatorOps) {
 		r.t.Fatalf("reconcile: %v", err)
 	}
 
-	var ops simplyblockv1alpha1.OperatorOps
+	var ops simplyblockv1alpha2.OperatorOps
 	if err := r.client.Get(context.Background(),
 		types.NamespacedName{Name: opsName, Namespace: opsNamespace}, &ops); err != nil {
 		r.t.Fatalf("read the run back: %v", err)
@@ -206,9 +210,9 @@ func (r *runner) jobs() []batchv1.Job {
 }
 
 // configs is the ClusterDeploymentConfigs that exist.
-func (r *runner) configs() []simplyblockv1alpha1.ClusterDeploymentConfig {
+func (r *runner) configs() []simplyblockv1alpha2.ClusterDeploymentConfig {
 	r.t.Helper()
-	var list simplyblockv1alpha1.ClusterDeploymentConfigList
+	var list simplyblockv1alpha2.ClusterDeploymentConfigList
 	if err := r.client.List(context.Background(), &list, client.InNamespace(opsNamespace)); err != nil {
 		r.t.Fatalf("list the configs: %v", err)
 	}
@@ -219,10 +223,10 @@ func TestDiscoverInspectingSettlesTheWorkersAndTheEnvironment(t *testing.T) {
 	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"))
 
 	_, ops := r.step() // start
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseRunning {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseRunning {
 		t.Fatalf("the run is %q after starting, want Running", ops.Status.Phase)
 	}
-	if ops.Status.Step.State != string(simplyblockv1alpha1.OperatorOpsStepInspecting) {
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepInspecting) {
 		t.Fatalf("the run is on step %q, want Inspecting", ops.Status.Step.State)
 	}
 	if ops.Status.StartedAt == nil {
@@ -233,11 +237,11 @@ func TestDiscoverInspectingSettlesTheWorkersAndTheEnvironment(t *testing.T) {
 	if !slices.Equal(ops.Status.Workers, []string{"worker-1", "worker-2"}) {
 		t.Errorf("the run settled on %v", ops.Status.Workers)
 	}
-	if ops.Status.Environment != simplyblockv1alpha1.KubernetesEnvironmentK3s {
+	if ops.Status.Environment != simplyblockv1alpha2.KubernetesEnvironmentK3s {
 		t.Errorf("concluded the environment %q, want K3s from the kubelet version",
 			ops.Status.Environment)
 	}
-	if ops.Status.Step.State != string(simplyblockv1alpha1.OperatorOpsStepProbing) {
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepProbing) {
 		t.Errorf("the run is on step %q, want Probing", ops.Status.Step.State)
 	}
 	if _, has := ops.Status.Step.KubeDeadline(); !has {
@@ -287,7 +291,7 @@ func TestDiscoverSkipsWorkersAStorageNodeAlreadyRunsOn(t *testing.T) {
 
 func TestDiscoverHonorsTheNodeSelector(t *testing.T) {
 	r := newRunner(t,
-		discoverRun(&simplyblockv1alpha1.DiscoverSpec{
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{
 			NodeSelector: map[string]string{"simplyblock.io/storage": "true"},
 		}),
 		worker("worker-1", labeled("simplyblock.io/storage", "true")),
@@ -308,7 +312,7 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	r.step()
 	_, ops := r.step()
 
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseFailed {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
 	if !strings.Contains(ops.Status.Message, "no schedulable worker") {
@@ -344,7 +348,7 @@ func TestDiscoverProbingCreatesOneJobPerWorkerAndOnlyOnce(t *testing.T) {
 	if result.RequeueAfter == 0 {
 		t.Error("Probing did not ask to be looked at again while its Jobs run")
 	}
-	if ops.Status.Step.State != string(simplyblockv1alpha1.OperatorOpsStepProbing) {
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepProbing) {
 		t.Errorf("the run left Probing before any report arrived")
 	}
 
@@ -374,12 +378,12 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	}
 
 	_, ops := r.step() // probing: sees the reports, moves to Writing
-	if ops.Status.Step.State != string(simplyblockv1alpha1.OperatorOpsStepWriting) {
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepWriting) {
 		t.Fatalf("the run is on step %q, want Writing", ops.Status.Step.State)
 	}
 
 	_, ops = r.step() // writing
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseSucceeded {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseSucceeded {
 		t.Fatalf("the run is %q: %s", ops.Status.Phase, ops.Status.Message)
 	}
 	if ops.Status.CompletedAt == nil {
@@ -399,7 +403,7 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if config.Spec.Approved {
 		t.Error("the document was written approved")
 	}
-	if config.Spec.Environment != simplyblockv1alpha1.KubernetesEnvironmentK3s {
+	if config.Spec.Environment != simplyblockv1alpha2.KubernetesEnvironmentK3s {
 		t.Errorf("the document says environment %q, want the one Inspecting concluded",
 			config.Spec.Environment)
 	}
@@ -439,7 +443,7 @@ func TestDiscoverGrowsAnExistingClusterWhenToldTo(t *testing.T) {
 	// is settled, and naming a template beside a reference is what admission
 	// refuses.
 	r := newRunner(t,
-		discoverRun(&simplyblockv1alpha1.DiscoverSpec{ClusterRef: "sb-cluster"}),
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{ClusterRef: "sb-cluster"}),
 		worker("worker-1"),
 	)
 
@@ -453,7 +457,7 @@ func TestDiscoverGrowsAnExistingClusterWhenToldTo(t *testing.T) {
 	r.step()
 	_, ops := r.step()
 
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseSucceeded {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseSucceeded {
 		t.Fatalf("the run is %q: %s", ops.Status.Phase, ops.Status.Message)
 	}
 	config := r.configs()[0]
@@ -467,7 +471,7 @@ func TestDiscoverGrowsAnExistingClusterWhenToldTo(t *testing.T) {
 
 func TestDiscoverNamesTheDocumentItWasAskedFor(t *testing.T) {
 	r := newRunner(t,
-		discoverRun(&simplyblockv1alpha1.DiscoverSpec{ConfigName: "rack-b-draft"}),
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{ConfigName: "rack-b-draft"}),
 		worker("worker-1"),
 	)
 
@@ -504,7 +508,7 @@ func TestDiscoverIgnoresAReportForAWorkerItIsNotAbout(t *testing.T) {
 	r.step()
 	_, ops := r.step()
 
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseSucceeded {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseSucceeded {
 		t.Fatalf("the run is %q: %s", ops.Status.Phase, ops.Status.Message)
 	}
 	workers := r.configs()[0].Spec.NodeSets[0].Groups[0].Workers
@@ -521,7 +525,7 @@ func TestDiscoverFailsWithoutAProbeImage(t *testing.T) {
 
 	_, ops := r.step()
 
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseFailed {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
 	if !strings.Contains(ops.Status.Message, NodeProbeImageEnv) {
@@ -536,7 +540,7 @@ func TestDiscoverStopsWhenAborted(t *testing.T) {
 
 	_, ops := r.step()
 
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseAborted {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseAborted {
 		t.Fatalf("the run is %q, want Aborted", ops.Status.Phase)
 	}
 	if len(r.jobs()) != 0 {
@@ -559,7 +563,7 @@ func TestDiscoverIsTerminalOnceItFinishes(t *testing.T) {
 	}
 	r.step()
 	_, ops := r.step()
-	if ops.Status.Phase != simplyblockv1alpha1.OperatorOpsPhaseSucceeded {
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseSucceeded {
 		t.Fatalf("the run is %q: %s", ops.Status.Phase, ops.Status.Message)
 	}
 	firstConfig := ops.Status.ConfigRef

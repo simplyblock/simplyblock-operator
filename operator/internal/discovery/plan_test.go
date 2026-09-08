@@ -17,7 +17,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -201,7 +201,7 @@ func TestPlanAppliesTheFiltersItWasGiven(t *testing.T) {
 
 	// A deny list on the slot every worker boots from, and a size range that
 	// admits the rest.
-	filter := &simplyblockv1alpha1.DeviceFilter{
+	filter := &simplyblockv1alpha2.DeviceFilter{
 		PcieDenyList:   []string{"0000:af:00.0"},
 		DriveSizeRange: "1T-4T",
 	}
@@ -232,7 +232,7 @@ func TestPlanScansTheBlockClassWhenAskedTo(t *testing.T) {
 		blockDisk("vdc", 0, 2*tb),
 	)}
 
-	filter := &simplyblockv1alpha1.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
+	filter := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
 	plan := Planner{Class: ClassOf(filter)}.Plan(fleet, filter)
 
 	if plan.Class != ClassBlock {

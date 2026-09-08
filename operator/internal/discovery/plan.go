@@ -15,7 +15,7 @@ import (
 	"slices"
 	"strings"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -51,7 +51,7 @@ type Planner struct {
 // Plan is what a run concluded: the draft to write, and why it looks like that.
 type Plan struct {
 	// NodeSets are the draft's node sets, ready to go into a spec.
-	NodeSets []simplyblockv1alpha1.NodeSet
+	NodeSets []simplyblockv1alpha2.NodeSet
 
 	// Class is the class of backend storage the draft's devices are named in.
 	Class DeviceClass
@@ -96,7 +96,7 @@ func (p Plan) RefusalLines() []string {
 // the device is, then whether it is free, then whether this run wants it. A
 // partition refused as "not in the allow list" would be a true statement and
 // the wrong one.
-func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha1.DeviceFilter) []DeviceRule {
+func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
 	rules := []DeviceRule{
 		WholeDiskRule{},
 		ClassRule{Class: class},
@@ -142,7 +142,7 @@ func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha1.DeviceFilte
 // The reports are taken in whatever order they arrived and the output does not
 // depend on it: workers are sorted by name before grouping, so two runs over
 // one fleet produce the same draft.
-func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha1.DeviceFilter) Plan {
+func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.DeviceFilter) Plan {
 	class := p.Class
 	if class == "" {
 		class = ClassNVMe

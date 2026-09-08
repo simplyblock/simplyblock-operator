@@ -709,7 +709,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-
@@ -767,6 +767,7 @@ spec:
                     type: boolean
                   fabricType:
                     description: FabricType is the storage fabric.
+                    maxLength: 32
                     type: string
                   maxSubsystemCount:
                     description: |-
@@ -783,9 +784,11 @@ spec:
                       this cluster makes: 100G or 1T, where a bare number is gigabytes. Like
                       VCPUCount it is the cluster's and is copied onto every node the expansion
                       writes. Omitted, each node uses the computed minimum.
+                    maxLength: 32
                     type: string
                   name:
                     description: Name is the StorageCluster's name.
+                    maxLength: 253
                     type: string
                   stripe:
                     description: Stripe is the erasure-coding layout.
@@ -822,6 +825,7 @@ spec:
                   Absent means the document creates the cluster in Cluster. Setting it to a
                   cluster that does not exist, or leaving it absent when one already does,
                   is refused rather than reconciled.
+                maxLength: 253
                 type: string
               edgeCluster:
                 description: |-
@@ -843,7 +847,13 @@ spec:
                 - Talos
                 type: string
               nodeSets:
-                description: NodeSets are the nodes the deployment is made of.
+                description: |-
+                  NodeSets are the nodes the deployment is made of.
+
+                  The upper bound is what makes the device-class rule above estimable: the
+                  API server costs a CEL rule against the largest value the schema permits,
+                  and a list with no bound is costed as unbounded, which the rule's nested
+                  all() then multiplies past the budget.
                 items:
                   description: |-
                     NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -861,7 +871,9 @@ spec:
                             description: DataInterfaces are the data-plane network
                               interfaces.
                             items:
+                              maxLength: 63
                               type: string
+                            maxItems: 32
                             type: array
                           devices:
                             description: Devices selects the storage devices every
@@ -874,16 +886,20 @@ spec:
                                   path in one list. It is the alternative to NVMe rather than a companion of
                                   it: the two classes are not mixed within a cluster.
                                 items:
+                                  maxLength: 255
                                   pattern: ^/dev/[a-zA-Z0-9._/-]+$
                                   type: string
+                                maxItems: 128
                                 type: array
                                 x-kubernetes-list-type: set
                               nvme:
                                 description: NVMe names NVMe devices by PCI address
                                   ("0000:5e:00.0").
                                 items:
+                                  maxLength: 32
                                   pattern: ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$
                                   type: string
+                                maxItems: 128
                                 type: array
                                 x-kubernetes-list-type: set
                             type: object
@@ -920,22 +936,26 @@ spec:
                           mgmtInterface:
                             description: MgmtInterface is the management network interface
                               the storage nodes bind.
+                            maxLength: 63
                             type: string
                           name:
                             description: |-
                               Name identifies the group within its node set, for a reader and for the
                               events a validation failure emits.
+                            maxLength: 253
                             type: string
                           spdkSystemMemory:
                             description: |-
                               SpdkSystemMemory is the memory the control plane starts SPDK with on these
                               nodes.
+                            maxLength: 32
                             pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                             type: string
                           workers:
                             description: Workers are the Kubernetes worker hostnames
                               in this group.
                             items:
+                              maxLength: 253
                               type: string
                             maxItems: 200
                             minItems: 1
@@ -945,6 +965,7 @@ spec:
                         - name
                         - workers
                         type: object
+                      maxItems: 64
                       minItems: 1
                       type: array
                     name:
@@ -952,11 +973,13 @@ spec:
                         Name is the node set's name. It is copied to StorageNode.spec.nodeSet, so
                         that a node can be traced back to the part of the document that produced
                         it.
+                      maxLength: 253
                       type: string
                   required:
                   - groups
                   - name
                   type: object
+                maxItems: 64
                 minItems: 1
                 type: array
             required:
@@ -1170,7 +1193,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-

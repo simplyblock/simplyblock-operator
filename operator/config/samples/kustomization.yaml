@@ -7,5 +7,5 @@ resources:
 - storage_v1alpha1_snapshotreplication.yaml
 - storage_v1alpha1_storagebackup.yaml
 - storage_v1alpha1_backuprestore.yaml
-- storage_v1alpha1_operatorops.yaml
+- storage_v1alpha2_operatorops.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

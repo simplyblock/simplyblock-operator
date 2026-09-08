@@ -37,6 +37,7 @@ import (
 
 	"github.com/simplyblock/atlas/inventory"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -100,7 +101,7 @@ type OperatorOpsReconciler struct {
 func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	var ops simplyblockv1alpha1.OperatorOps
+	var ops simplyblockv1alpha2.OperatorOps
 	if err := r.Get(ctx, req.NamespacedName, &ops); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -115,9 +116,9 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Terminal and staying that way: the run is the audit record now.
 	switch ops.Status.Phase {
-	case simplyblockv1alpha1.OperatorOpsPhaseSucceeded,
-		simplyblockv1alpha1.OperatorOpsPhaseFailed,
-		simplyblockv1alpha1.OperatorOpsPhaseAborted:
+	case simplyblockv1alpha2.OperatorOpsPhaseSucceeded,
+		simplyblockv1alpha2.OperatorOpsPhaseFailed,
+		simplyblockv1alpha2.OperatorOpsPhaseAborted:
 		return ctrl.Result{}, nil
 	}
 
@@ -125,7 +126,7 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.abort(ctx, &ops)
 	}
 
-	if ops.Spec.Action != simplyblockv1alpha1.OperatorOpsActionDiscover {
+	if ops.Spec.Action != simplyblockv1alpha2.OperatorOpsActionDiscover {
 		// The enum admits nothing else, so this is the schema having been
 		// bypassed rather than a case to handle.
 		return r.fail(ctx, &ops, fmt.Sprintf("action %q is not one this operator runs", ops.Spec.Action))
@@ -140,14 +141,14 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	log.Info("advancing discovery", "step", ops.Status.Step.State, "phase", ops.Status.Phase)
 
-	switch simplyblockv1alpha1.OperatorOpsStep(ops.Status.Step.State) {
+	switch simplyblockv1alpha2.OperatorOpsStep(ops.Status.Step.State) {
 	case "":
 		return r.startInspecting(ctx, &ops)
-	case simplyblockv1alpha1.OperatorOpsStepInspecting:
+	case simplyblockv1alpha2.OperatorOpsStepInspecting:
 		return r.inspect(ctx, &ops)
-	case simplyblockv1alpha1.OperatorOpsStepProbing:
+	case simplyblockv1alpha2.OperatorOpsStepProbing:
 		return r.probe(ctx, &ops)
-	case simplyblockv1alpha1.OperatorOpsStepWriting:
+	case simplyblockv1alpha2.OperatorOpsStepWriting:
 		return r.write(ctx, &ops)
 	default:
 		return r.fail(ctx, &ops, fmt.Sprintf("step %q is not one this action has", ops.Status.Step.State))
@@ -159,12 +160,12 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // that never did.
 func (r *OperatorOpsReconciler) startInspecting(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
-	ops.Status.Phase = simplyblockv1alpha1.OperatorOpsPhaseRunning
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	ops.Status.Step.State = string(simplyblockv1alpha1.OperatorOpsStepInspecting)
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepInspecting)
 	ops.Status.Message = "reading the cluster's workers"
 	r.event(ops, corev1.EventTypeNormal, "OperationStarted", "discovery started")
 
@@ -179,11 +180,11 @@ func (r *OperatorOpsReconciler) startInspecting(
 // there with no probe report to describe it.
 func (r *OperatorOpsReconciler) inspect(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
-		spec = &simplyblockv1alpha1.DiscoverSpec{}
+		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
 	var nodes corev1.NodeList
@@ -229,8 +230,8 @@ func (r *OperatorOpsReconciler) inspect(
 	}
 
 	ops.Status.Workers = workers
-	ops.Status.Environment = simplyblockv1alpha1.KubernetesEnvironment(environment.Distribution)
-	ops.Status.Step.State = string(simplyblockv1alpha1.OperatorOpsStepProbing)
+	ops.Status.Environment = simplyblockv1alpha2.KubernetesEnvironment(environment.Distribution)
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
 	deadline := metav1.NewTime(time.Now().Add(probingDeadline))
 	ops.Status.Step.Deadline = &deadline
 	ops.Status.Message = fmt.Sprintf("probing %d worker(s) of a %s cluster",
@@ -269,7 +270,7 @@ func (r *OperatorOpsReconciler) workersAlreadyTaken(
 // creating a second.
 func (r *OperatorOpsReconciler) probe(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -280,7 +281,7 @@ func (r *OperatorOpsReconciler) probe(
 	}
 
 	owner := metav1.NewControllerRef(ops,
-		simplyblockv1alpha1.GroupVersion.WithKind("OperatorOps"))
+		simplyblockv1alpha2.GroupVersion.WithKind("OperatorOps"))
 
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
@@ -344,7 +345,7 @@ func (r *OperatorOpsReconciler) probe(
 			fmt.Sprintf("the probe on %s failed, so it is not in the draft", worker))
 	}
 
-	ops.Status.Step.State = string(simplyblockv1alpha1.OperatorOpsStepWriting)
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepWriting)
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("%d worker(s) reported; writing the draft", len(reports))
 	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
@@ -353,11 +354,11 @@ func (r *OperatorOpsReconciler) probe(
 // write turns the reports into a ClusterDeploymentConfig in Draft.
 func (r *OperatorOpsReconciler) write(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
-		spec = &simplyblockv1alpha1.DiscoverSpec{}
+		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
 	reports, err := r.reportsFor(ctx, ops)
@@ -405,7 +406,7 @@ func (r *OperatorOpsReconciler) write(
 
 	now := metav1.Now()
 	ops.Status.ConfigRef = config.Name
-	ops.Status.Phase = simplyblockv1alpha1.OperatorOpsPhaseSucceeded
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseSucceeded
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
@@ -417,16 +418,16 @@ func (r *OperatorOpsReconciler) write(
 // draftFor builds the document, and the notes explaining the numbers in it that
 // were not read off the hardware.
 func (r *OperatorOpsReconciler) draftFor(
-	ops *simplyblockv1alpha1.OperatorOps,
-	spec *simplyblockv1alpha1.DiscoverSpec,
+	ops *simplyblockv1alpha2.OperatorOps,
+	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
-) (*simplyblockv1alpha1.ClusterDeploymentConfig, []string) {
+) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string) {
 	name := spec.ConfigName
 	if name == "" {
 		name = configNamePrefix + ops.Name
 	}
 
-	config := &simplyblockv1alpha1.ClusterDeploymentConfig{
+	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ops.Namespace,
@@ -435,7 +436,7 @@ func (r *OperatorOpsReconciler) draftFor(
 				nodeprobe.LabelRun:       ops.Name,
 			},
 		},
-		Spec: simplyblockv1alpha1.ClusterDeploymentConfigSpec{
+		Spec: simplyblockv1alpha2.ClusterDeploymentConfigSpec{
 			// Always false, and never anything else, including on a re-run. A
 			// second discovery writes a second document rather than editing
 			// the first, because the first may have been reviewed and
@@ -470,7 +471,7 @@ func (r *OperatorOpsReconciler) draftFor(
 // is still worth a document.
 func (r *OperatorOpsReconciler) reportsFor(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (map[string]nodeprobe.Report, error) {
 	var maps corev1.ConfigMapList
 	if err := r.List(ctx, &maps,
@@ -510,10 +511,10 @@ func (r *OperatorOpsReconciler) probeServiceAccount() string {
 // nothing to unwind beyond the Jobs it started.
 func (r *OperatorOpsReconciler) abort(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
-	ops.Status.Phase = simplyblockv1alpha1.OperatorOpsPhaseAborted
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseAborted
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = "aborted; discovery changes nothing, so nothing was undone"
@@ -530,11 +531,11 @@ func (r *OperatorOpsReconciler) abort(
 // running with nothing recording what they found.
 func (r *OperatorOpsReconciler) finalize(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) (ctrl.Result, error) {
-	terminal := ops.Status.Phase == simplyblockv1alpha1.OperatorOpsPhaseSucceeded ||
-		ops.Status.Phase == simplyblockv1alpha1.OperatorOpsPhaseFailed ||
-		ops.Status.Phase == simplyblockv1alpha1.OperatorOpsPhaseAborted
+	terminal := ops.Status.Phase == simplyblockv1alpha2.OperatorOpsPhaseSucceeded ||
+		ops.Status.Phase == simplyblockv1alpha2.OperatorOpsPhaseFailed ||
+		ops.Status.Phase == simplyblockv1alpha2.OperatorOpsPhaseAborted
 
 	if !terminal && ops.Status.Phase != "" {
 		if _, err := r.abort(ctx, ops); err != nil {
@@ -551,11 +552,11 @@ func (r *OperatorOpsReconciler) finalize(
 // fail ends a run with a reason.
 func (r *OperatorOpsReconciler) fail(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 	reason string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
-	ops.Status.Phase = simplyblockv1alpha1.OperatorOpsPhaseFailed
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseFailed
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = reason
@@ -567,7 +568,7 @@ func (r *OperatorOpsReconciler) fail(
 // so that a stale status can be told from a current one.
 func (r *OperatorOpsReconciler) status(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 ) error {
 	ops.Status.ObservedGeneration = ops.Generation
 	return r.Status().Update(ctx, ops)
@@ -578,7 +579,7 @@ func (r *OperatorOpsReconciler) status(
 // The action is the step the run is on, so that a reader scanning a run's
 // events sees which of the three produced each one.
 func (r *OperatorOpsReconciler) event(
-	ops *simplyblockv1alpha1.OperatorOps,
+	ops *simplyblockv1alpha2.OperatorOps,
 	eventType, reason, message string,
 ) {
 	if r.Recorder == nil {
@@ -636,7 +637,7 @@ func orUnknown(distribution string) string {
 // next poll.
 func (r *OperatorOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.OperatorOps{}).
+		For(&simplyblockv1alpha2.OperatorOps{}).
 		Owns(&batchv1.Job{}).
 		Named("operatorops").
 		Complete(r)

@@ -16,7 +16,7 @@ import (
 	"fmt"
 
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -42,7 +42,7 @@ const (
 // where each derived number came from.
 type ClusterTemplate struct {
 	// Template is the API type, ready to go into a spec.
-	Template *simplyblockv1alpha1.ClusterTemplate
+	Template *simplyblockv1alpha2.ClusterTemplate
 
 	// Notes are one sentence per derived field, in the order a reviewer would
 	// read them. They go into the run's status and its events, because a number
@@ -59,7 +59,7 @@ type ClusterTemplate struct {
 // so, because a draft that fails schema validation is one a reviewer cannot
 // even read.
 func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
-	out := ClusterTemplate{Template: &simplyblockv1alpha1.ClusterTemplate{
+	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{
 		Name:              name,
 		MaxSubsystemCount: ptr.To(DefaultMaxSubsystemCount),
 	}}

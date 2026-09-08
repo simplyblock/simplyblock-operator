@@ -10,7 +10,7 @@
 #   kubectl get cdc
 #
 # A narrowed run looks like the commented block at the bottom.
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: OperatorOps
 metadata:
   name: discover-now
@@ -24,7 +24,7 @@ spec:
 # lands there is the explicit device list they produced, so re-running the
 # filter later against changed hardware cannot change what a reviewer already
 # approved.
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: OperatorOps
 metadata:
   name: discover-rack-b

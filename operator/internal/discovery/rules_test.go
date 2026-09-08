@@ -13,7 +13,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -211,15 +211,15 @@ func TestClassOfDefaultsToNVMe(t *testing.T) {
 		t.Errorf("a run with no filter scans %q, want %q: NVMe is what every "+
 			"deployment before the block class was built out of", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha1.DeviceFilter{}); got != ClassNVMe {
+	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{}); got != ClassNVMe {
 		t.Errorf("an empty filter scans %q, want %q", got, ClassNVMe)
 	}
-	if got := ClassOf(&simplyblockv1alpha1.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
 		EnableLogicalBlockDevices: ptr.To(true),
 	}); got != ClassBlock {
 		t.Errorf("a filter asking for block devices scans %q, want %q", got, ClassBlock)
 	}
-	if got := ClassOf(&simplyblockv1alpha1.DeviceFilter{
+	if got := ClassOf(&simplyblockv1alpha2.DeviceFilter{
 		EnableLogicalBlockDevices: ptr.To(false),
 	}); got != ClassNVMe {
 		t.Errorf("a filter declining block devices scans %q, want %q", got, ClassNVMe)

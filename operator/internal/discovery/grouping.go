@@ -25,7 +25,7 @@ import (
 	"slices"
 	"strings"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -181,7 +181,7 @@ func groupDeviceBytes(group Group) uint64 {
 // NodeSetBuilder organizes groups into the node sets of a draft.
 type NodeSetBuilder interface {
 	Name() string
-	Build(groups []Group) []simplyblockv1alpha1.NodeSet
+	Build(groups []Group) []simplyblockv1alpha2.NodeSet
 }
 
 // SingleNodeSet puts every group into one node set.
@@ -202,7 +202,7 @@ const DefaultNodeSetName = "discovered"
 
 func (SingleNodeSet) Name() string { return "single node set" }
 
-func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha1.NodeSet {
+func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 	if len(groups) == 0 {
 		return nil
 	}
@@ -212,23 +212,23 @@ func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha1.NodeSet {
 		name = DefaultNodeSetName
 	}
 
-	set := simplyblockv1alpha1.NodeSet{Name: name, Groups: make([]simplyblockv1alpha1.NodeGroup, 0, len(groups))}
+	set := simplyblockv1alpha2.NodeSet{Name: name, Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(groups))}
 	for _, group := range groups {
 		set.Groups = append(set.Groups, nodeGroupOf(group))
 	}
-	return []simplyblockv1alpha1.NodeSet{set}
+	return []simplyblockv1alpha2.NodeSet{set}
 }
 
 // nodeGroupOf renders one group as the API's NodeGroup.
-func nodeGroupOf(group Group) simplyblockv1alpha1.NodeGroup {
+func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 	workers := make([]string, 0, len(group.Workers))
 	for _, worker := range group.Workers {
 		workers = append(workers, worker.Name)
 	}
 
-	out := simplyblockv1alpha1.NodeGroup{Name: group.Name, Workers: workers}
+	out := simplyblockv1alpha2.NodeGroup{Name: group.Name, Workers: workers}
 	if len(group.Addresses) > 0 {
-		selection := &simplyblockv1alpha1.DeviceSelection{}
+		selection := &simplyblockv1alpha2.DeviceSelection{}
 		if group.Class == ClassBlock {
 			selection.Block = group.Addresses
 		} else {

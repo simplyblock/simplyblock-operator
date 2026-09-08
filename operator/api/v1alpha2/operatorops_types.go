@@ -13,7 +13,7 @@
 // operator/docs/designs/crd-redesign/design-clusterdeploymentconfig.md, whose
 // Appendix B is this file.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

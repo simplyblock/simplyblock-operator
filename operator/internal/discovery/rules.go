@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/simplyblock/atlas/blockdev"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -91,7 +91,7 @@ const (
 // filter that does not ask for block devices, is NVMe: that is what every
 // deployment before the logical block-device class existed was built out of, so
 // it is what a run that says nothing keeps reporting.
-func ClassOf(filter *simplyblockv1alpha1.DeviceFilter) DeviceClass {
+func ClassOf(filter *simplyblockv1alpha2.DeviceFilter) DeviceClass {
 	if filter != nil && filter.EnableLogicalBlockDevices != nil && *filter.EnableLogicalBlockDevices {
 		return ClassBlock
 	}
