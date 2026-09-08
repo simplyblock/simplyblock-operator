@@ -195,6 +195,41 @@ func TestReadUsageDoesNotProbeADeviceOfZeroSize(t *testing.T) {
 	}
 }
 
+func TestReadUsageFindsASwapAreaWhenTheDeviceRootIsMountedElsewhere(t *testing.T) {
+	// The swap list is the one source that names a device by path, and the path
+	// it names is the host's. A caller that mounted the host's /dev somewhere
+	// else builds its device paths from that prefix, so a full-path comparison
+	// matches nothing and the swap disk is reported without the reason it is
+	// unavailable. The kernel's exclusive open still refuses it, so nothing is
+	// handed over — but "the kernel holds it and gives no reason" is a worse
+	// answer than "it is swap" for the person reading the report.
+	h := storageHost()
+	h.files["self/mountinfo"] = mountedBootDisk
+	h.files["swaps"] = swapOnVirtio // names /dev/vda
+
+	root := h.write(t)
+	cfg := ScanConfig{SysfsRoot: root, ProcRoot: root, DevRoot: "/host/dev"}
+
+	disks, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+	if got := scanned(t, disks, "vda").Path; got != "/host/dev/vda" {
+		t.Fatalf("the device path is %q, and the fixture meant to move the device root", got)
+	}
+
+	usage, err := ReadUsage(cfg, disks, free)
+	if err != nil {
+		t.Fatalf("read the usage: %v", err)
+	}
+	if !usage["vda"].Swap {
+		t.Error("the swap disk was not recognized because the caller mounted /dev elsewhere")
+	}
+	if usage["nvme0n1"].Swap {
+		t.Error("a disk the swap list does not name was reported as swap")
+	}
+}
+
 func TestReadUsageReadsTheMountTableItWasPointedAt(t *testing.T) {
 	// A process in a container has its own mount namespace, so its own
 	// mountinfo does not list the host's mounts. A scan running there and

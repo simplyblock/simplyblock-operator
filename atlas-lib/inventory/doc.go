@@ -46,6 +46,19 @@
 // testable against a captured tree, and it is also how a container that mounts
 // a host's /sys somewhere else reads the host rather than its own namespace.
 //
+// One field in it does not default safely, and a caller in a pod has to set it.
+// [Config.MountinfoPath] is the mount table the disk reading consults, and its
+// default is this process's own — which in a pod is the pod's mount namespace
+// and lists none of the host's mounts. A collection that leaves it alone
+// therefore finds nothing mounted and reports the disk carrying the host's root
+// filesystem as free. The host's table is PID 1's:
+//
+//	inv, err := inventory.Collect(ctx, inventory.Config{
+//	    SysfsRoot:     "/host/sys",
+//	    ProcRoot:      "/host/proc",
+//	    MountinfoPath: "/host/proc/1/mountinfo",
+//	})
+//
 // # What a block device is, is not decided here
 //
 // The disks are read through [github.com/simplyblock/atlas/blockdev], which

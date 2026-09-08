@@ -120,7 +120,15 @@ func (c ScanConfig) mountinfo() string {
 type Kind string
 
 const (
-	// KindDisk is a whole disk: the only kind a cluster is built out of.
+	// KindDisk is a whole disk: the only kind a cluster is built out of, and
+	// what an entry carrying none of the markers below is taken to be.
+	//
+	// There is deliberately no "something else" kind. An entry nothing here
+	// recognizes is more safely called a disk than set aside as unknown,
+	// because a disk is the thing candidacy scrutinizes: an unrecognized entry
+	// reaches the bus check, and a whole disk on no bus the scan can name is
+	// refused with ReasonUnknownTransport. A kind nothing ever produced would
+	// only be a branch every caller's switch had to carry and none would reach.
 	KindDisk Kind = "Disk"
 
 	// KindPartition is a slice of one. A partition is not backend storage, and
@@ -148,10 +156,6 @@ const (
 	// unconfigured nbd devices, and calling those disks put sixteen entries
 	// claiming to be local storage into the report of every worker in a fleet.
 	KindNetwork Kind = "Network"
-
-	// KindOther is a device none of the above recognized. It is not a disk, and
-	// it is reported rather than dropped so that a caller can say what it saw.
-	KindOther Kind = "Other"
 )
 
 // Transport is the bus a device sits on.

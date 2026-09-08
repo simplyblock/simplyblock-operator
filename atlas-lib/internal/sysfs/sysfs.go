@@ -6,7 +6,7 @@
 // The layout constants below are NVMe's, because that is the hierarchy the
 // public `nvme` package builds its Subsystem/Controller/Namespace model out of.
 // The readers and the path helpers are not: class/block and class/net are the
-// same shape of tree, and `blockdev` and `hostinfo` read them with these.
+// same shape of tree, and `blockdev` and `inventory` read them with these.
 //
 // Observed layout (NVMe-oF/TCP, multipath, kernel 5.14 / Rocky 9):
 //

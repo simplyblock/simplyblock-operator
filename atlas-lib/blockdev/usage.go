@@ -125,7 +125,7 @@ func ReadUsage(cfg ScanConfig, disks []Disk, exclusive ExclusiveOpener) (map[str
 				continue
 			}
 			u.Mountpoints = append(u.Mountpoints, mounts[devNumber{part.Major, part.Minor}]...)
-			if swaps[part.Path] {
+			if swaps[part.Path] || swaps[part.Name] {
 				u.Swap = true
 			}
 		}
@@ -199,13 +199,22 @@ func readMountinfo(path string) (map[devNumber][]string, error) {
 // with, which is not a swap area.
 const swapsHeaderPrefix = "Filename"
 
-// readSwaps reads which paths are active swap areas.
+// readSwaps reads which devices are active swap areas, keyed both by the path
+// the swap list names and by that path's last element.
 //
 // Swap is the one source that names a device by path rather than by number, so
-// this is a path match and cannot be anything else. It is not the only defense:
-// the kernel holds a swap device exclusively, so the exclusive open refuses it
-// whatever path it was activated under, and this reading is what turns that
-// refusal into a reason a reviewer can read.
+// this is a path match and cannot be anything else. Keying by the last element
+// as well is what makes it survive a caller that mounted the host's /dev
+// somewhere else: the swap list names the host's /dev/vda where such a caller's
+// device paths read /host/dev/vda, and a full-path comparison would match
+// nothing and report the swap disk without the reason it is unavailable.
+//
+// It still does not catch every spelling. An area activated through
+// /dev/mapper/vg-swap is named that way here and the device's kernel name is
+// dm-1, so neither key matches. That is why this is not the only defense: the
+// kernel holds a swap device exclusively, so the exclusive open refuses it
+// whatever path it was activated under. What this reading adds is the reason,
+// which the kernel does not give.
 func readSwaps(proc string) (map[string]bool, error) {
 	path := filepath.Join(proc, "swaps")
 	raw, err := os.ReadFile(path)
@@ -224,7 +233,9 @@ func readSwaps(proc string) (map[string]bool, error) {
 		if len(fields) == 0 || fields[0] == swapsHeaderPrefix {
 			continue
 		}
-		swaps[unescapeMountField(fields[0])] = true
+		path := unescapeMountField(fields[0])
+		swaps[path] = true
+		swaps[filepath.Base(path)] = true
 	}
 	return swaps, nil
 }

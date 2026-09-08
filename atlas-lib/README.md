@@ -45,12 +45,13 @@ atlas/
 │   ├── signatures.go       The signature catalog and the offsets each format writes to
 │   ├── scan.go             Scan: enumerate class/block; Disk, Kind, Transport, ScanConfig
 │   ├── usage.go            Usage: who already uses a device (mounts, swap, holders, O_EXCL)
+│   │                       ScanConfig.MountinfoPath: in a pod, point it at the host's table
 │   ├── candidate.go        Inspector.Candidates: may this device be handed over, and why not
 │   ├── local_linux.go      OpenLocal (O_DIRECT), ResolveDevice, OpenExclusive, plus a non-Linux stub
 │   └── blkid.go            BlkidProber: the shadow the reading is migrating off
 ├── inventory/              What there is to deploy on, gathered in one call
 │   ├── doc.go              The entry point, and why NUMA is the join rather than a detail
-│   ├── inventory.go        Config, Inventory, Collect, AvailableDevices, ByNUMANode
+│   ├── inventory.go        Config (roots + MountinfoPath), Inventory, Collect, AvailableDevices, ByNUMANode
 │   ├── cpu.go              CPU: online/present/affinity counts, sockets, cores, hyperthreading, NUMACPUs
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
@@ -470,6 +471,12 @@ partial-failure handling.
 
 ```go
 inv, err := inventory.Collect(ctx, inventory.Config{
+    // Reading a host from a pod means naming where its trees are mounted, and
+    // the mount table is the one that matters: see the warning below.
+    SysfsRoot:     "/host/sys",
+    ProcRoot:      "/host/proc",
+    MountinfoPath: "/host/proc/1/mountinfo",
+
     // Omit these and the machine is read without a cluster around it.
     Kubernetes: inventory.KubernetesSources{
         Discovery: clientset.Discovery(),
@@ -521,6 +528,14 @@ The last entry is `NUMANodeUnknown` when something could not be placed — a
 bridge, loopback, a disk behind a controller whose bus reports no node — and it
 is absent when everything was. Dropping the unplaceable would make the rollup
 read as the whole inventory while missing part of it.
+
+**Reading a host from inside a pod: name its mount table.** A pod has its own
+mount namespace, so `/proc/self/mountinfo` lists none of the host's mounts. A
+collection that leaves `MountinfoPath` at its default therefore finds nothing
+mounted and reports the disk carrying the host's root filesystem as free — the
+one mistake in this whole flow that loses data. The host's table is PID 1's.
+Everything else defaults sensibly; this one does not, and it is a field rather
+than a guess because only the caller knows where it mounted `/proc`.
 
 Two refusals are worth knowing about before writing anything that filters
 devices by name. A fabric NVMe namespace is a simplyblock volume this node has
