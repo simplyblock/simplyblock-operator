@@ -7,7 +7,6 @@ import (
 )
 
 func TestVolumeContext(t *testing.T) {
-	volumeContextFileName := "volumeContext.json"
 
 	dir, err := os.MkdirTemp("", "test")
 	if err != nil {
@@ -42,5 +41,32 @@ func TestVolumeContext(t *testing.T) {
 	_, err = os.Stat(dir + "/" + volumeContextFileName)
 	if !os.IsNotExist(err) {
 		t.Fatalf("cleanUpVolumeContext failed to cleanup volume context stash")
+	}
+}
+
+// TestCleanUpVolumeContextIsIdempotent covers a second unstage of the same
+// volume. The CSI spec lets kubelet retry NodeUnstageVolume, and a retry after
+// a successful one finds the stash already gone; reporting that as an error
+// fails the RPC forever and wedges the volume.
+func TestCleanUpVolumeContextIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := stashVolumeContext(map[string]string{"key": "value"}, dir); err != nil {
+		t.Fatalf("stashVolumeContext: %v", err)
+	}
+	if err := cleanUpVolumeContext(dir); err != nil {
+		t.Fatalf("first cleanUpVolumeContext: %v", err)
+	}
+	if err := cleanUpVolumeContext(dir); err != nil {
+		t.Errorf("second cleanUpVolumeContext: %v, want nil — an unstage retry must not fail", err)
+	}
+}
+
+// TestCleanUpVolumeContextOnNeverStagedPath covers the other order the same
+// retry can arrive in: an unstage for a volume whose staging never wrote a
+// stash at all.
+func TestCleanUpVolumeContextOnNeverStagedPath(t *testing.T) {
+	if err := cleanUpVolumeContext(t.TempDir()); err != nil {
+		t.Errorf("cleanUpVolumeContext on a path with no stash: %v, want nil", err)
 	}
 }

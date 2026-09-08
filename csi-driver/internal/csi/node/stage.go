@@ -62,7 +62,7 @@ func (ns *Server) NodeStageVolume(
 
 	if ns.kubeClient != nil {
 		nodeName := ns.Driver.GetNodeID()
-		node, nodeErr := ns.kubeClient.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
+		node, nodeErr := ns.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if nodeErr == nil {
 			vc["hostNQN"] = nqn.Host(string(node.UID))
 		} else {

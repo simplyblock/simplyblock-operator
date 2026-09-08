@@ -76,9 +76,14 @@ func lookupContext(folder, fileName string) (interface{}, error) {
 	return data, nil
 }
 
+// cleanUpContext removes a stash, treating an already-absent one as success.
+//
+// NodeUnstageVolume is retried by kubelet, and a retry after a successful
+// unstage finds the file gone. Reporting that as an error fails the RPC every
+// time from then on, so the volume can never finish unstaging.
 func cleanUpContext(folder, fileName string) error {
 	fPath := filepath.Join(folder, fileName)
-	if err := os.Remove(fPath); err != nil {
+	if err := os.Remove(fPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to cleanup volume context stash (%s): %w", fPath, err)
 	}
 	return nil

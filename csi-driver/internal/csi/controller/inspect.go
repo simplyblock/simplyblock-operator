@@ -94,8 +94,11 @@ func (cs *Server) ControllerGetVolume(
 		}, nil
 	}
 
+	// The volume is identified by the handle the caller asked about, which is
+	// what the CSI spec requires and what the abnormal path above returns. The
+	// lvol UUID inside it addresses the control plane, not the CSI volume.
 	volume := &csi.Volume{
-		VolumeId:      spdkVol.VolumeID,
+		VolumeId:      volumeID,
 		VolumeContext: volumeInfo,
 	}
 
