@@ -87,10 +87,10 @@ preflight: ## Check the tools and privileges a run needs.
 	      echo "  Sweep what an earlier run left behind and look again: make clean-clusters"; \
 	    fi; \
 	    grants=$$(sudo -n -l 2>/dev/null); \
-	    for want in "pkill -x bootpd" ".talos/clusters/"; do \
+	    for want in "pkill -x bootpd" "talos/clusters/"; do \
 	      case "$$grants" in \
 	        *"$$want"*) ;; \
-	        *) echo "warning: no passwordless sudo rule mentions \"$$want\", so an unattended run stops on it (see README.md)" ;; \
+	        *) echo "warning: no passwordless sudo rule mentions $$want, so an unattended run stops on it (see README.md)" ;; \
 	      esac; \
 	    done; \
 	    ;; \
