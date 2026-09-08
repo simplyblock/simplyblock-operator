@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	ginkgo "github.com/onsi/ginkgo/v2"
@@ -119,7 +120,7 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		// longer resolves) disarms the guard with no other symptom. A cluster is
 		// the only place that shows up: the unit tests patch a fake client, which
 		// has no RBAC to get wrong.
-		gomega.Eventually(func() string {
+		gomega.Eventually(func() (string, error) {
 			return pvcAnnotation(f, ns, defaultPVCName, annotationOnDiskFilesystem)
 		}, 2*time.Minute, 5*time.Second).Should(gomega.Equal("ext4"),
 			"the node plugin never recorded the on-disk filesystem on claim %s", defaultPVCName)
@@ -158,12 +159,20 @@ const defaultPVCName = "spdkcsi-pvc"
 // what this asserts is the string the driver writes to a live cluster.
 const annotationOnDiskFilesystem = "storage.simplyblock.io/on-disk-filesystem"
 
-// pvcAnnotation reads one annotation off a claim, returning the empty string
-// when the claim or the annotation is not there yet.
-func pvcAnnotation(f *framework.Framework, ns, pvcName, key string) string {
+// pvcAnnotation reads one annotation off a claim, reporting the empty string
+// when the annotation is not there yet: that is the only reading a poll should
+// wait through, because it is the one staging is on its way to writing.
+//
+// A claim that cannot be read at all stops the poll instead. By the time this is
+// called the claim is bound, since the workload pod is running and could not
+// have started otherwise, so a Forbidden or an unreachable API server is a
+// broken cluster rather than a stage that has not happened. Folded into the
+// empty string it would spend the whole timeout and then blame the node plugin
+// for not writing an annotation nobody could have read.
+func pvcAnnotation(f *framework.Framework, ns, pvcName, key string) (string, error) {
 	pvc, err := f.ClientSet.CoreV1().PersistentVolumeClaims(ns).Get(context.Background(), pvcName, metav1.GetOptions{})
 	if err != nil {
-		return ""
+		return "", gomega.StopTrying(fmt.Sprintf("read claim %s/%s", ns, pvcName)).Wrap(err)
 	}
-	return pvc.Annotations[key]
+	return pvc.Annotations[key], nil
 }
