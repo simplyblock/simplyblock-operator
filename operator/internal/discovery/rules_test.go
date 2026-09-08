@@ -206,6 +206,37 @@ func TestWorkerWasReadableIsOffByDefaultAndSaysWhatWasMissed(t *testing.T) {
 	}
 }
 
+func TestWorkerHasDevicesExplainsAMachineWhoseDisksAreAlreadyDriven(t *testing.T) {
+	// The case this whole PCI reading exists for. Every NVMe controller on the
+	// machine is on a userspace driver, so the kernel presents no block device
+	// for any of them and the disk reading is silent. "No device survived the
+	// rules" is true and tells a reviewer to go and look at a machine that is
+	// full of disks.
+	worker := report("worker-1")
+	worker.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", TakenByUserspace: true},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", TakenByUserspace: true},
+	}
+
+	ok, why := (WorkerHasDevices{}).Admit(worker, nil)
+
+	if ok {
+		t.Fatal("admitted a worker with no usable device")
+	}
+	for _, fragment := range []string{"0000:00:02.0", "uio_pci_generic", "2 of its NVMe controllers"} {
+		if !strings.Contains(why, fragment) {
+			t.Errorf("the reason %q does not mention %q", why, fragment)
+		}
+	}
+
+	// A machine that genuinely has nothing still gets the plain answer, so the
+	// two are distinguishable.
+	plain := report("worker-2")
+	if _, why := (WorkerHasDevices{}).Admit(plain, nil); strings.Contains(why, "userspace") {
+		t.Errorf("a machine with no controllers at all was described as having them taken: %q", why)
+	}
+}
+
 func TestClassOfDefaultsToNVMe(t *testing.T) {
 	if got := ClassOf(nil); got != ClassNVMe {
 		t.Errorf("a run with no filter scans %q, want %q: NVMe is what every "+

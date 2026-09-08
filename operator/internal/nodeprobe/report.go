@@ -65,6 +65,16 @@ type Report struct {
 	// grounds it was refused on.
 	Devices []Device `json:"devices,omitempty"`
 
+	// NVMeControllers is every NVMe controller on the machine's PCI bus, with
+	// the driver that owns each.
+	//
+	// It is here because Devices cannot see all of them. A controller a
+	// userspace driver has been given has no block device at all, so a worker
+	// with four of them reports no NVMe disks: this is what tells a reviewer
+	// the disks exist and something else is driving them, rather than leaving
+	// them to conclude the machine has none.
+	NVMeControllers []Controller `json:"nvmeControllers,omitempty"`
+
 	// Unreadable is what the probe could not read, one sentence each. It is
 	// separate from a device's own rejections: this is the machine refusing to
 	// answer, where a rejection is an answer.
@@ -202,6 +212,42 @@ type Device struct {
 	// Available. Both are written, rather than one being derived from the
 	// other, so that a reader on an older schema still gets the verdict.
 	Rejections []Rejection `json:"rejections,omitempty"`
+}
+
+// Controller is one NVMe controller on the PCI bus.
+type Controller struct {
+	// Address is the slot, in the form a deployment config names an NVMe
+	// device by.
+	Address string `json:"address"`
+
+	// Driver is what owns it: the kernel's own driver for a controller whose
+	// namespaces it presents, uio_pci_generic or vfio-pci for one a userspace
+	// driver has, and empty for one nothing owns.
+	Driver string `json:"driver,omitempty"`
+
+	// Vendor and Product are the raw PCI identifiers, which is what sysfs has:
+	// resolving them to names needs a database the probe does not carry.
+	Vendor  string `json:"vendor,omitempty"`
+	Product string `json:"product,omitempty"`
+
+	// NUMANode is the memory node it hangs off, or NUMANodeUnknown.
+	NUMANode int `json:"numaNode"`
+
+	// TakenByUserspace reports whether a userspace-IO driver owns it, which on
+	// this product's hosts means SPDK has it or something left it taken.
+	TakenByUserspace bool `json:"takenByUserspace,omitempty"`
+}
+
+// ControllersTakenByUserspace is the controllers no block device corresponds
+// to, which is the answer to why a worker full of disks reported none.
+func (r Report) ControllersTakenByUserspace() []Controller {
+	var taken []Controller
+	for _, controller := range r.NVMeControllers {
+		if controller.TakenByUserspace {
+			taken = append(taken, controller)
+		}
+	}
+	return taken
 }
 
 // Rejection is one ground with the evidence for it.

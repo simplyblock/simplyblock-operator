@@ -49,12 +49,18 @@ atlas/
 │   ├── candidate.go        Inspector.Candidates: may this device be handed over, and why not
 │   ├── local_linux.go      OpenLocal (O_DIRECT), ResolveDevice, OpenExclusive, plus a non-Linux stub
 │   └── blkid.go            BlkidProber: the shadow the reading is migrating off
+├── pci/                    What is on the PCI bus, and which driver owns each device
+│   ├── doc.go              Why a block-device scan is blind to a controller SPDK took
+│   ├── scan.go             Device, Scan, NVMeControllers, IsNVMe, BoundToUserspace
+│   ├── userspace.go        HeldBy: which process is driving it, from /proc (needs hostPID)
+│   └── rebind.go           BindTo / Unbind, refusing a device something holds
 ├── inventory/              What there is to deploy on, gathered in one call
 │   ├── doc.go              The entry point, and why NUMA is the join rather than a detail
 │   ├── inventory.go        Config (roots + MountinfoPath), Inventory, Collect, AvailableDevices, ByNUMANode
 │   ├── cpu.go              CPU: online/present/affinity counts, sockets, cores, hyperthreading, NUMACPUs
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
+│   │                       (Inventory.NVMeControllers comes from pci/, see below)
 │   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
@@ -638,6 +644,26 @@ mounted and reports the disk carrying the host's root filesystem as free — the
 one mistake in this whole flow that loses data. The host's table is PID 1's.
 Everything else defaults sensibly; this one does not, and it is a field rather
 than a guess because only the caller knows where it mounted `/proc`.
+
+**A worker's NVMe disks may be invisible to the disk reading entirely.** SPDK
+takes a controller by rebinding it from the kernel's `nvme` driver to
+`uio_pci_generic` or `vfio-pci`, and from that moment the kernel presents no
+block device for it. On the fleet this was developed against, three of four
+workers had four NVMe controllers each on `uio_pci_generic` and not one NVMe
+block device between them — so a `class/block` scan reports "no NVMe disks"
+about a machine with four. `inv.NVMeControllers` is the second half of the
+answer, and `inv.ControllersTakenByUserspace()` is the question worth asking
+whenever a draft came back empty:
+
+```go
+if len(inv.AvailableDevices()) == 0 {
+    if taken := inv.ControllersTakenByUserspace(); len(taken) > 0 {
+        // Not a machine without storage: a machine whose storage something
+        // else is already driving. pci.HeldBy says which process, and
+        // pci.BindTo gives a controller back — refusing while anything holds it.
+    }
+}
+```
 
 Two refusals are worth knowing about before writing anything that filters
 devices by name. A fabric NVMe namespace is a simplyblock volume this node has

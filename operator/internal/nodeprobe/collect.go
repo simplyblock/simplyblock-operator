@@ -17,6 +17,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/pci"
 )
 
 // FromInventory renders a collected inventory as the report for one node.
@@ -27,14 +28,15 @@ import (
 // which part of the answer is missing.
 func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadable error) Report {
 	return Report{
-		Version:    ReportVersion,
-		Node:       node,
-		ProbedAt:   metav1.NewTime(at),
-		CPU:        cpuOf(inv.CPU),
-		HugePages:  hugePagesOf(inv.HugePages),
-		Interfaces: interfacesOf(inv.Interfaces),
-		Devices:    devicesOf(inv.Devices),
-		Unreadable: sentences(unreadable),
+		Version:         ReportVersion,
+		Node:            node,
+		ProbedAt:        metav1.NewTime(at),
+		CPU:             cpuOf(inv.CPU),
+		HugePages:       hugePagesOf(inv.HugePages),
+		Interfaces:      interfacesOf(inv.Interfaces),
+		Devices:         devicesOf(inv.Devices),
+		NVMeControllers: controllersOf(inv.NVMeControllers),
+		Unreadable:      sentences(unreadable),
 	}
 }
 
@@ -126,6 +128,21 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	return out
 }
 
+func controllersOf(devices []pci.Device) []Controller {
+	out := make([]Controller, 0, len(devices))
+	for _, device := range devices {
+		out = append(out, Controller{
+			Address:          device.Address,
+			Driver:           device.Driver,
+			Vendor:           device.Vendor,
+			Product:          device.Product,
+			NUMANode:         device.NUMANode,
+			TakenByUserspace: device.BoundToUserspace(),
+		})
+	}
+	return out
+}
+
 // sentences flattens the error Collect joins into one entry per reader that
 // failed.
 //
@@ -152,12 +169,14 @@ func sentences(err error) []string {
 func Summary(report Report) string {
 	return fmt.Sprintf(
 		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
-			"%d MiB of huge pages, %d interfaces, %d readings unavailable",
+			"%d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
+			"driver, %d readings unavailable",
 		report.Node,
 		len(report.AvailableDevices()), len(report.Devices),
 		report.CPU.OnlineCPUs, report.CPU.PhysicalCores, report.CPU.HyperThreading,
 		report.HugePageBytes()>>20,
 		len(report.Interfaces),
+		len(report.ControllersTakenByUserspace()),
 		len(report.Unreadable),
 	)
 }

@@ -17,6 +17,9 @@
 //	blockdev        What a Linux block device is, and what it carries: the
 //	                reading a formatting decision rests on, plus the scan that
 //	                enumerates a host's devices and decides which are free.
+//	pci             What PCI devices a machine has and which driver owns each,
+//	                so that an NVMe controller a userspace driver holds is
+//	                visible at all: it has no block device.
 //	inventory       What there is to deploy on, in one call: CPU topology and
 //	                hyperthreading, the huge pages already allocated, the
 //	                network interfaces with their link speeds, the free disks,

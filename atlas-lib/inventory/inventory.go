@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/discovery"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/pci"
 )
 
 const (
@@ -183,6 +184,17 @@ type Inventory struct {
 	// to be able to be told why the disk they expected is not a candidate.
 	Devices []blockdev.Candidate
 
+	// NVMeControllers is every NVMe controller on the machine's PCI bus, with
+	// the driver that owns each.
+	//
+	// It is here because the disk reading cannot see all of them. SPDK takes a
+	// controller by rebinding it from the kernel's NVMe driver to a
+	// userspace-IO one, and from that moment the kernel presents no block
+	// device for it: a worker with four such controllers reports no NVMe disks
+	// at all. This is what says the disks are there and something else has
+	// them.
+	NVMeControllers []pci.Device
+
 	// Environment is which Kubernetes distribution the cluster runs, and the
 	// markers that said so.
 	//
@@ -208,6 +220,23 @@ func (i Inventory) AvailableDevices() []blockdev.Candidate {
 	return free
 }
 
+// ControllersTakenByUserspace is the NVMe controllers a userspace driver owns,
+// which are the disks this machine has and the kernel does not present.
+//
+// A discovery run that found no candidate devices should say whether this is
+// empty: no disks and no controllers is a machine with no storage, and no disks
+// with four controllers is a machine whose storage something else is already
+// driving. They are different answers and only one of them is a surprise.
+func (i Inventory) ControllersTakenByUserspace() []pci.Device {
+	var taken []pci.Device
+	for _, controller := range i.NVMeControllers {
+		if controller.BoundToUserspace() {
+			taken = append(taken, controller)
+		}
+	}
+	return taken
+}
+
 // NUMANodeInventory is everything one memory node has.
 type NUMANodeInventory struct {
 	// Node is the memory node's id, or NUMANodeUnknown for the entry holding
@@ -226,6 +255,10 @@ type NUMANodeInventory struct {
 	// attached to this node.
 	Interfaces []Interface
 	Devices    []blockdev.Candidate
+
+	// NVMeControllers is the NVMe controllers on this node, including the ones
+	// no block device corresponds to because a userspace driver has them.
+	NVMeControllers []pci.Device
 }
 
 // NUMAHugePagesOfSize is one node's share of one pool, carrying the page size
@@ -295,6 +328,11 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 		target.Devices = append(target.Devices, device)
 	}
 
+	for _, controller := range i.NVMeControllers {
+		target := node(controller.NUMANode)
+		target.NVMeControllers = append(target.NVMeControllers, controller)
+	}
+
 	// Ascending by node, with the unknown entry last: it is not a node, and a
 	// caller walking the list expects the real ones first. Its id is negative,
 	// so it has to be moved rather than sorted into place.
@@ -355,6 +393,16 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		errs = append(errs, fmt.Errorf("read the block devices: %w", err))
 	}
 	inv.Devices = devices
+
+	controllers, err := pci.Scan(pci.Config{
+		SysfsRoot: cfg.sysfs(),
+		ProcRoot:  cfg.proc(),
+		DevRoot:   cfg.dev(),
+	})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
+	}
+	inv.NVMeControllers = pci.NVMeControllers(controllers)
 
 	if cfg.Kubernetes.Discovery != nil || len(cfg.Kubernetes.Nodes) > 0 {
 		env, err := CollectEnvironment(ctx, cfg.Kubernetes.Discovery, cfg.Kubernetes.Nodes)

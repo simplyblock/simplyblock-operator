@@ -278,11 +278,33 @@ type WorkerHasDevices struct{}
 
 func (WorkerHasDevices) Name() string { return "has devices" }
 
-func (WorkerHasDevices) Admit(_ nodeprobe.Report, admitted []nodeprobe.Device) (bool, string) {
-	if len(admitted) == 0 {
-		return false, "no device of it survived the device rules"
+func (WorkerHasDevices) Admit(report nodeprobe.Report, admitted []nodeprobe.Device) (bool, string) {
+	if len(admitted) > 0 {
+		return true, ""
 	}
-	return true, ""
+
+	// A worker whose disks are on a userspace driver has no block devices at
+	// all, so "no device survived the rules" is true and useless: the machine
+	// is full of disks that something else is already driving. Saying which
+	// controllers and which driver is the difference between a reviewer
+	// concluding the machine has no storage and knowing to reclaim it.
+	if taken := report.ControllersTakenByUserspace(); len(taken) > 0 {
+		return false, fmt.Sprintf(
+			"it presents no usable block device, and %d of its NVMe controllers (%s) are "+
+				"held by a userspace driver, so the kernel presents no disk for them",
+			len(taken), describeControllers(taken))
+	}
+	return false, "no device of it survived the device rules"
+}
+
+// describeControllers names the controllers and the driver holding them, which
+// is what a reviewer needs to decide whether to reclaim them.
+func describeControllers(controllers []nodeprobe.Controller) string {
+	parts := make([]string, 0, len(controllers))
+	for _, controller := range controllers {
+		parts = append(parts, fmt.Sprintf("%s on %s", controller.Address, controller.Driver))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // WorkerWasReadable admits a worker whose probe read everything it went for.
