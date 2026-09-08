@@ -75,6 +75,14 @@ spec:
                   fieldPath: spec.nodeName
             - name: SIMPLYBLOCK_REBALANCER_IMAGE
               value: "{{ .Values.image.rebalancer.repository }}:{{ .Values.image.rebalancer.tag | default .Values.image.operator.tag }}"
+            # The worker probe a discovery run creates as a Job per worker. It is
+            # this same image: the probe binary ships in it beside the manager, so
+            # a Job cannot be a version out of step with the operator that created
+            # it. The operator cannot read this off its own pod, because a pod's
+            # spec names whatever tag it was deployed with and a registry may have
+            # moved it since.
+            - name: SB_NODEPROBE_IMAGE
+              value: "{{ .Values.image.operator.repository }}:{{ .Values.image.operator.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:

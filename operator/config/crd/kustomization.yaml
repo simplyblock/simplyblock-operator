@@ -20,6 +20,8 @@ resources:
 - bases/storage.simplyblock.io_replicationslots.yaml
 - bases/storage.simplyblock.io_replicationops.yaml
 - bases/storage.simplyblock.io_storagedevices.yaml
+- bases/storage.simplyblock.io_clusterdeploymentconfigs.yaml
+- bases/storage.simplyblock.io_operatorops.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []
