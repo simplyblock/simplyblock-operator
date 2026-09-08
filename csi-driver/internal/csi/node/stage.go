@@ -73,10 +73,11 @@ func (ns *Server) NodeStageVolume(
 	if spdkVol, err := csicommon.ParseVolumeHandle(volumeID); err == nil {
 		vc["poolID"] = spdkVol.PoolRef
 
-		// Re-fetch connection info from the backend when:
-		// - the volume was provisioned against a pool with allowed_hosts (nqn/targetType empty), or
-		// - the volume may have been failed over (always refresh so the backend can redirect
-		//   to the clone and return target_lvol_id for correct device lookup).
+		// Re-fetch the connection info from the backend, which two cases need. A
+		// volume provisioned against a pool with allowed_hosts carries an empty
+		// `nqn` and `targetType`, and a volume that may have been failed over needs
+		// the refresh so the backend can redirect to the clone and return
+		// target_lvol_id for the device lookup.
 		if sbcClient, clientErr := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef); clientErr == nil {
 			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.VolumeID, vc["hostNQN"])
 			if infoErr != nil {
@@ -207,7 +208,7 @@ func (ns *Server) stageVolume(
 	// device is mounted directly rather than through SafeFormatAndMount. That
 	// helper probes the device again itself and formats whenever its own probe
 	// reads blank, so on a fabric that degrades between the two probes it
-	// reformats a filesystem staging just positively identified — and the
+	// reformats a filesystem staging just positively identified, and the
 	// annotation guard below never runs on this path, because it is only
 	// consulted when the preflight reads blank. The helper also preen-repairs
 	// (fsck -a) every existing filesystem it mounts read-write, which writes to
@@ -222,7 +223,7 @@ func (ns *Server) stageVolume(
 	// Mounting the one that is there works, and leaves a volume serving a
 	// filesystem nobody declared, with the disagreement in a log line and nowhere
 	// else, until whatever notices next decides to make the device match the
-	// class again — and that decision reformats.
+	// class again, and that decision reformats.
 	//
 	// Refusing costs an outage on a volume nobody can currently mount correctly
 	// anyway, and it puts the misconfiguration in front of an operator while the
@@ -305,7 +306,7 @@ func (ns *Server) stageVolume(
 		}
 	}
 
-	// The device now definitely carries fsType: mkfs just put it there — a device
+	// The device now definitely carries fsType, because mkfs just put it there. A device
 	// already carrying a filesystem returned from the probe-found branch above.
 	// Record that on the claim, so what a volume is formatted with is answerable
 	// without a node to run blkid on.
@@ -317,8 +318,8 @@ func (ns *Server) stageVolume(
 // restageVolume repairs a staging mount whose backing NVMe-oF device was lost
 // (total path loss → the kernel removed the device, leaving a dead EIO mount).
 // It force-unmounts the dead mount, reconnects the volume, and remounts the
-// EXISTING filesystem in place. It never reformats — the volume already holds
-// data. Filesystem (mount) volumes only; block volumes have no staging mount.
+// existing filesystem in place. It never reformats, because the volume already holds
+// data. Filesystem (mount) volumes only, since block volumes have no staging mount.
 func (ns *Server) restageVolume(
 	ctx context.Context,
 	volumeID, stagingTargetPath, stagingParentPath string,

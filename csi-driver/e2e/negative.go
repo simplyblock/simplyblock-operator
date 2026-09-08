@@ -46,7 +46,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 			Create(context.Background(), pvc, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "create PVC with invalid StorageClass")
 		ginkgo.DeferCleanup(func() {
-			// Best-effort cleanup; ignore errors since PVC may already be gone.
+			// Best-effort cleanup, ignoring errors since the PVC may already be gone.
 			_ = f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
 				Delete(context.Background(), pvcName, metav1.DeleteOptions{})
 		})

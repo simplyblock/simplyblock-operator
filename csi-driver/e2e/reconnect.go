@@ -185,7 +185,7 @@ func lvolIDForPVC(c kubernetes.Interface, ns, pvcName string) string {
 	// The NVMe-oF subsystem NQN is built from the lvol's "model" UUID. With
 	// max_namespace_per_subsys=1 that equals the volume handle's VolumeID, but
 	// with >1 several volumes share one subsystem whose NQN carries the primary
-	// lvol's model — so the handle's VolumeID won't appear in the NQN. Match on
+	// lvol's model, so the handle's VolumeID will not appear in the NQN. Match on
 	// the model from the PV's volume attributes, falling back to the handle.
 	if attrs := pv.Spec.CSI.VolumeAttributes; attrs != nil {
 		if model := attrs["model"]; model != "" {
@@ -258,7 +258,7 @@ func waitForSubsystem(f *framework.Framework, podName, container, lvolID string)
 	gomega.Eventually(func() *nvmeSubsystem {
 		lastSubsys = execInPod(f, driverNamespace(), podName, container, "nvme list-subsys -o json")
 		lastList = execInPod(f, driverNamespace(), podName, container, "nvme list")
-		subs, _ := parseSubsystems(lastSubsys) // ignore parse errors here; raw is logged on timeout
+		subs, _ := parseSubsystems(lastSubsys) // ignore parse errors here, since raw is logged on timeout
 		found = subsystemForLvol(subs, lvolID)
 		return found
 	}, time.Minute, 3*time.Second).ShouldNot(gomega.BeNil(),

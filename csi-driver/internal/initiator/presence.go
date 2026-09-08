@@ -6,7 +6,7 @@
 // device and nothing else reports it. Diffing a fresh scan against what was
 // there before is what turns that silence into an event.
 //
-// Both halves of the data path write to it — an attach registers its device
+// Both halves of the data path write to it. An attach registers its device
 // immediately rather than waiting for the monitor's next poll, because a volume
 // that connects and loses its paths inside one poll interval would otherwise
 // never have been "present" and its loss would go unnoticed forever. That is
@@ -14,7 +14,7 @@
 // behind an API rather than as three package-level variables.
 //
 // TODO: replace this with a live sysfs scan via atlas nvme.SysfsDeviceResolver
-// once the atlas connector is sufficiently tested — it duplicates what atlas
+// once the atlas connector is sufficiently tested, since it duplicates what atlas
 // already reads from /sys.
 package initiator
 

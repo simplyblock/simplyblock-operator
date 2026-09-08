@@ -76,7 +76,7 @@ func (cs *Server) handleSnapshotSource(
 			klog.Errorf("error cloning snapshot: %v", err)
 			return nil, err
 		}
-		// 409: a clone with this name already exists — reconcile it.
+		// 409: a clone with this name already exists, so reconcile it.
 		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes)
 		if rerr != nil {
 			return nil, rerr
@@ -143,7 +143,7 @@ func (cs *Server) handleVolumeSource(
 			klog.Errorf("error cloning volume: %v", err)
 			return nil, err
 		}
-		// 409: a clone with this name already exists — reconcile it.
+		// 409: a clone with this name already exists, so reconcile it.
 		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes)
 		if rerr != nil {
 			return nil, rerr

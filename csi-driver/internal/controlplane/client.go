@@ -32,7 +32,7 @@ var (
 	ErrSnapshotExists   = errors.New("snapshot already exists")
 
 	// ErrClusterNotFound means the clusterID referenced by a request is no longer
-	// present in the driver's secret configuration — i.e. the cluster has been
+	// present in the driver's secret configuration, i.e., the cluster has been
 	// removed from management. Any volume/snapshot on such a cluster is
 	// unmanageable and, from the CSI perspective, effectively gone. Callers should
 	// treat delete operations for these as idempotently successful rather than
@@ -62,13 +62,13 @@ func isHTTPStatus(err error, code int) bool {
 }
 
 // ClusterAPI is the interface through which the CSI driver manages volumes,
-// snapshots, and storage pools on a SimplyBlock cluster.
+// snapshots, and storage pools on a simplyblock cluster.
 //
 // Concurrency: CreateVolume is safe for concurrent calls. Publish/Unpublish/Delete
-// for different volumes are safe concurrently; for the same volume they must be
-// serialised by the caller.
+// for different volumes are safe concurrently. For the same volume they must be
+// serialized by the caller.
 //
-// Idempotency: implementations must tolerate duplicate CSI requests (e.g. double
+// Idempotency: implementations must tolerate duplicate CSI requests (e.g., double
 // publish) as required by the CSI spec.
 type ClusterAPI interface {
 	// Identity
@@ -100,7 +100,7 @@ type ClusterAPI interface {
 	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName string) (string, error)
 }
 
-// StoragePool represents a SimplyBlock storage pool returned by the cluster API.
+// StoragePool represents a simplyblock storage pool returned by the cluster API.
 type StoragePool struct {
 	Name string `json:"name"`
 	UUID string `json:"id"`
@@ -145,7 +145,7 @@ type ReplicationRelationship struct {
 	ActiveLvolID    string `json:"active_lvol_id"`
 }
 
-// LvolResp is the v2 VolumeDTO returned by the SimplyBlock API
+// LvolResp is the v2 VolumeDTO returned by the simplyblock API
 type LvolResp struct {
 	Name     string `json:"name"`
 	UUID     string `json:"id"`
@@ -162,7 +162,7 @@ type Connection struct {
 
 // APIClient is cluster-scoped: it carries the credentials for one cluster
 // and borrows a Connection to reach the webappapi service.
-// It is immutable after construction; pool scoping is handled by the caller.
+// It is immutable after construction, and pool scoping is handled by the caller.
 type APIClient struct {
 	ClusterID  string
 	Credential string // cluster_secret for v1, or SA JWT / cluster_secret for v2 Bearer auth
@@ -174,7 +174,7 @@ type ClusterStatus struct {
 	Status string `json:"status"`
 }
 
-// SnapshotResp is the response of GET /snapshots/ — field tags match v2 SnapshotDTO
+// SnapshotResp is the response of GET /snapshots/. Field tags match the v2 SnapshotDTO
 type SnapshotResp struct {
 	Name      string `json:"name"`
 	UUID      string `json:"id"`
@@ -498,7 +498,7 @@ func (client APIClient) listSnapshots(ctx context.Context, poolID string) ([]*Sn
 }
 
 // listAllSnapshots iterates every pool in the cluster and collects all snapshots.
-// Used when no pool is set (e.g. ListSnapshots CSI RPC).
+// Used when no pool is set (e.g., ListSnapshots CSI RPC).
 func (client APIClient) listAllSnapshots(ctx context.Context) ([]*SnapshotResp, error) {
 	pools, err := client.listStoragePools(ctx)
 	if err != nil {
@@ -647,7 +647,7 @@ func (client APIClient) getStorageNodeStatus(ctx context.Context, nodeID string)
 	return resp.Status, nil
 }
 
-// do executes an HTTP request against the SimplyBlock API and returns the raw
+// do executes an HTTP request against the simplyblock API and returns the raw
 // JSON response body. Callers unmarshal directly into their typed structs.
 //
 // Response handling:
@@ -693,12 +693,12 @@ func (client APIClient) do(ctx context.Context, method, path string, body any) (
 	}
 	defer deferrers.Close(resp.Body)
 
-	// 204 No Content — success, no body
+	// 204 No Content: success, no body
 	if resp.StatusCode == http.StatusNoContent {
 		return nil, nil
 	}
 
-	// 201 Created — return the UUID extracted from the Location header, encoded as a JSON string
+	// 201 Created: return the UUID extracted from the Location header, encoded as a JSON string
 	if resp.StatusCode == http.StatusCreated {
 		location := resp.Header.Get("Location")
 		if location == "" {
@@ -732,7 +732,7 @@ func (client APIClient) authorizationHeader(path string) string {
 }
 
 // locationToUUID extracts the last path segment from a Location header value.
-// e.g. "/clusters/x/storage-pools/y/volumes/uuid/" → "uuid"
+// e.g., `/clusters/x/storage-pools/y/volumes/<uuid>/` yields the `<uuid>`
 func locationToUUID(location string) string {
 	trimmed := strings.TrimRight(location, "/")
 	idx := strings.LastIndex(trimmed, "/")

@@ -24,7 +24,7 @@ type scriptedResult struct {
 
 // scriptedExec builds a FakeExec answering successive commands from script and
 // recording every invocation's argv, so a test can assert which commands were
-// chosen. Scripting more results than the code consumes is fine; running more
+// chosen. Scripting more results than the code consumes is fine. Running more
 // commands than scripted panics.
 func scriptedExec(script []scriptedResult) (*testingexec.FakeExec, *[][]string) {
 	fe := &testingexec.FakeExec{}
@@ -167,7 +167,7 @@ func TestFormatOptionsNeedsBothStripeValues(t *testing.T) {
 }
 
 // TestFormatOptionsRejectsAnUnusableStripeWidth. sw multiplies su into the full
-// stripe, so a non-positive value would ask mkfs for a stripe of zero width;
+// stripe, so a non-positive value would ask mkfs for a stripe of zero width, and
 // alignment is dropped rather than guessed.
 func TestFormatOptionsRejectsAnUnusableStripeWidth(t *testing.T) {
 	for _, sw := range []string{"0", "-1", "many"} {

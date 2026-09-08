@@ -26,8 +26,8 @@ const lvolIndex = "lvol"
 // goes through the cache when it is synced and falls back to a direct API read
 // otherwise, so callers never have to deal with an unavailable cache.
 //
-// A nil *Manager is valid and means "no Kubernetes access at all" (e.g. no
-// in-cluster client could be built); its read methods return empty results so
+// A nil *Manager is valid and means "no Kubernetes access at all" (e.g., no
+// in-cluster client could be built). Its read methods return empty results so
 // callers can keep operating in a degraded mode.
 type Manager struct {
 	client      k8sclient.Interface
@@ -69,10 +69,10 @@ func NewManager(client k8sclient.Interface) *Manager {
 }
 
 // Start launches the informers, which LIST-then-WATCH in the background and
-// populate the caches automatically; there is no manual sync step. Reads check
+// populate the caches automatically, and there is no manual sync step. Reads check
 // HasSynced per call and fall back to the API until the initial LIST completes,
 // so Start need not block on sync. It is a no-op on a nil Manager and should be
-// called once from a single owner. The informers run until ctx is cancelled.
+// called once from a single owner. The informers run until ctx is canceled.
 func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
@@ -93,7 +93,7 @@ func (m *Manager) HasSynced() bool {
 }
 
 // Client returns the underlying Kubernetes client, for reads of resources the
-// Manager does not cache (e.g. Pods, StorageClasses). Returns nil on a nil
+// Manager does not cache (e.g., Pods, StorageClasses). Returns nil on a nil
 // Manager.
 func (m *Manager) Client() k8sclient.Interface {
 	if m == nil {

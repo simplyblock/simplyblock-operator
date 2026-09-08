@@ -24,7 +24,7 @@ import (
 // model is the master lvol UUID taken from the subsystem NQN
 // (nqn.2023-02.io.simplyblock:<cluster>:lvol:<model>), every namespace of the
 // subsystem is a block device on the subsystem's controller, and udev names its
-// links nvme-<model>_<infix>_<nsid>.
+// links `nvme-<model>_<infix>_<nsid>`.
 type realSubsystem struct {
 	model string
 	// infix is what udev puts between the model and the nsid: the volume's HA
@@ -33,9 +33,9 @@ type realSubsystem struct {
 	infix string
 	// controller is the block-device prefix: namespace N is <controller>n<N>.
 	controller string
-	// suffixlessTarget is the device the plain nvme-<model>_<infix> link points
+	// suffixlessTarget is the device the plain `nvme-<model>_<infix>` link points
 	// at. udev repoints it whenever the subsystem changes, so it names an
-	// arbitrary namespace — nvme2n2 out of five namespaces on the node below —
+	// arbitrary namespace (nvme2n2 out of five namespaces on the node below)
 	// and must never be mistaken for the namespace the caller asked for.
 	suffixlessTarget string
 	// lvolIDs maps a namespace ID to that namespace's own lvol UUID, which udev
@@ -129,8 +129,8 @@ var realNodeSubsystems = []realSubsystem{
 	},
 }
 
-// nonHASubsystem is a volume of a cluster with ha_type "single", where udev
-// spells the infix "single" instead of "ha". It is not part of the captured
+// nonHASubsystem is a volume of a cluster with `ha_type` `single`, where udev
+// spells the infix `single` instead of `ha`. It is not part of the captured
 // node and shares the fixture directory with it so that both namings are
 // covered by the same sweeps.
 var nonHASubsystem = realSubsystem{
@@ -176,7 +176,7 @@ const (
 	testModel  = "b1e2c3d4-0000-1111-2222-333344445555"
 	testLvolID = "aa11bb22-cc33-dd44-ee55-ff6677889900"
 
-	// testPoll keeps the scan loops fast; production polls once a second.
+	// testPoll keeps the scan loops fast. Production polls once a second.
 	testPoll = time.Millisecond
 )
 
@@ -187,7 +187,7 @@ func testLink(model string, nsID int) string {
 
 // deviceFixture is a fake /dev/disk/by-id: block devices are plain files in a
 // sibling directory, by-id entries are relative symlinks to them, exactly as
-// udev writes them ("../../nvme0n1").
+// udev writes them (`../../nvme0n1`).
 type deviceFixture struct {
 	t       *testing.T
 	byIDDir string
@@ -328,11 +328,11 @@ func TestMatchNamespaceDeviceOnRealNode(t *testing.T) {
 	}
 }
 
-// TestMatchNamespaceDeviceRejectsNeighbouringNamespaces is the case the glob fix
+// TestMatchNamespaceDeviceRejectsNeighboringNamespaces is the case the glob fix
 // is about: on a 19-namespace subsystem the pattern for namespace 1 must not be
 // satisfied by namespaces 10 to 19, and vice versa. Every namespace of every
 // subsystem in the fixture is checked, with all of its siblings present.
-func TestMatchNamespaceDeviceRejectsNeighbouringNamespaces(t *testing.T) {
+func TestMatchNamespaceDeviceRejectsNeighboringNamespaces(t *testing.T) {
 	f := newRealNodeFixture(t)
 	if got := len(realNodeSubsystems[1].lvolIDs); got != 19 {
 		t.Fatalf("fixture changed: subsystem has %d namespaces, expected 19", got)
@@ -358,7 +358,7 @@ func TestMatchNamespaceDeviceRejectsNeighbouringNamespaces(t *testing.T) {
 // a full cross product: the pattern for a namespace matches that namespace's
 // link and no other, so 1 rejects 10 to 19, 10 rejects 100 to 199, and 9 rejects
 // 19 and 99. It holds because filepath.Match anchors the whole name, which
-// leaves the trailing "_<nsid>" of the pattern anchored at its end — the
+// leaves the trailing "_<nsid>" of the pattern anchored at its end, and the
 // property a pattern that merely looks right would break silently, handing the
 // caller another volume's block device.
 func TestNamespaceGlobRejectsLongerNsid(t *testing.T) {
@@ -410,8 +410,8 @@ func TestNamespaceGlobRejectsLongerNsidOnDisk(t *testing.T) {
 }
 
 // TestMatchNamespaceDeviceIgnoresSuffixlessAlias pins that the subsystem-wide
-// nvme-<model>_ha link is never selected. It points at an arbitrary namespace —
-// nvme2n2 on the captured node — so honoring it would hand the caller another
+// `nvme-<model>_ha` link is never selected. It points at an arbitrary namespace,
+// nvme2n2 on the captured node, so honoring it would hand the caller another
 // volume's block device.
 func TestMatchNamespaceDeviceIgnoresSuffixlessAlias(t *testing.T) {
 	f := newRealNodeFixture(t)
@@ -480,7 +480,7 @@ func TestDisconnectGlobOnRealNode(t *testing.T) {
 				}
 			}
 
-			// The suffixless alias and the per-namespace uuid links carry no
+			// The suffixless alias and the per-namespace `uuid` links carry no
 			// nsid suffix, so they must stay out of the disconnect set.
 			for _, match := range matches {
 				name := filepath.Base(match)
@@ -527,7 +527,7 @@ func TestDisconnectGlobOnLastNamespace(t *testing.T) {
 
 // TestMatchNamespaceDeviceFallbackNeedsNsidSuffix documents the reach of the
 // lvol-UUID fallback glob. udev publishes the namespace UUID as
-// nvme-uuid.<lvolID> with no nsid suffix, which the fallback cannot match; it
+// `nvme-uuid.<lvolID>` with no nsid suffix, which the fallback cannot match. It
 // only helps for links that do carry one.
 func TestMatchNamespaceDeviceFallbackNeedsNsidSuffix(t *testing.T) {
 	t.Run("uuid link without nsid suffix is found via NSUUID fallback", func(t *testing.T) {
@@ -808,8 +808,8 @@ func TestDeviceGlobsMatchLinkNames(t *testing.T) {
 			want: false,
 		},
 		{
-			// The glob itself cannot exclude these — "_[0-9]*" ends in a
-			// wildcard — so listNamespaceDevices filters them out afterwards.
+			// The glob itself cannot exclude these, since "_[0-9]*" ends in a
+			// wildcard, so listNamespaceDevices filters them out afterward.
 			// See TestListNamespaceDevicesDropsPartitions.
 			name: "any namespace glob still matches partition links",
 			glob: anyNamespaceDeviceGlob(dir, sub.model),
@@ -882,7 +882,7 @@ func TestMatchNamespaceDeviceAliasesToSameDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Either name is a correct answer — they are the same namespace — so what
+	// Either name is a correct answer, since they are the same namespace, so what
 	// matters is that the scan returns one of them and it leads to the device.
 	if !links[got] {
 		t.Errorf("got device %q, want one of %v", got, links)
@@ -951,7 +951,7 @@ func TestMatchNamespaceDeviceReportsBothFailures(t *testing.T) {
 }
 
 // TestMatchNamespaceDeviceAppearsLate covers the wait itself: udev creates the
-// symlink some time after nvme connect returns.
+// symlink some time after `nvme connect` returns.
 func TestMatchNamespaceDeviceAppearsLate(t *testing.T) {
 	f := newDeviceFixture(t)
 	link := testLink(testModel, 2)
@@ -1058,7 +1058,7 @@ const scanGraceTime = time.Second
 // mustReturnPromptly runs scan in the background and fails if it has not
 // returned within scanGraceTime, reporting err once it has. The wait loops are
 // handed an hour-long poll interval wherever a test asserts "this must not
-// sleep", so a regression that sleeps once shows up as a quick failure instead
+// sleep`, so a regression that sleeps once shows up as a quick failure instead
 // of stalling the whole suite until its timeout.
 func mustReturnPromptly(t *testing.T, scan func() error) error {
 	t.Helper()

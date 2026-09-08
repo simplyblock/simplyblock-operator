@@ -24,7 +24,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-UNMANAGED", func() {
 		// A simplyblock volume created directly via the API (no PV/PVC) is still
 		// an NVMe-oF subsystem on the host, but the node plugin must NOT manage
 		// its paths. We connect such a volume, degrade it, and confirm the
-		// monitor leaves it alone (no recovery) — the behavior the positive
+		// monitor leaves it alone (no recovery), which is the behavior the positive
 		// SPDKCSI-RECONNECT test shows it WOULD apply to a managed volume.
 		ginkgo.It("skips a connected simplyblock volume that has no PV/PVC", func() {
 			pool := poolNameForTests(f.ClientSet)
@@ -42,13 +42,13 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-UNMANAGED", func() {
 			// --max-namespace-per-subsys 1 pins this volume to its own NVMe-oF
 			// subsystem (the default is 32, which packs several lvols into one
 			// subsystem). Recovery is gated per-lvol on PV/PVC ownership, but the
-			// node plugin reconnects at the *subsystem/controller* level — shared
+			// node plugin reconnects at the *subsystem and controller* level, shared
 			// by every namespace in the subsystem. If this unmanaged volume shared
 			// a subsystem with a PV-backed one, the managed sibling would drive
 			// recovery of the shared controllers and restore this volume's dropped
 			// path, defeating the negative assertion below. A dedicated subsystem
 			// guarantees the only thing that could reconnect it is management of
-			// this very lvol — which there is none.
+			// this very lvol, of which there is none.
 			addOut := sbctl(f, fmt.Sprintf("volume add %s %s %s --max-namespace-per-subsys 1", volName, size, pool))
 			framework.Logf("sbctl volume add %s: %s", volName, addOut)
 			// `sbctl volume add` echoes a transient task id, not the volume's Id,
@@ -155,7 +155,7 @@ func pluginContainerName(pod *corev1.Pod) string {
 // `sbctl volume list --json`. Returns "" if no volume with that name exists.
 func sbctlVolumeIDByName(f *framework.Framework, name string) string {
 	out := sbctl(f, "volume list --json")
-	// sbctl may prefix log lines before the JSON array; slice from the first '['.
+	// sbctl may prefix log lines before the JSON array, so slice from the first '['.
 	if i := strings.IndexByte(out, '['); i > 0 {
 		out = out[i:]
 	}
@@ -174,9 +174,10 @@ func sbctlVolumeIDByName(f *framework.Framework, name string) string {
 	return ""
 }
 
-// sbctlClusterID resolves a simplyblock cluster's UUID via `sbctl cluster list
-// --json`. It matches by name when name != "", otherwise (or if the name has no
-// match) falls back to the sole cluster. Returns "" if it cannot resolve one.
+// sbctlClusterID resolves a simplyblock cluster's UUID by running
+// `sbctl cluster list --json`. It matches by name when name is set, otherwise
+// (or if the name has no match) falls back to the sole cluster. It returns an
+// empty string if it cannot resolve one.
 func sbctlClusterID(f *framework.Framework, name string) string {
 	out := sbctl(f, "cluster list --json")
 	if i := strings.IndexByte(out, '['); i > 0 {

@@ -45,8 +45,8 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 			"/dev/spdk-block should be a block device")
 
 		ginkgo.By("verify block device reports a non-zero size")
-		// blockdev is not always available on alpine; use /proc/partitions or
-		// stat as a fallback.  blockdev --getsize64 returns bytes.
+		// blockdev is not always available on alpine, so use /proc/partitions or
+		// stat as a fallback. blockdev --getsize64 returns bytes.
 		sizeOut, _ := execCommandInPod(f,
 			"blockdev --getsize64 /dev/spdk-block 2>/dev/null || stat -c %s /dev/spdk-block",
 			ns, &blockPodLabel)
@@ -141,18 +141,18 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 
 		ginkgo.By("verify the block device size inside the pod reflects the expansion")
 		// For raw block devices the kernel updates the device size automatically
-		// once the backend has resized the volume.  Poll briefly to let it catch up.
+		// once the backend has resized the volume. Poll briefly to let it catch up.
 		gomega.Eventually(func() bool {
 			out, _ := execCommandInPod(f,
 				"blockdev --getsize64 /dev/spdk-block 2>/dev/null || echo 0",
 				ns, &blockPodLabel)
-			// expandedSize.Value() returns bytes; blockdev returns bytes too.
+			// expandedSize.Value() returns bytes, and blockdev returns bytes too.
 			sizeStr := strings.TrimSpace(out)
 			if sizeStr == "0" || sizeStr == "" {
 				return false
 			}
-			// Accept any positive size — exact value depends on backend
-			// alignment.  The important thing is the device is accessible.
+			// Accept any positive size, since the exact value depends on the backend
+			// alignment. The important thing is the device is accessible.
 			return true
 		}, 2*time.Minute, 5*time.Second).Should(gomega.BeTrue(),
 			"block device should be accessible after PVC expansion")

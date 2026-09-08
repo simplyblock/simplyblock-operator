@@ -21,7 +21,7 @@ import (
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
-// CreateVolume creates a new volume in the SimplyBlock storage system.
+// CreateVolume creates a new volume in the simplyblock storage system.
 func (cs *Server) CreateVolume(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
@@ -64,7 +64,8 @@ func (cs *Server) CreateVolume(
 		return nil, classifyCreateVolumeError(err)
 	}
 
-	// copy volume info. node needs these info to contact target(ip, port, nqn, ...)
+	// Copy the volume info the node service needs to reach the target: `ip`,
+	// `port`, `nqn`, and the rest.
 	if csiVolume.VolumeContext == nil {
 		csiVolume.VolumeContext = volumeInfo
 	} else {
@@ -83,7 +84,7 @@ func (cs *Server) CreateVolume(
 	}
 
 	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
-	// (issue #403) — resolveClusterSelection only tracks zone/region.
+	// (issue #403), since resolveClusterSelection only tracks zone and region.
 	topologySegments := copyTopologySegments(selection.topology)
 	if key, val := dhchapAllowedNodeSegment(req); key != "" {
 		if topologySegments == nil {
@@ -96,7 +97,7 @@ func (cs *Server) CreateVolume(
 		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: topologySegments}}
 	}
 	// selection.topology is nil for a StorageClass that selects its cluster
-	// directly via cluster_id (no zone/region routing configured) — the
+	// directly via cluster_id (no zone or region routing configured), the
 	// DHCHAP-gated case #403 added support for above. zoneFromSegments/
 	// regionFromSegments nil-check internally, so this stays a no-op rather
 	// than needing a guard here too.
@@ -149,7 +150,7 @@ func (cs *Server) DeleteVolume(
 		klog.Warningf("volume not published: %s", volumeID)
 	case errors.Is(err, controlplane.ErrClusterNotFound):
 		// The cluster this volume lived on has been removed from management. The
-		// volume is unreachable and effectively gone; report success so the
+		// volume is unreachable and effectively gone, so report success and let the
 		// external-provisioner drops its finalizer instead of retrying forever.
 		klog.Warningf("cluster for volume %s no longer managed, treating as already deleted: %v", volumeID, err)
 		return &csi.DeleteVolumeResponse{}, nil
@@ -167,7 +168,7 @@ func (cs *Server) DeleteVolume(
 	case errors.Is(err, controlplane.ErrClusterNotFound):
 		// The cluster this volume lived on has been removed from management (e.g.
 		// its secret config changed between unpublish and delete). The volume is
-		// unreachable and effectively gone; report success so the
+		// unreachable and effectively gone, so report success and let the
 		// external-provisioner drops its finalizer instead of retrying forever.
 		klog.Warningf("cluster for volume %s no longer managed, treating as already deleted: %v", volumeID, err)
 	case err != nil:
@@ -261,7 +262,7 @@ func (cs *Server) prepareCreateVolumeReq(
 
 // reconcileExistingVolume handles a 409 (name already exists) on a volume create
 // or clone. If an online volume with the name exists it is reused (after a size
-// check); a non-online leftover from a failed earlier attempt is deleted so the
+// check). A non-online leftover from a failed earlier attempt is deleted so the
 // caller can recreate. It returns the existing volume's UUID to reuse, "" to
 // recreate, or an error (a size conflict, or a list/delete failure).
 func reconcileExistingVolume(
@@ -340,8 +341,8 @@ func (cs *Server) createVolume(
 
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
-	// PVC annotation — an explicit annotation is a deliberate override and wins
-	// — and only when the PVC opted in via simplyblock.io/pod-affinity: "true".
+	// PVC annotation, since an explicit annotation is a deliberate override and wins,
+	// and only when the PVC opted in via `simplyblock.io/pod-affinity: true`.
 	// Without that annotation, Tier 1 is skipped for this PVC even if the Pod's
 	// resolved node hosts a co-located storage node.
 	if podAffinitive && createVolReq.HostID == "" {
@@ -376,7 +377,7 @@ func (cs *Server) createVolume(
 				vol.VolumeId = fmt.Sprintf("%s:%s:%s", sbclient.ClusterID(), sbclient.PoolID(), existingUUID)
 				return &vol, nil
 			}
-			// The non-online leftover (if any) has been cleaned up; create fresh.
+			// The non-online leftover, if any, has been cleaned up. Create a fresh one.
 			volumeID, err = sbclient.CreateVolume(ctx, createVolReq)
 			if err != nil {
 				klog.Errorf("createVolume: recreate after cleanup failed: %v", err)
@@ -408,7 +409,7 @@ func (cs *Server) publishVolume(
 		return nil, err
 	}
 
-	// hostNQN is not available in the controller path; pass empty string.
+	// hostNQN is not available in the controller path, so pass an empty string.
 	// If the volume has allowed_hosts configured, this call will fail and the
 	// node will re-fetch connection info at NodeStageVolume time using its own NQN.
 	volumeInfo, err := sbclient.VolumeInfo(ctx, spdkVol.VolumeID, "")

@@ -34,7 +34,7 @@ func parseSnapshotID(csiSnapshotID string) (*spdkSnapshot, error) {
 		// New 3-part format: {clusterID}:{poolID}:{snapshotID}
 		return &spdkSnapshot{clusterID: ids[0], poolID: ids[1], snapshotID: ids[2]}, nil
 	case 2:
-		// Legacy 2-part format: {clusterID}:{snapshotID} — pool resolved at delete time
+		// Legacy 2-part format: {clusterID}:{snapshotID}, with the pool resolved at delete time
 		return &spdkSnapshot{clusterID: ids[0], snapshotID: ids[1]}, nil
 	default:
 		return nil, fmt.Errorf("invalid snapshot ID format: %s", csiSnapshotID)
@@ -44,7 +44,8 @@ func parseSnapshotID(csiSnapshotID string) (*spdkSnapshot, error) {
 // reconcileExistingSnapshot handles a 409 from CreateSnapshot: the control plane
 // says a snapshot with this name already exists. It lists snapshots and, if the
 // existing one has the same source volume, returns it as success (CSI
-// idempotency — this is our own snapshot from an earlier attempt). If the source
+// idempotency, since this is the driver's own snapshot from an earlier attempt).
+// If the source
 // differs, it is a real name conflict → AlreadyExists.
 func reconcileExistingSnapshot(
 	ctx context.Context,
@@ -129,8 +130,8 @@ func (cs *Server) CreateSnapshot(
 	if err != nil {
 		d := classifyCreateSnapshotError(err)
 		if d.IsIdempotent() {
-			// 409: the snapshot already exists. Reconcile — if it is ours (same
-			// source) return it as success (CSI idempotency); if it belongs to a
+			// 409: the snapshot already exists. Reconcile: if it is this driver's (same
+			// source) return it as success (CSI idempotency), and if it belongs to a
 			// different source, it is a genuine name conflict.
 			return reconcileExistingSnapshot(ctx, sbclient, spdkVol.VolumeID, snapshotName)
 		}
@@ -166,7 +167,8 @@ func (cs *Server) DeleteSnapshot(
 
 	sbSnapshot, err := parseSnapshotID(csiSnapshotID)
 	if err != nil {
-		// Invalid format means the snapshot was never created by this driver — treat as already deleted.
+		// Invalid format means the snapshot was never created by this driver, so treat
+		// it as already deleted.
 		klog.Warningf("invalid snapshot ID format, treating as already deleted: %s", csiSnapshotID)
 		return &csi.DeleteSnapshotResponse{}, nil
 	}
@@ -174,7 +176,7 @@ func (cs *Server) DeleteSnapshot(
 	if err != nil {
 		if errors.Is(err, controlplane.ErrClusterNotFound) {
 			// The cluster this snapshot lived on has been removed from management.
-			// The snapshot is unreachable and effectively gone; report success so the
+			// The snapshot is unreachable and effectively gone, so report success and let the
 			// external-snapshotter drops its finalizer instead of retrying forever.
 			klog.Warningf("cluster for snapshot %s no longer managed, treating as already deleted: %v", csiSnapshotID, err)
 			return &csi.DeleteSnapshotResponse{}, nil
@@ -191,7 +193,7 @@ func (cs *Server) DeleteSnapshot(
 			klog.Errorf("failed to delete snapshot, snapshotID: %s err: %v", csiSnapshotID, err)
 			return nil, d
 		}
-		// already gone — idempotent success
+		// already gone: idempotent success
 		klog.Warningf("snapshot not found, treating as already deleted: %s", csiSnapshotID)
 	}
 

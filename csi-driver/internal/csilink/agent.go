@@ -1,7 +1,7 @@
 // Package csilink runs the CSI driver's end of the link to the operator.
 //
-// The driver dials the operator and holds the connection open; the operator
-// issues its RPCs back down it. That direction is deliberate — nothing has to
+// The driver dials the operator and holds the connection open, and the operator
+// issues its RPCs back down it. That direction is deliberate: nothing has to
 // listen on a node, so the deployment needs no per-node ingress, no address
 // discovery, and no NetworkPolicy beyond a pod reaching a Service.
 //
@@ -27,7 +27,7 @@ import (
 // Config configures the driver's agent. HubAddress, ID and TokenFile are
 // required.
 type Config struct {
-	// HubAddress is the operator's link endpoint, "host:port".
+	// HubAddress is the operator's link endpoint, `host:port`.
 	HubAddress string
 
 	// CAFile is the bundle that signs the operator's serving certificate.
@@ -37,13 +37,13 @@ type Config struct {
 	CAFile string
 
 	// ServerName overrides the name verified against that certificate. Needed
-	// when the address dialled is not the name the certificate carries.
+	// when the address dialed is not the name the certificate carries.
 	ServerName string
 
 	// TokenFile is the projected ServiceAccount token presented to the
 	// operator. It is re-read on every attempt, because kubelet rewrites it
 	// well before expiry and a cached copy would start failing to reconnect
-	// hours later — during an outage, which is when reconnecting matters.
+	// hours later, during an outage, which is when reconnecting matters.
 	TokenFile string
 
 	// ID is the identity this peer asks to register as. The operator verifies

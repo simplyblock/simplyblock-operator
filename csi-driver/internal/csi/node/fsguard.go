@@ -45,8 +45,8 @@ const (
 // The claim's namespace and name usually travel in the volume context: the
 // external-provisioner runs with --extra-create-metadata, so CreateVolume was
 // told which claim it was provisioning for and copied that into the context
-// that became the PersistentVolume's volume attributes. A volume without them —
-// provisioned by an older driver, or by a hand-written PersistentVolume — is
+// that became the PersistentVolume's volume attributes. A volume without them,
+// provisioned by an older driver or by a hand-written PersistentVolume, is
 // resolved the long way instead: find the PersistentVolume carrying this volume
 // handle, and follow its claim reference.
 func (ns *Server) persistentVolumeClaimForVolume(
@@ -86,7 +86,7 @@ func (ns *Server) persistentVolumeClaimForVolume(
 //
 // It errors on the other two readings. A claim that cannot be read leaves the
 // blank probe that led here unexplained, and a claim asking for a filesystem
-// this driver does not create is an instruction that cannot be carried out;
+// this driver does not create is an instruction that cannot be carried out, so
 // under either one, whether the device holds data is still open, so staging
 // fails rather than formatting through the doubt.
 func (ns *Server) annotatedFilesystem(
@@ -120,7 +120,7 @@ func (ns *Server) annotatedFilesystem(
 
 // recordOnDiskFilesystem writes the filesystem a volume was staged with onto its
 // claim, under the same annotation that requests one. The annotation is a
-// request only while the device is blank; from the first successful stage on it
+// request only while the device is blank. From the first successful stage on, it
 // is the record of what is actually down there, which is why it is written back
 // rather than left as whatever was asked for.
 //

@@ -50,7 +50,7 @@ func (ns *Server) buildAccessibleTopology(ctx context.Context) map[string]string
 	}
 	if err != nil {
 		// All retries exhausted. Crash so the pod restarts and retries from a
-		// clean state — registering without topology silently breaks PVC provisioning.
+		// clean state, since registering without topology silently breaks PVC provisioning.
 		klog.Fatalf("topology discovery: giving up after %d attempts for node %s — crashing to trigger pod restart: %v",
 			maxRetries, nodeName, err)
 	}
@@ -78,7 +78,7 @@ func (ns *Server) buildAccessibleTopology(ctx context.Context) map[string]string
 
 	if len(segments) == 0 {
 		// No zone/region labels found. Return hostname so the external-provisioner
-		// can still build AccessibilityRequirements — without at least one topology
+		// can still build AccessibilityRequirements. Without at least one topology
 		// key on the CSINode, WaitForFirstConsumer provisioning fails. The controller
 		// falls through to its single-cluster fallback when hostname doesn't match
 		// any zone/region map entry.

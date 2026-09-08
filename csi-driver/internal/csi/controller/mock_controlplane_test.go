@@ -28,7 +28,7 @@ type mockVolume struct {
 	Status string // defaults to "online" when empty
 }
 
-// status returns the volume's reported status, defaulting to "online."
+// status returns the volume's reported status, defaulting to `online`.
 func (v *mockVolume) status() string {
 	if v.Status == "" {
 		return "online"
@@ -62,13 +62,13 @@ type mockSBCLI struct {
 	snapshotCreateStatus int
 
 	// snapshotCreatePersistThenFail, when true, makes the next snapshot POST
-	// persist the snapshot but respond HTTP 500 — the ambiguous timeout where the
+	// persist the snapshot but respond HTTP 500: the ambiguous timeout where the
 	// control plane created the snapshot but the client never saw success.
 	snapshotCreatePersistThenFail bool
 
 	// strictSnapshotNameConflict makes the snapshot POST return HTTP 409 for any
 	// existing snapshot that shares the requested name, regardless of its source
-	// volume — the non-idempotent behavior the real web API exhibits under load.
+	// volume, the non-idempotent behavior the real web API exhibits under load.
 	strictSnapshotNameConflict bool
 
 	// allowDuplicateNames disables the create-volume name-conflict check, modeling
@@ -82,21 +82,21 @@ type mockSBCLI struct {
 	// *after* the volume has already been created.
 	failGetVolume bool
 
-	// failIf, when set, is consulted on every request before its handler runs;
+	// failIf, when set, is consulted on every request before its handler runs.
 	// returning true makes the mock respond HTTP 500 without running the handler.
-	// It lets a test fail every API except a chosen one — a future-proof way to
+	// It lets a test fail every API except a chosen one, a future-proof way to
 	// assert an RPC performs no ordering-sensitive call (e.g., that CreateSnapshot
 	// creates the snapshot only after every other API call has succeeded).
 	failIf func(r *http.Request) bool
 
 	// createVolumeBodies records the raw JSON body of every createVolume POST, in
 	// order. It lets a test assert what the driver actually put on the wire rather
-	// than only what the mock happens to decode — placement is the motivating case:
+	// than only what the mock happens to decode. Placement is the motivating case:
 	// host_id is not part of the mock's own bookkeeping, but whether it is sent is
 	// exactly the behavior under test.
 	createVolumeBodies [][]byte
 
-	// injectStatus, when set, is consulted before each handler; a non-zero return
+	// injectStatus, when set, is consulted before each handler. A non-zero return
 	// makes the mock respond with that HTTP status without running the handler.
 	// It lets a test drive an RPC through every control-plane response and assert
 	// the resulting gRPC code.
@@ -393,7 +393,7 @@ func (m *mockSBCLI) createVolume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Default to 1 GiB; override with explicit size if provided.
+	// Default to 1 GiB, overridden by an explicit size when one is provided.
 	size := int64(1 * 1024 * 1024 * 1024)
 	if body.Size != "" {
 		if parsed, err := strconv.ParseInt(body.Size, 10, 64); err == nil && parsed > 0 {

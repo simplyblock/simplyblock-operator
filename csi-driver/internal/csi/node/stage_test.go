@@ -41,7 +41,7 @@ type scriptedResult struct {
 // scriptedExec builds a FakeExec that answers successive commands from script
 // and records every invocation's argv, so a test can assert which commands
 // staging chose to run. Scripting more results than the code under test
-// consumes is fine; running more commands than scripted panics, so each test
+// consumes is fine. Running more commands than scripted panics, so each test
 // scripts the longest path it wants to observe.
 func scriptedExec(script []scriptedResult) (*testingexec.FakeExec, *[][]string) {
 	fe := &testingexec.FakeExec{}
@@ -88,7 +88,7 @@ func stageRequest(fsType string) *csi.NodeStageVolumeRequest {
 	}
 }
 
-// Regression: 2026-09-04-format-decided-by-upstream-reprobe — staging probed
+// Regression: 2026-09-04-format-decided-by-upstream-reprobe. Staging probed
 // the device, found ext4, and then handed the device to
 // FormatAndMountSensitiveWithFormatOptions, which probes it again itself and
 // formats whenever that second probe reads blank. On a fabric that degraded
@@ -134,10 +134,10 @@ func TestStageNeverFormatsWhenPreflightFoundFilesystem(t *testing.T) {
 	}
 }
 
-// Regression: 2026-09-04-format-decided-by-upstream-reprobe — the companion
+// Regression: 2026-09-04-format-decided-by-upstream-reprobe. The companion
 // contract of the same fix. When the device already carries a filesystem other
 // than the one the volume asks for, staging must mount what is actually there
-// (mounting ext4 as XFS fails, and XFS needs nouuid — the same reasoning #481
+// (mounting ext4 as XFS fails, and XFS needs nouuid, the same reasoning #481
 // applied to the annotation branch), must record it for the restage path, and
 // must not run fsck: FormatAndMountSensitiveWithFormatOptions preen-repairs
 // every existing filesystem it mounts read-write, which writes to a device

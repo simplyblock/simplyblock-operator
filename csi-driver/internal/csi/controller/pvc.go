@@ -1,6 +1,6 @@
 // Reading and clearing the annotations a PersistentVolumeClaim carries into
 // provisioning. They are how a workload asks for something its StorageClass
-// does not say, so they are read at create time and cleared afterwards.
+// does not say, so they are read at create time and cleared afterward.
 package controller
 
 import (
@@ -62,7 +62,7 @@ func (cs *Server) removePVCAnnotations(
 
 // pvcAnnotation returns the first non-empty value among keys, in priority order.
 // It lets a value be sourced from a primary annotation with one or more
-// fallbacks (e.g. selected-storage-node, then the legacy host-id forms).
+// fallbacks (e.g., selected-storage-node, then the legacy host-id forms).
 func pvcAnnotation(annotations map[string]string, keys ...string) string {
 	for _, k := range keys {
 		if v := annotations[k]; v != "" {

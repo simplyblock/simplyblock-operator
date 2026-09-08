@@ -46,7 +46,7 @@ func (ns *Server) NodeGetVolumeStats(
 			return nil, status.Errorf(codes.Internal, "statfs %q: %v", volumePath, err)
 		}
 
-		// Compute in uint64 (Bsize is int64 on Linux but uint32 on darwin; the block
+		// Compute in uint64 (Bsize is int64 on Linux but uint32 on darwin, and the block
 		// counts are uint64 on both) and convert the product once, so neither conversion
 		// is a platform-dependent no-op.
 		totalBytes := int64(s.Blocks * uint64(s.Bsize))
@@ -99,7 +99,7 @@ func (ns *Server) NodeGetVolumeStats(
 }
 
 // redirectToActiveVolume is called when VolumeInfo returns ErrVolumeNotFound for
-// the source volume — typically after a migration with --delete-source removed it.
+// the source volume, typically after a migration with --delete-source removed it.
 // It queries the replication relationship on the source cluster (which survives
 // volume deletion) to find the active volume on the target cluster, then fetches
 // connection info from the target. Returns nil if redirection is not possible.
@@ -137,7 +137,7 @@ func (ns *Server) redirectToActiveVolume(
 	klog.Infof("redirected deleted volume %s → active volume %s on cluster %s",
 		volumeID, activeLvolID, targetClusterID)
 	// Override cluster_id and poolID so the initiator uses the target cluster
-	// for any subsequent API calls — without this the initiator inherits the
+	// for any subsequent API calls. Without this the initiator inherits the
 	// source cluster_id from vc and fails looking up the target volume there.
 	connInfo["cluster_id"] = targetClusterID
 	connInfo["poolID"] = targetPoolID

@@ -26,8 +26,8 @@ type Server struct {
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
-// background loops the node plugin runs — the connection monitor and the
-// guardian — are started by the driver, next to the operator link, so that
+// background loops the node plugin runs, the connection monitor and the
+// guardian, are started by the driver, next to the operator link, so that
 // constructing a service does not launch a daemon.
 //
 //nolint:unparam // error return kept for constructor symmetry / future use

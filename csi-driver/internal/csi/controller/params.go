@@ -20,7 +20,7 @@ const (
 	annotationQoSWMBps    = "simplyblock.io/qos-w-mbps"
 	annotationPodAffinity = "simplyblock.io/pod-affinity"
 
-	// Deprecated annotation keys — still supported for backward compatibility.
+	// Deprecated annotation keys, still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
 	deprecatedAnnotationLvolID      = "simplybk/lvol-id"
 	deprecatedAnnotationQoSRWIOPS   = "simplybk/qos-rw-iops"
@@ -30,20 +30,21 @@ const (
 
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
-	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
+	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key, see poolNodeLabelKey
 
 )
 
 // dhchapAllowedNodeLabelValue must match the literal value the operator's
 // syncNodeLabels writes onto every node in a pool's AllowedNodes
-// (simplyblockstoragepool_controller.go) — see dhchapAllowedNodeSegment.
+// (simplyblockstoragepool_controller.go). See dhchapAllowedNodeSegment.
 const dhchapAllowedNodeLabelValue = "allowed"
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
-// to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
-// ungated volume. Matches the exact key from paramDHCHAPNodeSelector rather than
-// a shared prefix, since a node can belong to more than one DHCHAP pool and
-// prefix-matching would AND their labels together into one nodeAffinity.
+// to pin PersistentVolume.spec.nodeAffinity to, or an empty key and value for
+// a plain, ungated volume. It matches the exact key from
+// paramDHCHAPNodeSelector rather than a shared prefix, since a node can belong
+// to more than one DHCHAP pool and prefix-matching would AND their labels
+// together into one nodeAffinity.
 //
 // Deliberately does not consult req.GetAccessibilityRequirements(): unlike
 // the zone/region segments below, which genuinely depend on which node a
@@ -51,8 +52,8 @@ const dhchapAllowedNodeLabelValue = "allowed"
 // node currently allowed for this pool") and its value is always the same
 // fixed constant, so there's nothing to look up. That matters because
 // AccessibilityRequirements is populated by external-provisioner only for
-// topology keys already registered in the node's CSINode object — fixed at
-// CSI plugin registration time — so a pool's label key would silently be
+// topology keys already registered in the node's CSINode object, fixed at
+// CSI plugin registration time, so a pool's label key would silently be
 // missing from it the first time a node is added to that pool, until the
 // plugin happens to re-register. Building the segment straight from the
 // StorageClass parameter sidesteps that registration-timing gap entirely.

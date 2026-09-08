@@ -3,8 +3,8 @@
 // It is the last resort of the node-side data path: when a volume's device is
 // gone and the reconnect loop cannot bring it back, the workload holding a dead
 // mount will not recover on its own. The guardian decides whether restarting it
-// is allowed — the pod has to have opted in, its cluster has to be serving, and
-// pods sharing a subsystem have to move together — and then does it.
+// is allowed (the pod has to have opted in, its cluster has to be serving, and
+// pods sharing a subsystem have to move together) and then does it.
 package guardian
 
 import (
@@ -148,7 +148,7 @@ type Guardian struct {
 	cs      kubernetes.Interface
 
 	// devices resolves a volume UUID to the local NVMe device and its
-	// subsystem co-tenants, without any in-memory caching — reads are
+	// subsystem co-tenants, without any in-memory caching, since reads are
 	// against live sysfs.
 	devices atlasnvme.DeviceResolver
 
@@ -222,7 +222,7 @@ func (g *Guardian) loadState() {
 
 // Start starts the guardian loop in a goroutine. The cache manager is
 // shared with the rest of the node plugin so the guardian reads PV/PVC state
-// from memory rather than issuing a Get per PVC per pod on every poll; it falls
+// from memory rather than issuing a Get per PVC per pod on every poll. It falls
 // back to the API transparently, and a nil manager degrades to API-only reads.
 func Start(ctx context.Context, cfg Config, manager *sbkube.Manager) (*Guardian, error) {
 	if cfg.NodeName == "" {
@@ -315,7 +315,7 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 
 // RegisterUnpublish removes the pod→lvol mapping for the specific volume being
 // unpublished. Scoping removal to the exact lvolID ensures that sibling volumes
-// mounted by the same pod are not dropped from Guardian's tracking — a bug that
+// mounted by the same pod are not dropped from Guardian's tracking, a bug that
 // would cause a later break on an untouched volume to be silently ignored.
 // Call from NodeUnpublishVolume with the lvolID parsed from req.GetVolumeId().
 func (g *Guardian) RegisterUnpublish(lvolID, targetPath string) {
@@ -483,7 +483,7 @@ func earliestBrokenPerCluster(brokenAt map[string]time.Time, clusterByLvol map[s
 	return result
 }
 
-// evaluateClusterStatuses checks the live status of every cluster, honouring
+// evaluateClusterStatuses checks the live status of every cluster, honoring
 // the BrokenLvolGracePeriod before making API calls. It updates
 // g.clusterWasInactive to track active↔inactive transitions and returns the
 // set of cluster IDs that are currently active.
@@ -505,7 +505,7 @@ func (g *Guardian) evaluateClusterStatuses(info clusters.Info, earliestBroken ma
 		}
 
 		// If any lvol on this cluster broke recently, wait for the grace period
-		// before checking status — the cluster may still be transitioning to suspended.
+		// before checking status, since the cluster may still be transitioning to suspended.
 		if firstBroken, hasBroken := earliestBroken[cid]; hasBroken {
 			if time.Since(firstBroken) < g.cfg.BrokenLvolGracePeriod {
 				klog.Infof(
@@ -583,14 +583,14 @@ func (g *Guardian) podsByUID(ctx context.Context) (map[string]v1.Pod, error) {
 // cacheSubsystemNQN performs a live sysfs scan for lvolID and, if found,
 // writes the subsystem NQN into LvolState so that subsystemLvolIDs can still
 // identify siblings after the NVMe path drops and the device disappears from
-// sysfs. Safe to call concurrently; holds the mutex only for the write.
+// sysfs. Safe to call concurrently, since it holds the mutex only for the write.
 func (g *Guardian) cacheSubsystemNQN(lvolID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	dev, err := g.devices.ByUUID(ctx, lvolID)
 	if err != nil {
-		return // path not visible yet; RegisterPublish may call us again on next publish
+		return // path not visible yet. RegisterPublish may call again on the next publish
 	}
 	nqn := dev.Subsystem.NQN
 	if nqn == "" {
@@ -606,7 +606,7 @@ func (g *Guardian) cacheSubsystemNQN(lvolID string) {
 }
 
 // subsystemNQN returns the NQN of the subsystem the given lvol belongs to.
-// It tries a live atlas sysfs scan first; if the device is not in sysfs
+// It tries a live atlas sysfs scan first. If the device is not in sysfs
 // (path already broken), it falls back to the NQN cached by cacheSubsystemNQN
 // at RegisterPublish time. Returns "" when neither source is available.
 func (g *Guardian) subsystemNQN(ctx context.Context, lvolID string) string {
@@ -626,15 +626,15 @@ func (g *Guardian) subsystemNQN(ctx context.Context, lvolID string) string {
 }
 
 // lvolsOnSubsystem returns all lvolIDs that share the subsystem identified by
-// nqn. It first tries atlas ListWithSelector on the live sysfs (most accurate,
-// picks up volumes joined since last publish); when the subsystem is not in
+// NQN. It first tries atlas ListWithSelector on the live sysfs (most accurate,
+// picks up volumes joined since last publish). When the subsystem is not in
 // sysfs (broken path), it falls back to the guardian's own registration map,
 // which was populated at RegisterPublish time.
 func (g *Guardian) lvolsOnSubsystem(ctx context.Context, nqn string) []string {
 	devs, err := g.devices.ListWithSelector(ctx, atlasnvme.DeviceSelector{NQN: nqn})
 	if err == nil && len(devs) > 0 {
 		// FIXME: the kernel may temporarily hold two sysfs entries for the same
-		// NQN — a stale subsystem awaiting reaping alongside a freshly connected
+		// NQN, a stale subsystem awaiting reaping alongside a freshly connected
 		// one (see atlas/nvme sysfs_scan.go: subsystemControllers). DeviceSelector
 		// matches on NQN alone, so ListWithSelector returns namespaces from both.
 		// For coordinated restart this is safe (we over-count siblings, worst case
@@ -710,9 +710,9 @@ func (g *Guardian) restartBrokenLvols(
 		klog.Warningf("Guardian debug: lvol=%s podUIDs=%v", lvolID, podsByLvol[lvolID])
 
 		// Route based on the NQN index:
-		//   nil      → not yet indexed; fall back to per-pod StorageClass check
-		//   len == 1 → single-member subsystem; individual restart is safe
-		//   len > 1  → shared subsystem; all pods must restart together
+		//   nil      → not yet indexed, so fall back to the per-pod StorageClass check
+		//   len == 1 → single-member subsystem, so an individual restart is safe
+		//   len > 1  → shared subsystem, so all pods must restart together
 		siblings := g.subsystemLvolIDs(ctx, lvolID)
 		if len(siblings) > 1 {
 			restarted += g.coordinatedSubsystemRestart(ctx, cid, siblings, podsByLvol, uidToPod)
@@ -766,7 +766,7 @@ func (g *Guardian) isPodRestartable(ctx context.Context, pod *v1.Pod, podUID str
 // pass, deletes it. Returns true only when the pod was successfully deleted
 // (or was already gone), so the caller can update restart state.
 // siblings is the NQN index result for this pod's lvolID (nil = not indexed,
-// len 1 = single-member); callers must not pass siblings with len > 1.
+// len 1 = single-member). Callers must not pass siblings with len > 1.
 func (g *Guardian) restartIndividualPod(
 	ctx context.Context,
 	cid, lvolID, podUID string,
@@ -807,7 +807,7 @@ func (g *Guardian) restartIndividualPod(
 
 // coordinatedSubsystemRestart restarts all pods that share an NVMe-oF
 // subsystem simultaneously. All candidates must pass every check before any
-// pod is deleted — a single failure suppresses the whole group to prevent a
+// pod is deleted. A single failure suppresses the whole group to prevent a
 // partial teardown that would disconnect the shared subsystem while other
 // pods are still using it. Returns the number of pods deleted.
 func (g *Guardian) coordinatedSubsystemRestart(
@@ -836,7 +836,7 @@ func (g *Guardian) coordinatedSubsystemRestart(
 	}
 
 	// Gate: every candidate must pass all checks before any pod is deleted.
-	// isPodRestartable logs the pod-level reason; we log the group consequence
+	// isPodRestartable logs the pod-level reason, and this logs the group consequence
 	// and emit events so the situation is visible via kubectl describe pod.
 	for _, c := range candidates {
 		pod := c.pod
@@ -1053,7 +1053,7 @@ func (g *Guardian) podOptedInForAutoRestart(ctx context.Context, pod *v1.Pod) bo
 		return true
 	}
 
-	ok, err := g.podUsesOptedInSimplyBlockStorageClass(ctx, pod)
+	ok, err := g.podUsesOptedInSimplyblockStorageClass(ctx, pod)
 	if err != nil {
 		klog.Warningf("Guardian: failed checking StorageClass opt-in for pod %s/%s: %v",
 			pod.Namespace, pod.Name, err)
@@ -1063,7 +1063,7 @@ func (g *Guardian) podOptedInForAutoRestart(ctx context.Context, pod *v1.Pod) bo
 	return ok
 }
 
-func (g *Guardian) podUsesOptedInSimplyBlockStorageClass(ctx context.Context, pod *v1.Pod) (bool, error) {
+func (g *Guardian) podUsesOptedInSimplyblockStorageClass(ctx context.Context, pod *v1.Pod) (bool, error) {
 	seenPVCs := make(map[string]struct{})
 	seenSCs := make(map[string]struct{})
 

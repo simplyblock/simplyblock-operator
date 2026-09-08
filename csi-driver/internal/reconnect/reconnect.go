@@ -45,20 +45,21 @@ var (
 )
 
 // NodeHostNQN returns this Kubernetes node's simplyblock-format host NQN
-// (nqn.2014-08.io.simplyblock:uuid:<node.UID>) — the identity DHCHAP/
+// (nqn.2014-08.io.simplyblock:uuid:<node.UID>), the identity DHCHAP and
 // allowed_hosts pools authorize, and that the CSI driver must present on
 // every connect to that node's volumes (see NodeStageVolume, which computes
 // the same formula). It is a per-NODE constant, not a per-volume one: every
 // lvol staged on this node shares the exact same value, since it depends
 // only on this node's own UID. That makes it safe to cache indefinitely for
-// the process's lifetime rather than tracking it per-lvolID — a per-lvolID
+// the process's lifetime rather than tracking it per-lvolID. A per-lvolID
 // cache would need eviction and, worse, would be silently wiped by any
 // process restart (a csi-node pod restart, node reboot, OOM) for lvols that
 // stay connected at the kernel level across it, reintroducing the very
 // "reconnect drops the host identity" bug this exists to fix, just
 // triggered by a different event. Recomputing this per-node value fresh on
 // every process start has no such failure mode. A failed lookup is not
-// cached, so the next call retries rather than getting stuck returning "".
+// cached, so the next call retries rather than getting stuck returning an
+// empty string.
 func NodeHostNQN(ctx context.Context, client kubernetes.Interface, nodeName string) string {
 	nodeHostNQNMu.Lock()
 	defer nodeHostNQNMu.Unlock()
@@ -75,7 +76,7 @@ func NodeHostNQN(ctx context.Context, client kubernetes.Interface, nodeName stri
 }
 
 // isManagedLvol reports whether lvolID is backed by a PersistentVolume
-// provisioned by the given CSI driver. Only such lvols are reconnected;
+// provisioned by the given CSI driver. Only such lvols are reconnected, and
 // benchmark and foreign (non-simplyblock, or other-driver) volumes are skipped.
 func isManagedLvol(manager *sbkube.Manager, lvolID, driver string) bool {
 	pv, err := manager.PersistentVolumeByLogicalVolumeID(context.Background(), lvolID)
@@ -120,14 +121,14 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 					continue
 				}
 				clusterID, nqnLvolID := parsed.ClusterID, parsed.LvolID
-				// Prefer the sysfs UUID when available — it always identifies the
+				// Prefer the sysfs UUID when available, since it always identifies the
 				// exact namespace LVol. Falls back to the NQN-derived ID.
 				lvolID := device.LvolID
 				if lvolID == "" {
 					lvolID = nqnLvolID
 				}
 
-				// Only act on lvols backed by a PV from our CSI driver; skip
+				// Only act on lvols backed by a PV from this CSI driver. Skip
 				// benchmark and foreign volumes.
 				if !isManagedLvol(manager, lvolID, driver) {
 					continue
@@ -137,7 +138,7 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 				// so the cleanup loop never sees a device without a mapping.
 				// TODO: replace devicePresentMap/deviceToLvolIDMap with a live
 				// sysfs scan via atlas nvme.SysfsDeviceResolver once the atlas
-				// connector is sufficiently tested — these maps duplicate what
+				// connector is sufficiently tested, since these maps duplicate what
 				// atlas already reads from /sys.
 				initiator.MarkDevicePresent(device.DevicePath, lvolID)
 
@@ -311,8 +312,8 @@ func MonitorConnection(markBroken func(lvolID string), manager *sbkube.Manager, 
 	}
 }
 
-// hasConnectingPath reports whether any path has State == "connecting".
-// On a multi-path volume this typically means a node's IP changed and the kernel
+// hasConnectingPath reports whether any path has State `connecting`.
+// On a multipath volume this typically means a node's IP changed and the kernel
 // is still trying to reach the old address.
 func hasConnectingPath(paths []initiator.Path) bool {
 	for _, p := range paths {
@@ -407,7 +408,7 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []ini
 	// The reconciles above can only connect what is missing, and the failure that
 	// matters most is not a missing controller: it is a controller that exists,
 	// is live, and contributes no path to this namespace. `nvme connect` refuses
-	// it with "already connected", so the reconcile re-issues a connect that never
+	// it with `already connected`, so the reconcile re-issues a connect that never
 	// reaches the target and the volume stays below its published redundancy
 	// indefinitely. Repairing that needs a teardown, which is what this does.
 	fabric.HealMonitoredVolume(context.Background(), subsystemNQN, lvolID, expectedConns)
@@ -508,23 +509,24 @@ func reconcileNonOptimizedPaths(
 // matching an expected endpoint against an attached one by address *and* port.
 //
 // The port is the whole point. A storage node listens for one subsystem on several ports,
-// so 10.0.0.112:4426 and 10.0.0.112:4428 are different endpoints on one node — and
+// so 10.0.0.112:4426 and 10.0.0.112:4428 are different endpoints on one node, and
 // matching on the address alone let any controller on a node stand in for every endpoint
 // on it. A stale controller left at a port the control plane no longer publishes then
-// read as "this node is already connected", and the endpoint it does publish was never
+// read as `this node is already connected`, and the endpoint it does publish was never
 // connected at all: the volume sat below its published redundancy for as long as the
 // stale controller survived, with a reconcile running every tick and finding nothing to
 // do.
 //
 // An attached endpoint the control plane no longer publishes is ignored rather than
-// disconnected. An endpoint missing from the current answer is not necessarily gone — a
-// node in restart looks exactly the same — and tearing down a live data path on that
-// evidence is not a decision to make from here; atlas diagnoses these as
+// disconnected. An endpoint missing from the current answer is not necessarily
+// gone, since a
+// node in restart looks exactly the same, and tearing down a live data path on that
+// evidence is not a decision to make from here. atlas diagnoses these as
 // DefectStaleEndpoint and refuses to repair them unattended for the same reason. What
 // bounds them is ctrl_loss_tmo, which is why DefaultCtrlLossTmo is a minute.
 //
-// A controller that is attached but cannot serve — stuck connecting, or live and
-// exporting no namespace — still counts as attached here, and deliberately: connecting
+// A controller that is attached but cannot serve, whether stuck connecting or live and
+// exporting no namespace, still counts as attached here, and deliberately: connecting
 // its endpoint again would add a second controller for one endpoint rather than replace
 // the broken one. Those are repaired by tearing them down, which healMonitoredVolume does
 // through atlas, and reconnected by the tick after that.
@@ -546,7 +548,7 @@ func missingEndpoints(conns []*controlplane.LvolConnectResp, active []initiator.
 }
 
 // parseEndpoint splits an NVMe controller address attribute into its target address and
-// port — the two halves that together identify one endpoint.
+// port: the two halves that together identify one endpoint.
 func parseEndpoint(address string) (ip, port string) {
 	for _, part := range strings.Split(address, ",") {
 		switch {

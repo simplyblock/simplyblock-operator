@@ -78,7 +78,7 @@ func (s *nonBlockingGRPCServer) serve(
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(logGRPC, timeoutInterceptor),
-		// The CSI sidecars connect over a local unix socket and are wired (via
+		// The CSI sidecars connect over a local Unix socket and are wired (via
 		// csi-lib-utils' OnConnectionLoss/ExitOnConnectionLoss) to os.Exit(1) the
 		// moment their connection to the driver drops. We must therefore NEVER
 		// proactively close a healthy connection: MaxConnectionAge / MaxConnectionIdle

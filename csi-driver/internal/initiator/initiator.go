@@ -2,8 +2,9 @@
 // resolves the block device it exports, and tears both down again.
 //
 // It also owns the primitives that reading and changing the local fabric is
-// built from — the nvme-cli queries, the /dev/disk/by-id resolution, and the
-// record of which device currently backs which logical volume — because the
+// built from: the nvme-cli queries, the /dev/disk/by-id resolution, and the
+// record of which device currently backs which logical volume. They live here
+// because the
 // connection monitor in the reconnect package needs the same ones and must not
 // grow a second copy.
 package initiator
@@ -33,9 +34,9 @@ import (
 
 const (
 	// devByIDNamespacePattern matches the by-id symlink of one specific
-	// namespace of a subsystem, e.g. nvme-<model>_<serial>_<nsid>. The
+	// namespace of a subsystem, e.g., `nvme-<model>_<serial>_<nsid>`. The
 	// identifier is matched as a substring because udev prefixes the link
-	// with the transport ("nvme-") and appends the controller serial.
+	// with the transport (`nvme-`) and appends the controller serial.
 	devByIDNamespacePattern = "*%s*_%d"
 	// devByIDAnyNamespacePattern matches the by-id symlinks of every
 	// namespace of a subsystem, whatever their nsid.
@@ -67,9 +68,9 @@ const (
 	// kernel prefers for I/O.
 	ANAStateOptimized = "optimized"
 
-	// nvmeQueryTimeoutSeconds bounds read-only "nvme list"/"nvme list-subsys"
+	// nvmeQueryTimeoutSeconds bounds read-only `nvme list` and `nvme list-subsys`
 	// queries. MonitorConnection is a single, sequential loop with no
-	// concurrency of its own; without this timeout, a stuck nvme-cli/kernel
+	// concurrency of its own. Without this timeout, a stuck nvme-cli or kernel
 	// call would block that goroutine forever, silently disabling path
 	// recovery and guardian broken-lvol detection for the rest of the
 	// process's life.
@@ -77,7 +78,7 @@ const (
 )
 
 // devByIDPartitionSuffix matches the partition suffix udev appends to the by-id
-// link of the whole device it was derived from, e.g. "..._ha_1-part1".
+// link of the whole device it was derived from, e.g., `..._ha_1-part1`.
 var devByIDPartitionSuffix = regexp.MustCompile(`[-_]part[0-9]+$`)
 
 // Initiator attaches one volume's subsystem and resolves its block device.
@@ -91,10 +92,10 @@ type Initiator interface {
 	Disconnect(ctx context.Context) error
 }
 
-// initiatorNVMf is an implementation of NVMf tcp initiator
+// initiatorNVMf is an implementation of an NVMe-oF TCP initiator.
 type initiatorNVMf struct {
-	lvolID         string // source lvol UUID — used for backend API calls
-	deviceLvolID   string // clone UUID after failover, else same as lvolID — used for local device lookup
+	lvolID         string // source lvol UUID, used for backend API calls
+	deviceLvolID   string // clone UUID after failover, else same as lvolID, used for local device lookup
 	targetType     string
 	nqn            string
 	reconnectDelay string
@@ -105,7 +106,7 @@ type initiatorNVMf struct {
 	hostIface      string
 	hostNQN        string
 	poolID         string
-	clusterID      string // explicit cluster override; empty means derive from NQN
+	clusterID      string // explicit cluster override. Empty means derive it from the NQN
 }
 
 type Path struct {
@@ -129,7 +130,7 @@ type SubsystemResponse struct {
 type DeviceInfo struct {
 	DevicePath   string
 	SerialNumber string
-	LvolID       string // UUID from /sys/block/<dev>/uuid — set for namespaced LVols
+	LvolID       string // UUID from `/sys/block/<dev>/uuid`, set for namespaced lvols
 }
 
 // New creates an Initiator for the target type named in the volume context.
@@ -186,7 +187,7 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 //
 // A connected subsystem is not the same thing as a usable one: it can be attached
 // with live controllers and export no namespace at all, in which case waiting can
-// never produce a device — every retry short-circuits on the existing connection
+// never produce a device: every retry short-circuits on the existing connection
 // and times out on device discovery, and kubelet retries NodeStageVolume forever.
 // So a failed device lookup is diagnosed rather than simply returned, and if the
 // fabric could be repaired the attach is tried once more. See nvmerepair.go.
@@ -223,7 +224,7 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 		// the lvolID from NQN gives the master LvolID of the subsystem
 		// Although the connection string is same for all the lvols in the subsystem,
 		// volume/<lvol-id>/connect/ connect API return 404 if master lvol is deleted
-		// so using the actual lvolID instead instead of master lvol ID
+		// so using the actual lvolID instead of master lvol ID
 		lvolID := nvmf.lvolID
 		sbcClient, err := clusters.Client(ctx, clusterID, nvmf.poolID)
 		if err != nil {
@@ -264,7 +265,7 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 // registerDevicePresence records a freshly connected device in the shared
 // presence maps instead of waiting for the next MonitorConnection poll to
 // discover it. Without this, a device that connects and then loses all paths
-// faster than one poll interval (~3s+jitter) is never seen as "present", so the
+// faster than one poll interval (~3s+jitter) is never seen as `present`, so the
 // guardian's gone-device detection in reconnectSubsystems has nothing to diff
 // against and can silently miss the loss forever.
 func (nvmf *initiatorNVMf) registerDevicePresence(devicePath string) {
@@ -316,9 +317,9 @@ func selectDisconnectTarget(matches []string) (devicePath string, shared bool) {
 }
 
 // namespaceDeviceGlob returns the glob matching the by-id symlink of namespace
-// nsID of the subsystem identified by id — a model or an lvol UUID. The
+// nsID of the subsystem identified by id, a model or an lvol UUID. The
 // identifier is matched as a substring because udev prefixes the link with the
-// transport ("nvme-") and appends the controller serial before the nsid suffix.
+// transport (`nvme-`) and appends the controller serial before the nsid suffix.
 func namespaceDeviceGlob(byIDDir, id string, nsID int) string {
 	return filepath.Join(byIDDir, fmt.Sprintf(devByIDNamespacePattern, id, nsID))
 }
@@ -358,9 +359,9 @@ func nsuuidDeviceGlob(byIDDir, id string) string {
 
 // matchNamespaceDevice waits in byIDDir for the block device of namespace nsID
 // to show up. It tries three patterns in order:
-//  1. *<model>*_<nsID>  — subsystem model carried by every namespace link.
-//  2. *<lvolID>*_<nsID> — clone UUID with nsID suffix (_ha_N udev rule).
-//  3. nvme-uuid.<lvolID> — kernel NSUUID symlink (no nsID suffix); produced for
+//  1. *<model>*_<nsID>: subsystem model carried by every namespace link.
+//  2. *<lvolID>*_<nsID>: clone UUID with nsID suffix (_ha_N udev rule).
+//  3. `nvme-uuid.<lvolID>`: kernel NSUUID symlink, no nsID suffix, produced for
 //     failover clones of namespaced volumes whose NSUUID = clone UUID.
 func matchNamespaceDevice(
 	ctx context.Context,
@@ -418,7 +419,7 @@ func waitForDeviceReady(
 			// Several links under /dev/disk/by-id/ usually point at the same
 			// device, which is fine. But a broken matcher may match multiple
 			// devices, which is not fine. Also, a dangling device from a
-			// previous connect may match — that one goes away shortly, so keep
+			// previous connect may match, and that one goes away shortly, so keep
 			// scanning instead of failing the connect outright.
 			match, err := resolveToSameDevice(matches)
 			if err == nil {
@@ -478,7 +479,7 @@ func waitForDeviceGone(ctx context.Context, deviceGlob string, attempts int, pol
 		if len(matches) == 0 {
 			return nil
 		}
-		// Never sleep after the last scan; attempts set to 0 means a single
+		// Never sleep after the last scan. attempts set to 0 means a single
 		// immediate look, as in waitForDeviceReady.
 		if i >= attempts {
 			break
@@ -514,9 +515,9 @@ func execWithTimeout(ctx context.Context, cmdLine []string, timeout int) error {
 	return err
 }
 
-// execNVMeQuery runs a read-only "nvme" CLI query (list/list-subsys) bounded
+// execNVMeQuery runs a read-only `nvme` CLI query (`list`, `list-subsys`) bounded
 // by nvmeQueryTimeoutSeconds, so a stuck nvme-cli/kernel call can never block
-// a caller forever — notably the single-threaded reconnect monitor loop,
+// a caller forever, notably the single-threaded reconnect monitor loop,
 // which has no other goroutine to pick up the work if this one wedges.
 func execNVMeQuery(ctx context.Context, cmdLine ...string) ([]byte, error) {
 	execCtx, cancel := context.WithTimeout(ctx, nvmeQueryTimeoutSeconds*time.Second)
@@ -579,7 +580,8 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 	return nil
 }
 
-// logicalVolumeIdByDevicePath reads /sys/block/<dev>/uuid for a device path like /dev/nvme0n2.
+// logicalVolumeIdByDevicePath reads `/sys/block/<dev>/uuid` for a device path
+// like `/dev/nvme0n2`.
 // Returns an empty string if the file is absent, unreadable, or not a valid UUID.
 func logicalVolumeIdByDevicePath(devicePath string) string {
 	name := filepath.Base(devicePath)
@@ -699,9 +701,9 @@ func ParseAddress(address string) string {
 }
 
 // dhchapAuthArgs extracts the --hostnqn, --dhchap-secret, --dhchap-ctrl-secret,
-// and --tls flags from the control-plane-supplied nvme-connect command line.
+// and `--tls` flags from the control-plane-supplied `nvme connect` command line.
 // The control plane is the only party that resolves the connecting host's
-// DHCHAP secret (pool-shared or per-host key material); it bakes these flags
+// DHCHAP secret (pool-shared or per-host key material), and it bakes these flags
 // into LvolConnectResp.Connect rather than exposing them as separate fields
 // (see build_nvme_connect_entry/HostConnectAuth in sbcli), so this is the only
 // channel the CSI driver has for them today.
@@ -709,12 +711,12 @@ func ParseAddress(address string) string {
 // Whenever --hostnqn is present, this also adds a --hostid derived from that
 // same NQN's UUID. Without an explicit --hostid, nvme-cli falls back to the
 // node's static /etc/nvme/hostid (written once, node-wide, by the CSI
-// DaemonSet's postStart hook) — shared by every connect on that node
+// DaemonSet's postStart hook), shared by every connect on that node
 // regardless of --hostnqn. The kernel refuses to associate one hostid with
 // two different hostnqns ("found same hostid ... but different hostnqn"), so
 // a node with even one pre-existing default-hostnqn connection (the common
 // case: any plain, non-gated volume) would reject every later connect that
-// names an explicit, different hostnqn — exactly what allowed_hosts/DHCHAP
+// names an explicit, different hostnqn, which is exactly what allowed_hosts and DHCHAP
 // volumes need. Deriving hostid from hostnqn's own UUID keeps the pair
 // internally consistent and never collides with the node's random
 // file-based default.
@@ -750,8 +752,8 @@ func ConnectViaNVMe(ctx context.Context, conn *controlplane.LvolConnectResp, ctr
 	if conn.HostIface != "" {
 		cmd = append(cmd, "-f", conn.HostIface)
 	}
-	// conn.Connect is the full "nvme connect ..." line the control plane
-	// built for this exact host NQN — the only source of the DHCHAP/host
+	// conn.Connect is the full `nvme connect ...` line the control plane
+	// built for this exact host NQN, and the only source of the DHCHAP and host
 	// identity flags below, since LvolConnectResp carries no separate fields
 	// for them.
 	cmd = append(cmd, dhchapAuthArgs(conn.Connect)...)

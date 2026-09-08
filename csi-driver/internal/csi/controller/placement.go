@@ -79,7 +79,7 @@ func (cs *Server) resolveClusterSelection(req *csi.CreateVolumeRequest) (*cluste
 		if sel := tryList(topoReq.GetRequisite()); sel != nil {
 			return sel, nil
 		}
-		// Topology was provided but contains no zone or region key recognised by
+		// Topology was provided but contains no zone or region key recognized by
 		// the StorageClass map. This means the worker node is missing the required
 		// topology labels.
 		nodeName := nodeNameFromTopology(topoReq.GetPreferred())
@@ -119,8 +119,8 @@ func nodeNameFromTopology(topos []*csi.Topology) string {
 }
 
 // coLocatedHostID extracts the storage-node UUID co-located with the consuming
-// Pod's scheduled worker, scoped to clusterID, from CSI topology requirements —
-// i.e. a csicommon.TopologyKeyStorageNodeUUIDPrefix-prefixed segment written by the
+// Pod's scheduled worker, scoped to clusterID, from CSI topology requirements.
+// i.e., a csicommon.TopologyKeyStorageNodeUUIDPrefix-prefixed segment written by the
 // simplyblock-operator onto the Kubernetes Node the Pod was scheduled to (see
 // StorageNodeSetReconciler.labelWorkerNodes) and advertised via
 // nodeserver.buildAccessibleTopology. The segment KEY is
@@ -129,7 +129,7 @@ func nodeNameFromTopology(topos []*csi.Topology) string {
 // nodeNameFromTopology's fallback order. When a worker hosts more than one
 // storage-node instance (NUMA sockets), one of the matching instances is picked
 // uniformly at random, so volumes routed here via Tier 1 spread across every
-// co-located instance instead of piling onto one — this is a host-level
+// co-located instance instead of piling onto one. This is a host-level
 // guarantee only, not true socket-level affinity, which isn't resolvable at
 // CreateVolume time (kubelet's Topology Manager pins a Pod to a NUMA socket only
 // at container start). Returns "" if no segment matches.

@@ -83,7 +83,7 @@ func controlledOptInPod(name, uid string) v1.Pod {
 }
 
 // controlledNonOptInPod is controller-managed but carries no opt-in label and
-// no PVC volumes so podUsesOptedInSimplyBlockStorageClass returns (false, nil).
+// no PVC volumes so podUsesOptedInSimplyblockStorageClass returns (false, nil).
 func controlledNonOptInPod(name, uid string) v1.Pod {
 	return v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -181,7 +181,7 @@ func TestCoordinatedSubsystemRestart_Gate_StandalonePodSuppressesGroup(t *testin
 }
 
 // A non-opted-in pod fails the podOptedInForAutoRestart gate and suppresses
-// the entire group — this is the all-or-nothing safety guarantee.
+// the entire group. This is the all-or-nothing safety guarantee.
 func TestCoordinatedSubsystemRestart_Gate_NonOptedInSuppressesGroup(t *testing.T) {
 	pods := []v1.Pod{
 		controlledOptInPod("pod-a", "uid-1"),
@@ -236,7 +236,7 @@ func TestCoordinatedSubsystemRestart_Gate_ExpiredBackoffAllowsRestart(t *testing
 	}
 }
 
-// Happy path: all candidates pass every gate — all pods are deleted and
+// Happy path: all candidates pass every gate, so all pods are deleted and
 // lastRestart is set for each.
 func TestCoordinatedSubsystemRestart_AllPass_DeletesAll(t *testing.T) {
 	pods := []v1.Pod{
@@ -283,7 +283,7 @@ func TestCoordinatedSubsystemRestart_MultipleSiblings_AllDeleted(t *testing.T) {
 }
 
 // DryRun=true: the function returns the candidate count but issues no Delete
-// calls — pods must still exist in the fake client.
+// calls, so pods must still exist in the fake client.
 func TestCoordinatedSubsystemRestart_DryRun_NoDeletions(t *testing.T) {
 	pods := []v1.Pod{
 		controlledOptInPod("pod-a", "uid-1"),
@@ -305,7 +305,7 @@ func TestCoordinatedSubsystemRestart_DryRun_NoDeletions(t *testing.T) {
 	}
 }
 
-// A non-NotFound delete error causes that pod to be skipped; the other pods
+// A non-NotFound delete error causes that pod to be skipped. The other pods
 // in the group are still deleted and counted.
 func TestCoordinatedSubsystemRestart_DeleteError_NonNotFound_SkipsPod(t *testing.T) {
 	pods := []v1.Pod{
@@ -331,8 +331,8 @@ func TestCoordinatedSubsystemRestart_DeleteError_NonNotFound_SkipsPod(t *testing
 	}
 }
 
-// A NotFound error on Delete is treated as success — the pod was already gone
-// and is still counted as "deleted".
+// A NotFound error on Delete is treated as success, since the pod was already gone
+// and is still counted as `deleted`.
 func TestCoordinatedSubsystemRestart_DeleteNotFound_CountedAsDeleted(t *testing.T) {
 	pod := controlledOptInPod("pod-gone", "uid-1")
 	// Pod is NOT registered in the fake client → Delete returns NotFound.
@@ -375,11 +375,11 @@ func TestRestartBrokenLvols_MultiLvol_PodRestartedOnce(t *testing.T) {
 		podsByLvol, buildUIDToPod(pod),
 	)
 
-	// Pod must be deleted exactly once — the second lvol must see the active backoff.
+	// Pod must be deleted exactly once, and the second lvol must see the active backoff.
 	if restarted != 1 {
 		t.Errorf("expected 1 restart, got %d — double-delete bug #423-A", restarted)
 	}
-	// lastRestart must still be set after the tick; the bug cleared it prematurely.
+	// lastRestart must still be set after the tick. The bug cleared it prematurely.
 	if _, ok := g.lastRestart["uid-1"]; !ok {
 		t.Error("lastRestart[uid-1] was erased while pod still tracked on lvol-b (bug #423-A)")
 	}
@@ -387,7 +387,7 @@ func TestRestartBrokenLvols_MultiLvol_PodRestartedOnce(t *testing.T) {
 
 // Manifestation B: RegisterUnpublish must only remove the pod from the specific
 // lvolID being unpublished, not from every lvol in g.lvols. Before the fix,
-// unpublishing vol-A silently wiped vol-B from tracking — a subsequent break on
+// unpublishing vol-A silently wiped vol-B from tracking, so a subsequent break on
 // vol-B would hit MarkBrokenLvol, find an unknown lvol, and silently skip it.
 func TestRegisterUnpublish_OnlyRemovesTargetLvol(t *testing.T) {
 	g := newTestGuardian(fake.NewSimpleClientset())
@@ -404,7 +404,7 @@ func TestRegisterUnpublish_OnlyRemovesTargetLvol(t *testing.T) {
 		t.Error("lvol-a should have been removed from g.lvols after unpublish")
 	}
 
-	// lvol-b must still be tracked — the old bug wiped it alongside lvol-a.
+	// lvol-b must still be tracked. The old bug wiped it alongside lvol-a.
 	st, ok := g.lvols["lvol-b"]
 	if !ok {
 		t.Fatal("lvol-b was incorrectly wiped from g.lvols by unpublish of lvol-a (bug #423-B)")

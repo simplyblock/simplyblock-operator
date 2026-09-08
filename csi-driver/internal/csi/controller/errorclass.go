@@ -19,31 +19,31 @@ type controlPlaneErrorClass struct {
 	Retryable bool
 
 	// RPCSpecific marks a control-plane status whose CSI meaning depends on the
-	// calling RPC and therefore cannot be classified generically — namely 404
+	// calling RPC and therefore cannot be classified generically, namely, 404
 	// and 409. Example: a 404 means "already deleted, success" for DeleteVolume
-	// but "source not found, NotFound" for CreateVolume-from-snapshot; a 409
+	// but "source not found, NotFound" for CreateVolume-from-snapshot. A 409
 	// means "idempotent, return the existing object" for a create with the same
 	// source but "AlreadyExists" for a different one. The generic classifier
-	// cannot resolve these — a per-RPC classifier (see errorclass_rpc.go) does.
+	// cannot resolve these, so a per-RPC classifier (see errorclass_rpc.go) does.
 	// If one reaches generic classification unresolved, it is a driver bug: Code
 	// is codes.Internal so it surfaces rather than being silently mislabeled
-	// (e.g. as a retryable Unavailable).
+	// (e.g., as a retryable Unavailable).
 	RPCSpecific bool
 
 	// Success means the control-plane error is a no-op for this RPC and it should
-	// return success — e.g. a 404 on a delete: the object is already gone.
+	// return success, e.g., a 404 on a delete, where the object is already gone.
 	Success bool
 
 	// Idempotent means the RPC must resolve a conflict by looking up the existing
-	// object before deciding — e.g. a 409 on a create: same source/params →
+	// object before deciding, e.g., a 409 on a create, where same source and params →
 	// return the existing object as success, otherwise AlreadyExists. Pure
-	// classification cannot decide; the RPC performs the lookup.
+	// classification cannot decide, so the RPC performs the lookup.
 	Idempotent bool
 }
 
 // classifyControlPlaneError maps a simplyblock control-plane error to the gRPC
 // status a CSI RPC should return, and whether retrying can help. It handles only
-// the operation-INDEPENDENT ("generic") failures; operation-specific statuses
+// the operation-independent ("generic") failures. Operation-specific statuses
 // (404, 409) are flagged RPCSpecific and must be handled by the RPC itself.
 //
 // Generic policy:
@@ -52,7 +52,7 @@ type controlPlaneErrorClass struct {
 //   - 500/502/503/504 and 408 → Unavailable (retryable).
 //   - 429 and 507 → ResourceExhausted (retryable backpressure/capacity).
 //   - 400/422 → InvalidArgument, 401 → Unauthenticated, 403 → PermissionDenied,
-//     412 → FailedPrecondition; other 4xx → FailedPrecondition (all permanent).
+//     412 → FailedPrecondition, other 4xx → FailedPrecondition (all permanent).
 //   - 501/505/508/511 and any other 5xx → Internal (permanent).
 //   - An unrecognized non-HTTP error (e.g. a secret-parse or unmarshal bug) is
 //     NOT a transient control-plane failure → Internal, not retryable. Mapping
@@ -80,14 +80,14 @@ func classifyControlPlaneError(err error) controlPlaneErrorClass {
 		return controlPlaneErrorClass{Code: codes.Unavailable, Retryable: true}
 	}
 
-	// Unknown, non-transport error — treat as an internal fault, not a retry.
+	// Unknown, non-transport error: treat it as an internal fault, not a retry.
 	return controlPlaneErrorClass{Code: codes.Internal}
 }
 
 // httpStatusOf returns the HTTP status a control-plane error represents, or 0 if
 // it is not an HTTP error. The client converts a few statuses to sentinel errors
 // (404 → Err*NotFound, 409 → Err*Exists) before they reach the RPC, so those are
-// mapped back to their status here — otherwise the 404/409 dispositions could
+// mapped back to their status here, since otherwise the 404 and 409 dispositions could
 // never fire.
 func httpStatusOf(err error) int {
 	switch {
@@ -106,7 +106,7 @@ func httpStatusOf(err error) int {
 // classifyHTTPStatus applies the generic policy to a raw HTTP status code.
 func classifyHTTPStatus(status int) controlPlaneErrorClass {
 	switch status {
-	// Operation-specific — must be handled by the RPC, never generically.
+	// Operation-specific: must be handled by the RPC, never generically.
 	case http.StatusNotFound, // 404
 		http.StatusConflict: // 409
 		return controlPlaneErrorClass{Code: codes.Internal, RPCSpecific: true}
@@ -119,7 +119,7 @@ func classifyHTTPStatus(status int) controlPlaneErrorClass {
 		http.StatusRequestTimeout:     // 408
 		return controlPlaneErrorClass{Code: codes.Unavailable, Retryable: true}
 
-	// Backpressure / capacity — retry with backoff.
+	// Backpressure or capacity: retry with backoff.
 	case http.StatusTooManyRequests, // 429
 		http.StatusInsufficientStorage: // 507
 		return controlPlaneErrorClass{Code: codes.ResourceExhausted, Retryable: true}

@@ -84,7 +84,7 @@ func Run(conf *config.Config) {
 	// Build one Kubernetes client shared by the node and controller servers
 	// (PV/PVC/topology reads, PVC-annotation patches) instead of each constructing
 	// its own in-cluster config + clientset. A missing in-cluster config is
-	// non-fatal — the features that need it degrade to no-ops.
+	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
@@ -128,9 +128,9 @@ func Run(conf *config.Config) {
 
 // startLink dials the operator as whichever peer this process is.
 //
-// A node plugin serves its local NVMe state on the link — that is the point of
-// linking it — and is identified by the node it runs on. A controller plugin
-// links as itself and currently serves nothing; it is registered so the
+// A node plugin serves its local NVMe state on the link, which is the point of
+// linking it, and is identified by the node it runs on. A controller plugin
+// links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
 func startLink(ctx context.Context, conf *config.Config) error {
 	cfg := csilink.Config{

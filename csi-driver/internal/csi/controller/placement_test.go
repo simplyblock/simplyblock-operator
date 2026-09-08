@@ -2,7 +2,7 @@
 // controller resolves into the host_id it sends on the CreateVolume POST, and in
 // what priority. It lives beside the other controllerserver tests because it
 // asserts on the wire body the driver produces (recorded by mockSBCLI), not on
-// the intermediate helper — the annotation reaching the control plane is the
+// the intermediate helper, since the annotation reaching the control plane is the
 // behavior that decides whether a pinned volume is created in the right place or
 // has to be migrated there afterward.
 package controller

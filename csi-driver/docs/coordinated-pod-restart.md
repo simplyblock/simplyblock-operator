@@ -8,17 +8,17 @@ has its own private NVMe-oF subsystem (its own NQN).
 
 The problem arises when **multiple pods share a single NVMe-oF subsystem**. In
 simplyblock, a subsystem is identified by its NQN (NVMe Qualified Name). If two
-pods — call them A and B — both have volumes on the same NQN, they share one
+pods (call them A and B) both have volumes on the same NQN, they share one
 physical connection to the storage node.
 
-When the NVMe-oF path breaks, **both pod A and pod B are broken** — they share
+When the NVMe-oF path breaks, **both pod A and pod B are broken**, because they share
 the same physical connection, so neither can do I/O. The Guardian would only
-consider restarting pod A because pod A's lvol is marked broken; pod B may not
+consider restarting pod A because pod A's lvol is marked broken. Pod B may not
 yet appear broken in the Guardian's view.
 
 Restarting pod A alone triggers NodeUnpublish → NodeUnstage → NodeStage →
 NodePublish for the replacement pod. The NodeStage step reconnects the shared
-NVMe-oF subsystem. From the kernel's perspective the NQN is now live again —
+NVMe-oF subsystem. From the kernel's perspective the NQN is now live again,
 but **pod B's mount was established before the disconnect/reconnect cycle**. Pod
 B's kernel mount is stale: the NVMe path looks connected but the mount context
 is no longer valid. The Guardian sees the NQN as healthy and never restarts pod
@@ -36,7 +36,7 @@ nqn.2023-01.io.simplyblock:<clusterID>:lvol:<masterLvolID>
 
 Multiple volumes (and therefore multiple pods) can be placed on lvols that belong
 to the same subsystem. When that happens, they all use the same single NVMe-oF
-connection — the one whose NQN is derived from the master lvol.
+connection, the one whose NQN is derived from the master lvol.
 
 ## The NQN Index
 
@@ -51,11 +51,11 @@ lvolIDsByNQN map[string][]string  // NQN     →  []lvolID
 `SubsystemLvolIDs(lvolID)` looks up both maps and returns all lvol IDs that share
 the same NQN as the given lvolID, **including itself**. Three outcomes are possible:
 
-| Return value | Meaning |
-|---|---|
-| `nil` | lvolID not yet in the index — connection not established yet, or node just restarted |
-| `[]string{lvolID}` | sole member — private subsystem, safe to restart individually |
-| `[]string{lvolID, siblingA, ...}` | shared subsystem — coordinated restart required |
+| Return value                      | Meaning                                                                                |
+|-----------------------------------|----------------------------------------------------------------------------------------|
+| `nil`                             | lvolID not yet in the index: no connection established yet, or the node just restarted |
+| `[]string{lvolID}`                | sole member: a private subsystem, safe to restart individually                         |
+| `[]string{lvolID, siblingA, ...}` | shared subsystem: a coordinated restart is required                                    |
 
 ## Decision Flow
 
@@ -83,11 +83,11 @@ pass every eligibility check before any pod is deleted**.
 
 Eligibility checks (applied to each candidate):
 
-1. **Controller-managed** — pod must be owned by a Deployment, StatefulSet, or
+1. **Controller-managed:** the pod must be owned by a Deployment, StatefulSet, or
    similar controller so it will be recreated automatically after deletion.
-2. **Opted in** — pod must carry the `simplyblock.io/auto-restart-on-pathloss: "true"`
+2. **Opted in:** the pod must carry the `simplyblock.io/auto-restart-on-pathloss: "true"`
    label, or use a StorageClass that carries that annotation.
-3. **Not in backoff** — at least `RestartBackoff` (default 10 min) must have
+3. **Not in backoff:** at least `RestartBackoff` (default 10 min) must have
    elapsed since the last restart of this pod.
 
 If any candidate fails any check, **the entire group is suppressed** for this
@@ -127,7 +127,7 @@ the situation is observable. It resolves itself within one poll interval.
 `coordinatedSubsystemRestart` receives the full sibling list from the NQN index.
 It then filters to candidates that actually have a broken pod. If only pod A is
 broken and pod B is healthy (no broken-lvol record), pod B is not included as a
-candidate — the restart proceeds for pod A alone via the coordinated path, which
+candidate, so the restart proceeds for pod A alone via the coordinated path, which
 in this case produces a one-element candidate list and degrades safely to a
 single-pod delete.
 
@@ -149,13 +149,13 @@ that share a subsystem, or none of them will receive automatic restarts.
 Kubernetes Events are emitted so problems are visible via `kubectl describe pod`
 without needing to dig through CSI node logs:
 
-| Situation | Event reason | Emitted on |
-|---|---|---|
-| NQN index not yet populated | `AutoRestartSuppressed` | the suppressed pod |
+| Situation                         | Event reason                | Emitted on           |
+|-----------------------------------|-----------------------------|----------------------|
+| NQN index not yet populated       | `AutoRestartSuppressed`     | the suppressed pod   |
 | Non-opted-in pod blocks the group | `CoordinatedRestartBlocked` | the **blocking** pod |
-| Opted-in pod held back by a peer | `CoordinatedRestartPending` | each **blocked** pod |
+| Opted-in pod held back by a peer  | `CoordinatedRestartPending` | each **blocked** pod |
 
-**Example — non-opted-in pod blocking the group:**
+**Example, a non-opted-in pod blocking the group:**
 
 ```
 kubectl describe pod <opted-in-pod>

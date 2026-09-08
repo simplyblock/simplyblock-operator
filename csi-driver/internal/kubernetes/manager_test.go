@@ -19,7 +19,7 @@ import (
 const testDriver = "csi.simplyblock.io"
 
 // Realistic handle components: clusterID and lvolID are UUIDs (as production
-// volume handles always are); poolID is a name here to exercise that it need
+// volume handles always are). poolID is a name here to exercise that it need
 // not be a UUID.
 const (
 	clusterUUID = "8ffac363-0c46-4714-a71b-f9c0b58a1269"

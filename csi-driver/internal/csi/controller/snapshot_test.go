@@ -34,7 +34,7 @@ func createSourceVolume(t *testing.T, cs *Server, name string) string {
 // an RPC through every control-plane response (each HTTP status + transport
 // failures) by injecting it on the RPC's first API call, and asserts the RPC
 // returns the gRPC code its classifier prescribes. This is what verifies the
-// error classification is actually wired into the RPC — every response mapped to
+// error classification is actually wired into the RPC: every response mapped to
 // its correct gRPC code, not a blanket Unavailable.
 //
 //	classify: the RPC's classify*Error function (source of the expected code).
@@ -80,7 +80,7 @@ func assertControlPlaneErrorMapping(
 	})
 	t.Run("connection_refused", func(t *testing.T) {
 		mock := newMockSBCLI()
-		mock.Close() // dead endpoint; the secret still captures its URL string
+		mock.Close() // dead endpoint, but the secret still captures its URL string
 		check(
 			t,
 			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")},
@@ -198,20 +198,20 @@ func seedSnapshotSource(m *mockSBCLI) string {
 // assertNoOrphanOnFailure proves an RPC is atomic on failure: whenever it returns
 // an error, its mutating control-plane call (the create) must NOT have persisted.
 // Equivalently, the create must be ordered after every OTHER fallible call, so a
-// precondition/metadata failure aborts before creating anything — otherwise a
+// precondition or metadata failure aborts before creating anything, since otherwise a
 // failure leaves an orphan that later retries can't reconcile.
 //
 // It is a positional matrix run in two phases:
 //
-//	Phase 1 — Discovery. Run the RPC once, fully successfully, with a mock whose
+//	Phase 1, discovery. Run the RPC once, fully successfully, with a mock whose
 //	failIf hook counts every API request but fails none. The count N is the total
-//	number of control-plane calls, and the loop bound — so the matrix never loops
+//	number of control-plane calls, and the loop bound, so the matrix never loops
 //	open-endedly and needs no hardcoded count.
 //
-//	Phase 2 — Matrix. For each k in 1..N, on a fresh mock, fail ONLY the k-th
+//	Phase 2, the matrix. For each k in 1..N, on a fresh mock, fail only the k-th
 //	request. If the RPC then returns an error, the mutation must not have persisted.
 //
-// A best-effort call whose failure the RPC tolerates (e.g. a post-create info
+// A best-effort call whose failure the RPC tolerates (e.g., a post-create info
 // read) is fine: the RPC succeeds and the mutation legitimately persists, so the
 // no-orphan check only applies when the RPC actually errors. Because N is
 // discovered at runtime, any precondition added later gets its own iteration.
@@ -230,7 +230,7 @@ func assertNoOrphanOnFailure(
 		seed = func(*mockSBCLI) {}
 	}
 
-	// Phase 1 — discover the number of API calls a successful RPC makes.
+	// Phase 1: discover the number of API calls a successful RPC makes.
 	discover := newMockSBCLI()
 	defer discover.Close()
 	seed(discover)
@@ -245,7 +245,7 @@ func assertNoOrphanOnFailure(
 		t.Fatalf("expected the RPC to make at least 2 API calls, got %d", calls)
 	}
 
-	// Phase 2 — fail the k-th call; if the RPC errors, no mutation may persist.
+	// Phase 2: fail the k-th call. If the RPC errors, no mutation may persist.
 	for k := 1; k <= calls; k++ {
 		target := k
 		t.Run(fmt.Sprintf("fail_call_%d_of_%d", k, calls), func(t *testing.T) {
@@ -266,7 +266,7 @@ func assertNoOrphanOnFailure(
 }
 
 // TestCreateSnapshot_NoAPICallBeforeMetadataResolved: the snapshot must be created
-// only after all preconditions/metadata (e.g. the source volume size) resolve.
+// only after all preconditions/metadata (e.g., the source volume size) resolve.
 func TestCreateSnapshot_NoAPICallBeforeMetadataResolved(t *testing.T) {
 	const srcLvolID = "77777777-7777-7777-7777-777777777777"
 	srcVolID := sanityClusterID + ":" + sanityPoolUUID + ":" + srcLvolID
@@ -294,10 +294,10 @@ func TestCreateSnapshot_NoAPICallBeforeMetadataResolved(t *testing.T) {
 // be reconciled on retry, not dead-ended on AlreadyExists.
 //
 // Attempt 1's create is persisted by the control plane but the response is lost,
-// so the client sees an error — a valid snapshot of the correct source is left
-// behind. On retry the real web API answers 409 for the duplicate name;
+// so the client sees an error, a valid snapshot of the correct source is left
+// behind. On retry the real web API answers 409 for the duplicate name, and
 // CreateSnapshot must list, see the same source, and return the existing snapshot
-// as success (CSI idempotency) — not a duplicate, not AlreadyExists.
+// as success (CSI idempotency), not a duplicate and not AlreadyExists.
 func TestCreateSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -322,7 +322,7 @@ func TestCreateSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 		t.Fatalf("expected exactly 1 leftover snapshot after attempt 1, got %d", leftover)
 	}
 
-	// Attempt 2 (retry, same name + source): must reconcile — return the existing
+	// Attempt 2 (retry, same name and source): must reconcile and return the existing
 	// snapshot as success, no duplicate.
 	resp, err := cs.CreateSnapshot(ctx, req)
 	if err != nil {
@@ -340,16 +340,16 @@ func TestCreateSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 
 // TestCreateVolumeFromSnapshot_CloneError_LeavesPVDangling proves that when the
 // clone-from-snapshot API call fails, the broken PersistentVolume is left
-// dangling — the same cleanup gap as the plain-create path, on the clone path.
+// dangling: the same cleanup gap as the plain-create path, on the clone path.
 //
 // handleSnapshotSource returns the raw clone error, which CreateVolume wraps as
 // codes.Unavailable and returns. It neither repairs nor cleans up the dangling
 // PV left on the Kubernetes side. This test asserts the PV is cleaned up after
-// the clone error; it is RED today.
+// the clone error. It is red today.
 // TestCreateVolumeFromSnapshot_ReconcilesLeftoverOnRetry: the clone-from-snapshot
 // path must reconcile a leftover on retry (like the plain-create path), not leak a
 // duplicate or dead-end. Attempt 1's clone is created but publish fails, leaving a
-// cloned volume behind; the retry must reuse it, not create a second clone.
+// cloned volume behind, so the retry must reuse it rather than create a second clone.
 func TestCreateVolumeFromSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

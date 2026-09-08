@@ -26,7 +26,7 @@ func (ns *Server) NodePublishVolume(
 	defer unlock()
 
 	// If the backing NVMe-oF device was lost (total path loss), repair it before
-	// bind-mounting into the pod — otherwise the pod inherits the dead mount/
+	// bind-mounting into the pod, since otherwise the pod inherits the dead mount or
 	// missing device. kubelet skips NodeStage when the volume is still referenced
 	// on this node (e.g., a same-node pod replacement), so NodePublish is the
 	// reliable place to heal.
@@ -127,7 +127,7 @@ func (ns *Server) publishVolume(stagingPath string, req *csi.NodePublishVolumeRe
 
 // healVolumeBeforePublish repairs a volume whose backing NVMe-oF device was lost
 // (total path loss) before it is bind-mounted into a (replacement) pod. For
-// filesystem volumes it restages the dead staging mount; for block volumes it
+// filesystem volumes it restages the dead staging mount, and for block volumes it
 // reconnects the missing device. No-op when the volume is healthy.
 func (ns *Server) healVolumeBeforePublish(ctx context.Context, req *csi.NodePublishVolumeRequest) error {
 	volCap := req.GetVolumeCapability()

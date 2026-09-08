@@ -4,7 +4,7 @@ Follow [deploy/spdk/README](deploy/spdk/README.md) to deploy SPDK storage servic
 
 ### Deploy SPDKCSI services
 
-1. Launch Minikube test cluster.
+1. Launch minikube test cluster.
   ```bash
     $ cd scripts
     $ sudo ./minikube.sh up
@@ -62,7 +62,7 @@ Follow [deploy/spdk/README](deploy/spdk/README.md) to deploy SPDK storage servic
     NAME                   READY   STATUS    RESTARTS   AGE
     spdkcsi-test           1/1     Running   0          1m31s
 
-    # Check attached spdk volume in test pod
+    # Check the attached SPDK volume in the test pod
     $ kubectl exec spdkcsi-test mount | grep spdkcsi
     /dev/disk/by-id/nvme-..._spdkcsi-sn on /spdkvol type ext4 (rw,relatime)
   ```

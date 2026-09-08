@@ -12,8 +12,8 @@ type Server struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *csicommon.VolumeLocks
 	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
-	// cleanup). Built once at construction and reused; nil when no in-cluster
-	// config is available (e.g. unit tests), in which case the annotation helpers
+	// cleanup). Built once at construction and reused, and nil when no in-cluster
+	// config is available (e.g., unit tests), in which case the annotation helpers
 	// are no-ops.
 	kubeClient kubernetes.Interface
 }

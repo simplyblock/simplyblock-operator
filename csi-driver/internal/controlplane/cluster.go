@@ -1,6 +1,6 @@
 // ClusterClient: the control-plane client scoped to one cluster, and
 // optionally to one storage pool. It is what every caller outside this
-// package holds; the endpoint methods it delegates to are in client.go.
+// package holds. The endpoint methods it delegates to are in client.go.
 package controlplane
 
 import (
@@ -67,7 +67,7 @@ func envOr(key, fallback string) string {
 }
 
 // tlsServerName returns the FQDN service name that matches the TLS certificate
-// SANs (e.g. "simplyblock-webappapi.simplyblock.svc") derived from the URL host
+// SANs (e.g., "simplyblock-webappapi.simplyblock.svc") derived from the URL host
 // and the pod's own namespace. Falls back to the bare hostname on any error.
 func tlsServerName(clusterIP string) string {
 	// strip scheme and port to get just the hostname
@@ -90,7 +90,7 @@ func tlsServerName(clusterIP string) string {
 
 type ClusterClient struct {
 	API    *APIClient
-	poolID string // pool scope for this client; empty means cluster-level only
+	poolID string // pool scope for this client, empty meaning cluster-level only
 }
 
 func (c *ClusterClient) ClusterID() string { return c.API.ClusterID }
@@ -102,7 +102,7 @@ func (c *ClusterClient) PoolID() string    { return c.poolID }
 func (c *ClusterClient) ScopeToPool(poolID string) { c.poolID = poolID }
 
 // poolForVolume returns the pool ID for lvolID. If this client is already
-// scoped to a pool, that pool ID is returned immediately. Otherwise all pools
+// scoped to a pool, that pool ID is returned immediately. Otherwise, all pools
 // are scanned to locate the volume.
 func (c *ClusterClient) poolForVolume(ctx context.Context, lvolID string) (string, error) {
 	if c.poolID != "" {

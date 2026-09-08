@@ -214,7 +214,7 @@ func TestCoLocatedHostID(t *testing.T) {
 				csicommon.TopologyKeyStorageNodeUUIDPrefix + clusterID + ".0": socket0UUID,
 			})},
 		}
-		// Run repeatedly to also confirm it isn't always the same candidate —
+		// Run repeatedly to also confirm it is not always the same candidate,
 		// the tie-break spreads placement across every co-located instance
 		// instead of concentrating on one.
 		seen := map[string]bool{}
@@ -244,7 +244,7 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("UUID value changes without the key changing (replacement scenario)", func(t *testing.T) {
 		// The whole point of keying by slot (cluster+ordinal) instead of by UUID:
 		// the key that CSINode has cached stays valid even after the storage
-		// node behind it is replaced — only the value differs.
+		// node behind it is replaced, and only the value differs.
 		const newUUID = "33333333-3333-3333-3333-333333333333"
 		slotKey := csicommon.TopologyKeyStorageNodeUUIDPrefix + clusterID + ".0"
 		req := &csi.TopologyRequirement{

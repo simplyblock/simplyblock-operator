@@ -72,7 +72,7 @@ func basicCreateVolumeRequest(name string) *csi.CreateVolumeRequest {
 }
 
 // volMapID is a well-formed 3-part volume handle (UUID cluster/pool/lvol) whose
-// lvol does not exist — the RPC's first API call is injected with each response.
+// lvol does not exist. The RPC's first API call is injected with each response.
 const volMapID = sanityClusterID + ":" + sanityPoolUUID + ":99999999-9999-9999-9999-999999999999"
 
 // TestCreateVolume_ControlPlaneErrorMapping drives CreateVolume through every
@@ -83,7 +83,7 @@ func TestCreateVolume_ControlPlaneErrorMapping(t *testing.T) {
 		func(t *testing.T, ctx context.Context, m *mockSBCLI) error {
 			cs := newTestControllerServer(t, m)
 			req := basicCreateVolumeRequest("pvc-vol-map")
-			req.Parameters["pool_name"] = sanityPoolUUID // UUID → no pool lookup; create POST is first
+			req.Parameters["pool_name"] = sanityPoolUUID // UUID → no pool lookup, so the create POST is first
 			_, err := cs.CreateVolume(ctx, req)
 			return err
 		})
@@ -133,14 +133,14 @@ func TestValidateVolumeCapabilities_ControlPlaneErrorMapping(t *testing.T) {
 }
 
 // TestCreateVolume_ReconcilesLeftoverOnRetry proves that CreateVolume's
-// create-before-publish ordering is safe *because it reconciles on retry* — as
+// create-before-publish ordering is safe *because it reconciles on retry*, as
 // long as the control plane dedupes by volume name (409 on a duplicate).
 //
 // Attempt 1 creates the volume on the control plane but fails at publish, leaving
 // a created, online volume behind. The retry (same name) must NOT create a
 // duplicate: the ErrVolumeExists list-by-name fallback finds the existing volume,
 // re-publishes it (now the control plane is healthy), and returns it. End state:
-// exactly one volume, success — no orphan, no duplicate.
+// exactly one volume, success: no orphan and no duplicate.
 //
 // Contrast TestProvisioning_APIError_LeaksVolumesWhilePVCStaysPending, where a
 // control plane that does NOT dedupe by name makes the same ordering leak one
@@ -179,7 +179,7 @@ func TestCreateVolume_ReconcilesLeftoverOnRetry(t *testing.T) {
 		t.Fatal("retry returned no volume id")
 	}
 
-	// Exactly one volume must remain — the retry reused the leftover, no duplicate.
+	// Exactly one volume must remain: the retry reused the leftover, with no duplicate.
 	mock.mu.Lock()
 	defer mock.mu.Unlock()
 	if got := len(mock.volumes); got != 1 {
@@ -192,15 +192,15 @@ func TestCreateVolume_ReconcilesLeftoverOnRetry(t *testing.T) {
 // control plane.
 //
 // Lifecycle: while a PVC is Pending, the external-provisioner calls CreateVolume
-// with the SAME name (pvc-<uid>) repeatedly until it succeeds; no PV object
+// with the same name (`pvc-<uid>`) repeatedly until it succeeds. No PV object
 // exists yet. If an earlier attempt created a volume that never came online, the
 // retry hits the ErrVolumeExists fallback in createVolume, finds the volume is
-// not online, and returns codes.AlreadyExists — every time, forever. The
+// not online, and returns codes.AlreadyExists every time, forever. The
 // provisioner never gets a success, so the PVC never binds.
 //
 // The retry must instead recover: clean up the broken (non-online) volume and
 // create a fresh one, then stay idempotent across further retries. This test
-// asserts that; it is RED today.
+// asserts that. It is red today.
 func TestCreateVolume_RetryRecoversFromBrokenVolume(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -244,7 +244,7 @@ func TestCreateVolume_RetryRecoversFromBrokenVolume(t *testing.T) {
 		}
 	}
 
-	// Exactly one volume must remain for this name, and it must be online — no
+	// Exactly one volume must remain for this name, and it must be online, with no
 	// orphaned broken volume left behind.
 	mock.mu.Lock()
 	defer mock.mu.Unlock()

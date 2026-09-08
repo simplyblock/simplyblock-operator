@@ -150,9 +150,9 @@ func TestChoose_IgnoresDefectsWithNoRemedy(t *testing.T) {
 	}
 }
 
-// The controller name is exactly what a repair changes — tearing down nvme3 and
-// reconnecting yields nvme7 at the same address — so the cooldown has to key on
-// the endpoint or it never recognises the same repair twice.
+// The controller name is exactly what a repair changes (tearing down nvme3 and
+// reconnecting yields nvme7 at the same address) so the cooldown has to key on
+// the endpoint or it never recognizes the same repair twice.
 func TestCooldownKey_ControllerScopeKeysOnEndpoint(t *testing.T) {
 	first := defect(nvmeof.DefectControllerNotContributing, nvmeof.ScopeController,
 		[]nvme.Controller{testCtrl("nvme3", "10.0.0.3")})
@@ -173,7 +173,7 @@ func TestCooldownKey_ControllerScopeKeysOnEndpoint(t *testing.T) {
 // A subsystem-scope repair concerns the subsystem behind this NQN, whatever
 // instance the kernel hands out after the teardown. Keying on the controllers or
 // on the instance id would lose the cooldown as soon as a reconnect renumbered
-// either — reopening the loop the cooldown exists to close.
+// either, reopening the loop the cooldown exists to close.
 func TestCooldownKey_SubsystemScopeIgnoresInstanceAndControllers(t *testing.T) {
 	withInstance := func(kind nvmeof.DefectKind, instance nvme.SubsystemID, ctrlID string) nvmeof.Defect {
 		d := defect(kind, nvmeof.ScopeSubsystem, []nvme.Controller{testCtrl(ctrlID, "10.0.0.1")})
@@ -193,7 +193,7 @@ func TestCooldownKey_SubsystemScopeIgnoresInstanceAndControllers(t *testing.T) {
 
 // Inspect reports one ambiguous-head defect per stale instance, so several can
 // be outstanding for one NQN. A shared key would let repairing the first mark
-// the rest as handled and leave stale heads attached — and a lookup by NQN can
+// the rest as handled and leave stale heads attached, and a lookup by NQN can
 // then still return the wrong block device.
 func TestCooldownKey_AmbiguousHeadsStayDistinct(t *testing.T) {
 	head := func(instance nvme.SubsystemID, ctrlID string) nvmeof.Defect {
@@ -270,8 +270,8 @@ func TestCooldown_PrunesExpiredEntries(t *testing.T) {
 	}
 }
 
-// Teardown follows the order atlas put the controllers in — paths that cannot
-// serve I/O first, the optimized path last — and one that fails does not stop
+// Teardown follows the order atlas put the controllers in, paths that cannot
+// serve I/O first and the optimized path last, and one that fails does not stop
 // the ones behind it, or the optimized path would be left behind.
 func TestRepair_TearsDownInOrderAndContinuesPastFailure(t *testing.T) {
 	var attempted []string
@@ -311,7 +311,7 @@ func TestRepair_RefusesADefectWithNoRemedy(t *testing.T) {
 func TestTargetsFromConnections(t *testing.T) {
 	conns := []*controlplane.LvolConnectResp{
 		{Nqn: repairTestNQN, IP: "10.0.0.1", Port: 4420, TargetType: "TCP"},
-		nil, // the API has produced these; a nil must not panic or become a target
+		nil, // the API has produced these, and a nil must not panic or become a target
 		{Nqn: repairTestNQN, IP: "10.0.0.2", Port: 4421},
 	}
 	targets := targetsFromConnections(repairTestNQN, conns)
@@ -441,6 +441,6 @@ func (f fakeDevs) ByNamespace(context.Context, string, nvme.NamespaceID) (nvme.D
 }
 
 // errs404 must wrap atlas's sentinel: Inspect reads errs.ErrNotFound as "this
-// subsystem is not attached", which is not a defect, and anything else as a
+// subsystem is not attached`, which is not a defect, and anything else as a
 // failure to diagnose.
 var errs404 = fmt.Errorf("subsystem: %w", errs.ErrNotFound)

@@ -205,8 +205,8 @@ func TestAnnotatedFilesystem_NoClaim(t *testing.T) {
 // Formatting is irreversible, so the only device staging may format is one it
 // positively read as blank. These cases cover the two readings that are not
 // that, and must therefore fail staging rather than fall through to mkfs. The
-// probe itself lives in atlas's blockdev package now; what this pins is the
-// driver's boundary — that every refusal the prober raises still fails staging.
+// probe itself lives in atlas's blockdev package now. What this pins is the
+// driver's boundary: that every refusal the prober raises still fails staging.
 // patchedFilesystems returns the on-disk-filesystem value of every claim patch
 // the node server sent, in order, so a test can assert both what was written and
 // that nothing was written at all.

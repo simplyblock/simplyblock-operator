@@ -5,7 +5,7 @@
 // raw client.API.do against a hand-built path, which only compiled while the
 // initiator, the connection monitor, and the guardian shared this package's
 // file. Splitting them out gave those callers a choice between exporting the
-// transport or naming the question they are actually asking; this file is the
+// transport or naming the question they are actually asking. This file is the
 // second.
 package controlplane
 
@@ -22,7 +22,7 @@ import (
 // subsystem spans, and whether the volume is online.
 type NodeInfo struct {
 	NodeID string   `json:"storage_node_id"` // v2 VolumeDTO field
-	Nodes  []string `json:"nodes"`           // URL paths in v2; converted to UUIDs after parsing
+	Nodes  []string `json:"nodes"`           // URL paths in v2, converted to UUIDs after parsing
 	Status string   `json:"status"`
 }
 
@@ -63,7 +63,7 @@ func (c *ClusterClient) VolumeNodeInfo(ctx context.Context, lvolID string) (*Nod
 	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal node info: %w", err)
 	}
-	// v2 nodes field returns URL paths; extract UUIDs from last path segment
+	// v2 nodes field returns URL paths, so extract UUIDs from the last path segment
 	for i, n := range info.Nodes {
 		info.Nodes[i] = locationToUUID(n)
 	}

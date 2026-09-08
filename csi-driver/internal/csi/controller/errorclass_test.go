@@ -30,11 +30,11 @@ func TestClassifyControlPlaneError_HTTPStatuses(t *testing.T) {
 		{429, codes.ResourceExhausted, true, false},
 		{507, codes.ResourceExhausted, true, false},
 
-		// Operation-specific — the RPC must handle these, not generic classification.
+		// Operation-specific: the RPC must handle these, not generic classification.
 		{404, codes.Internal, false, true},
 		{409, codes.Internal, false, true},
 
-		// Permanent client errors — never retryable.
+		// Permanent client errors: never retryable.
 		{400, codes.InvalidArgument, false, false},
 		{401, codes.Unauthenticated, false, false},
 		{403, codes.PermissionDenied, false, false},
@@ -48,7 +48,7 @@ func TestClassifyControlPlaneError_HTTPStatuses(t *testing.T) {
 		{415, codes.FailedPrecondition, false, false}, // unsupported media type
 		{422, codes.InvalidArgument, false, false},    // unprocessable entity
 
-		// Permanent server errors — never retryable.
+		// Permanent server errors: never retryable.
 		{501, codes.Internal, false, false}, // not implemented
 		{505, codes.Internal, false, false}, // HTTP version not supported
 		{508, codes.Internal, false, false}, // loop detected
@@ -115,7 +115,7 @@ func TestClassifyControlPlaneError_TransportErrors(t *testing.T) {
 			retryable: true,
 		},
 		{
-			// An unknown, non-transport error (e.g. secret parse / unmarshal bug)
+			// An unknown, non-transport error (e.g., secret parse / unmarshal bug)
 			// must NOT be mistaken for a retryable transport failure.
 			name:      "unknown non-transport error",
 			err:       fmt.Errorf("failed to parse secret file: %w", errors.New("unexpected end of JSON input")),

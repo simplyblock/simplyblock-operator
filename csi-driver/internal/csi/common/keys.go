@@ -40,7 +40,7 @@ const (
 	// UUID: external-provisioner caches the set of topology KEYS in the CSINode
 	// object at node-plugin registration time and hard-errors CreateVolume if a
 	// live Node's label keys ever diverge from that cached set, so the key must
-	// stay stable across UUID churn — only the value is expected to change. The
+	// stay stable across UUID churn, and only the value is expected to change. The
 	// key is cluster-scoped so a worker hosting instances from more than one
 	// simplyblock cluster cannot have one cluster's socket slot collide with
 	// another's.

@@ -81,7 +81,7 @@ func TestDHCHAPAuthArgsNoAuthWhenUnneeded(t *testing.T) {
 
 // TestDHCHAPAuthArgsNoHostIDWithoutAUUID pins what adopting atlas nqn.HostUUID
 // tightened. The hand-rolled predecessor took whatever followed the last colon
-// of the host NQN and passed it as --hostid; nqn.HostUUID requires the :uuid:
+// of the host NQN and passed it as `--hostid`. nqn.HostUUID requires the `:uuid:`
 // marker and a well-formed UUID, so a host NQN in any other shape now yields
 // the --hostnqn alone.
 //

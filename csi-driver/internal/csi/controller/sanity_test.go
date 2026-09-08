@@ -20,7 +20,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Stub node server — returns success for all node operations so that the
+// Stub node server: returns success for all node operations so that the
 // controller-focused sanity tests can complete their AfterEach cleanups.
 // ---------------------------------------------------------------------------
 
@@ -124,7 +124,7 @@ func TestSanity(t *testing.T) {
 	}
 	t.Setenv("SPDKCSI_SECRET", secretFile)
 
-	// Build CSI driver + servers (controller only; stub node server for node ops).
+	// Build the CSI driver and its servers (controller only, with a stub node server).
 	cd := csicommon.NewCSIDriver("test.csi.simplyblock.io", "test", "test-node")
 	cd.AddControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,

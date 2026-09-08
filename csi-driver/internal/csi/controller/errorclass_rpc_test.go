@@ -100,8 +100,8 @@ func TestRPCErrorClassifiers(t *testing.T) {
 		{"unknown", errors.New("secret parse failed"), controlPlaneErrorClass{Code: codes.Internal}},
 	}
 
-	// Per-RPC overrides — the only statuses allowed to differ from generic. Any
-	// HTTP status may be overridden in principle; today only 404/409 are. A status
+	// Per-RPC overrides: the only statuses allowed to differ from generic. Any
+	// HTTP status may be overridden in principle. Today, only 404 and 409 are. A status
 	// that is neither overridden nor generic (an unhandled 404/409) must surface
 	// as an Internal (RPCSpecific) bug.
 	rpcs := []struct {
@@ -162,7 +162,7 @@ func TestRPCErrorClassifiers(t *testing.T) {
 		}
 
 		t.Run(rpc.name, func(t *testing.T) {
-			// Every HTTP status: override wins; else generic; else unhandled 404/409 → bug.
+			// Every HTTP status: an override wins, else generic, else an unhandled 404 or 409 is a bug.
 			statuses := map[int]bool{404: true, 409: true}
 			for s := range generic {
 				statuses[s] = true

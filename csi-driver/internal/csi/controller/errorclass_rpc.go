@@ -8,10 +8,10 @@ import (
 )
 
 // errorClassifier is a per-RPC control-plane response policy. Any HTTP status in
-// its overrides map is dispositioned RPC-specifically; every other status — and
-// every non-HTTP transport error — falls through to classifyControlPlaneError.
+// its overrides map is dispositioned RPC-specifically. Every other status, and
+// every non-HTTP transport error, falls through to classifyControlPlaneError.
 //
-// In principle any status may be overridden; in practice only the
+// In principle any status may be overridden. In practice, only the
 // operation-specific ones (404, 409) are, because those are the statuses whose
 // CSI meaning depends on the operation. Each RPC has a preconfigured instance
 // below, so an operation's full response→disposition table lives in one
@@ -55,11 +55,11 @@ var _ interface {
 } = classifiedError{}
 
 // IsIdempotent reports that the handler must resolve a conflict by looking up the
-// existing object (e.g. a 409 on create) before returning.
+// existing object (e.g., a 409 on create) before returning.
 func (c classifiedError) IsIdempotent() bool { return c.class.Idempotent }
 
 // IsSuccess reports that the error is a no-op for this RPC and it should return
-// success (e.g. a 404 on delete).
+// success (e.g., a 404 on delete).
 func (c classifiedError) IsSuccess() bool { return c.class.Success }
 
 // Retryable reports whether retrying the operation can help.
@@ -118,12 +118,12 @@ var (
 	// or the target being expanded/inspected) does not exist → NotFound.
 	sourceNotFound = controlPlaneErrorClass{Code: codes.NotFound}
 	// resolveConflict: a 409 must be resolved by looking up the existing object
-	// (same source/params → return it as success; otherwise AlreadyExists).
+	// (same source and params → return it as success, otherwise AlreadyExists).
 	resolveConflict = controlPlaneErrorClass{Idempotent: true}
 )
 
 // Preconfigured per-RPC classifiers. Every RPC that talks to the control plane
-// has one; generic statuses (5xx, timeout, 429, 4xx…) come from the shared
+// has one. Generic statuses (5xx, timeout, 429, 4xx…) come from the shared
 // classifier, and only the operation-specific statuses are overridden here.
 var (
 	CreateVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
@@ -151,7 +151,7 @@ var (
 		http.StatusNotFound: sourceNotFound,
 	}}
 
-	// ListSnapshotsErrorClassifier has no operation-specific statuses — every
+	// ListSnapshotsErrorClassifier has no operation-specific statuses: every
 	// status is handled generically.
 	ListSnapshotsErrorClassifier = errorClassifier{}
 )

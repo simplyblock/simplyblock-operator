@@ -139,7 +139,7 @@ func TestMissingEndpoints_UnusableControllerStillCountsAsAttached(t *testing.T) 
 }
 
 // An attached endpoint the control plane no longer publishes is neither reported as
-// missing nor allowed to satisfy a published one — it is simply not consulted.
+// missing nor allowed to satisfy a published one. It is simply not consulted.
 func TestMissingEndpoints_UnpublishedEndpointIsIgnored(t *testing.T) {
 	conns := []*controlplane.LvolConnectResp{{IP: "10.0.0.112", Port: 4428}}
 	active := []initiator.Path{

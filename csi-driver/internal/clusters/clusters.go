@@ -1,7 +1,7 @@
 // Package clusters resolves a cluster ID to a connected control-plane client.
 //
-// It owns the driver's cluster secret — which clusters exist, where their
-// control planes are, and what credential reaches them — and is the only place
+// It owns the driver's cluster secret (which clusters exist, where their
+// control planes are, and what credential reaches them) and is the only place
 // that file is read. Three call sites used to parse it independently, each with
 // its own environment-variable default and its own error handling, which is how
 // a cluster could be visible to one of them and not the others.
@@ -100,7 +100,7 @@ func List() ([]string, error) {
 
 // Client creates a control-plane client scoped to a cluster and optionally a
 // pool. poolIDOrName may be a pool UUID (used as-is), a pool name (resolved via
-// the API), or empty (no pool context — only cluster-level operations work).
+// the API), or empty (no pool context, so only cluster-level operations work).
 func Client(ctx context.Context, clusterID, poolIDOrName string) (*controlplane.ClusterClient, error) {
 	clusters, err := Load()
 	if err != nil {

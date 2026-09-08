@@ -6,8 +6,8 @@
 // service because none of it needs a CSI request to answer: whether a device is
 // blank, which options mkfs takes for a filesystem, whether a mount has gone
 // dead, and whether a path is safe to mount over are all questions about the
-// node. The decisions layered on top of those answers — which filesystem a
-// volume is supposed to carry, and what to do when the device disagrees — stay
+// node. The decisions layered on top of those answers, which filesystem a
+// volume is supposed to carry and what to do when the device disagrees, stay
 // in the node service, where the claim and the volume capability are.
 package mount
 
@@ -35,8 +35,8 @@ import (
 // Mounter performs the node-local half of staging: reading a device, mounting
 // it, and managing the path it is mounted on.
 //
-// It holds the two seams the operations need — the mount interface and the
-// command runner — so a test can drive the whole package without a kernel.
+// It holds the two seams the operations need, the mount interface and the
+// command runner, so a test can drive the whole package without a kernel.
 type Mounter struct {
 	mounter k8smount.Interface
 	execer  exec.Interface
@@ -92,7 +92,7 @@ func Supported(fsType string) bool {
 // volume asked for.
 func FlagsFor(fsType string) []string {
 	if fsType == "xfs" {
-		// XFS refuses to mount two filesystems with the same UUID; nouuid lets a
+		// XFS refuses to mount two filesystems with the same UUID, and nouuid lets a
 		// volume and its clone or restored snapshot mount on the same node.
 		return []string{"nouuid"}
 	}
@@ -137,7 +137,7 @@ const (
 // xfsStripeOptions returns mkfs.xfs format options that set the stripe geometry
 // from the StorageClass-provided xfs_su/xfs_sw parameters, falling back to
 // defaultXFSStripeUnit/defaultXFSStripeWidth when unset. Both parameters must
-// be set together; if only one is set, the defaults are used instead.
+// be set together. If only one is set, the defaults are used instead.
 func xfsStripeOptions(volumeContext map[string]string) []string {
 	su := volumeContext["xfs_su"]
 	sw := volumeContext["xfs_sw"]
@@ -162,7 +162,7 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 }
 
 // xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
-// new XFS volumes are created with. xfsprogs ships it; the container image only has
+// new XFS volumes are created with. xfsprogs ships it, and the container image only has
 // to contain a matching xfsprogs. Kept in sync with the assertion in
 // deploy/image/Dockerfile_base.
 const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
@@ -185,9 +185,10 @@ const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
 // is the only option.
 //
 // lts_5.15.conf is chosen over the closer lts_6.x baselines because it sits below the
-// floor of every el9 minor instead of tracking vendor backports -- 9.5 accepts 0xb
+// floor of every el9 minor instead of tracking vendor backports: 9.5 accepts 0xb
 // while 9.8 additionally accepts EXCHRANGE and NREXT64. The options compose with
-// xfsStripeOptions: stripe geometry lives in sb_unit/sb_width/sb_logsunit and is
+// xfsStripeOptions: stripe geometry lives in sb_unit, sb_width, and sb_logsunit,
+// and is
 // independent of the feature words.
 //
 // An unusable config file is a warning rather than an error: mkfs.xfs treats an
@@ -279,7 +280,7 @@ var supportedOnDiskFilesystems = map[string]bool{
 	"xfs":  true,
 }
 
-// stagingMountDead reports whether stagingPath is a dead/corrupted mount — the
+// stagingMountDead reports whether stagingPath is a dead or corrupted mount: the
 // state left behind when total NVMe-oF path loss makes the kernel remove the
 // backing device. Such a mount returns ENOTCONN/ESTALE/EIO on access, which
 // mount.IsCorruptedMnt detects.
@@ -287,14 +288,14 @@ func (m *Mounter) IsDead(stagingPath string) bool {
 	if _, err := m.mounter.IsMountPoint(stagingPath); err != nil {
 		return k8smount.IsCorruptedMnt(err)
 	}
-	// IsMountPoint can still succeed on a mount whose device just vanished;
+	// IsMountPoint can still succeed on a mount whose device just vanished, so
 	// a stat of the path then fails with an EIO-class error.
 	fi, err := os.Stat(stagingPath)
 	if err != nil {
 		return k8smount.IsCorruptedMnt(err)
 	}
 	// Some filesystems (notably ext4) do NOT shut down when their backing block
-	// device is removed on total NVMe-oF path loss — unlike XFS, which goes EIO
+	// device is removed on total NVMe-oF path loss, unlike XFS, which goes EIO
 	// and is caught above. IsMountPoint and stat then both succeed from cache, so
 	// the dead mount looks healthy and never gets restaged. Detect it by checking
 	// that the block device backing the mount still exists: the mountpoint's

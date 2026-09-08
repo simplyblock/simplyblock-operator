@@ -20,7 +20,7 @@ import (
 )
 
 // startCSIController boots the real controller behind a gRPC server (exactly as
-// TestSanity does) and returns a CSI ControllerClient dialed to it — so calls
+// TestSanity does) and returns a CSI ControllerClient dialed to it, so calls
 // go PVC-shim -> gRPC -> Simplyblock CSI driver -> mock control plane.
 func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 	t.Helper()
@@ -41,7 +41,7 @@ func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 	}
 	ns := &stubNodeServer{DefaultNodeServer: csicommon.NewDefaultNodeServer(cd)}
 
-	// Keep the socket path short: unix socket paths are capped (~104 bytes on
+	// Keep the socket path short: Unix socket paths are capped (~104 bytes on
 	// macOS) and t.TempDir() embeds the long test name.
 	sockDir, err := os.MkdirTemp("", "sbcsi")
 	if err != nil {
@@ -62,8 +62,8 @@ func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 }
 
 // fakeProvisioner is a minimal stand-in for the Kubernetes external-provisioner
-// sidecar: it names the volume pvc-<uid>, calls CreateVolume over gRPC, and on
-// success writes a bound PV. On error it leaves the PVC Pending, to be retried —
+// sidecar: it names the volume `pvc-<uid>`, calls CreateVolume over gRPC, and on
+// success writes a bound PV. On error it leaves the PVC Pending, to be retried,
 // exactly the loop that ran 225k times in the incident.
 type fakeProvisioner struct {
 	client   csi.ControllerClient
@@ -83,7 +83,7 @@ func (p *fakeProvisioner) provision(ctx context.Context, pvc *corev1.PersistentV
 		Parameters:    p.scParams,
 	})
 	if err != nil {
-		return err // PVC stays Pending; the provisioner will retry.
+		return err // PVC stays Pending, and the provisioner will retry.
 	}
 
 	pv := &corev1.PersistentVolume{
@@ -115,10 +115,10 @@ func (p *fakeProvisioner) provision(ctx context.Context, pvc *corev1.PersistentV
 // is re-issued.
 //
 // This idempotency depends on the control plane enforcing volume-name uniqueness
-// (409 on a duplicate name): the driver sends a stable name (pvc-<uid>) and
+// (409 on a duplicate name): the driver sends a stable name (`pvc-<uid>`) and
 // relies on the 409 to detect and reconcile its own prior volume. A control
 // plane that does NOT enforce name-uniqueness would instead create a fresh lvol
-// on every retry — one leaked volume per attempt — but that is a control-plane
+// on every retry (one leaked volume per attempt) but that is a control-plane
 // contract violation, not a driver bug, so it is out of scope here.
 func TestProvisioning_RetryIsIdempotentUnderNameUniqueness(t *testing.T) {
 	mock := newMockSBCLI()

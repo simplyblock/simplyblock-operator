@@ -28,7 +28,7 @@ service, in twelve files:
 | `internal/initiator`      | 2     | 843          | Connect, disconnect, device resolution, the nvme-cli primitives, and the device-presence record                                                                   |
 | `internal/csi/common`     | 8     | 751          | The vendored upstream helpers, `VolumeLocks`, and the keys and handle both services share                                                                         |
 | `internal/reconnect`      | 1     | 571          | The monitor loop, ANA path reconciliation, and subsystem reconnect                                                                                                |
-| `internal/mount`          | 1     | 469          | Reading a device, mkfs and mount, and the lifecycle of the path it mounts on                                                                                      |
+| `internal/mount`          | 1     | 469          | Reading a device, mkfs, mount, and the lifecycle of the path it mounts on                                                                                         |
 | `internal/fabric`         | 1     | 460          | Defect-driven NVMe-oF repair                                                                                                                                      |
 | `internal/kubernetes`     | 3     | 284          | The informer-backed PV and PVC reader                                                                                                                             |
 | `internal/driver`         | 1     | 219          | `Run`: the services, the background loops, the operator link, and the gRPC server                                                                                 |
@@ -47,8 +47,8 @@ reaching across everything, which is what an assembly package is for, and
 nothing imports it but `main`.
 
 The name `spdk` is gone with the package. It named a dependency the driver
-stopped talking to directly long before this work started — the SPDK JSON-RPC
-path no longer exists — and what it actually held was the CSI service surface,
+stopped talking to directly long before this work started. The SPDK JSON-RPC
+path no longer exists, and what it actually held was the CSI service surface,
 which is now called that.
 
 What the split has already bought:
@@ -61,11 +61,11 @@ What the split has already bought:
   32%, `controlplane` 32%, `guardian` 29%, `reconnect` 13%. The last of those is
   the honest measure of how little of the repair loop is tested, which the old
   `util` package's 34% hid.
-- **One reader of the cluster secret.** `clusters` owns the file; the three call
+- **One reader of the cluster secret.** `clusters` owns the file, and the three call
   sites that each parsed it independently now share a loader.
 
 - **Tests that name their subject.** `controllerserver_volume_test.go` and its
-  three siblings were four test files against one 1,492-line file — the shape a
+  three siblings were four test files against one 1,492-line file, the shape a
   package wants to be, which is what they became: `volume_test.go`,
   `snapshot_test.go`, `placement_test.go`, and `provisioner_test.go` in
   `csi/controller`, beside the files they test.
@@ -78,7 +78,7 @@ What the split has already bought:
 
 The two large packages divide along the layers that already existed in the code
 but were not expressed in it. Four layers, with imports pointing only downward.
-Everything below layer 4 is built; layer 4 is what steps 4 and 5 still owe:
+Everything below is built, and the whole of it now stands:
 
 ```text
 csi-driver/
@@ -120,7 +120,7 @@ csi-driver/
 `internal/` is importable from anywhere rooted at `csi-driver/`, so `e2e/` keeps
 working without a shim.
 
-### Layer 1 — leaves
+### Layer 1: leaves
 
 **`internal/config`** took `util/config.go` unchanged, minus the RPC timeout
 constant, which was never configuration and moved to `controlplane` where its
@@ -129,8 +129,8 @@ nothing but `config.Parse()` and `driver.Run()`.
 
 **NQN parsing has no package here at all.** The split briefly gave it one:
 `LvolIDFromNQN` and `HostIDFromHostNQN` are called by three layers on strings
-from three sources — the control plane's connect response, the kernel's
-`list-subsys` output, and a Kubernetes node UID — so filing them under any one
+from three sources (the control plane's connect response, the kernel's
+`list-subsys` output, and a Kubernetes node UID) so filing them under any one
 layer would have made the other two import it upward. But atlas-lib's `nqn`
 already exported both, which makes this an adoption rather than a placement
 question, and the local package was deleted the same day it was written. See
@@ -140,12 +140,12 @@ question, and the local package was deleted the same day it was written. See
 `APIClient`, `ClusterClient`, `Connection`, the v2 path builders, `HTTPError`,
 and the response types (`LvolResp`, `SnapshotResp`, `StoragePool`,
 `LvolConnectResp`, `ReplicationRelationship`, `MasterLvol`). It was the one
-package already internally coherent; it was simply filed under the wrong name.
+package already internally coherent. It was simply filed under the wrong name.
 
 It also gained a `queries.go`. Three callers used to reach through
-`client.API.do` at a hand-built path — the connection monitor for a volume's
+`client.API.do` at a hand-built path: the connection monitor for a volume's
 node placement, the initiator for its endpoints, the guardian for cluster status
-— which compiled only while all of them shared one package file. Each is now a
+which compiled only while all of them shared one package file. Each is now a
 method that names the question it asks, so the transport stays unexported. See
 *Overlap with atlas-lib* below: this package should eventually not exist at all.
 
@@ -153,8 +153,8 @@ method that names the question it asks, so the transport stays unexported. See
 `ClusterConfig` and `ClustersInfo` (now `Config` and `Info`),
 `NewsimplyBlockClient` (now `Client`), `resolvePoolUUID`, and the
 `SPDKCSI_SECRET` / `SPDKCSI_API_TOKEN_PATH` resolution. Three call sites parsed
-that file independently — the client factory, `Guardian.loadClusterSecret`, and
-`controllerserver.ListClusters` — each with its own environment default and its
+that file independently (the client factory, `Guardian.loadClusterSecret`, and
+`controllerserver.ListClusters`) each with its own environment default and its
 own error handling. They share `clusters.Load` now, `ListClusters` became
 `clusters.List` and stopped being an exported function on the controller
 service, and there is one place to add caching.
@@ -168,29 +168,29 @@ merge `internal/kubernetes/volumehandle` with `parseVolumeID`, `parseSnapshotID`
 `spdkVolume`, and `spdkSnapshot`, on the grounds that handle parsing is not a
 Kubernetes concern. That was right, and it was answered better: the parsing went
 to `atlas/lvol.ParseHandle`, `volumehandle` was deleted, and `spdkVolume` turned
-out to be `lvol.Handle` with three fields renamed, so it went too — its
+out to be `lvol.Handle` with three fields renamed, so it went too. Its
 `parseVolumeID` adapter is now a four-line `parseVolumeHandle` that wraps the
 atlas call in a CSI-shaped error.
 
 What is left is `spdkSnapshot` and `parseSnapshotID`, and they cannot join it: a
 snapshot id has a legacy two-part form, `{clusterID}:{snapshotID}`, that
 `ParseHandle` rightly rejects. One type and one function, read by one service,
-is not a package; step 5 files them under `internal/csi/controller`.
+is not a package, so step 5 filed them under `internal/csi/controller`.
 
-### Layer 2 — the node-local data path
+### Layer 2: the node-local data path
 
 **`internal/initiator`** took the connect and disconnect half of the old
 `initiator.go`: the interface (now `Initiator`), `initiatorNVMf`, the
 constructor (now `New`), the `/dev/disk/by-id` glob and match helpers, and the
 `nvme-cli` wrappers. The types and primitives the monitor also needs are
-exported — `Path`, `Subsystem`, `SubsystemResponse`, `DeviceInfo`,
-`NVMeDevices`, `SubsystemsForDevice`, `ConnectViaNVMe`, `ParseAddress` — rather
+exported (`Path`, `Subsystem`, `SubsystemResponse`, `DeviceInfo`,
+`NVMeDevices`, `SubsystemsForDevice`, `ConnectViaNVMe`, and `ParseAddress`) rather
 than copied, which is the whole reason `reconnect` sits above it rather than
 beside it.
 
 The device-presence record moved with them, into `presence.go`, behind
 `MarkDevicePresent`, `ForgetDevice`, and `PruneMissingDevices`. It was three
-package-level maps and a mutex that both halves wrote to directly; that only
+package-level maps and a mutex that both halves wrote to directly, and that only
 worked while they shared a package. It is also the one place that can tell a
 volume lost every path, since the kernel removes the device and reports nothing.
 
@@ -204,14 +204,14 @@ coming back to. Its coverage now reads separately, at 13%.
 
 **`internal/fabric`** took `nvmerepair.go`. One coupling had to be broken first:
 `repairFabric` was a method on `initiatorNVMf` and `healMonitoredVolume` was
-called from the monitor loop. Both are functions now — `RepairAttach` and
-`HealMonitoredVolume` — taking the NQN, the volume ID, and the connections:
+called from the monitor loop. Both are functions now, `RepairAttach` and
+`HealMonitoredVolume`, taking the NQN, the volume ID, and the connections:
 exactly what
 they already used, so `fabric` depends on nothing above it and both callers
 depend on `fabric`.
 
 **`internal/mount`** took the filesystem half of `nodeserver.go`, 469 lines of
-it: the blkid probe, mkfs and mount, filesystem resize, the XFS stripe and
+it: the blkid probe, mkfs, mount, filesystem resize, the XFS stripe and
 feature option builders, the supported-filesystem set, the `nouuid` rule, the
 ext4 reserved-block adjustment, dead-mount detection, force unmount, and the
 whole lifecycle of the directory or file a volume is mounted on. `nodeserver.go`
@@ -220,18 +220,18 @@ went from 1,497 lines to 1,110.
 The seam is what needs a CSI request to answer. Nothing in `mount` does: whether
 a device reads blank, which options mkfs takes for a filesystem, whether a mount
 has gone dead, and whether a path is safe to mount over are all questions about
-the node. It holds the two injectable seams those need — a mount interface and a
-command runner — so its tests script commands and never touch a kernel.
+the node. It holds the two injectable seams those need, a mount interface and a
+command runner, so its tests script commands and never touch a kernel.
 
 `stageVolume` stays in the node service, because it is the *decision* rather
 than the operation: which filesystem the volume is supposed to carry, and what
 to do when the device disagrees. So do `fsTypeOrDefault`, `stagedFsType`, and
-`stagingMountFlags`, which read a `csi.VolumeCapability`; the last of them calls
+`stagingMountFlags`, which read a `csi.VolumeCapability`. The last of them calls
 `mount.FlagsFor` for the one rule that is the filesystem's rather than the
 volume's.
 
 The extraction also removed the node service's `execer` field. It existed to let
-a test script the probe and observe which commands staging ran; that is now the
+a test script the probe and observe which commands staging ran. That is now the
 mounter's seam, and the node service holds only the mounter.
 
 The filesystem *annotation guard* (`persistentVolumeClaimForVolume`,
@@ -239,7 +239,7 @@ The filesystem *annotation guard* (`persistentVolumeClaimForVolume`,
 it reads and patches PVCs, which is Kubernetes-shaped policy layered on top of
 the mount primitives, not a mount primitive itself.
 
-### Layer 3 — Kubernetes-shaped daemons
+### Layer 3: Kubernetes-shaped daemons
 
 **`internal/guardian`** took `guardian.go` whole. It already was a package in
 everything but name: 1,325 lines, one type, its own persisted state file, its
@@ -251,7 +251,7 @@ now carries.
 **`internal/csilink`** is unchanged, and keeps the name it shares with
 `operator/internal/csilink`.
 
-### Layer 4 — the CSI surface
+### Layer 4: the CSI surface
 
 **`internal/csi/common`** is `internal/csi-common`, renamed so the directory and the
 package name agree (`csi-common` on disk, `csicommon` in Go, today).
@@ -272,7 +272,7 @@ group and concern, which the tests already anticipate:
 | `expand.go`     | `ControllerExpandVolume`                                                                            | 1084–1125          |
 | `inspect.go`    | `ValidateVolumeCapabilities`, `ControllerGetVolume`                                                 | 590–638, 1277–1329 |
 | `pvc.go`        | `fetchPVCAnnotations`, `removePVCAnnotations`, `pvcAnnotation`                                      | 1487–1545          |
-| `errorclass.go` | `errorclass.go` and `errorclass_rpc.go`, moved as-is                                                | —                  |
+| `errorclass.go` | `errorclass.go` and `errorclass_rpc.go`, moved as-is                                                | :                  |
 
 `placement.go` is worth calling out: `resolveClusterSelection` plus the topology
 helpers are ~250 lines of pure functions over `csi.Topology` with no I/O at all,
@@ -290,7 +290,7 @@ taken the filesystem work:
 | `expand.go`   | `NodeExpandVolume`                                                                                              | 548–610                       |
 | `stats.go`    | `NodeGetVolumeStats`, `redirectToActiveVolume`                                                                  | 183–307                       |
 | `fsguard.go`  | the PVC filesystem annotation guard                                                                             | 967–1090                      |
-| `context.go`  | the staged volume-context stash (from `util.go`)                                                                | —                             |
+| `context.go`  | the staged volume-context stash (from `util.go`)                                                                | :                             |
 
 The node service constructor currently starts the guardian and the monitor loop
 as a side effect of `newNodeServer`. Those two goroutines should be started by
@@ -305,14 +305,14 @@ layers, which is exactly what an assembly package is for.
 
 Nothing survived as a shared utility. The file broke up entirely:
 
-| Symbol                                                                                                                                                | Destination                                                                                                                                                   |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `StashVolumeContext`, `LookupVolumeContext`, `CleanUpVolumeContext`, `stashContext`, `lookupContext`, `cleanUpContext`, `ConvertInterfaceToMap`       | `internal/spdk/volumecontext.go`, unexported — only the node service stages a volume context, and step 5 carries the file into `internal/csi/node`            |
-| `ParseJSONFile`, `FromEnv`                                                                                                                            | `internal/clusters` (its only remaining callers read the secret)                                                                                              |
-| `ToGiB`, `AlignToGiBBytes`, `GIB`, `MIB`                                                                                                              | `internal/spdk/volumecontext.go`, unexported — only sizing in `CreateVolume` and `ControllerExpandVolume`; step 5 carries them into `internal/csi/controller` |
-| `parseDurationFromEnv`                                                                                                                                | `internal/guardian` — its only caller                                                                                                                         |
-| `TryLock`, `ToMiB`                                                                                                                                    | **deleted** — no non-test caller                                                                                                                              |
-| `getNvmeDeviceName`, `detectNvmeDeviceName`, `CheckIfNvmeDeviceExists`, `GetNvmeDeviceName`, `GetVirtioBlkDeviceName`, `GetAvailablePhysicalFunction` | **deleted** in step 1 — SPDK vhost and virtio-blk leftovers from the upstream fork, with no caller outside the file                                           |
+| Symbol                                                                                                                                                | Destination                                                                                                                                                      |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `StashVolumeContext`, `LookupVolumeContext`, `CleanUpVolumeContext`, `stashContext`, `lookupContext`, `cleanUpContext`, `ConvertInterfaceToMap`       | `internal/spdk/volumecontext.go`, unexported: only the node service stages a volume context, and step 5 carries the file into `internal/csi/node`                |
+| `ParseJSONFile`, `FromEnv`                                                                                                                            | `internal/clusters` (its only remaining callers read the secret)                                                                                                 |
+| `ToGiB`, `AlignToGiBBytes`, `GIB`, `MIB`                                                                                                              | `internal/spdk/volumecontext.go`, unexported: only sizing in `CreateVolume` and `ControllerExpandVolume`, and step 5 carried them into `internal/csi/controller` |
+| `parseDurationFromEnv`                                                                                                                                | `internal/guardian`: its only caller                                                                                                                             |
+| `TryLock`, `ToMiB`                                                                                                                                    | **deleted**: no non-test caller                                                                                                                                  |
+| `getNvmeDeviceName`, `detectNvmeDeviceName`, `CheckIfNvmeDeviceExists`, `GetNvmeDeviceName`, `GetVirtioBlkDeviceName`, `GetAvailablePhysicalFunction` | **deleted** in step 1: SPDK vhost and virtio-blk leftovers from the upstream fork, with no caller outside the file                                               |
 
 `VolumeLocks` from `idlocker.go` is used by both CSI services and moved to
 `internal/csi-common` alongside the other shared service scaffolding, which
@@ -335,7 +335,7 @@ one deletes a package rather than moving it:
   `InformerResolver` are the same object: informer-backed PV and PVC reads with
   a direct-read fallback, indexed by CSI volume handle. Two implementations of
   one cache is exactly the drift the house rule exists to prevent.
-- **Volume handle parsing against `atlas/lvol` — done for this component.**
+- **Volume handle parsing against `atlas/lvol`, done for this component.**
   `atlas/lvol.ParseHandle` now decomposes a handle the way the format actually
   works: cluster and volume are canonical UUIDs, the pool segment is carried as
   written because it may be a name, and surrounding whitespace is trimmed.
@@ -344,9 +344,9 @@ one deletes a package rather than moving it:
   for callers that genuinely want three typed UUIDs.
 
   **The operator has not adopted it, and should not yet.** It parses the same
-  string in three more shapes — `splitVolumeHandle`,
+  string in three more shapes (`splitVolumeHandle`,
   `parseSimplyblockVolumeHandle`, and eight bare
-  `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)` call sites — none of which
+  `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)` call sites) none of which
   validate anything beyond segment count and non-emptiness. Adopting
   `ParseHandle` there compiles and is arguably a bug fix, since none of those
   loops filters by CSI driver and a foreign handle carrying two colons is
@@ -355,11 +355,11 @@ one deletes a package rather than moving it:
   volume id as a readable placeholder (`cluster-uuid-policy-add`,
   `lvol-switch`) rather than as a UUID. That is a suite-wide convention, not a
   handful of sloppy fixtures, so tightening the operator's handle validation is
-  a decision with its own blast radius and belongs in its own change — one that
+  a decision with its own blast radius and belongs in its own change, one that
   either reworks those fixtures or concludes the operator should keep parsing
   permissively.
 
-- **NQN handling against `atlas/nqn` — done.** `getLvolIDFromNQN` and
+- **NQN handling against `atlas/nqn`, done.** `getLvolIDFromNQN` and
   `hostIDFromHostNQN` are `nqn.Parse` and `nqn.HostUUID`, and the three
   hand-spelled `nqn.2014-08.io.simplyblock:uuid:<uid>` literals in the node
   service, the reconnect loop, and the DHCHAP end-to-end test are `nqn.Host`.
@@ -405,7 +405,7 @@ without the next:
    parsing briefly became a local leaf and was then adopted from `atlas/nqn`
    instead, which is where it belonged.
 4. **Extract `internal/mount` (done):** 469 lines out of `nodeserver.go`, which
-   drops from 1,497 to 1,110, with the tests that were previously impossible —
+   drops from 1,497 to 1,110, with the tests that were previously impossible:
    the probe cases moved out of the node service, and the mkfs option builders
    gained the first tests they have ever had. `internal/volumeid` was not
    created: `atlas/lvol` absorbed the handle parsing instead, and what remained
@@ -414,8 +414,8 @@ without the next:
    `csi/common`, `csi/identity`, `csi/controller`, `csi/node`, and a top-level
    `driver`, with the two large service files split by the tables above. The
    guardian and monitor goroutine starts left `newNodeServer` for `driver`. The
-   keys the two services share — the claim keys, the cluster parameter, and the
-   four topology keys the node advertises and the controller matches on — moved
+   keys the two services share (the claim keys, the cluster parameter, and the
+   four topology keys the node advertises and the controller matches on) moved
    to `csi/common`, where a contract between two services can only be spelled
    once.
 6. **Adopt the atlas-lib primitives:** one package per change, deleting the
