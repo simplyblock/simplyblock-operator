@@ -22,13 +22,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	"github.com/simplyblock/csi-driver/internal/fabric"
-	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 const (
@@ -588,7 +588,7 @@ func logicalVolumeIdByDevicePath(devicePath string) string {
 		return ""
 	}
 	uuid := strings.TrimSpace(string(data))
-	if !volumehandle.IsUUID(uuid) {
+	if !lvol.IsCanonicalUUID(uuid) {
 		return ""
 	}
 	return uuid

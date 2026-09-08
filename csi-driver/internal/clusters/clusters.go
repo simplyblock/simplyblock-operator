@@ -16,10 +16,10 @@ import (
 	"strings"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/lvol"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
-	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 const (
@@ -182,7 +182,7 @@ func credentialFor(cfg *Config) string {
 // resolvePoolUUID returns poolIDOrName as-is if it is already a UUID, otherwise
 // looks up the pool UUID by name via the API.
 func resolvePoolUUID(ctx context.Context, c *controlplane.ClusterClient, poolIDOrName string) (string, error) {
-	if volumehandle.IsUUID(poolIDOrName) {
+	if lvol.IsCanonicalUUID(poolIDOrName) {
 		return poolIDOrName, nil
 	}
 	return c.GetPoolUUIDByName(ctx, poolIDOrName)

@@ -311,35 +311,30 @@ one deletes a package rather than moving it:
   `InformerResolver` are the same object: informer-backed PV and PVC reads with
   a direct-read fallback, indexed by CSI volume handle. Two implementations of
   one cache is exactly the drift the house rule exists to prevent.
-- **`internal/volumeid` against `atlas/lvol.VolumeHandle`.** Five
-  implementations parse this one string today: `volumehandle.Parse`,
-  `lvol.VolumeHandle.Split`, and — in the operator — `splitVolumeHandle`,
+- **Volume handle parsing against `atlas/lvol` — done for this component.**
+  `atlas/lvol.ParseHandle` now decomposes a handle the way the format actually
+  works: cluster and volume are canonical UUIDs, the pool segment is carried as
+  written because it may be a name, and surrounding whitespace is trimmed.
+  `internal/kubernetes/volumehandle` is deleted and its six call sites, `e2e`
+  included, call `lvol.ParseHandle` and `lvol.IsCanonicalUUID`. `Split` remains
+  for callers that genuinely want three typed UUIDs.
+
+  **The operator has not adopted it, and should not yet.** It parses the same
+  string in three more shapes — `splitVolumeHandle`,
   `parseSimplyblockVolumeHandle`, and eight bare
-  `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)` call sites. They already
-  disagree: the last three accept a handle whose cluster is not a UUID, and the
-  first two reject it.
+  `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)` call sites — none of which
+  validate anything beyond segment count and non-emptiness. Adopting
+  `ParseHandle` there compiles and is arguably a bug fix, since none of those
+  loops filters by CSI driver and a foreign handle carrying two colons is
+  currently mistaken for a simplyblock one. But it fails roughly seventeen of
+  the operator's unit tests, because 35 of its test fixtures spell a cluster or
+  volume id as a readable placeholder (`cluster-uuid-policy-add`,
+  `lvol-switch`) rather than as a UUID. That is a suite-wide convention, not a
+  handful of sloppy fixtures, so tightening the operator's handle validation is
+  a decision with its own blast radius and belongs in its own change — one that
+  either reworks those fixtures or concludes the operator should keep parsing
+  permissively.
 
-  **`Split` cannot simply be adopted.** It requires all three segments to be
-  UUIDs, and the pool segment is not always one. Until `75c43c57` (#357,
-  2026-05-19, the v2 API migration) the controller service built handles as
-  `fmt.Sprintf("%s:%s:%s", clusterID, poolName, volumeID)` — the pool **name**.
-  A PersistentVolume outlives every driver upgrade, so any cluster provisioned
-  before that release still carries name-bearing handles, and this is why
-  `volumehandle.Parse` accepts a non-UUID pool, why the operator's own helper
-  names that return value `poolNameOrID`, and why `clusters.resolvePoolUUID`
-  has a by-name branch on a value that came out of a handle. Adopting `Split`
-  as it stands would make those volumes unparseable: the PV index would stop
-  finding them, and `NodeStageVolume` and `DeleteVolume` would fail on them.
-
-  The step is therefore to give `atlas/lvol` a parse matching the real
-  contract — cluster and volume are UUIDs, the pool is a UUID **or** a name,
-  segments returned as strings — and collapse all five onto it. `Split` keeps
-  its place for callers that genuinely want typed UUIDs. Two smaller
-  differences belong in the same pass: `Split` returns `uuid.UUID`, so
-  `.String()` lowercases a handle that was written in uppercase, where the
-  driver compares the parsed lvol ID against strings read from sysfs and from
-  NQNs; and `Split` gained whitespace trimming to match `Parse`, since a handle
-  is read out of a YAML document a human may have edited.
 - **NQN handling against `atlas/nqn` — done.** `getLvolIDFromNQN` and
   `hostIDFromHostNQN` are `nqn.Parse` and `nqn.HostUUID`, and the three
   hand-spelled `nqn.2014-08.io.simplyblock:uuid:<uid>` literals in the node

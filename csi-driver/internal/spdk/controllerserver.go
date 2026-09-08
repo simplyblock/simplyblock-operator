@@ -28,7 +28,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/kube"
-	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1006,15 +1006,17 @@ func (cs *controllerServer) createVolume(
 }
 
 func parseVolumeID(csiVolumeID string) (*spdkVolume, error) {
-	// csiVolumeID format: {clusterUUID}:{poolUUID}:{lvolUUID}
+	// csiVolumeID format: {clusterUUID}:{poolUUIDOrName}:{lvolUUID}
 	// e.g. 8ffac363-0c46-4714-a71b-f9c0b58a1269:df34f16c-...:8e2dcb9d-...
-	vh, ok := volumehandle.Parse(csiVolumeID)
+	// The pool segment is a name on volumes provisioned before the v2 API
+	// migration, which is why it is carried as written and resolved later.
+	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolumeID))
 	if !ok {
 		return nil, fmt.Errorf("invalid volume handle %q (expected {clusterID}:{poolID}:{lvolID})", csiVolumeID)
 	}
 	return &spdkVolume{
 		clusterID: vh.ClusterID,
-		poolID:    vh.PoolID,
+		poolID:    vh.PoolRef,
 		lvolID:    vh.VolumeID,
 	}, nil
 }

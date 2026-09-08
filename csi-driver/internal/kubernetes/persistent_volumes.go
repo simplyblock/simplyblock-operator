@@ -3,12 +3,11 @@ package kubernetes
 import (
 	"context"
 
+	"github.com/simplyblock/atlas/lvol"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog"
-
-	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 // indexPersistentVolumeByCSIDriver is the IndexFunc that groups
@@ -29,7 +28,7 @@ func indexPersistentVolumeByLvolID(obj interface{}) ([]string, error) {
 	if !ok || pv.Spec.CSI == nil {
 		return nil, nil
 	}
-	vh, ok := volumehandle.Parse(pv.Spec.CSI.VolumeHandle)
+	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	if !ok {
 		return nil, nil
 	}
@@ -135,7 +134,7 @@ func (m *Manager) PersistentVolumeByLogicalVolumeID(
 		if pv.Spec.CSI == nil {
 			continue
 		}
-		if vh, ok := volumehandle.Parse(pv.Spec.CSI.VolumeHandle); ok && vh.VolumeID == lvolID {
+		if vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle)); ok && vh.VolumeID == lvolID {
 			return pv, nil
 		}
 	}

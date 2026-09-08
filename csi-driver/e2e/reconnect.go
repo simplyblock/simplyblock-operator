@@ -9,13 +9,12 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/lvol"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
-
-	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 // The subsystem listing the suite parses, reduced to the fields it needs. The
@@ -193,7 +192,7 @@ func lvolIDForPVC(c kubernetes.Interface, ns, pvcName string) string {
 			return model
 		}
 	}
-	vh, ok := volumehandle.Parse(pv.Spec.CSI.VolumeHandle)
+	vh, ok := lvol.ParseHandle(lvol.VolumeHandle(pv.Spec.CSI.VolumeHandle))
 	gomega.Expect(ok).To(gomega.BeTrue(), "parse volume handle %q", pv.Spec.CSI.VolumeHandle)
 	return vh.VolumeID
 }
