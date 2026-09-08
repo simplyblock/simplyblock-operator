@@ -66,22 +66,10 @@ spec:
             description: ReplicationPolicySpec defines the desired replication schedule
               and retention.
             properties:
-              enableConsistencyGroup:
-                description: |-
-                  EnableConsistencyGroup groups the policy's volumes into ONE crash-consistent
-                  unit: replication snapshots are taken as atomically frozen generations
-                  across every member, and the members fail over together. Members must share
-                  one storage node (the group pins placement on the first attached volume and
-                  rejects members created elsewhere). Decided at creation — the backend
-                  creates the group record together with the policy — hence immutable.
-                type: boolean
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               interval:
                 default: 5m
                 description: Interval is how often a replication snapshot is taken
-                  (e.g., "5m" or "1h").
+                  (e.g. "5m", "1h").
                 type: string
               mode:
                 default: failover
@@ -108,9 +96,6 @@ spec:
             required:
             - pairRef
             type: object
-            x-kubernetes-validations:
-            - message: field enableConsistencyGroup is immutable once set
-              rule: '!has(oldSelf.enableConsistencyGroup) || has(self.enableConsistencyGroup)'
           status:
             description: ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
             properties:
@@ -180,28 +165,6 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
-              groupLastSeq:
-                description: |-
-                  GroupLastSeq is the newest completed consistency-group generation
-                  (each generation is one crash-consistent snapshot set across every
-                  member).
-                format: int64
-                type: integer
-              groupLvsName:
-                description: |-
-                  GroupLvsName is the logical volume store the consistency group is
-                  pinned to, alongside GroupNodeUUID.
-                type: string
-              groupNodeUUID:
-                description: |-
-                  GroupNodeUUID is the storage node the policy's consistency group is
-                  pinned to, set by the group's first attached member: every further
-                  member volume must be created on this node. Empty for a policy without
-                  a consistency group, or before the first member joins.
-                type: string
               ready:
                 description: Ready is true when the backend ReplicationPolicy has
                   been created.
