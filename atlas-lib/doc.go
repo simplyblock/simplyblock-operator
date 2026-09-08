@@ -15,7 +15,13 @@
 //	nvmeof          Connect and disconnect NVMe-oF (TCP) targets.
 //	nqn             Build and parse NVMe Qualified Names.
 //	blockdev        What a Linux block device is, and what it carries: the
-//	                reading a formatting decision rests on.
+//	                reading a formatting decision rests on, plus the scan that
+//	                enumerates a host's devices and decides which are free.
+//	inventory       What there is to deploy on, in one call: CPU topology and
+//	                hyperthreading, the huge pages already allocated, the
+//	                network interfaces with their link speeds, the free disks,
+//	                and which Kubernetes distribution this is. Every reading
+//	                carries its NUMA node, and the join is per node.
 //	lvm             Run Linux LVM commands scoped to a device, and answer
 //	                content-based identity questions about them.
 //	lvol            Logical-volume identity, and lvol -> NVMe device mapping.

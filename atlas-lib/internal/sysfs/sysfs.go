@@ -1,8 +1,12 @@
-// Package sysfs provides low-level access to the Linux NVMe sysfs
-// hierarchy: path-layout constants and (raw and typed) attribute-reading
-// helpers. It is internal so these details stay out of the public `nvme` API
-// and can change freely. Package nvme builds the public
-// Subsystem/Controller/Namespace model on top of it.
+// Package sysfs provides low-level access to the Linux sysfs hierarchy:
+// path-layout constants, (raw and typed) attribute-reading helpers, and the
+// device-tree questions in paths.go. It is internal so these details stay out
+// of the public APIs built over it and can change freely.
+//
+// The layout constants below are NVMe's, because that is the hierarchy the
+// public `nvme` package builds its Subsystem/Controller/Namespace model out of.
+// The readers and the path helpers are not: class/block and class/net are the
+// same shape of tree, and `blockdev` and `inventory` read them with these.
 //
 // Observed layout (NVMe-oF/TCP, multipath, kernel 5.14 / Rocky 9):
 //
