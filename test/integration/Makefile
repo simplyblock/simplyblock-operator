@@ -9,11 +9,21 @@
 SHELL := /bin/bash
 
 # The helpers a run leaves behind, as one definition for every target that looks
-# for them. The second pattern drops the pattern-matchers themselves: pgrep
-# matches any command line that merely contains the string it was given, so a
-# grep, or a monitoring script watching for these, counts as a leftover.
+# for them.
+#
+# Two questions, because either alone is wrong. pgrep -f finds a command line
+# that names a helper, which is also true of a grep or of a monitoring script
+# watching for one. So each candidate is then asked what it actually is, and
+# only a talosctl counts.
+#
+# That question is put to ucomm rather than to comm or the command line, both of
+# which carry however the binary was invoked: talosctl reached through PATH
+# reads as `talosctl`, and the same binary named outright reads as
+# `/opt/homebrew/bin/talosctl`, which Config.TalosctlPath permits. ucomm is the
+# executable's own name either way.
 ORPHANS = pgrep -f "talosctl (loadbalancer-launch|dhcpd-launch|qemu-launch)" 2>/dev/null \
-	  | xargs -I{} sh -c 'ps -o command= -p {} | grep -q "^talosctl" && echo {}' 2>/dev/null
+	  | xargs -I{} sh -c 'case "$$(ps -o ucomm= -p {} 2>/dev/null | tr -d " ")" in \
+	      talosctl) echo {} ;; esac' 2>/dev/null
 GO ?= go
 TIMEOUT ?= 60m
 # -count=1 defeats the test cache. Go caches a passing package result and replays
