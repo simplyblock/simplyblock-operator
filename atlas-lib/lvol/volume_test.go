@@ -31,3 +31,44 @@ func TestVolumeHandleSplit(t *testing.T) {
 		}
 	}
 }
+
+// TestVolumeHandleSplitTrimsSurroundingWhitespace covers handles that arrive
+// with whitespace around them. A CSI volume handle is read back out of a
+// PersistentVolume, and a PV is a YAML document a human may have written or
+// edited, so a trailing newline or an indent-induced space is a property of
+// how the value was transported and not of the identity it names.
+func TestVolumeHandleSplitTrimsSurroundingWhitespace(t *testing.T) {
+	const (
+		cs = "11111111-1111-1111-1111-111111111111"
+		ps = "22222222-2222-2222-2222-222222222222"
+		vs = "33333333-3333-3333-3333-333333333333"
+	)
+	handle := cs + ":" + ps + ":" + vs
+	for _, spelling := range []string{
+		" " + handle,
+		handle + " ",
+		"  " + handle + "  ",
+		handle + "\n",
+		"\t" + handle + "\r\n",
+	} {
+		c, p, v, err := VolumeHandle(spelling).Split()
+		if err != nil {
+			t.Errorf("Split(%q) = %v, want the handle it wraps", spelling, err)
+			continue
+		}
+		if c.String() != cs || p.String() != ps || v.String() != vs {
+			t.Errorf("Split(%q) = %s, %s, %s", spelling, c, p, v)
+		}
+	}
+
+	// Whitespace inside the handle is not transport, it is a malformed value.
+	for _, spelling := range []string{
+		cs + " :" + ps + ":" + vs,
+		cs + ": " + ps + ":" + vs,
+		cs + ":" + ps + ":" + vs[:8] + " " + vs[9:],
+	} {
+		if _, _, _, err := VolumeHandle(spelling).Split(); err == nil {
+			t.Errorf("Split(%q) = nil error, want error", spelling)
+		}
+	}
+}
