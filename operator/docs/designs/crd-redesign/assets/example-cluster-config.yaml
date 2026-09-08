@@ -1,0 +1,142 @@
+# An example ClusterDeploymentConfig, referenced from design-clusterdeploymentconfig.md
+# §3. It lives beside the design rather than in a chart or a test fixture because it is
+# what a discovery run writes and an administrator then reviews, which is a document
+# somebody reads before anything is applied rather than a manifest the product ships.
+#
+# The fields are Appendix A's, which is the type this expands from. Two things a reader
+# copying from here should know: spec.approved is false in everything discovery writes
+# (§5), and the device lists are explicit rather than a rule, because the deviceFilter
+# that produced them is an input to the run and is not carried into the document (§8.1).
+#
+# Two documents: an NVMe deployment, and the same shape for a fleet of logical block
+# devices. They are separate documents because they are separate clusters: a cluster is
+# built out of one class of device, so the two classes never appear in one document
+# (§3.1).
+
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ClusterDeploymentConfig
+metadata:
+  name: production
+  namespace: simplyblock
+
+spec:
+  # Set by a reviewer, never by discovery. The webhook of §5.1 rejects an edit that
+  # changes anything else in the same request.
+  approved: false
+
+  # Detected from the markers a distribution leaves, not asked for (§8.1). One of
+  # Vanilla, OpenShift, Rancher, K3s, or Talos.
+  environment: OpenShift
+  edgeCluster: false
+
+  # Absent spec.clusterRef, so this document creates its cluster. A growth document
+  # names an existing cluster in spec.clusterRef and carries no spec.cluster (§6).
+  cluster:
+    name: production
+    # All three sizing values are the cluster's and are stated once (§3.1). The
+    # subsystem cap is read from here whenever a node's configuration is
+    # generated; the other two are copied into each StorageNode as it is created.
+    maxSubsystemCount: 100
+    vcpuCount: 15
+    minHugePagesSize: 16G
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+    enableFailureDomains: true
+
+  # One entry per organizational grouping of workers, usually a rack. A set carries
+  # no sizing: that is the cluster's, above, and every node this document creates is
+  # stamped with the same values (design-storagenode.md §3.1).
+  nodeSets:
+    - name: rack-a
+      groups:
+        # NVMe devices are named by PCI address, which is the class simplyblock has
+        # always accepted.
+        - name: saturn
+          workers:
+            - worker3
+            - worker4
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          # Every group declares the fault group its workers share, which the
+          # cluster's enableFailureDomains makes mandatory. The label is the rack
+          # these machines are in, which is what this node set is named for.
+          failureDomain: rack-a
+          devices:
+            nvme:
+              - "0000:5e:00.0"
+              - "0000:5f:00.0"
+
+        # Every group of every node set names the same class, which is the class
+        # the cluster is built out of (§3.1). This document is an NVMe deployment,
+        # so no group in it carries a block list.
+        - name: mars
+          workers:
+            - worker5
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          failureDomain: rack-a
+          devices:
+            nvme:
+              - "0000:60:00.0"
+
+    - name: rack-b
+      groups:
+        - name: elon
+          workers:
+            - worker1
+            - worker2
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          failureDomain: rack-b
+          devices:
+            nvme:
+              - "0000:5e:00.0"
+
+---
+# The second class, as its own deployment. Logical block devices are named by path and
+# are the class 26.4 adds, and a document that named them beside the NVMe addresses
+# above would be rejected by the spec's CEL rule rather than deployed as a mixed
+# cluster.
+#
+# Nothing else about the document changes. The cluster template carries no device class
+# of its own: the expansion reads it off these lists and stamps it onto the
+# StorageCluster it creates (§4.2).
+
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ClusterDeploymentConfig
+metadata:
+  name: archive
+  namespace: simplyblock
+
+spec:
+  approved: false
+  environment: Vanilla
+  edgeCluster: false
+
+  cluster:
+    name: archive
+    maxSubsystemCount: 100
+    vcpuCount: 15
+    minHugePagesSize: 16G
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+
+  nodeSets:
+    - name: rack-c
+      groups:
+        - name: ceres
+          workers:
+            - worker6
+            - worker7
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          devices:
+            block:
+              - /dev/sdb
+              - /dev/sdc
