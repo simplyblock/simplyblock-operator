@@ -48,6 +48,10 @@ Two chart-specific rules keep that scope usable:
 - **`Arm` is the company, `ARM` is the architecture.** The upstream Apache header
   names the company, so `Arm Limited`, `Arm Ltd`, and `Arm Holdings` are exempt
   from the terminology rule.
+- **`Simplyblock GmbH` is the legal entity, `simplyblock` is the product.** The
+  registered name is spelled the way it is registered wherever it appears — a
+  copyright line, a licence, a contract — and is exempt from the brand casing
+  rule. Nothing else is: `Simplyblock cluster` is still a finding.
 
 Also skipped: vendored and generated trees (`vendor/`, `.venv/`,
 `site-packages/`, `__pycache__/`, `build/`, `dist/`, `.bin/`), test-run artifacts

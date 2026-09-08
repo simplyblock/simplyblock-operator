@@ -57,6 +57,7 @@ METADATA_LINE_PATTERN = re.compile(r"^\s*(title|description)\s*:")
 IMAGE_LINE_PATTERN = re.compile(r"^\s*!\[.*\]\(.*\)\s*$")
 CAPTION_LINE_PATTERN = re.compile(r"^\s*(Image|Figure|Table)\s+\d+\s*:")
 
+
 # Material grid cards: an HTML wrapper around Markdown card definitions.
 GRID_CARDS_OPEN_PATTERN = re.compile(r"<(?:div|ul)[^>]*class=\"[^\"]*\bgrid\b", re.IGNORECASE)
 GRID_CARDS_CLOSE_PATTERN = re.compile(r"</(?:div|ul)>", re.IGNORECASE)
@@ -104,7 +105,8 @@ MIXED_CASE_REASON = (
     "('Simplyblock Documentation' or 'simplyblock documentation', never a mix)"
 )
 CONTEXT_REASON = (
-    "Expected lowercase 'simplyblock' here (exception rules: heading, card or admonition "
+    "Expected lowercase 'simplyblock' here (exception rules: the legal entity "
+    "'Simplyblock GmbH', heading, card or admonition "
     "title, paragraph start, sentence start after '.', ':', '?', '!', or ';')"
 )
 
@@ -179,6 +181,13 @@ def scan_file(file_path):
             word_match = FOLLOWING_WORD_PATTERN.match(following)
             next_word = word_match.group(1) if word_match else ""
             term = next_word.lower()
+
+            # "Simplyblock GmbH" is the registered legal entity, not the
+            # product. It is spelled the way the company is registered
+            # wherever it appears — a copyright line, a licence, a contract —
+            # and the brand casing rule does not reach it.
+            if found == "Simplyblock" and next_word == "GmbH":
+                continue
 
             if found in ("simplyblock", "Simplyblock") and term in DEPRECATED_TERMS:
                 # Link text may legitimately name the old product, for example
