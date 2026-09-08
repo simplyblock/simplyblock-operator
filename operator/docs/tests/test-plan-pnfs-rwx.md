@@ -222,17 +222,17 @@ omission, see §12.
 
 ## 11. Coverage Summary
 
-| Class                        | Scenarios | Covered | Not covered |
-|------------------------------|-----------|---------|-------------|
-| CSI unit (`U-`)              | 28        | 0       | all         |
-| Operator (`O-`)              | 9         | 0       | all         |
-| Sanity (`SAN-`)              | 2         | 0       | all         |
-| Integration (`I-`)           | 8         | 0       | all         |
-| End-to-end (`E-`)            | 14        | 0       | all         |
-| Failure injection (`F-`)     | 10        | 0       | all         |
-| Security (`SEC-`)            | 6         | 0       | all         |
-| Load and soak (`L-`)         | 6         | 0       | all         |
-| **Total**                    | **83**    | **0**   | **all**     |
+| Class                    | Scenarios | Covered | Not covered |
+|--------------------------|-----------|---------|-------------|
+| CSI unit (`U-`)          | 28        | 0       | all         |
+| Operator (`O-`)          | 9         | 0       | all         |
+| Sanity (`SAN-`)          | 2         | 0       | all         |
+| Integration (`I-`)       | 8         | 0       | all         |
+| End-to-end (`E-`)        | 14        | 0       | all         |
+| Failure injection (`F-`) | 10        | 0       | all         |
+| Security (`SEC-`)        | 6         | 0       | all         |
+| Load and soak (`L-`)     | 6         | 0       | all         |
+| **Total**                | **83**    | **0**   | **all**     |
 
 Nothing is implemented yet, by design: the document is a Draft and the feature
 depends on backend work that has not landed (the design's §6.1). The number to

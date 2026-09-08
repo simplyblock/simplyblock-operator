@@ -124,19 +124,19 @@ File: `atlas-lib/volstack/artifact_test.go` (new)
 
 File: `atlas-lib/volstack/record_test.go` (new)
 
-| #    | Scenario                                                                                                                                                                                                                  | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                                                                                                            | Positive | —    |
-| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                                                                                                              | Positive | —    |
-| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                                                                                                     | Positive | —    |
-| U-51 | The record is removed only after the last `Release` succeeds                                                                                                                                                              | Positive | —    |
-| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                                                                                                        | Negative | —    |
-| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                                                                                                      | Negative | —    |
-| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                                                                                                   | Negative | —    |
-| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one                                                                                | Boundary | —    |
-| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                                                                                                | Positive | —    |
-| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                                                                                                             | Positive | —    |
-| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                                                                                                           | Boundary | —    |
+| #    | Scenario                                                                                                                                   | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                             | Positive | —    |
+| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                               | Positive | —    |
+| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                      | Positive | —    |
+| U-51 | The record is removed only after the last `Release` succeeds                                                                               | Positive | —    |
+| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                         | Negative | —    |
+| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                       | Negative | —    |
+| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                    | Negative | —    |
+| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one | Boundary | —    |
+| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                 | Positive | —    |
+| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                              | Positive | —    |
+| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                            | Boundary | —    |
 
 ### LVM Naming and Primitives (design §5.3, §5.4)
 

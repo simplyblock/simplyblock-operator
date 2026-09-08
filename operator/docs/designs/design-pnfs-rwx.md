@@ -710,7 +710,7 @@ Changes in `pkg/spdk/controllerserver.go`, `pkg/util/nvmf.go`, `pkg/util/jsonrpc
 | `pnfs` / `access_protocol: nfs`                                                                             | Opt into the pNFS path                                  | off     |
 | `mds_selector`                                                                                              | Optional label/affinity to constrain MDS host selection | none    |
 | `nfs_mount_options`                                                                                         | Extra NFS mount options appended to `v4.1`              | none    |
-| (reuse) `pool_name`, `cluster_id`/`zone_cluster_map`/`region_cluster_map`, QoS, `compression`, `encryption` | as today | — |
+| (reuse) `pool_name`, `cluster_id`/`zone_cluster_map`/`region_cluster_map`, QoS, `compression`, `encryption` | as today                                                | —       |
 
 Parsed alongside the existing keys in `prepareCreateVolumeReq` (`controllerserver.go`).
 
@@ -1173,15 +1173,15 @@ where they belong rather than left open: the export registry is a CRD (§7.1), t
 control channel is csi-link (§6.4), the mount address is a Service ClusterIP
 (§13.3), and the volume handle keeps the synthetic `nfs:` form (§11).
 
-| #  | Question                                                                                                                                                                                                                        | Owner               |
-|----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
-| Q1 | **`fsid` allocation:** which component allocates collision-free `fsid`s per MDS host, and which one owns the pseudo-root (`fsid=0`)? Per-host uniqueness is structural here, because one host serves many exports (§8.4).       | Operator            |
-| Q2 | **NFSv4.1 server identity:** can `server_owner` and `server_scope` be made to match across MDS hosts, so failover is a reconnect rather than full state recovery? If not, what does state recovery cost an application (§13.3)? | Backend team, spike |
-| Q3 | **Service ClusterIP from a kernel mount:** does a sunrpc mount reach a ClusterIP on every supported CNI dataplane, specifically under eBPF kube-proxy replacement (§13.3)?                                                      | Spike               |
-| Q4 | **Debian and Ubuntu:** `/dev/disk/by-id` naming and the `nfs-common` difference, and therefore whether the distro matrix can include them (§5.3).                                                                               | Spike               |
-| Q5 | **Tenancy model:** `no_root_squash` lets a container root write as root on the shared filesystem. What squash and `fsGroup` model applies, and is Kerberos in scope for GA (§15)?                                               | Product             |
-| Q6 | **MDS health probe:** is `StorageNode.status` plus a `/snode/info` field enough to detect a dead `nfsd`, or does the export need its own probe over csi-link (§13.5)?                                                           | Operator            |
-| Q7 | **Guardian interaction:** does the existing `MonitorConnection` and Guardian machinery extend to an NFS mount, or does a pNFS mount need its own monitor (§10.4)?                                                               | CSI driver          |
+| #   | Question                                                                                                                                                                                                                        | Owner               |
+|-----|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| Q1  | **`fsid` allocation:** which component allocates collision-free `fsid`s per MDS host, and which one owns the pseudo-root (`fsid=0`)? Per-host uniqueness is structural here, because one host serves many exports (§8.4).       | Operator            |
+| Q2  | **NFSv4.1 server identity:** can `server_owner` and `server_scope` be made to match across MDS hosts, so failover is a reconnect rather than full state recovery? If not, what does state recovery cost an application (§13.3)? | Backend team, spike |
+| Q3  | **Service ClusterIP from a kernel mount:** does a sunrpc mount reach a ClusterIP on every supported CNI dataplane, specifically under eBPF kube-proxy replacement (§13.3)?                                                      | Spike               |
+| Q4  | **Debian and Ubuntu:** `/dev/disk/by-id` naming and the `nfs-common` difference, and therefore whether the distro matrix can include them (§5.3).                                                                               | Spike               |
+| Q5  | **Tenancy model:** `no_root_squash` lets a container root write as root on the shared filesystem. What squash and `fsGroup` model applies, and is Kerberos in scope for GA (§15)?                                               | Product             |
+| Q6  | **MDS health probe:** is `StorageNode.status` plus a `/snode/info` field enough to detect a dead `nfsd`, or does the export need its own probe over csi-link (§13.5)?                                                           | Operator            |
+| Q7  | **Guardian interaction:** does the existing `MonitorConnection` and Guardian machinery extend to an NFS mount, or does a pNFS mount need its own monitor (§10.4)?                                                               | CSI driver          |
 
 ---
 
