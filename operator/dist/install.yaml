@@ -3847,6 +3847,9 @@ spec:
               rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
             - message: field storageClassParameters is immutable once set
               rule: '!has(oldSelf.storageClassParameters) || has(self.storageClassParameters)'
+            - message: dhchap requires a non-empty allowedNodes
+              rule: '!has(self.dhchap) || !self.dhchap || (has(self.allowedNodes)
+                && size(self.allowedNodes) > 0)'
           status:
             description: status defines the observed state of StoragePool
             properties:
