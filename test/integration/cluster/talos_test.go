@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -75,5 +76,36 @@ func TestSurvivorMessageSaysWhatToDo(t *testing.T) {
 func TestSurvivorMessageIsEmptyWhenNothingSurvived(t *testing.T) {
 	if msg := survivorMessage("sbi-4899", nil); msg != "" {
 		t.Errorf("a clean teardown reported: %s", msg)
+	}
+}
+
+// TestWithTeardownCarriesBothFailures. A create that fails tears itself down,
+// and the teardown can fail in its own way: talosctl cannot destroy a cluster
+// that died before writing state.yaml, so the processes it started stay behind
+// and only root can end them. Reporting the create's failure alone loses that,
+// and the host is then unable to create another cluster for reasons the next
+// run reports as a port conflict.
+func TestWithTeardownCarriesBothFailures(t *testing.T) {
+	create := errors.New("create cluster sbi-1: exit status 1")
+	teardown := errors.New("cluster sbi-1 was not torn down: sudo kill -9 4914")
+
+	err := withTeardown(create, teardown)
+
+	for _, want := range []string{"exit status 1", "was not torn down", "4914"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not carry %q:\n%v", want, err)
+		}
+	}
+	if !errors.Is(err, create) {
+		t.Error("the create failure is no longer matchable, so a caller cannot classify it")
+	}
+}
+
+// TestWithTeardownIsTheCreateFailureAlone when the teardown worked, which is
+// the ordinary case and must stay unchanged.
+func TestWithTeardownIsTheCreateFailureAlone(t *testing.T) {
+	create := errors.New("create cluster sbi-1: exit status 1")
+	if err := withTeardown(create, nil); err.Error() != create.Error() {
+		t.Errorf("a clean teardown changed the error: %v", err)
 	}
 }

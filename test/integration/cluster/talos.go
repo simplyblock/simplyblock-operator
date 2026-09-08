@@ -243,36 +243,38 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		// Capture what the cluster looked like before tearing it down: destroy
 		// removes the only evidence of why create failed.
 		diag := c.diagnose(context.WithoutCancel(ctx))
-		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("create cluster %s: %w\n%s%s", cfg.Name, err, out, diag)
+		down := c.Destroy(context.WithoutCancel(ctx))
+		return nil, withTeardown(
+			fmt.Errorf("create cluster %s: %w\n%s%s", cfg.Name, err, out, diag), down)
 	}
 	// cluster create writes no kubeconfig; it is a separate command, and it needs
 	// to be told which node to ask — cluster create leaves endpoints in the
 	// talosconfig but no nodes, so the address has to be read back out.
 	nodes, err := c.controlplaneAddresses(ctx)
 	if err != nil {
-		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, err
+		down := c.Destroy(context.WithoutCancel(ctx))
+		return nil, withTeardown(err, down)
 	}
 	c.addresses = nodes
 
 	if out, err := c.run(ctx, 2*time.Minute, "--talosconfig", c.talosconfig,
 		"kubeconfig", c.kubeconfig, "--nodes", nodes[0], "--force"); err != nil {
-		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("fetch kubeconfig for %s: %w\n%s", cfg.Name, err, out)
+		down := c.Destroy(context.WithoutCancel(ctx))
+		return nil, withTeardown(
+			fmt.Errorf("fetch kubeconfig for %s: %w\n%s", cfg.Name, err, out), down)
 	}
 
 	// talosctl ran as root, so everything it wrote is root-owned; the test and
 	// kubectl run unprivileged and have to be able to read it.
 	if err := c.reclaimWorkDir(ctx); err != nil {
-		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, err
+		down := c.Destroy(context.WithoutCancel(ctx))
+		return nil, withTeardown(err, down)
 	}
 	// The QEMU monitors are root-owned for the same reason, and faulting a host
 	// means connecting to one. See monitor.go.
 	if err := c.reclaimMonitors(ctx); err != nil {
-		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, err
+		down := c.Destroy(context.WithoutCancel(ctx))
+		return nil, withTeardown(err, down)
 	}
 	return c, nil
 }
@@ -311,6 +313,18 @@ func (c *Cluster) Destroy(ctx context.Context) error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// withTeardown is how a create failure reports a teardown that could not
+// finish. Both matter: the create's own error says what went wrong this time,
+// and the teardown's says the host cannot be used for the next attempt until
+// somebody ends what is left. The create failure stays the wrapped one, so a
+// caller can still classify it.
+func withTeardown(create, teardown error) error {
+	if teardown == nil {
+		return create
+	}
+	return fmt.Errorf("%w\n%s", create, teardown.Error())
 }
 
 // survivingPIDs are this cluster's node processes still running. Only the QEMU
