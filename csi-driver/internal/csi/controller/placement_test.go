@@ -5,7 +5,7 @@
 // the intermediate helper — the annotation reaching the control plane is the
 // behavior that decides whether a pinned volume is created in the right place or
 // has to be migrated there afterward.
-package spdk
+package controller
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/simplyblock/atlas/kube"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 const (
@@ -51,7 +52,7 @@ func placementPVC(annotations map[string]string) *corev1.PersistentVolumeClaim {
 func colocationTopology() *csi.TopologyRequirement {
 	return &csi.TopologyRequirement{
 		Preferred: []*csi.Topology{{Segments: map[string]string{
-			topologyKeyStorageNodeUUIDPrefix + sanityClusterID + ".0": placementColocatedNode,
+			csicommon.TopologyKeyStorageNodeUUIDPrefix + sanityClusterID + ".0": placementColocatedNode,
 		}}},
 	}
 }
@@ -87,8 +88,8 @@ func sentHostID(t *testing.T, mock *mockSBCLI, req *csi.CreateVolumeRequest, pvc
 func placementCreateVolumeRequest(name string) *csi.CreateVolumeRequest {
 	req := basicCreateVolumeRequest(name)
 	req.Parameters["pool_name"] = sanityPoolUUID // UUID → no pool lookup
-	req.Parameters[CSIStorageNameKey] = placementPVCName
-	req.Parameters[CSIStorageNamespaceKey] = placementPVCNamespace
+	req.Parameters[csicommon.CSIStorageNameKey] = placementPVCName
+	req.Parameters[csicommon.CSIStorageNamespaceKey] = placementPVCNamespace
 	return req
 }
 
@@ -177,8 +178,8 @@ func TestCreateVolume_FirstPlacementHostID(t *testing.T) {
 
 			req := placementCreateVolumeRequest("pvc-placement")
 			if tc.omitPVCParams {
-				delete(req.Parameters, CSIStorageNameKey)
-				delete(req.Parameters, CSIStorageNamespaceKey)
+				delete(req.Parameters, csicommon.CSIStorageNameKey)
+				delete(req.Parameters, csicommon.CSIStorageNamespaceKey)
 			}
 			req.AccessibilityRequirements = tc.topology
 

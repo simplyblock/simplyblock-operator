@@ -1,4 +1,4 @@
-package spdk
+package controller
 
 import (
 	"context"
@@ -15,7 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
-	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/csi/identity"
 )
 
 // ---------------------------------------------------------------------------
@@ -138,10 +139,10 @@ func TestSanity(t *testing.T) {
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	})
 
-	ids := newIdentityServer(cd)
-	cs, err := newControllerServer(cd, nil)
+	ids := identity.New(cd)
+	cs, err := New(cd, nil)
 	if err != nil {
-		t.Fatalf("newControllerServer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	ns := &stubNodeServer{DefaultNodeServer: csicommon.NewDefaultNodeServer(cd)}
 

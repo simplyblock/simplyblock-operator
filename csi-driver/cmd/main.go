@@ -23,7 +23,7 @@ import (
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/config"
-	"github.com/simplyblock/csi-driver/internal/spdk"
+	"github.com/simplyblock/csi-driver/internal/driver"
 )
 
 const (
@@ -68,7 +68,7 @@ func init() {
 func main() {
 	klog.Infof("Starting SPDK-CSI driver: %v version: %v", conf.DriverName, driverVersion)
 
-	spdk.Run(&conf)
+	driver.Run(&conf)
 
 	os.Exit(0)
 }

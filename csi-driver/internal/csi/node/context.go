@@ -6,60 +6,18 @@
 // unstage, publish, and expand. Capacity is rounded to whole GiB because the
 // control plane provisions in GiB, and a volume reported smaller than it was
 // asked for fails the external-provisioner's own check.
-package spdk
+package node
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/simplyblock/atlas/errs/deferrers"
 )
 
 // file name in which volume context is stashed.
 const volumeContextFileName = "volume-context.json"
-
-const (
-	mib = int64(1024 * 1024)
-	gib = mib * 1024
-)
-
-func ParseJSONFile(fileName string, result interface{}) error {
-	file, err := os.Open(fileName)
-	if err != nil {
-		return err
-	}
-	defer deferrers.Close(file)
-
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(bytes, result)
-}
-
-// toGiB rounds up bytes to gigabytes
-func toGiB(bytes int64) int64 {
-	return (bytes + gib - 1) / gib
-}
-
-// alignToGiBBytes rounds bytes up to the next GiB boundary and returns bytes.
-func alignToGiBBytes(bytes int64) int64 {
-	return toGiB(bytes) * gib
-}
-
-// ${env:-def}
-func FromEnv(env, def string) string {
-	s := os.Getenv(env)
-	if s != "" {
-		return s
-	}
-	return def
-}
 
 // convertInterfaceToMap converts an interface to a map[string]string
 func convertInterfaceToMap(data interface{}) (map[string]string, error) {

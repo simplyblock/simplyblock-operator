@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // blackbox test of util package
-package spdk
+package node
 
 import (
 	"os"

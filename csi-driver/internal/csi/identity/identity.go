@@ -14,27 +14,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package spdk
+package identity
 
 import (
 	"context"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
-	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
-type identityServer struct {
+type Server struct {
 	*csicommon.DefaultIdentityServer
 }
 
-func newIdentityServer(d *csicommon.CSIDriver) *identityServer {
-	return &identityServer{
+func New(d *csicommon.CSIDriver) *Server {
+	return &Server{
 		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d),
 	}
 }
 
-func (ids *identityServer) GetPluginCapabilities(
+func (ids *Server) GetPluginCapabilities(
 	_ context.Context,
 	_ *csi.GetPluginCapabilitiesRequest,
 ) (*csi.GetPluginCapabilitiesResponse, error) {

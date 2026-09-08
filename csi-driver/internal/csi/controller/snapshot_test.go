@@ -1,4 +1,4 @@
-package spdk
+package controller
 
 import (
 	"context"
@@ -16,11 +16,12 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // createSourceVolume provisions a normal volume through the controller and
 // returns its CSI volume ID ("{clusterID}:{poolID}:{lvolID}").
-func createSourceVolume(t *testing.T, cs *controllerServer, name string) string {
+func createSourceVolume(t *testing.T, cs *Server, name string) string {
 	t.Helper()
 	resp, err := cs.CreateVolume(context.Background(), basicCreateVolumeRequest(name))
 	if err != nil {
@@ -108,7 +109,7 @@ func TestCreateSnapshot_ControlPlaneErrorMapping(t *testing.T) {
 		mock := newMockSBCLI()
 		defer mock.Close()
 		src := seedSnapshotSource(mock)
-		parsed, _ := parseVolumeHandle(src)
+		parsed, _ := csicommon.ParseVolumeHandle(src)
 		existingID := uuid.New().String()
 		mock.mu.Lock()
 		mock.snapshots[existingID] = &mockSnapshot{
@@ -357,7 +358,7 @@ func TestCreateVolumeFromSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 
 	// A source snapshot the clone reads from.
 	srcVolID := createSourceVolume(t, cs, "pvc-clone-source")
-	src, err := parseVolumeHandle(srcVolID)
+	src, err := csicommon.ParseVolumeHandle(srcVolID)
 	if err != nil {
 		t.Fatalf("parse source volume ID: %v", err)
 	}

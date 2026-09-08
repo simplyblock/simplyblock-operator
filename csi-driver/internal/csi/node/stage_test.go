@@ -6,7 +6,7 @@
 // there. They live next to nodeserver.go because they exercise unexported
 // staging internals.
 
-package spdk
+package node
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	utilexec "k8s.io/utils/exec"
 	testingexec "k8s.io/utils/exec/testing"
 
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
@@ -103,7 +104,7 @@ func TestStageNeverFormatsWhenPreflightFoundFilesystem(t *testing.T) {
 		{out: ""}, // spare scripting for any further command
 	})
 	fm := k8smount.NewFakeMounter(nil)
-	ns := &nodeServer{mounter: mount.NewWith(fm, fe)}
+	ns := &Server{mounter: mount.NewWith(fm, fe)}
 
 	stagingPath := stagingDir(t)
 	volumeContext := map[string]string{}
@@ -158,7 +159,7 @@ func TestStageRefusesAFilesystemTheClassDidNotAskFor(t *testing.T) {
 		{out: ""},
 	})
 	fm := k8smount.NewFakeMounter(nil)
-	ns := &nodeServer{mounter: mount.NewWith(fm, fe)}
+	ns := &Server{mounter: mount.NewWith(fm, fe)}
 
 	stagingPath := stagingDir(t)
 	volumeContext := map[string]string{}
@@ -203,8 +204,8 @@ func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
 	req := stageRequest(extFS)
 	req.VolumeId = pvcTestHandle
 	volumeContext := map[string]string{
-		CSIStorageNamespaceKey: pvcTestNamespace,
-		CSIStorageNameKey:      pvcTestName,
+		csicommon.CSIStorageNamespaceKey: pvcTestNamespace,
+		csicommon.CSIStorageNameKey:      pvcTestName,
 	}
 
 	err := ns.stageVolume(context.Background(), fakeDevice, stagingDir(t), req, volumeContext)

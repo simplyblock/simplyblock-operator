@@ -3,7 +3,7 @@
 // off it. Both routes to the claim are covered, since a volume provisioned
 // before the provisioner stashed the claim's identity in the volume context can
 // only be resolved through its PersistentVolume.
-package spdk
+package node
 
 import (
 	"context"
@@ -18,8 +18,12 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
+
+// testDriverName is the CSI driver name the fixtures below provision under.
+const testDriverName = "test.csi.simplyblock.io"
 
 const (
 	pvcTestCluster = "8ffac363-0c46-4714-a71b-f9c0b58a1269"
@@ -37,7 +41,7 @@ const (
 // client and a cache manager over the given objects, which is all the claim
 // lookup and the annotation write-back need. The client is returned so a test
 // can assert on the writes that reached it.
-func newPVCTestNodeServer(t *testing.T, objects ...runtime.Object) (*nodeServer, *fake.Clientset) {
+func newPVCTestNodeServer(t *testing.T, objects ...runtime.Object) (*Server, *fake.Clientset) {
 	t.Helper()
 
 	client := fake.NewSimpleClientset(objects...)
@@ -54,7 +58,7 @@ func newPVCTestNodeServer(t *testing.T, objects ...runtime.Object) (*nodeServer,
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	return &nodeServer{kubeClient: client, manager: manager}, client
+	return &Server{kubeClient: client, manager: manager}, client
 }
 
 // annotatedPVC returns the test claim carrying the on-disk-filesystem
@@ -90,8 +94,8 @@ func TestPersistentVolumeClaimForVolume_FromVolumeContext(t *testing.T) {
 	ns, _ := newPVCTestNodeServer(t, annotatedPVC("xfs"))
 
 	pvc, err := ns.persistentVolumeClaimForVolume(context.Background(), pvcTestHandle, map[string]string{
-		CSIStorageNamespaceKey: pvcTestNamespace,
-		CSIStorageNameKey:      pvcTestName,
+		csicommon.CSIStorageNamespaceKey: pvcTestNamespace,
+		csicommon.CSIStorageNameKey:      pvcTestName,
 	})
 	if err != nil {
 		t.Fatalf("persistentVolumeClaimForVolume: unexpected error %v", err)
@@ -121,8 +125,8 @@ func TestPersistentVolumeClaimForVolume_ClaimGone(t *testing.T) {
 	ns, _ := newPVCTestNodeServer(t)
 
 	_, err := ns.persistentVolumeClaimForVolume(context.Background(), pvcTestHandle, map[string]string{
-		CSIStorageNamespaceKey: pvcTestNamespace,
-		CSIStorageNameKey:      pvcTestName,
+		csicommon.CSIStorageNamespaceKey: pvcTestNamespace,
+		csicommon.CSIStorageNameKey:      pvcTestName,
 	})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("persistentVolumeClaimForVolume error = %v, want NotFound", err)
@@ -161,8 +165,8 @@ func TestAnnotatedFilesystem(t *testing.T) {
 			ns, _ := newPVCTestNodeServer(t, annotatedPVC(tc.annotation))
 
 			got, err := ns.annotatedFilesystem(context.Background(), pvcTestHandle, map[string]string{
-				CSIStorageNamespaceKey: pvcTestNamespace,
-				CSIStorageNameKey:      pvcTestName,
+				csicommon.CSIStorageNamespaceKey: pvcTestNamespace,
+				csicommon.CSIStorageNameKey:      pvcTestName,
 			})
 			if tc.wantError {
 				if err == nil {
@@ -245,8 +249,8 @@ func TestRecordOnDiskFilesystem(t *testing.T) {
 			ns, client := newPVCTestNodeServer(t, annotatedPVC(tc.annotation))
 
 			ns.recordOnDiskFilesystem(context.Background(), pvcTestHandle, map[string]string{
-				CSIStorageNamespaceKey: pvcTestNamespace,
-				CSIStorageNameKey:      pvcTestName,
+				csicommon.CSIStorageNamespaceKey: pvcTestNamespace,
+				csicommon.CSIStorageNameKey:      pvcTestName,
 			}, tc.staged)
 
 			got := patchedFilesystems(t, client)

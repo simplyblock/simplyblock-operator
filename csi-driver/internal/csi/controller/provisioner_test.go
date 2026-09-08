@@ -1,4 +1,4 @@
-package spdk
+package controller
 
 import (
 	"context"
@@ -15,7 +15,8 @@ import (
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
-	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/csi/identity"
 )
 
 // startCSIController boots the real controller behind a gRPC server (exactly as
@@ -33,10 +34,10 @@ func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	})
 
-	ids := newIdentityServer(cd)
-	cs, err := newControllerServer(cd, nil)
+	ids := identity.New(cd)
+	cs, err := New(cd, nil)
 	if err != nil {
-		t.Fatalf("newControllerServer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	ns := &stubNodeServer{DefaultNodeServer: csicommon.NewDefaultNodeServer(cd)}
 

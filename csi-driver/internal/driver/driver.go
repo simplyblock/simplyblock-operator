@@ -14,7 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package spdk
+// Package driver assembles the CSI driver: it builds the services this process
+// was asked to serve, starts the background loops a node plugin owns, opens the
+// link to the operator, and serves gRPC.
+//
+// It is the only package that reaches across every layer, which is what an
+// assembly package is for. Nothing imports it but main.
+package driver
 
 import (
 	"context"
@@ -31,16 +37,22 @@ import (
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
 	"github.com/simplyblock/csi-driver/internal/config"
-	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/csi/controller"
+	"github.com/simplyblock/csi-driver/internal/csi/identity"
+	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
+	"github.com/simplyblock/csi-driver/internal/guardian"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
 func Run(conf *config.Config) {
 	var (
 		cd  *csicommon.CSIDriver
-		ids *identityServer
-		cs  *controllerServer
-		ns  *nodeServer
+		ids *identity.Server
+		cs  *controller.Server
+		ns  *node.Server
 
 		controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
 			csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
@@ -66,7 +78,7 @@ func Run(conf *config.Config) {
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
 	}
 
-	ids = newIdentityServer(cd)
+	ids = identity.New(cd)
 
 	// Build one Kubernetes client shared by the node and controller servers
 	// (PV/PVC/topology reads, PVC-annotation patches) instead of each constructing
@@ -83,7 +95,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsNodeServer {
 		var err error
-		ns, err = newNodeServer(cd, kubeClient)
+		ns, err = startNodeServer(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
@@ -91,7 +103,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = newControllerServer(cd, kubeClient)
+		cs, err = controller.New(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
@@ -156,4 +168,52 @@ func startLink(ctx context.Context, conf *config.Config) error {
 
 	_, err := csilink.Start(ctx, cfg)
 	return err
+}
+
+// startNodeServer builds the node service and starts the two background loops
+// that belong to a node plugin rather than to a request: the connection
+// monitor, which reconnects NVMe-oF paths the control plane still publishes,
+// and the guardian, which restarts the pods whose volumes lost every path.
+//
+// They start here rather than inside the service's constructor because
+// constructing a service should not launch a daemon: a test wanting a node
+// service should not get a poll loop against a live control plane with it.
+//
+// One Kubernetes cache manager is shared by both. The monitor reads
+// PersistentVolumes every few seconds and the guardian reads them per pod on
+// every poll, so a single instance means a single PV watch and a single PVC
+// watch. It serves reads from cache once synced and falls back to the API until
+// then, so neither consumer needs a fallback of its own.
+func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*node.Server, error) {
+	manager := sbkube.NewManager(kubeClient)
+	manager.Start(context.Background())
+
+	ns, err := node.New(cd, kubeClient, manager)
+	if err != nil {
+		return nil, err
+	}
+
+	nodeName := cd.GetNodeID()
+	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)
+	if err != nil {
+		// A guardian that will not start costs pod restarts on total path loss,
+		// which is a degradation rather than a reason to refuse to serve.
+		klog.Errorf("failed to start guardian: %v", err)
+	} else {
+		ns.AttachGuardian(podGuardian)
+	}
+
+	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
+
+	return ns, nil
+}
+
+// markBroken is the monitor's hook into the guardian, tolerant of there being
+// no guardian: the monitor still reconnects paths without one, it just has
+// nowhere to report a volume that lost all of them.
+func markBroken(g *guardian.Guardian) func(string) {
+	if g == nil {
+		return nil
+	}
+	return g.MarkBrokenLvol
 }

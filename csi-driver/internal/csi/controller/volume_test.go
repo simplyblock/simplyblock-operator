@@ -1,4 +1,4 @@
-package spdk
+package controller
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
-	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 const testDriverName = "test.csi.simplyblock.io"
@@ -34,9 +34,9 @@ func writeMockSecret(t *testing.T, mock *mockSBCLI) {
 	t.Setenv("SPDKCSI_SECRET", secretFile)
 }
 
-// newTestControllerServer wires a controllerServer to the given mock control
+// newTestControllerServer wires a Server to the given mock control
 // plane, mirroring the setup used by TestSanity.
-func newTestControllerServer(t *testing.T, mock *mockSBCLI) *controllerServer {
+func newTestControllerServer(t *testing.T, mock *mockSBCLI) *Server {
 	t.Helper()
 
 	writeMockSecret(t, mock)
@@ -49,9 +49,9 @@ func newTestControllerServer(t *testing.T, mock *mockSBCLI) *controllerServer {
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	})
 
-	cs, err := newControllerServer(cd, nil)
+	cs, err := New(cd, nil)
 	if err != nil {
-		t.Fatalf("newControllerServer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	return cs
 }
