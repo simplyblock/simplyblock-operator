@@ -45,7 +45,7 @@ const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 
-	dhchapNodeLabelParam = "dhchap_node_label" // read by paramDHCHAPNodeLabel in csi-driver/pkg/spdk/controllerserver.go
+	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/pkg/spdk/controllerserver.go
 )
 
 // StoragePoolReconciler reconciles a StoragePool object
@@ -386,7 +386,7 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		// CreateVolume turns this into the PV's nodeAffinity (dhchapAllowedNodeSegment, #403).
 		// Deliberately no matching AllowedTopologies term: CSINode topology keys are frozen at
 		// csi-node registration, so a pool label written later fails every PVC (#484).
-		params[dhchapNodeLabelParam] = poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
+		params[dhchapNodeSelectorParam] = poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {

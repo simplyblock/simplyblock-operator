@@ -23,7 +23,7 @@ volume's *first* scheduling decision and one for every decision after that:
    labels. Governs which node an unbound PVC's first consuming Pod can land
    on.
 2. **`PersistentVolume.spec.nodeAffinity`** — set once by `CreateVolume`,
-   built directly from the pool's `dhchap_node_label` StorageClass parameter.
+   built directly from the pool's `dhchap_node_selector` StorageClass parameter.
    Governs every later Pod scheduling decision that reuses the already-bound
    PV (recreate, restart, drain).
 
@@ -74,7 +74,7 @@ provisioner: csi.simplyblock.io
 parameters:
   cluster_id: 2403cae5-b9df-4e46-a761-4283d81d8535
   pool_name: pool-a
-  dhchap_node_label: simplyblock.io/pool.simplyblock.cluster-a.pool-a
+  dhchap_node_selector: simplyblock.io/pool.simplyblock.cluster-a.pool-a
 reclaimPolicy: Delete
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
@@ -85,7 +85,7 @@ allowedTopologies:
     - allowed
 ```
 
-`dhchap_node_label` and `allowedTopologies` are only set when
+`dhchap_node_selector` and `allowedTopologies` are only set when
 `spec.dhchap: true` **and** `allowedNodes` is non-empty. Both `parameters`
 and `allowedTopologies` are immutable in the Kubernetes API once created, so
 this object is create-only — editing `AllowedNodes` later only ever changes

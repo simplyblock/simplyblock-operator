@@ -67,10 +67,15 @@ const (
 	paramClusterID          = "cluster_id"
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
-	paramDHCHAPNodeLabel    = "dhchap_node_label" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
-	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
-	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
-	topologyKeyRegionStable = "topology.kubernetes.io/region"
+	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
+	// paramDHCHAPNodeLabelDeprecated is the original name of the parameter above,
+	// still read so that a StorageClass written before the rename keeps working.
+	// StorageClass parameters are immutable, so such a class cannot be migrated in
+	// place — it has to be replaced, hence the alias rather than a hard cutover.
+	paramDHCHAPNodeLabelDeprecated = "dhchap_node_label"
+	topologyKeyZoneStable          = "topology.kubernetes.io/zone"
+	topologyKeyZoneBeta            = "failure-domain.beta.kubernetes.io/zone"
+	topologyKeyRegionStable        = "topology.kubernetes.io/region"
 
 	// topologyKeyStorageNodeUUIDPrefix mirrors the Kubernetes Node label the
 	// simplyblock-operator writes for every storage-node instance co-located on
@@ -99,7 +104,7 @@ const dhchapAllowedNodeLabelValue = "allowed"
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
 // to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
-// ungated volume. Matches the exact key from paramDHCHAPNodeLabel rather than
+// ungated volume. Matches the exact key from paramDHCHAPNodeSelector rather than
 // a shared prefix, since a node can belong to more than one DHCHAP pool and
 // prefix-matching would AND their labels together into one nodeAffinity.
 //
@@ -114,8 +119,14 @@ const dhchapAllowedNodeLabelValue = "allowed"
 // missing from it the first time a node is added to that pool, until the
 // plugin happens to re-register. Building the segment straight from the
 // StorageClass parameter sidesteps that registration-timing gap entirely.
+// paramDHCHAPNodeSelector wins when both names are present, so a class that
+// carries the alias as well is gated on the current parameter.
 func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
-	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeLabel])
+	params := req.GetParameters()
+	key = strings.TrimSpace(params[paramDHCHAPNodeSelector])
+	if key == "" {
+		key = strings.TrimSpace(params[paramDHCHAPNodeLabelDeprecated])
+	}
 	if key == "" {
 		return "", ""
 	}

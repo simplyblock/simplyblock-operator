@@ -651,7 +651,7 @@ const (
 )
 
 // dhchapTestPool is DHCHAP-gated when allowedNodes is non-empty, which is what makes
-// createStorageClassIfNotExists set dhchap_node_label on the class.
+// createStorageClassIfNotExists set dhchap_node_selector on the class.
 func dhchapTestPool(name string, allowedNodes ...string) *simplyblockv1alpha1.StoragePool {
 	return &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
@@ -675,7 +675,7 @@ func plainTestPool(name string) *simplyblockv1alpha1.StoragePool {
 }
 
 // A generated class never carries AllowedTopologies: the term is unsatisfiable until the CSI
-// node plugin re-registers, and the allowed-node restriction rides on dhchap_node_label,
+// node plugin re-registers, and the allowed-node restriction rides on dhchap_node_selector,
 // which is set only for a pool that is actually gating on nodes.
 func TestPoolStorageClassShape(t *testing.T) {
 	for _, tc := range []struct {
@@ -709,8 +709,8 @@ func TestPoolStorageClassShape(t *testing.T) {
 			if tc.wantGated {
 				wantLabel = poolNodeLabelKey(dhchapTestNamespace, dhchapTestClusterName, tc.pool.Name)
 			}
-			if got := sc.Parameters[dhchapNodeLabelParam]; got != wantLabel {
-				t.Errorf("%s = %q, want %q", dhchapNodeLabelParam, got, wantLabel)
+			if got := sc.Parameters[dhchapNodeSelectorParam]; got != wantLabel {
+				t.Errorf("%s = %q, want %q", dhchapNodeSelectorParam, got, wantLabel)
 			}
 		})
 	}

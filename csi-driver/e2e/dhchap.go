@@ -39,11 +39,11 @@ import (
 )
 
 const (
-	// dhchapNodeLabelParam must match paramDHCHAPNodeLabel in
-	// pkg/spdk/controllerserver.go and dhchapNodeLabelParam in the operator's
+	// dhchapNodeSelectorParam must match paramDHCHAPNodeSelector in
+	// pkg/spdk/controllerserver.go and dhchapNodeSelectorParam in the operator's
 	// simplyblockstoragepool_controller.go — unexported in both, so duplicated
 	// here as the literal the two sides agree on.
-	dhchapNodeLabelParam = "dhchap_node_label"
+	dhchapNodeSelectorParam = "dhchap_node_selector"
 	// dhchapAllowedLabelValue is the value the operator's syncNodeLabels writes.
 	dhchapAllowedLabelValue = "allowed"
 )
@@ -137,7 +137,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			ginkgo.By("verify an unauthorized host is genuinely rejected by the backend authorization gate")
 			// The K8s scheduler would normally keep a pod off a node the pool
 			// doesn't allow (via the provisioned PV's nodeAffinity, built from
-			// dhchap_node_label), but that's a separate gate from the one this
+			// dhchap_node_selector), but that's a separate gate from the one this
 			// bug was about. Call /connect
 			// directly with an unregistered host NQN — the same request path the
 			// CSI driver takes — to confirm the backend itself still refuses it
@@ -241,10 +241,10 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 					"matches those terms against the CSINode topology keys frozen at csi-node registration, "+
 					"so a pool label written afterwards makes every PVC fail with "+
 					"\"is not in requisite\" (#484)", scName)
-			gomega.Expect(sc.Parameters).To(gomega.HaveKeyWithValue(dhchapNodeLabelParam, nodeLabelKey),
+			gomega.Expect(sc.Parameters).To(gomega.HaveKeyWithValue(dhchapNodeSelectorParam, nodeLabelKey),
 				"generated DHCHAP StorageClass %s must carry %s — it is the only thing CreateVolume turns "+
 					"into the PV's nodeAffinity (#403), and with allowedTopologies gone it is the sole "+
-					"allowed-node gate", scName, dhchapNodeLabelParam)
+					"allowed-node gate", scName, dhchapNodeSelectorParam)
 
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create PVC")
 			ginkgo.DeferCleanup(func() {
