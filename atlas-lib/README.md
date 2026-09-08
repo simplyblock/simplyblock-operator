@@ -43,8 +43,18 @@ atlas/
 │   ├── device.go           Device: path, kernel name, device numbers, block sizes, size, read-only
 │   ├── content.go          Content, Reading, Reader/Opener seam, Prober.Read
 │   ├── signatures.go       The signature catalog and the offsets each format writes to
-│   ├── local_linux.go      OpenLocal (O_DIRECT) and ResolveDevice, plus a non-Linux stub
+│   ├── scan.go             Scan: enumerate class/block; Disk, Kind, Transport, ScanConfig
+│   ├── usage.go            Usage: who already uses a device (mounts, swap, holders, O_EXCL)
+│   ├── candidate.go        Inspector.Candidates: may this device be handed over, and why not
+│   ├── local_linux.go      OpenLocal (O_DIRECT), ResolveDevice, OpenExclusive, plus a non-Linux stub
 │   └── blkid.go            BlkidProber: the shadow the reading is migrating off
+├── inventory/              What there is to deploy on, gathered in one call
+│   ├── doc.go              The entry point, and why NUMA is the join rather than a detail
+│   ├── inventory.go        Config, Inventory, Collect, AvailableDevices, ByNUMANode
+│   ├── cpu.go              CPU: online/present/affinity counts, sockets, cores, hyperthreading, NUMACPUs
+│   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
+│   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
+│   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
@@ -449,6 +459,82 @@ below is the example:
 store.DeviceResolver     // nvme.DeviceResolver
 store.SubsystemResolver  // nvme.SubsystemResolver
 ```
+
+#### Inspect a worker before it is given to a cluster
+
+What a discovery run asks before it writes a document: which disks are free,
+what the machine has to run a storage node with, and which distribution
+installed the kubelet. One call, because a run wants all of it about one worker
+and every caller would otherwise repeat the same five reads and the same
+partial-failure handling.
+
+```go
+inv, err := inventory.Collect(ctx, inventory.Config{
+    // Omit these and the machine is read without a cluster around it.
+    Kubernetes: inventory.KubernetesSources{
+        Discovery: clientset.Discovery(),
+        Nodes:     nodes.Items,
+    },
+})
+if err != nil {
+    // inv still holds every reading that succeeded: a worker whose CPU tree is
+    // unreadable has disks and NICs worth reporting. Record it and go on.
+}
+
+inv.CPU.OnlineCount             // logical CPUs; PhysicalCores and AffinityCount differ
+inv.CPU.HyperThreading          // the kernel's own answer where it gives one
+inv.HugePages.AllocatedBytes()  // what is already set aside, across every size
+inv.Interfaces                  // .SpeedMbps, .Virtual, .PCIAddress, .NUMANode
+inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
+inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
+
+// Every block device is returned, refused ones included, so that an
+// administrator can be told why the disk they expected is not a candidate.
+for _, c := range inv.Devices {
+    switch {
+    case c.Available():
+        // Free: a whole disk, on a bus this recognized, that nothing is using
+        // and that positively reads as holding nothing.
+    case c.OnlyRejectedFor(blockdev.ReasonPartitioned):
+        // The one refusal an administrator may override, for a stale table.
+    default:
+        // c.Rejections says what was found, in words, per ground.
+    }
+}
+```
+
+**NUMA is the join, not a detail.** A storage node is pinned to a socket and
+needs its SPDK cores, its huge-page memory, its data NIC, and its disks on the
+same side of the interconnect, so every reading carries the memory node it
+belongs to and `ByNUMANode` puts them together:
+
+```go
+for _, node := range inv.ByNUMANode() {
+    node.CPUs         // which online CPUs, over how many physical cores
+    node.HugePages    // one entry per page size, each carrying that size
+    node.Interfaces   // the NICs in this node's slots
+    node.Devices      // the disks in this node's slots
+}
+```
+
+The last entry is `NUMANodeUnknown` when something could not be placed — a
+bridge, loopback, a disk behind a controller whose bus reports no node — and it
+is absent when everything was. Dropping the unplaceable would make the rollup
+read as the whole inventory while missing part of it.
+
+Two refusals are worth knowing about before writing anything that filters
+devices by name. A fabric NVMe namespace is a simplyblock volume this node has
+attached, it is called `nvmeXnY` exactly like a local disk, and the kernel puts
+its multipath head under `devices/virtual` beside a dual-ported local disk's —
+so neither the name nor the sysfs path separates them, and only the controllers'
+`transport` does (`ReasonFabricNamespace`). And a device whose usage or content
+could not be established is refused as `ReasonUnreadable` rather than being read
+as free, which is the same rule the content reading below rests on.
+
+_Today:_ nothing is wired to these yet. They are the node-side half of the
+discovery action in
+[`design-clusterdeploymentconfig.md`](../operator/docs/designs/crd-redesign/design-clusterdeploymentconfig.md)
+§8, and the operator reaching a worker's inspection over the link is not built.
 
 #### Decide whether a device may be formatted
 
@@ -976,7 +1062,7 @@ shapes are meant to replace.
 The operator needs to ask nodes questions, but nothing listens on a node. The CSI
 pods dial the operator instead and hold the connection open; the operator issues
 its RPCs back down it. Each link is a yamux session, so both ends run an ordinary
-gRPC server *and* an ordinary client on it — which end dialled stops mattering
+gRPC server *and* an ordinary client on it — which end dialed stops mattering
 once the session exists.
 
 Operator side, as a leader-election `Runnable`:

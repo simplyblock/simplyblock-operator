@@ -30,3 +30,10 @@ func OpenLocal(context.Context, Device) (Reader, error) { return nil, errNotLinu
 
 // ResolveDevice reports that a local device cannot be inspected on this platform.
 func ResolveDevice(string) (Device, error) { return Device{}, errNotLinux }
+
+// OpenExclusive reports that the kernel cannot be asked here.
+//
+// It is deliberately not ErrDeviceBusy. A probe that could not be made says
+// nothing about the device, and answering "busy" would put a reason on a
+// refusal that this platform never established.
+func OpenExclusive(string) error { return errNotLinux }

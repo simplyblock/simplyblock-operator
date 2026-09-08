@@ -11,6 +11,7 @@ package blockdev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,29 @@ import (
 
 // NewProber returns a Prober reading local devices, bypassing the page cache.
 func NewProber(opts ...Option) *Prober { return NewProberWithOpener(OpenLocal, opts...) }
+
+// OpenExclusive asks the kernel whether it will hand the device at path over,
+// and closes it again immediately.
+//
+// O_EXCL on a block device means something different from O_EXCL on a file: the
+// kernel refuses the open when the device is mounted, when it is part of an
+// assembled device-mapper or software-RAID set, when it is an active swap area,
+// and when anything else holds it exclusively. That makes one open the only
+// check covering every way a device can be in use, including the ways sysfs and
+// the mount table do not describe.
+//
+// The open is read-only, so a device that is handed over is not written to and
+// nothing about it changes.
+func OpenExclusive(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_EXCL|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.EBUSY) {
+			return fmt.Errorf("%w: %s", ErrDeviceBusy, path)
+		}
+		return fmt.Errorf("blockdev: open %s exclusively: %w", path, err)
+	}
+	return unix.Close(fd)
+}
 
 // OpenLocal opens dev for probing on this host, read-only and with O_DIRECT.
 //
