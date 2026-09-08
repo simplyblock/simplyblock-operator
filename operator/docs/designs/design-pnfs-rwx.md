@@ -170,17 +170,17 @@ this document.
 
 The current driver provisions **RWO** (`SINGLE_NODE_WRITER`) volumes only. The relevant code:
 
-| Concern                                                                    | Location                                           |
-|----------------------------------------------------------------------------|----------------------------------------------------|
-| CSI entrypoint / flags                                                     | `cmd/main.go`                                      |
-| Controller RPCs (`CreateVolume`, `DeleteVolume`, snapshots, clone, expand) | `pkg/spdk/controllerserver.go`                     |
-| Node RPCs (`NodeStageVolume`, `NodePublishVolume`, heal/restage)           | `pkg/spdk/nodeserver.go`                           |
-| Identity + capabilities                                                    | `pkg/spdk/identityserver.go`, `pkg/spdk/driver.go` |
-| Control-plane HTTP v2 client (`ClusterAPI` interface, `APIClient`)         | `pkg/util/jsonrpc.go`                              |
-| Client wrapper, credential/TLS loading, `CreateLVolData`                   | `pkg/util/nvmf.go`                                 |
-| NVMe-oF initiator (`Connect`/`Disconnect`/`MonitorConnection`)             | `pkg/util/initiator.go`                            |
-| Guardian (pod restart on total path loss)                                  | `pkg/util/guardian.go`                             |
-| Volume handle parsing `{clusterID}:{poolID}:{lvolID}`                      | `pkg/kubernetes/volumehandle/index.go`             |
+| Concern                                                                    | Location                                                     |
+|----------------------------------------------------------------------------|--------------------------------------------------------------|
+| CSI entrypoint / flags                                                     | `cmd/main.go`                                                |
+| Controller RPCs (`CreateVolume`, `DeleteVolume`, snapshots, clone, expand) | `internal/spdk/controllerserver.go`                          |
+| Node RPCs (`NodeStageVolume`, `NodePublishVolume`, heal/restage)           | `internal/spdk/nodeserver.go`                                |
+| Identity + capabilities                                                    | `internal/spdk/identityserver.go`, `internal/spdk/driver.go` |
+| Control-plane HTTP v2 client (`ClusterAPI` interface, `APIClient`)         | `internal/util/jsonrpc.go`                                   |
+| Client wrapper, credential/TLS loading, `CreateLVolData`                   | `internal/util/nvmf.go`                                      |
+| NVMe-oF initiator (`Connect`/`Disconnect`/`MonitorConnection`)             | `internal/util/initiator.go`                                 |
+| Guardian (pod restart on total path loss)                                  | `internal/util/guardian.go`                                  |
+| Volume handle parsing `{clusterID}:{poolID}:{lvolID}`                      | `internal/kubernetes/volumehandle/index.go`                  |
 
 Today's RWO data path:
 
@@ -193,7 +193,7 @@ Storage-node components already exist and are relevant to the server side of pNF
 - **SNodeAPI:** a privileged, `hostNetwork` DaemonSet (`charts/spdk-csi/latest/spdk-csi/templates/storage-node.yaml`) launched with `python simplyblock_web/node_webapp.py storage_node_k8s`, health endpoint `/snode/check` on the snode API port. It host-mounts `/dev`, `/sys`, `/mnt`, `/lib/modules`, `/var/simplyblock`. It is SPDK/device-management focused. For pNFS it only grows **capability reporting** (kernel/nfs eligibility), because the export assembly itself lives in csi-node (§6.4).
 - **`csi-node`** (`csi-driver/internal/spdk/nodeserver.go`): the CSI node plugin DaemonSet. It already owns NVMe-oF connect/reconnect and mount/format on every node. For pNFS it also runs on MDS and storage hosts and performs the server-side export assembly (XFS, mount, and `exportfs`).
 - **Operator and CRDs** under `helm-charts/charts/simplyblock-operator/crds/`: `StorageCluster`, `StorageNodeSet`, `StorageNode`, `StorageNodeOps`, `StoragePool`, `ControlPlane`, `Task`, `VolumeMigration`, and the replication and backup families. Node state (`online`, `offline`, `in_restart`, and the rest) lives in `internal/utils/constants.go`.
-- Per-node status query: `GET /api/v2/clusters/{clusterID}/storage-nodes/{nodeID}/` (`getStorageNodeStatus`, `pkg/util/jsonrpc.go`).
+- Per-node status query: `GET /api/v2/clusters/{clusterID}/storage-nodes/{nodeID}/` (`getStorageNodeStatus`, `internal/util/jsonrpc.go`).
 
 ---
 
@@ -627,7 +627,7 @@ At Helm install and continuously via the operator:
 
 Two concerns on the MDS host are owned by the **csi-node** service (this repo), one by a co-located daemon (§6.4):
 
-- **NVMe-oF connection of the member namespaces** → **csi-node** (`pkg/spdk/nodeserver.go` + `pkg/util/initiator.go`). The MDS host is an NVMe-oF *initiator* for the members exactly like a client, so it reuses the existing, battle-tested connect/`MonitorConnection`/ANA-reconnect/Guardian machinery rather than re-implementing `nvme connect`. Requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
+- **NVMe-oF connection of the member namespaces** → **csi-node** (`internal/spdk/nodeserver.go` + `internal/util/initiator.go`). The MDS host is an NVMe-oF *initiator* for the members exactly like a client, so it reuses the existing, battle-tested connect/`MonitorConnection`/ANA-reconnect/Guardian machinery rather than re-implementing `nvme connect`. Requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
 - **Export assembly and control** (XFS, mount, and `exportfs`) → **csi-node**, extending its existing `SafeFormatAndMount` and mount lifecycle. It runs `exportfs` against the co-located `nfsd`.
 - **The NFS server:** a co-located long-running daemon set (kernel `nfsd` + `rpc.mountd` + `rpc.statd`), a systemd unit or sidecar (§6.4(b)). `blkmapd` is **not** here, because it is client-side only (§10).
 
@@ -695,11 +695,11 @@ csi-node's `CreateExport` and `DeleteExport` routines are the primitives the fai
 
 ## 9. CSI Controller Design
 
-Changes in `pkg/spdk/controllerserver.go`, `pkg/util/nvmf.go`, `pkg/util/jsonrpc.go`.
+Changes in `internal/spdk/controllerserver.go`, `internal/util/nvmf.go`, `internal/util/jsonrpc.go`.
 
 ### 9.1 Access-mode / capability changes
 
-- Advertise `MULTI_NODE_MULTI_WRITER` in the driver's access modes (`pkg/csi-common/driver.go` via `AddVolumeCapabilityAccessModes`, currently only `SINGLE_NODE_WRITER` in `sanity_test.go`).
+- Advertise `MULTI_NODE_MULTI_WRITER` in the driver's access modes (`internal/csi-common/driver.go` via `AddVolumeCapabilityAccessModes`, currently only `SINGLE_NODE_WRITER` in `sanity_test.go`).
 - In `CreateVolume`, branch on the requested access mode: `MULTI_NODE_MULTI_WRITER` alone, or the StorageClass flag, selects the **pNFS path**. The other `MULTI_NODE_*` modes are not specified by this design and are rejected rather than routed, so a read-only or single-writer multi-node request does not silently get RWX behavior.
 - No group capability is advertised. `GROUP_CONTROLLER_SERVICE` and `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT` belong to the striped design (§9.5), and claiming them here would have the driver advertise a service it does not implement.
 
@@ -761,7 +761,7 @@ them necessary is striping.
 
 ## 10. CSI Node Design (pNFS client)
 
-Changes in `pkg/spdk/nodeserver.go` and initiator reuse in `pkg/util/initiator.go`.
+Changes in `internal/spdk/nodeserver.go` and initiator reuse in `internal/util/initiator.go`.
 
 ### 10.1 `NodeStageVolume` (pNFS path)
 

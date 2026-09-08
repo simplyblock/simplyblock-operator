@@ -352,7 +352,7 @@ func sbctlPoolIDByName(f *framework.Framework, name string) string {
 // connectAsHost calls the control plane's GET .../connect?host_nqn=hostNQN
 // directly from inside a csi-node pod, using that pod's own mounted
 // credentials (the exact request path the CSI driver itself takes — see
-// getLvolConnections in pkg/util/jsonrpc.go). This lets a test probe the
+// getLvolConnections in internal/util/jsonrpc.go). This lets a test probe the
 // backend's authorization decision for an arbitrary host NQN without going
 // through the Go CSI client or the Kubernetes scheduler. Returns the HTTP
 // status code and response body.

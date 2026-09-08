@@ -184,7 +184,7 @@ lifecycle. `DeleteVolume` is idempotent, since an already-absent volume is not
 an error, so a retried `DeleteVolume` RPC needs no pre-check.
 
 _Today:_ `csi-driver/internal/spdk/controllerserver.go` uses the `kube` param helpers
-but still calls the control plane through its own `pkg/util/nvmf.go` client.
+but still calls the control plane through its own `internal/util/nvmf.go` client.
 
 #### Migrate a subsystem to another storage node
 

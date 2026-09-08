@@ -378,7 +378,7 @@ func vdoParams(vc map[string]string) (compression, deduplication, wantsVDO bool)
 }
 ```
 
-**`NodeStageVolume`** (`pkg/spdk/nodeserver.go`): after `initiator.Connect`, if
+**`NodeStageVolume`** (`internal/spdk/nodeserver.go`): after `initiator.Connect`, if
 `wantsVDO`, calls `ResolveClonedVDO` unconditionally, then `CreateOrAttachVDO`.
 The *returned* device path, not the raw NVMe-oF path, is what gets formatted and
 mounted.
