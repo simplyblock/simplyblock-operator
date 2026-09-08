@@ -8,9 +8,15 @@
 // kubectl by whoever is trying to work out why their disk was not a candidate.
 //
 // The name is derived rather than looked up so that a probe pod restarted by
-// its Job writes over its own report instead of leaving two. The labels carry
-// the run and the node as they are, because the name is sanitized and truncated
-// and cannot be parsed back.
+// its Job writes over its own report instead of leaving two.
+//
+// Neither the name nor the labels can be read back as the values that produced
+// them. Both are sanitized, and both are truncated — the name to what an object
+// name may be and a label to the 63 characters a label value may be — so a node
+// called ip-10-0-1-23.eu-central-1.compute.internal survives in neither. The
+// labels are for selecting a run's reports; the node a report is about is the
+// node field inside the report itself, which is the only place it appears
+// exactly as the cluster spells it.
 
 package nodeprobe
 

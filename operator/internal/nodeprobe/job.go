@@ -138,6 +138,15 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 		return nil, fmt.Errorf("a probe Job needs the node to run on")
 	case opts.Image == "":
 		return nil, fmt.Errorf("a probe Job needs an image")
+	case opts.ServiceAccountName == "":
+		// Left empty, the pod runs as the namespace's default service account,
+		// whose permissions are whatever that namespace happens to grant. The
+		// probe is meant to run under an account with two verbs on one kind, so
+		// the account is named rather than defaulted: a silent fallback is how
+		// a probe ends up with more access than it was designed to have.
+		return nil, fmt.Errorf(
+			"a probe Job needs a service account, and defaulting it would run the probe " +
+				"as the namespace's default account with whatever that grants")
 	}
 
 	privileged := true

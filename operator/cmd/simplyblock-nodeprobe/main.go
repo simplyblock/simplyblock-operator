@@ -234,6 +234,20 @@ func parseOptions(args []string, env func(string) string) (options, error) {
 		if opts.run == "" {
 			return options{}, fmt.Errorf("no run to attribute the report to: pass --run")
 		}
+		// A report going into the cluster is one a discovery run will act on,
+		// and this is the flag whose absence makes such a report wrong rather
+		// than incomplete: unset, the disk reading consults this process's own
+		// mount table, which in a pod lists none of the host's mounts and so
+		// reports the disk carrying the host's root filesystem as free. There
+		// is no safe default to pick here, because only the caller knows where
+		// it mounted the host's /proc, so the run is refused instead.
+		if opts.roots.MountinfoPath == "" {
+			return options{}, fmt.Errorf(
+				"no mount table to read: pass --mountinfo, which in a pod is the host's at %s. "+
+					"Without it this process reads its own mount namespace, which lists none of "+
+					"the host's mounts, and every mounted host disk would be reported free",
+				nodeprobe.HostMountinfoPath)
+		}
 	}
 	if opts.timeout <= 0 {
 		return options{}, fmt.Errorf("--timeout is %s, and a collection needs a positive one", opts.timeout)

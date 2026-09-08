@@ -22,8 +22,9 @@ import (
 
 // testNode and testRun are the worker and the run every case below is about.
 const (
-	testNode = "worker-3"
-	testRun  = "oops-20260908"
+	testNode    = "worker-3"
+	testRun     = "oops-20260908"
+	testAccount = "simplyblock-nodeprobe"
 )
 
 // probeJob builds the Job a discovery run would create for one worker.
@@ -34,7 +35,7 @@ func probeJob(t *testing.T) *batchv1.Job {
 		Run:                testRun,
 		Node:               testNode,
 		Image:              "quay.io/simplyblock-io/simplyblock-operator:26.4.0",
-		ServiceAccountName: "simplyblock-nodeprobe",
+		ServiceAccountName: testAccount,
 	})
 	if err != nil {
 		t.Fatalf("build the probe Job: %v", err)
@@ -152,6 +153,10 @@ func TestJobLandsOnTheNodeItIsNamedFor(t *testing.T) {
 		t.Error("the pod does not use the host's network, so /sys/class/net would " +
 			"report the pod's interfaces rather than the worker's")
 	}
+	if spec.ServiceAccountName != testAccount {
+		t.Errorf("the pod runs as %q, want %q: an empty name is the namespace's "+
+			"default account and whatever it grants", spec.ServiceAccountName, testAccount)
+	}
 }
 
 func TestJobPassesTheNodeAndNamespaceOutOfThePodsOwnSpec(t *testing.T) {
@@ -194,7 +199,7 @@ func TestJobPassesAnOwnerSoTheReportIsCollectedWithTheRun(t *testing.T) {
 
 	job, err := Job(JobOptions{
 		Namespace: "simplyblock", Run: testRun, Node: testNode,
-		Image: "operator:26.4.0", Owner: owner,
+		Image: "operator:26.4.0", Owner: owner, ServiceAccountName: testAccount,
 	})
 	if err != nil {
 		t.Fatalf("build the probe Job: %v", err)
@@ -256,6 +261,7 @@ func TestJobHonorsTheOverridesItWasGiven(t *testing.T) {
 
 	job, err := Job(JobOptions{
 		Namespace: "simplyblock", Run: "oops-1", Node: testNode, Image: "operator:26.4.0",
+		ServiceAccountName:      testAccount,
 		TTLSecondsAfterFinished: &ttl,
 		BackoffLimit:            &backoff,
 		ActiveDeadlineSeconds:   &deadline,
@@ -291,10 +297,14 @@ func TestJobRefusesWhatItCannotBuild(t *testing.T) {
 		name string
 		opts JobOptions
 	}{
-		{"no namespace", JobOptions{Run: "r", Node: "n", Image: "i"}},
-		{"no run", JobOptions{Namespace: "ns", Node: "n", Image: "i"}},
-		{"no node", JobOptions{Namespace: "ns", Run: "r", Image: "i"}},
-		{"no image", JobOptions{Namespace: "ns", Run: "r", Node: "n"}},
+		{"no namespace", JobOptions{Run: "r", Node: "n", Image: "i", ServiceAccountName: "sa"}},
+		{"no run", JobOptions{Namespace: "ns", Node: "n", Image: "i", ServiceAccountName: "sa"}},
+		{"no node", JobOptions{Namespace: "ns", Run: "r", Image: "i", ServiceAccountName: "sa"}},
+		{"no image", JobOptions{Namespace: "ns", Run: "r", Node: "n", ServiceAccountName: "sa"}},
+		// An empty account is not a default: the pod would run as the
+		// namespace's, with whatever that namespace grants, which is the
+		// opposite of the two-verb Role the probe is designed around.
+		{"no service account", JobOptions{Namespace: "ns", Run: "r", Node: "n", Image: "i"}},
 	} {
 		if _, err := Job(tc.opts); err == nil {
 			t.Errorf("%s: built a Job anyway", tc.name)
