@@ -374,8 +374,21 @@ func (r *OperatorOpsReconciler) write(
 		collected = append(collected, report)
 	}
 
+	// What Kubernetes says about the same machines. It is read again here
+	// rather than carried from Inspecting because it is a description and not a
+	// decision: which workers the run is about was settled there and is not
+	// re-derived, and a kubelet that has since republished its allocatable
+	// memory is reporting something truer than a copy taken minutes ago.
+	kubeNodes, err := r.kubeNodesFor(ctx, ops)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	filter := spec.DeviceFilter
-	planner := discoverypkg.Planner{Class: discoverypkg.ClassOf(filter)}
+	planner := discoverypkg.Planner{
+		Class:     discoverypkg.ClassOf(filter),
+		KubeNodes: kubeNodes,
+	}
 	plan := planner.Plan(collected, filter)
 
 	if len(plan.NodeSets) == 0 {
@@ -461,6 +474,30 @@ func (r *OperatorOpsReconciler) draftFor(
 		notes = append(notes, template.Notes...)
 	}
 	return config, notes
+}
+
+// kubeNodesFor reads what Kubernetes says about the workers this run settled
+// on.
+//
+// A node that has gone since Inspecting is skipped rather than failing the run:
+// its probe report is still what the machine had, and the draft describes a
+// worker somebody will review either way.
+func (r *OperatorOpsReconciler) kubeNodesFor(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.OperatorOps,
+) (map[string]discoverypkg.KubeNode, error) {
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return nil, err
+	}
+
+	wanted := make([]corev1.Node, 0, len(ops.Status.Workers))
+	for _, node := range nodes.Items {
+		if slices.Contains(ops.Status.Workers, node.Name) {
+			wanted = append(wanted, node)
+		}
+	}
+	return discoverypkg.KubeNodesOf(wanted), nil
 }
 
 // reportsFor reads the reports this run's probes have written, keyed by worker.

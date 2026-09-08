@@ -48,6 +48,12 @@ type Worker struct {
 
 	// PlacementReason is what the placement decided and why, for the record.
 	PlacementReason string
+
+	// Kube is what Kubernetes says about the same machine, which is not the
+	// same thing: the kubelet holds memory back for the system, so a worker
+	// with 256 GiB may schedule against 250. Its zero value means the planner
+	// was given no node objects.
+	Kube KubeNode
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without

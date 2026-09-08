@@ -53,6 +53,10 @@ type Report struct {
 	// CPU is the machine's processor inventory.
 	CPU CPU `json:"cpu"`
 
+	// Memory is how much the machine has and how much of it is available,
+	// which the huge-page reading alone does not say.
+	Memory Memory `json:"memory"`
+
 	// HugePages is what is already set aside, one entry per page size.
 	HugePages []HugePagePool `json:"hugePages,omitempty"`
 
@@ -121,6 +125,38 @@ type NUMACPUs struct {
 	Node          int   `json:"node"`
 	OnlineCPUs    []int `json:"onlineCPUs,omitempty"`
 	PhysicalCores int   `json:"physicalCores"`
+}
+
+// Memory is the machine's memory as the kernel reports it, in bytes.
+type Memory struct {
+	// TotalBytes is all usable RAM.
+	TotalBytes uint64 `json:"totalBytes"`
+
+	// FreeBytes is memory nothing holds, and AvailableBytes is what a new
+	// process could actually get: on a busy host the second is far larger,
+	// because most of what is not free is page cache the kernel reclaims on
+	// demand. Size against available.
+	FreeBytes      uint64 `json:"freeBytes"`
+	AvailableBytes uint64 `json:"availableBytes"`
+
+	// HugePagesBytes is memory reserved as huge pages, which is out of the
+	// general pool whether or not the pages are in use.
+	HugePagesBytes uint64 `json:"hugePagesBytes,omitempty"`
+
+	// SwapTotalBytes and SwapFreeBytes describe the swap the host has. A
+	// storage node host with swap in use is already oversubscribed.
+	SwapTotalBytes uint64 `json:"swapTotalBytes,omitempty"`
+	SwapFreeBytes  uint64 `json:"swapFreeBytes,omitempty"`
+
+	// NUMANodes is the same per memory node, ascending.
+	NUMANodes []NUMAMemory `json:"numaNodes,omitempty"`
+}
+
+// NUMAMemory is one memory node's share.
+type NUMAMemory struct {
+	Node       int    `json:"node"`
+	TotalBytes uint64 `json:"totalBytes"`
+	FreeBytes  uint64 `json:"freeBytes"`
 }
 
 // HugePagePool is one page size's allocation.

@@ -170,6 +170,12 @@ type Inventory struct {
 	// each memory node owns.
 	CPU CPU
 
+	// Memory is how much the machine has and how much of it is available,
+	// which huge pages alone do not say: a host may have 12 GiB reserved as
+	// huge pages and 4 GiB of ordinary memory left, and a storage node needs
+	// both.
+	Memory Memory
+
 	// HugePages is what has already been allocated, per size and per NUMA node.
 	HugePages HugePages
 
@@ -246,6 +252,10 @@ type NUMANodeInventory struct {
 	// CPUs is the node's share of the host's processors.
 	CPUs NUMACPUs
 
+	// Memory is the node's own memory, which is what a storage node pinned
+	// here would draw on.
+	Memory NUMAMemory
+
 	// HugePages is the node's share of each huge-page pool, ascending by page
 	// size. The page size is on the entry, so a caller reading one node's
 	// memory does not have to hold the pool it came from.
@@ -308,6 +318,10 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 
 	for _, cpus := range i.CPU.NUMANodes {
 		node(cpus.Node).CPUs = cpus
+	}
+
+	for _, share := range i.Memory.NUMANodes {
+		node(share.Node).Memory = share
 	}
 
 	for _, pool := range i.HugePages.Pools {
@@ -375,6 +389,12 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		errs = append(errs, fmt.Errorf("read the CPU topology: %w", err))
 	}
 	inv.CPU = cpu
+
+	memory, err := ReadMemory(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the memory: %w", err))
+	}
+	inv.Memory = memory
 
 	pages, err := ReadHugePages(cfg)
 	if err != nil {

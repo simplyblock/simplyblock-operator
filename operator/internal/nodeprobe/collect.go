@@ -32,6 +32,7 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		Node:            node,
 		ProbedAt:        metav1.NewTime(at),
 		CPU:             cpuOf(inv.CPU),
+		Memory:          memoryOf(inv.Memory),
 		HugePages:       hugePagesOf(inv.HugePages),
 		Interfaces:      interfacesOf(inv.Interfaces),
 		Devices:         devicesOf(inv.Devices),
@@ -54,6 +55,23 @@ func cpuOf(cpu inventory.CPU) CPU {
 			Node:          node.Node,
 			OnlineCPUs:    node.OnlineCPUs,
 			PhysicalCores: node.PhysicalCores,
+		})
+	}
+	return out
+}
+
+func memoryOf(memory inventory.Memory) Memory {
+	out := Memory{
+		TotalBytes:     memory.TotalBytes,
+		FreeBytes:      memory.FreeBytes,
+		AvailableBytes: memory.AvailableBytes,
+		HugePagesBytes: memory.HugePagesBytes,
+		SwapTotalBytes: memory.SwapTotalBytes,
+		SwapFreeBytes:  memory.SwapFreeBytes,
+	}
+	for _, node := range memory.NUMANodes {
+		out.NUMANodes = append(out.NUMANodes, NUMAMemory{
+			Node: node.Node, TotalBytes: node.TotalBytes, FreeBytes: node.FreeBytes,
 		})
 	}
 	return out
@@ -169,11 +187,12 @@ func sentences(err error) []string {
 func Summary(report Report) string {
 	return fmt.Sprintf(
 		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
-			"%d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
+			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
 		len(report.AvailableDevices()), len(report.Devices),
 		report.CPU.OnlineCPUs, report.CPU.PhysicalCores, report.CPU.HyperThreading,
+		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,
 		report.HugePageBytes()>>20,
 		len(report.Interfaces),
 		len(report.ControllersTakenByUserspace()),

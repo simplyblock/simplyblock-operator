@@ -19,6 +19,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/pci"
 )
 
 // probedAt is a fixed instant, so a report is compared against a value rather
@@ -189,6 +190,49 @@ func TestFromInventoryRendersTheMachinesReadings(t *testing.T) {
 	if len(report.Interfaces) != 1 || report.Interfaces[0].SpeedMbps != 25000 ||
 		report.Interfaces[0].State != string(inventory.LinkUp) {
 		t.Errorf("the interface reading is %+v", report.Interfaces)
+	}
+}
+
+func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
+	// A translation layer's whole job is carrying fields, and its failure mode
+	// is a field nobody wired up: the function still compiles, the tests that
+	// name other fields still pass, and the report goes out with a zero where a
+	// reading should be. That is what happened to the memory reading, which
+	// reached a real worker as nought of nought megabytes available.
+	//
+	// So this asserts that every top-level reading survives a non-zero
+	// inventory, rather than naming the ones somebody remembered.
+	inv := inventory.Inventory{
+		CPU:    inventory.CPU{OnlineCount: 16, PhysicalCores: 8},
+		Memory: inventory.Memory{TotalBytes: 256 << 30, AvailableBytes: 250 << 30},
+		HugePages: inventory.HugePages{Pools: []inventory.HugePagePool{
+			{SizeBytes: 1 << 30, Total: 16, Free: 16},
+		}},
+		Interfaces:      []inventory.Interface{{Name: "eth0", SpeedMbps: 25000}},
+		Devices:         []blockdev.Candidate{oneFreeDisk()},
+		NVMeControllers: []pci.Device{{Address: "0000:5e:00.0", Class: "0x010802", Driver: "nvme"}},
+	}
+
+	report := FromInventory("worker-3", probedAt, inv, nil)
+
+	for name, carried := range map[string]bool{
+		"cpu":             report.CPU.OnlineCPUs != 0,
+		"memory":          report.Memory.TotalBytes != 0,
+		"hugePages":       len(report.HugePages) != 0,
+		"interfaces":      len(report.Interfaces) != 0,
+		"devices":         len(report.Devices) != 0,
+		"nvmeControllers": len(report.NVMeControllers) != 0,
+	} {
+		if !carried {
+			t.Errorf("the %s reading was not carried into the report", name)
+		}
+	}
+
+	// The memory numbers in particular, since they are what a reviewer sizes
+	// against.
+	if report.Memory.AvailableBytes != 250<<30 {
+		t.Errorf("read %d bytes available, want %d",
+			report.Memory.AvailableBytes, uint64(250)<<30)
 	}
 }
 

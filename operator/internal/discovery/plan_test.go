@@ -21,6 +21,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
+// firstWorker is the name uniformFleet gives its first machine, which several
+// cases below attribute a refusal to.
+const firstWorker = "worker-1"
+
 func TestPlanPutsAUniformFleetInOneGroupOfOneNodeSet(t *testing.T) {
 	plan := Planner{}.Plan(uniformFleet(4), nil)
 
@@ -73,9 +77,9 @@ func TestPlanSplitsWorkersWhoseHardwareDiffers(t *testing.T) {
 			byWorker[worker] = group.Devices.NVMe
 		}
 	}
-	if slices.Equal(byWorker["worker-1"], byWorker["worker-4"]) {
+	if slices.Equal(byWorker[firstWorker], byWorker["worker-4"]) {
 		t.Errorf("worker-1 and worker-4 were given the same devices %v despite differing slots",
-			byWorker["worker-1"])
+			byWorker[firstWorker])
 	}
 	if !slices.Contains(byWorker["worker-4"], "0000:c0:00.0") {
 		t.Errorf("worker-4's group names %v, and its own slot is missing", byWorker["worker-4"])
@@ -148,8 +152,8 @@ func TestPlanRecordsWhatItDeclinedAndWhy(t *testing.T) {
 		if refusal.Reason == "" {
 			t.Errorf("%s was declined with no reason", device)
 		}
-		if refusal.Worker != "worker-1" {
-			t.Errorf("%s was attributed to %q", device, refusal.Worker)
+		if refusal.Worker != firstWorker {
+			t.Errorf("%s was attributed to %q, want %q", device, refusal.Worker, firstWorker)
 		}
 	}
 
@@ -179,7 +183,7 @@ func TestPlanRefusesAWorkerWithNothingUsableAndSaysSo(t *testing.T) {
 
 	plan := Planner{}.Plan(fleet, nil)
 
-	if len(plan.Workers) != 1 || plan.Workers[0].Name != "worker-1" {
+	if len(plan.Workers) != 1 || plan.Workers[0].Name != firstWorker {
 		t.Fatalf("the draft holds %d workers: %+v", len(plan.Workers), plan.Workers)
 	}
 	wholeWorker := false

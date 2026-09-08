@@ -46,6 +46,11 @@ type Planner struct {
 
 	// NodeSetBuilder organizes the groups. Nil is SingleNodeSet.
 	NodeSetBuilder NodeSetBuilder
+
+	// KubeNodes is what Kubernetes says about each worker, keyed by name, from
+	// KubeNodesOf. It is optional: a plan without it is built from the probe
+	// reports alone, and the workers carry a zero KubeNode.
+	KubeNodes map[string]KubeNode
 }
 
 // Plan is what a run concluded: the draft to write, and why it looks like that.
@@ -211,6 +216,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 			Devices:         chosen,
 			Class:           class,
 			PlacementReason: why,
+			Kube:            p.KubeNodes[report.Node],
 		})
 	}
 

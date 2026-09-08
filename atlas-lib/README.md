@@ -58,6 +58,7 @@ atlas/
 │   ├── doc.go              The entry point, and why NUMA is the join rather than a detail
 │   ├── inventory.go        Config (roots + MountinfoPath), Inventory, Collect, AvailableDevices, ByNUMANode
 │   ├── cpu.go              CPU: online/present/affinity counts, sockets, cores, hyperthreading, NUMACPUs
+│   ├── memory.go           Memory: total, free, available, huge-page and swap, per NUMA node
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
@@ -598,6 +599,7 @@ if err != nil {
 
 inv.CPU.OnlineCount             // logical CPUs; PhysicalCores and AffinityCount differ
 inv.CPU.HyperThreading          // the kernel's own answer where it gives one
+inv.Memory.AvailableBytes       // what a process could get; not the same as FreeBytes
 inv.HugePages.AllocatedBytes()  // what is already set aside, across every size
 inv.Interfaces                  // .SpeedMbps, .Virtual, .PCIAddress, .NUMANode
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
