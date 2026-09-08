@@ -67,7 +67,7 @@ const (
 	paramClusterID          = "cluster_id"
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
-	paramDHCHAPNodeLabel    = "dhchap_node_label" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
+	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
@@ -99,7 +99,7 @@ const dhchapAllowedNodeLabelValue = "allowed"
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
 // to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
-// ungated volume. Matches the exact key from paramDHCHAPNodeLabel rather than
+// ungated volume. Matches the exact key from paramDHCHAPNodeSelector rather than
 // a shared prefix, since a node can belong to more than one DHCHAP pool and
 // prefix-matching would AND their labels together into one nodeAffinity.
 //
@@ -115,7 +115,7 @@ const dhchapAllowedNodeLabelValue = "allowed"
 // plugin happens to re-register. Building the segment straight from the
 // StorageClass parameter sidesteps that registration-timing gap entirely.
 func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
-	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeLabel])
+	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeSelector])
 	if key == "" {
 		return "", ""
 	}
