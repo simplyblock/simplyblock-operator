@@ -73,6 +73,13 @@ type Config struct {
 	// blockdev.DefaultDevRoot. It decides the paths the disks are opened by.
 	DevRoot string
 
+	// MountinfoPath is the mount table the disk reading consults, defaulting to
+	// this process's own. A collection running in a pod has to point it at the
+	// host's, which is PID 1's: a pod has its own mount namespace, so its own
+	// table lists none of the host's mounts and every mounted host disk would
+	// be reported free. See blockdev.ScanConfig.MountinfoPath.
+	MountinfoPath string
+
 	// Prober reads what each block device carries. A nil Prober is the local
 	// one, reading devices on this host with the page cache bypassed.
 	Prober *blockdev.Prober
@@ -142,9 +149,10 @@ func (c Config) procPath(elem ...string) string {
 func (c Config) inspector() blockdev.Inspector {
 	return blockdev.Inspector{
 		Config: blockdev.ScanConfig{
-			SysfsRoot: c.sysfs(),
-			ProcRoot:  c.proc(),
-			DevRoot:   c.dev(),
+			SysfsRoot:     c.sysfs(),
+			ProcRoot:      c.proc(),
+			DevRoot:       c.dev(),
+			MountinfoPath: c.MountinfoPath,
 		},
 		Prober:    c.Prober,
 		Exclusive: c.Exclusive,

@@ -8,7 +8,10 @@
 
 package blockdev
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // scanned finds one device in a scan by kernel name, failing when it is absent.
 func scanned(t *testing.T, disks []Disk, name string) Disk {
@@ -265,6 +268,79 @@ func TestScanReportsNoneRatherThanFailingWithoutTheClassDirectory(t *testing.T) 
 	}
 	if len(disks) != 0 {
 		t.Errorf("scanned %d devices from a tree with no class/block", len(disks))
+	}
+}
+
+// The next two are regressions from a run against a real K3s worker, where the
+// probe pod reads the host's sysfs at /host/sys. Neither could have shown up
+// against a fixture rooted at a bare temporary directory.
+
+func TestScanIgnoresTheCallersMountPointWhenNamingATransport(t *testing.T) {
+	// The transport is read from the segments of the resolved device path, and
+	// that path begins with wherever the caller mounted sysfs. A probe pod
+	// mounts the host's at /host/sys, which puts a segment called "host" in
+	// front of every device on the machine; it matched the SCSI host directory
+	// pattern, and every device-mapper node, loop device, and network block
+	// device on a real worker came back as SCSI.
+	root := reRooted(t, storageHost(), filepath.Join("host", "sys"))
+
+	disks, err := Scan(ScanConfig{SysfsRoot: root})
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+
+	for _, name := range []string{"dm-0", "loop0"} {
+		if got := scanned(t, disks, name).Transport; got != TransportUnknown {
+			t.Errorf("read the transport of %s as %q under a /host/sys mount, want %q: "+
+				"the mount point is the caller's and says nothing about the bus",
+				name, got, TransportUnknown)
+		}
+	}
+	// The real buses still resolve, so the fix is not to report nothing.
+	for _, tc := range []struct {
+		name string
+		want Transport
+	}{{"nvme0n1", TransportNVMe}, {"sda", TransportSATA}, {"sdb", TransportSAS}, {"vda", TransportVirtio}} {
+		if got := scanned(t, disks, tc.name).Transport; got != tc.want {
+			t.Errorf("read the transport of %s as %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// reRooted writes a fixture under a nested mount point and returns the sysfs
+// root inside it, which is the shape a probe pod sees the host's tree in.
+func reRooted(t *testing.T, h tree, mountPoint string) string {
+	t.Helper()
+	nested := tree{files: map[string]string{}, links: map[string]string{}}
+	for path, content := range h.files {
+		nested.files[filepath.Join(mountPoint, path)] = content
+	}
+	for path, target := range h.links {
+		nested.links[filepath.Join(mountPoint, path)] = target
+	}
+	for _, dir := range h.dirs {
+		nested.dirs = append(nested.dirs, filepath.Join(mountPoint, dir))
+	}
+	return filepath.Join(nested.write(t), mountPoint)
+}
+
+func TestScanClassifiesANetworkBlockDevice(t *testing.T) {
+	// A Rocky worker carries sixteen nbd devices whether or not any is
+	// configured. They are not disks in this machine, and calling them disks
+	// put sixteen entries claiming to be local storage into every report.
+	h := storageHost()
+	const nbd = "devices/virtual/block/nbd0"
+	h.blockAttrs(nbd, "43:0", 0, false, false, false)
+	h.links["class/block/nbd0"] = "../../" + nbd
+
+	disks, err := Scan(ScanConfig{SysfsRoot: h.write(t)})
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+
+	if got := scanned(t, disks, "nbd0").Kind; got != KindNetwork {
+		t.Errorf("classified nbd0 as %q, want %q: a network block device is not a "+
+			"disk in this machine", got, KindNetwork)
 	}
 }
 

@@ -99,7 +99,7 @@ func ReadUsage(cfg ScanConfig, disks []Disk, exclusive ExclusiveOpener) (map[str
 		exclusive = OpenExclusive
 	}
 
-	mounts, err := readMountinfo(cfg.proc())
+	mounts, err := readMountinfo(cfg.mountinfo())
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +165,7 @@ const mountinfoFields = 6
 // numbers, and mounts states only a source string: /dev/mapper/vg0-root,
 // /dev/disk/by-uuid/…, and /dev/dm-0 are one device under three names, and
 // comparing strings would match one of the three.
-func readMountinfo(proc string) (map[devNumber][]string, error) {
-	path := filepath.Join(proc, "self", "mountinfo")
+func readMountinfo(path string) (map[devNumber][]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("blockdev: read %s: %w", path, err)

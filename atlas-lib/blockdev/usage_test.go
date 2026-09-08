@@ -11,6 +11,7 @@ package blockdev
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -191,6 +192,49 @@ func TestReadUsageDoesNotProbeADeviceOfZeroSize(t *testing.T) {
 	}
 	if !probed["/dev/nvme0n1"] {
 		t.Error("did not probe a disk with a size")
+	}
+}
+
+func TestReadUsageReadsTheMountTableItWasPointedAt(t *testing.T) {
+	// A process in a container has its own mount namespace, so its own
+	// mountinfo does not list the host's mounts. A scan running there and
+	// reading self/mountinfo sees an empty table and reports the disk carrying
+	// the root filesystem as free, which is how a mounted disk gets handed to a
+	// storage cluster. The host's table is PID 1's, and the caller has to be
+	// able to say so.
+	h := storageHost()
+	h.files["self/mountinfo"] = "25 1 0:24 / / rw - overlay overlay rw"
+	h.files["1/mountinfo"] = mountedBootDisk
+	h.files["swaps"] = swapOnVirtio
+
+	root := h.write(t)
+	container := ScanConfig{SysfsRoot: root, ProcRoot: root}
+	host := container
+	host.MountinfoPath = filepath.Join(root, "1", "mountinfo")
+
+	disks, err := Scan(container)
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+
+	asContainer, err := ReadUsage(container, disks, free)
+	if err != nil {
+		t.Fatalf("read the usage through the container's own table: %v", err)
+	}
+	if mounts := asContainer["nvme1n1"].Mountpoints; len(mounts) != 0 {
+		t.Errorf("the container's own table lists %v for the boot disk, and the "+
+			"fixture put nothing of the host's in it", mounts)
+	}
+
+	asHost, err := ReadUsage(host, disks, free)
+	if err != nil {
+		t.Fatalf("read the usage through the host's table: %v", err)
+	}
+	if mounts := asHost["nvme1n1"].Mountpoints; len(mounts) != 2 {
+		t.Errorf("read %v for the boot disk through the host's table, want its "+
+			"two mounts: pointing the reading at the host's namespace is the "+
+			"only thing that keeps a probe in a pod from handing over the root disk",
+			mounts)
 	}
 }
 

@@ -73,6 +73,17 @@ type ScanConfig struct {
 	// ProcRoot is the procfs mount point, defaulting to DefaultProcRoot. The
 	// scan does not read it; usage.go does.
 	ProcRoot string
+
+	// MountinfoPath is the mount table to read, defaulting to this process's
+	// own at <ProcRoot>/self/mountinfo.
+	//
+	// It is a field because the default is wrong in a container, and wrong in
+	// the direction that loses data. A process in a pod has its own mount
+	// namespace, so its own mountinfo does not list the host's mounts at all: a
+	// scan running there reads an empty table, concludes that nothing is
+	// mounted, and reports the disk carrying the host's root filesystem as
+	// free. The host's table is PID 1's, which such a caller points this at.
+	MountinfoPath string
 }
 
 func (c ScanConfig) sysfs() string {
@@ -94,6 +105,14 @@ func (c ScanConfig) proc() string {
 		return DefaultProcRoot
 	}
 	return c.ProcRoot
+}
+
+// mountinfo resolves which mount table to read.
+func (c ScanConfig) mountinfo() string {
+	if c.MountinfoPath == "" {
+		return filepath.Join(c.proc(), "self", "mountinfo")
+	}
+	return c.MountinfoPath
 }
 
 // Kind is what a block device is, which decides whether handing it to a storage
@@ -121,6 +140,14 @@ const (
 
 	// KindMemory is a RAM disk or a zram device.
 	KindMemory Kind = "Memory"
+
+	// KindNetwork is a block device backed by something on the network: an
+	// nbd, a Ceph RBD, a DRBD replica.
+	//
+	// It earns a kind of its own because a stock Rocky worker carries sixteen
+	// unconfigured nbd devices, and calling those disks put sixteen entries
+	// claiming to be local storage into the report of every worker in a fleet.
+	KindNetwork Kind = "Network"
 
 	// KindOther is a device none of the above recognized. It is not a disk, and
 	// it is reported rather than dropped so that a caller can say what it saw.
@@ -359,6 +386,9 @@ func classify(dir, name string) Kind {
 		return KindLoop
 	case strings.HasPrefix(name, "zram"), strings.HasPrefix(name, "ram"):
 		return KindMemory
+	case strings.HasPrefix(name, "nbd"), strings.HasPrefix(name, "rbd"),
+		strings.HasPrefix(name, "drbd"):
+		return KindNetwork
 	case strings.HasPrefix(name, "dm-"):
 		return KindDeviceMapper
 	case strings.HasPrefix(name, "md"):
@@ -375,25 +405,23 @@ func classify(dir, name string) Kind {
 // crosses a SCSI host and an ATA disk's crosses one too, so the specific
 // markers are checked before the general one.
 func transportOf(resolved string) Transport {
-	segments := strings.Split(filepath.Clean(resolved), string(filepath.Separator))
-
 	var scsi bool
-	for _, segment := range segments {
+	for _, segment := range deviceSegments(resolved) {
 		switch {
 		case segment == "nvme":
 			return TransportNVMe
-		case strings.HasPrefix(segment, "virtio"):
+		case numbered(segment, "virtio"):
 			return TransportVirtio
-		case strings.HasPrefix(segment, "mmc_host"), strings.HasPrefix(segment, "mmc"):
+		case segment == "mmc_host", numbered(segment, "mmc"):
 			return TransportMMC
-		case strings.HasPrefix(segment, "usb"):
+		case numbered(segment, "usb"):
 			return TransportUSB
-		case strings.HasPrefix(segment, "ata"):
+		case numbered(segment, "ata"):
 			return TransportSATA
 		case strings.HasPrefix(segment, "end_device-"), strings.HasPrefix(segment, "sas_"),
 			strings.HasPrefix(segment, "expander-"):
 			return TransportSAS
-		case strings.HasPrefix(segment, "host"):
+		case numbered(segment, "host"):
 			scsi = true
 		}
 	}
@@ -401,6 +429,39 @@ func transportOf(resolved string) Transport {
 		return TransportSCSI
 	}
 	return TransportUnknown
+}
+
+// deviceSegments is the part of a resolved sysfs path below the device tree.
+//
+// Everything above it is the caller's mount point and says nothing about any
+// bus. Skipping it is not tidiness: a probe pod mounts the host's sysfs at
+// /host/sys, which put a segment called "host" in front of every device on the
+// machine, and that read as a SCSI host directory. On a real worker it made
+// every device-mapper node, loop device, and network block device a SCSI one.
+func deviceSegments(resolved string) []string {
+	segments := strings.Split(filepath.Clean(resolved), string(filepath.Separator))
+	for i, segment := range segments {
+		if segment == "devices" {
+			return segments[i+1:]
+		}
+	}
+	return nil
+}
+
+// numbered reports whether a segment is a prefix followed by an instance
+// number, which is how the kernel names a bus: host0 is a SCSI host and ata1 is
+// an ATA port, where host and ata alone are neither.
+func numbered(segment, prefix string) bool {
+	rest, ok := strings.CutPrefix(segment, prefix)
+	if !ok || rest == "" {
+		return false
+	}
+	for i := range len(rest) {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // nvmeSubsystemTransport answers for a namespace the kernel presents through an
