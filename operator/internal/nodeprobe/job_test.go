@@ -326,3 +326,36 @@ func TestJobAndItsReportShareTheirName(t *testing.T) {
 		}
 	}
 }
+
+func TestJobNameFitsWhereKubernetesPutsIt(t *testing.T) {
+	// A Job's name is copied into every pod it creates, as the
+	// batch.kubernetes.io/job-name label, so it lives under the 63 bytes a
+	// label value may be rather than the 253 an object name may be. The API
+	// server refuses the whole Job when it does not fit, and the run stalls:
+	// the discovery step cannot probe a worker whose Job it cannot create.
+	//
+	// The node's name is what spends the budget. Kubernetes takes it from the
+	// machine, and every cloud and most on-premises installations hand it a
+	// fully qualified domain name rather than a short one.
+	for _, node := range []string{
+		"vm01.simplyblock4.localdomain",
+		"ip-10-0-1-23.eu-central-1.compute.internal",
+		"aks-nodepool1-41618177-vmss000000.internal.cloudapp.net",
+	} {
+		job, err := Job(JobOptions{
+			Namespace:          "simplyblock",
+			Run:                "discover-now",
+			Node:               node,
+			Image:              "operator:latest",
+			ServiceAccountName: testAccount,
+		})
+		if err != nil {
+			t.Fatalf("building the Job for %q: %v", node, err)
+		}
+		if len(job.Name) > maxLabelValueLength {
+			t.Errorf("the Job for %q is called %q, which is %d bytes: too long for the "+
+				"label Kubernetes copies it into, so the API server refuses it",
+				node, job.Name, len(job.Name))
+		}
+	}
+}

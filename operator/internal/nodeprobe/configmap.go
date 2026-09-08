@@ -11,9 +11,10 @@
 // its Job writes over its own report instead of leaving two.
 //
 // Neither the name nor the labels can be read back as the values that produced
-// them. Both are sanitized, and both are truncated — the name to what an object
-// name may be and a label to the 63 characters a label value may be — so a node
-// called ip-10-0-1-23.eu-central-1.compute.internal survives in neither. The
+// them. Both are sanitized, and both are truncated to the 63 characters a label
+// value may be — the name too, because the Job that writes a report is named
+// the same way and its name reaches its pods as a label — so a node called
+// ip-10-0-1-23.eu-central-1.compute.internal survives in neither. The
 // labels are for selecting a run's reports; the node a report is about is the
 // node field inside the report itself, which is the only place it appears
 // exactly as the cluster spells it.
@@ -57,10 +58,18 @@ const (
 	// disambiguates is always within one namespace and one run.
 	nameHashLength = 8
 
-	// maxNameLength is the DNS-subdomain limit a ConfigMap name has to fit, and
+	// maxNameLength is the budget every generated name is held to, and
 	// maxStemLength leaves room for the prefix, the digest, and the dash
 	// between them.
-	maxNameLength = 253
+	//
+	// It is 63 and not the 253 a ConfigMap's name may be, because the Job that
+	// writes the report is named the same way and a Job's name is copied into
+	// its pods as the batch.kubernetes.io/job-name label. A label value stops
+	// at 63, so the smaller of the two limits is the one that binds, and a name
+	// that only satisfies the larger is refused by the API server outright —
+	// the run then stalls on the first worker whose name is long, which is any
+	// worker a cloud named after its fully qualified domain name.
+	maxNameLength = 63
 	maxStemLength = maxNameLength - len(namePrefix) - nameHashLength - 1
 )
 
