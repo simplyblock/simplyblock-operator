@@ -677,6 +677,393 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: clusterdeploymentconfigs.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: ClusterDeploymentConfig
+    listKind: ClusterDeploymentConfigList
+    plural: clusterdeploymentconfigs
+    shortNames:
+    - cdc
+    singular: clusterdeploymentconfig
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.approved
+      name: Approved
+      type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterDeploymentConfig is a whole simplyblock deployment written down as one
+          reviewable document: the environment, the cluster, and the node sets with
+          their workers, interfaces, and devices. An administrator reviews it, approves
+          it, and the operator expands it into a StorageCluster and its StorageNodes.
+
+          It is ephemeral. Everything the expansion produces is self-describing, so the
+          document can be edited or deleted once it has been expanded, and nothing reads
+          it afterward.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
+              reviewable document.
+
+              The third rule is the device class one. A document describes one cluster and a
+              cluster is built out of one class of backend storage, so every group of every
+              node set names the same member of its DeviceSelection. The expansion reads the
+              class off them and stamps it onto the cluster it creates, which is why the
+              document carries no field for it.
+            properties:
+              approved:
+                description: |-
+                  Approved is the review gate. A document is expanded only once it is set,
+                  and is validated but otherwise inert before that, which is what makes
+                  reviewing a wrong document safe.
+                type: boolean
+              cluster:
+                description: Cluster is the StorageCluster to create. Ignored when
+                  ClusterRef is set.
+                properties:
+                  enableFailureDomains:
+                    description: |-
+                      EnableFailureDomains opts the cluster into failure-domain mode, in which
+                      every group must label the fault group its workers belong to.
+                    type: boolean
+                  fabricType:
+                    description: FabricType is the storage fabric.
+                    maxLength: 32
+                    type: string
+                  maxSubsystemCount:
+                    description: |-
+                      MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                      node of this cluster serves. Required, because the StorageCluster's own
+                      field is, and no StorageNode carries a copy of it.
+                    format: int32
+                    maximum: 75
+                    minimum: 10
+                    type: integer
+                  minHugePagesSize:
+                    description: |-
+                      MinHugePagesSize is the smallest huge-page allocation each storage node of
+                      this cluster makes: 100G or 1T, where a bare number is gigabytes. Like
+                      VCPUCount it is the cluster's and is copied onto every node the expansion
+                      writes. Omitted, each node uses the computed minimum.
+                    maxLength: 32
+                    type: string
+                  name:
+                    description: Name is the StorageCluster's name.
+                    maxLength: 253
+                    type: string
+                  stripe:
+                    description: Stripe is the erasure-coding layout.
+                    properties:
+                      dataChunks:
+                        description: DataChunks defines the number of data chunks
+                          in the erasure-coding layout.
+                        format: int32
+                        type: integer
+                      parityChunks:
+                        description: ParityChunks defines the number of parity chunks
+                          in the erasure-coding layout.
+                        format: int32
+                        type: integer
+                    type: object
+                  vcpuCount:
+                    description: |-
+                      VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                      this cluster. It is stated here and nowhere below, because the control
+                      plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
+                      into every StorageNode.spec.config.sizing it writes. Required, because the
+                      StorageCluster's own field is.
+                    format: int32
+                    minimum: 6
+                    type: integer
+                required:
+                - maxSubsystemCount
+                - name
+                - vcpuCount
+                type: object
+              clusterRef:
+                description: |-
+                  ClusterRef names an existing StorageCluster this document adds nodes to.
+                  Absent means the document creates the cluster in Cluster. Setting it to a
+                  cluster that does not exist, or leaving it absent when one already does,
+                  is refused rather than reconciled.
+                maxLength: 253
+                type: string
+              edgeCluster:
+                description: |-
+                  EdgeCluster states that this is an edge deployment. An edge deployment
+                  differs from a datacenter one in topology and scale rather than in kind,
+                  so it is the same StorageCluster with fewer, smaller nodes.
+                type: boolean
+              environment:
+                description: |-
+                  Environment is the Kubernetes distribution this deployment targets. It is a
+                  shorthand the expansion spends: it sets enableKubeletConfiguration,
+                  enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
+                  the document produces, after which nothing reads it again.
+                enum:
+                - Vanilla
+                - OpenShift
+                - Rancher
+                - K3s
+                - Talos
+                type: string
+              nodeSets:
+                description: |-
+                  NodeSets are the nodes the deployment is made of.
+
+                  The upper bound is what makes the device-class rule above estimable: the
+                  API server costs a CEL rule against the largest value the schema permits,
+                  and a list with no bound is costed as unbounded, which the rule's nested
+                  all() then multiplies past the budget.
+                items:
+                  description: |-
+                    NodeSet is the organizational grouping of a deployment, usually a rack: the
+                    workers a document adds or grows together. It carries no sizing, because sizing
+                    is uniform across a cluster and is stated once in ClusterTemplate.
+                  properties:
+                    groups:
+                      description: Groups are the sets of workers sharing one configuration.
+                      items:
+                        description: |-
+                          NodeGroup is a set of workers that share one configuration, which is what
+                          makes ten identical machines one entry rather than ten.
+                        properties:
+                          dataInterfaces:
+                            description: DataInterfaces are the data-plane network
+                              interfaces.
+                            items:
+                              maxLength: 63
+                              type: string
+                            maxItems: 32
+                            type: array
+                          devices:
+                            description: Devices selects the storage devices every
+                              worker in the group uses.
+                            properties:
+                              block:
+                                description: |-
+                                  Block names logical block devices by path ("/dev/sdb"). It expands into the
+                                  same config.deviceNames as NVMe, which takes a PCI address and a device
+                                  path in one list. It is the alternative to NVMe rather than a companion of
+                                  it: the two classes are not mixed within a cluster.
+                                items:
+                                  maxLength: 255
+                                  pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                                  type: string
+                                maxItems: 128
+                                type: array
+                                x-kubernetes-list-type: set
+                              nvme:
+                                description: NVMe names NVMe devices by PCI address
+                                  ("0000:5e:00.0").
+                                items:
+                                  maxLength: 32
+                                  pattern: ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$
+                                  type: string
+                                maxItems: 128
+                                type: array
+                                x-kubernetes-list-type: set
+                            type: object
+                            x-kubernetes-validations:
+                            - message: a device selection names NVMe addresses or
+                                block devices, not both
+                              rule: has(self.nvme) != has(self.block)
+                          failureDomain:
+                            description: |-
+                              FailureDomain is the label of the fault group every worker in this group
+                              belongs to ("rack-b"), which is usually the name of the rack, zone, or
+                              power feed they share. Discovery seeds it from topology.kubernetes.io/zone
+                              and leaves it unset where the Kubernetes API carries no topology, which
+                              holds provisioning with a clear reason rather than guessing. It expands
+                              into StorageNode.spec.config.failureDomain, whose shape it shares.
+                            maxLength: 63
+                            pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            type: string
+                          journalManager:
+                            description: JournalManager tunes the journal managers
+                              on these nodes.
+                            properties:
+                              count:
+                                description: Count is the number of journal managers
+                                  to configure.
+                                format: int32
+                                type: integer
+                              percentPerDevice:
+                                description: PercentPerDevice is the journal manager
+                                  capacity percentage per device.
+                                format: int32
+                                type: integer
+                            type: object
+                          mgmtInterface:
+                            description: MgmtInterface is the management network interface
+                              the storage nodes bind.
+                            maxLength: 63
+                            type: string
+                          name:
+                            description: |-
+                              Name identifies the group within its node set, for a reader and for the
+                              events a validation failure emits.
+                            maxLength: 253
+                            type: string
+                          spdkSystemMemory:
+                            description: |-
+                              SpdkSystemMemory is the memory the control plane starts SPDK with on these
+                              nodes.
+                            maxLength: 32
+                            pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                            type: string
+                          workers:
+                            description: Workers are the Kubernetes worker hostnames
+                              in this group.
+                            items:
+                              maxLength: 253
+                              type: string
+                            maxItems: 200
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: set
+                        required:
+                        - name
+                        - workers
+                        type: object
+                      maxItems: 64
+                      minItems: 1
+                      type: array
+                    name:
+                      description: |-
+                        Name is the node set's name. It is copied to StorageNode.spec.nodeSet, so
+                        that a node can be traced back to the part of the document that produced
+                        it.
+                      maxLength: 253
+                      type: string
+                  required:
+                  - groups
+                  - name
+                  type: object
+                maxItems: 64
+                minItems: 1
+                type: array
+            required:
+            - nodeSets
+            type: object
+            x-kubernetes-validations:
+            - message: an approved deployment config is immutable
+              rule: '!oldSelf.approved || self == oldSelf'
+            - message: approval cannot be withdrawn
+              rule: '!oldSelf.approved || self.approved'
+            - message: 'every group must name the same device class: all nvme or all
+                block'
+              rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
+                || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+          status:
+            description: ClusterDeploymentConfigStatus is the observed state of the
+              document.
+            properties:
+              clusterRef:
+                description: |-
+                  ClusterRef names the StorageCluster the expansion produced or added to. It
+                  is a record rather than a dependency: nothing resolves it after expansion,
+                  which is what makes the document safe to delete.
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the document moves, and never a log. On a Draft it is what validation
+                  found, which is what a reviewer reads before approving.
+                type: string
+              nodeRefs:
+                description: |-
+                  NodeRefs names the StorageNode objects the expansion created, for the same
+                  reason.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of the document.
+                enum:
+                - Draft
+                - Expanding
+                - Expanded
+                - Failed
+                type: string
+              step:
+                description: Step is the position of the expansion machine within
+                  Expanding.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'']'
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: controlplanes.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -762,6 +1149,283 @@ spec:
                 - Initializing
                 - Ready
                 type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: operatorops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: OperatorOps
+    listKind: OperatorOpsList
+    plural: operatorops
+    shortNames:
+    - oops
+    singular: operatorops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.configRef
+      name: Config
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OperatorOps is a single operation performed against the operator itself,
+          which today means a discovery run that writes a ClusterDeploymentConfig. It
+          runs to a terminal phase and stays afterward as the audit record.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              OperatorOpsSpec is one operation to perform against the operator itself.
+
+              It carries no target reference. Every other Ops kind in this group names the
+              entity it acts on; this one acts on the operator process, which is not a
+              resource in this API group, and the absent field is the signal.
+            properties:
+              abort:
+                description: |-
+                  Abort asks a running operation to stop at its next step and unwind.
+                  Whether an abort is expressible from the current step is declared by that
+                  action's graph rather than checked here. Discovery changes nothing, so an
+                  aborted run leaves behind at most the config it had already written.
+                type: boolean
+              action:
+                description: Action is the operation to perform.
+                enum:
+                - Discover
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              discover:
+                description: Discover parameterizes action Discover.
+                properties:
+                  clusterRef:
+                    description: |-
+                      ClusterRef names an existing StorageCluster the draft grows rather than
+                      creates. It is copied to the draft's own clusterRef, so that re-running
+                      discovery after an expansion produces a growth document naming the same
+                      cluster.
+                    type: string
+                  configName:
+                    description: |-
+                      ConfigName is the ClusterDeploymentConfig to write. Absent generates one
+                      from the run's timestamp, so that a second discovery never overwrites the
+                      first, which may have been reviewed and corrected.
+                    type: string
+                  deviceFilter:
+                    description: |-
+                      DeviceFilter narrows which of an inspected worker's devices reach the
+                      draft. Empty reports every device the worker advertises, including the one
+                      it boots from, which is what the approval gate then has to catch.
+                    properties:
+                      blockAllowList:
+                        description: |-
+                          BlockAllowList restricts candidates to these device paths ("/dev/sdb").
+                          This and BlockDenyList are the block class's half of the filter, and they
+                          require EnableLogicalBlockDevices for the same reason the PCI filters
+                          forbid it.
+                        items:
+                          pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      blockDenyList:
+                        description: |-
+                          BlockDenyList excludes these device paths. On a fleet that boots from
+                          /dev/sda, this is the one entry that keeps the root disk out of every group
+                          of every draft.
+                        items:
+                          pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      driveSizeRange:
+                        description: |-
+                          DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
+                          per-class filters, it applies to whichever class the run is scanning.
+                        type: string
+                      enableLogicalBlockDevices:
+                        description: |-
+                          EnableLogicalBlockDevices scans a worker's available logical block devices
+                          instead of its available NVMe devices. It selects the class rather than
+                          adding one, because the draft a run writes describes one cluster and a
+                          cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                          26.4 does not change what a discovery run reports.
+                        type: boolean
+                      enablePartitionedDevices:
+                        description: |-
+                          EnablePartitionedDevices reports devices carrying a partition table
+                          alongside the available ones, for the administrator who knows the table is
+                          stale and intends to hand the device over anyway. It is the only one of the
+                          three availability conditions that can be waived: a mounted or otherwise
+                          busy device is never reported, because simplyblock taking it would corrupt
+                          whatever is using it.
+                        type: boolean
+                      pcieAllowList:
+                        description: |-
+                          PcieAllowList restricts candidates to these PCI addresses. This and the two
+                          PCI filters below narrow the NVMe class alone, because a logical block
+                          device has no PCI address to match, so setting any of them on a run that
+                          scans the block class is rejected by the rule on this type.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      pcieDenyList:
+                        description: |-
+                          PcieDenyList excludes these PCI addresses. On a fleet that is uniform
+                          about which slot holds the boot device, this is what keeps that device out
+                          of every group of every draft.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      pcieModel:
+                        description: PcieModel restricts candidates to devices whose
+                          PCI model string matches.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: the PCI filters select NVMe devices and cannot be combined
+                        with enableLogicalBlockDevices; use blockAllowList and blockDenyList
+                      rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                        || !(has(self.pcieAllowList) || has(self.pcieDenyList) ||
+                        has(self.pcieModel))'
+                    - message: blockAllowList and blockDenyList select logical block
+                        devices and require enableLogicalBlockDevices
+                      rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                        || !(has(self.blockAllowList) || has(self.blockDenyList))
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector restricts which workers are inspected. Empty inspects every
+                      schedulable worker.
+                    type: object
+                type: object
+            required:
+            - action
+            type: object
+          status:
+            description: OperatorOpsStatus is the observed state of one operator operation.
+            properties:
+              completedAt:
+                description: CompletedAt is when it reached a terminal phase.
+                format: date-time
+                type: string
+              configRef:
+                description: ConfigRef names the ClusterDeploymentConfig a Discover
+                  run wrote.
+                type: string
+              environment:
+                description: |-
+                  Environment is the Kubernetes distribution Inspecting concluded, which
+                  Writing copies into the draft. It is recorded here as well so that a run
+                  that failed later still says what it found.
+                enum:
+                - Vanilla
+                - OpenShift
+                - Rancher
+                - K3s
+                - Talos
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the operation moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operation's own progress.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Aborted
+                type: string
+              startedAt:
+                description: StartedAt is when the operation started.
+                format: date-time
+                type: string
+              step:
+                description: Step is the position of the running action's state machine.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Inspecting'',''Probing'',''Writing'']'
+              workers:
+                description: |-
+                  Workers are the workers this run is inspecting, decided once in
+                  Inspecting so that a node joining the cluster mid-run does not change
+                  what the run is about.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
             type: object
         type: object
     served: true
@@ -4725,6 +5389,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - operatorops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -4753,6 +5418,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -4774,7 +5440,9 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
+  - clusterdeploymentconfigs/status
   - controlplanes/status
+  - operatorops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -4793,6 +5461,17 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - clusterdeploymentconfigs
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

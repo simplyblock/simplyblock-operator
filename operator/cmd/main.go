@@ -50,7 +50,9 @@ import (
 	"github.com/simplyblock/atlas/link"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -76,6 +78,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -509,6 +512,30 @@ func main() {
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
+		os.Exit(1)
+	}
+	// The distribution a cluster runs is concluded partly from the API groups it
+	// registers, and a run without this client concludes it from the nodes
+	// alone rather than failing.
+	operatorOpsDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client; "+
+			"a discovery run will read the distribution from the nodes alone")
+	}
+
+	// The discovery run's probe Jobs run the operator's own image, so that a Job
+	// cannot be a version out of step with the operator that created it. The
+	// image is read from the environment rather than from the running pod,
+	// because a pod may name its image by a tag the registry has since moved and
+	// what a Job needs is the reference the operator was deployed with.
+	if err := (&deployment.OperatorOpsReconciler{
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("operatorops-controller"),
+		Discovery:  operatorOpsDiscovery,
+		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterOpsReconciler{

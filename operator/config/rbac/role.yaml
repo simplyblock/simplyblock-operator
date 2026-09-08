@@ -207,6 +207,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - operatorops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -235,6 +236,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -256,7 +258,9 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
+  - clusterdeploymentconfigs/status
   - controlplanes/status
+  - operatorops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -275,3 +279,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - clusterdeploymentconfigs
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch

@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/discovery"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/pci"
 )
 
 const (
@@ -169,6 +170,12 @@ type Inventory struct {
 	// each memory node owns.
 	CPU CPU
 
+	// Memory is how much the machine has and how much of it is available,
+	// which huge pages alone do not say: a host may have 12 GiB reserved as
+	// huge pages and 4 GiB of ordinary memory left, and a storage node needs
+	// both.
+	Memory Memory
+
 	// HugePages is what has already been allocated, per size and per NUMA node.
 	HugePages HugePages
 
@@ -182,6 +189,17 @@ type Inventory struct {
 	// too, for the same reason the virtual interfaces are: an administrator has
 	// to be able to be told why the disk they expected is not a candidate.
 	Devices []blockdev.Candidate
+
+	// NVMeControllers is every NVMe controller on the machine's PCI bus, with
+	// the driver that owns each.
+	//
+	// It is here because the disk reading cannot see all of them. SPDK takes a
+	// controller by rebinding it from the kernel's NVMe driver to a
+	// userspace-IO one, and from that moment the kernel presents no block
+	// device for it: a worker with four such controllers reports no NVMe disks
+	// at all. This is what says the disks are there and something else has
+	// them.
+	NVMeControllers []pci.Device
 
 	// Environment is which Kubernetes distribution the cluster runs, and the
 	// markers that said so.
@@ -208,6 +226,23 @@ func (i Inventory) AvailableDevices() []blockdev.Candidate {
 	return free
 }
 
+// ControllersTakenByUserspace is the NVMe controllers a userspace driver owns,
+// which are the disks this machine has and the kernel does not present.
+//
+// A discovery run that found no candidate devices should say whether this is
+// empty: no disks and no controllers is a machine with no storage, and no disks
+// with four controllers is a machine whose storage something else is already
+// driving. They are different answers and only one of them is a surprise.
+func (i Inventory) ControllersTakenByUserspace() []pci.Device {
+	var taken []pci.Device
+	for _, controller := range i.NVMeControllers {
+		if controller.BoundToUserspace() {
+			taken = append(taken, controller)
+		}
+	}
+	return taken
+}
+
 // NUMANodeInventory is everything one memory node has.
 type NUMANodeInventory struct {
 	// Node is the memory node's id, or NUMANodeUnknown for the entry holding
@@ -216,6 +251,10 @@ type NUMANodeInventory struct {
 
 	// CPUs is the node's share of the host's processors.
 	CPUs NUMACPUs
+
+	// Memory is the node's own memory, which is what a storage node pinned
+	// here would draw on.
+	Memory NUMAMemory
 
 	// HugePages is the node's share of each huge-page pool, ascending by page
 	// size. The page size is on the entry, so a caller reading one node's
@@ -226,6 +265,10 @@ type NUMANodeInventory struct {
 	// attached to this node.
 	Interfaces []Interface
 	Devices    []blockdev.Candidate
+
+	// NVMeControllers is the NVMe controllers on this node, including the ones
+	// no block device corresponds to because a userspace driver has them.
+	NVMeControllers []pci.Device
 }
 
 // NUMAHugePagesOfSize is one node's share of one pool, carrying the page size
@@ -277,6 +320,10 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 		node(cpus.Node).CPUs = cpus
 	}
 
+	for _, share := range i.Memory.NUMANodes {
+		node(share.Node).Memory = share
+	}
+
 	for _, pool := range i.HugePages.Pools {
 		for _, share := range pool.NUMANodes {
 			entry := NUMAHugePagesOfSize{NUMAHugePages: share, SizeBytes: pool.SizeBytes}
@@ -293,6 +340,11 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 	for _, device := range i.Devices {
 		target := node(device.NUMANode)
 		target.Devices = append(target.Devices, device)
+	}
+
+	for _, controller := range i.NVMeControllers {
+		target := node(controller.NUMANode)
+		target.NVMeControllers = append(target.NVMeControllers, controller)
 	}
 
 	// Ascending by node, with the unknown entry last: it is not a node, and a
@@ -338,6 +390,12 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	}
 	inv.CPU = cpu
 
+	memory, err := ReadMemory(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the memory: %w", err))
+	}
+	inv.Memory = memory
+
 	pages, err := ReadHugePages(cfg)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the huge pages: %w", err))
@@ -355,6 +413,16 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		errs = append(errs, fmt.Errorf("read the block devices: %w", err))
 	}
 	inv.Devices = devices
+
+	controllers, err := pci.Scan(pci.Config{
+		SysfsRoot: cfg.sysfs(),
+		ProcRoot:  cfg.proc(),
+		DevRoot:   cfg.dev(),
+	})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
+	}
+	inv.NVMeControllers = pci.NVMeControllers(controllers)
 
 	if cfg.Kubernetes.Discovery != nil || len(cfg.Kubernetes.Nodes) > 0 {
 		env, err := CollectEnvironment(ctx, cfg.Kubernetes.Discovery, cfg.Kubernetes.Nodes)
