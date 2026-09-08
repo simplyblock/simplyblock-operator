@@ -38,8 +38,8 @@ func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
 	}
 	endpoints := []SpdkProxyEndpoint{
-		{NodeName: "ip-10-0-1-23.us-east-1.compute.internal", PodIP: "10.0.1.23", RpcPort: 9001},
-		{NodeName: "worker-1", PodIP: "10.0.1.24", RpcPort: 9001},
+		{NodeName: "ip-10-0-1-23.us-east-1.compute.internal", Address: "10.0.1.23", RpcPort: 9001},
+		{NodeName: "worker-1", Address: "10.0.1.24", RpcPort: 9001},
 	}
 
 	eps, err := BuildSpdkProxyEndpointSlice(sn, 9001, endpoints)
@@ -70,8 +70,8 @@ func TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
 	}
 	endpoints := []SpdkProxyEndpoint{
-		{NodeName: "worker.us-east-1.local", PodIP: "10.0.0.1", RpcPort: 9001},
-		{NodeName: "worker.eu-west-1.local", PodIP: "10.0.0.2", RpcPort: 9001},
+		{NodeName: "worker.us-east-1.local", Address: "10.0.0.1", RpcPort: 9001},
+		{NodeName: "worker.eu-west-1.local", Address: "10.0.0.2", RpcPort: 9001},
 	}
 
 	eps, err := BuildSpdkProxyEndpointSlice(sn, 9001, endpoints)

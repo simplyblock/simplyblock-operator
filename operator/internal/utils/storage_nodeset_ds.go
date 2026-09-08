@@ -524,11 +524,14 @@ func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, no
 	}
 }
 
-// SpdkProxyEndpoint describes a single spdk-proxy pod instance that backs the
-// headless spdk-proxy Service.
+// SpdkProxyEndpoint describes one spdk-proxy instance that backs the headless
+// spdk-proxy Service. Address is the worker's node IP rather than anything
+// read off a pod: the spdk-proxy pod is host-networked, so the two are the
+// same value, and taking it from the node keeps the endpoint publishable
+// while the pod is being replaced.
 type SpdkProxyEndpoint struct {
 	NodeName string
-	PodIP    string
+	Address  string
 	RpcPort  int32
 }
 
@@ -571,7 +574,7 @@ func BuildSpdkProxyEndpointSlice(
 
 		hostname := label
 		eps = append(eps, discoveryv1.Endpoint{
-			Addresses:  []string{e.PodIP},
+			Addresses:  []string{e.Address},
 			Hostname:   &hostname,
 			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
 		})

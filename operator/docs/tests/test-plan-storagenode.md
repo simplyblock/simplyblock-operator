@@ -238,21 +238,24 @@ File: `operator/internal/controllers/node/storagenodeset_storagenode_unit_test.g
 Files: `operator/internal/controllers/node/storagenodeset_controller_unit_test.go`,
 `operator/internal/utils/storage_nodeset_ds_test.go`
 
-| #     | Scenario                                                                           | Type     | Test                                                                 |
-|-------|------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------|
-| U-95  | The per-pod address is built from the worker's hostname label and the namespace    | Positive | `TestStorageNodeSetAPIAddress`                                       |
-| U-96  | The EndpointSlice check matches the address builder's output exactly               | Positive | `TestEndpointSliceHasWorker_MatchesBuilderOutput`                    |
-| U-97  | A dotted worker hostname is truncated to a valid endpoint label                    | Boundary | `TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates`            |
-| U-98  | Two workers whose first label segment collides: the build fails rather than merges | Negative | `TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails`           |
-| U-99  | SPDK proxy EndpointSlices are built from the running pods                          | Positive | `TestReconcileSpdkProxyEndpointSlices`                               |
-| U-100 | Two pods sharing a first label segment: reported rather than silently merged       | Negative | `TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment`         |
-| U-101 | The RPC port is read from the pod's environment, falling back to its name          | Boundary | `TestExtractSpdkProxyRpcPort_FallbackToPodName`                      |
-| U-102 | The serving certificate's revision is stamped onto the pod template                | Positive | `TestStorageNodeSetDaemonSetTLSSecretRevisionAnnotation`             |
-| U-103 | The certificate Secret rotates: the DaemonSet rolls                                | Positive | `TestStorageNodeSetDaemonSetReconcileRollsOnTLSSecretRevisionChange` |
-| U-104 | The TLS serving environment reaches the container                                  | Positive | `TestStorageNodeSetDaemonSetSBTLSServeEnv`                           |
-| U-105 | A Secret that is not the storage-node-api certificate: the predicate ignores it    | Negative | `TestIsStorageNodeSetTLSSecretPredicate`                             |
-| U-106 | The certificate Secret changes: every affected object in the namespace is enqueued | Positive | `TestTLSSecretToStorageNodeSetRequestsEnqueuesAllInNamespace`        |
-| U-107 | Certificates and Services are reconciled together for the cert-manager provider    | Positive | `TestReconcileServicesAndServingCertificatesForCertManagerProvider`  |
+| #     | Scenario                                                                           | Type       | Test                                                                 |
+|-------|------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------|
+| U-95  | The per-pod address is built from the worker's hostname label and the namespace    | Positive   | `TestStorageNodeSetAPIAddress`                                       |
+| U-96  | The EndpointSlice check matches the address builder's output exactly               | Positive   | `TestEndpointSliceHasWorker_MatchesBuilderOutput`                    |
+| U-97  | A dotted worker hostname is truncated to a valid endpoint label                    | Boundary   | `TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates`            |
+| U-98  | Two workers whose first label segment collides: the build fails rather than merges | Negative   | `TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails`           |
+| U-99  | SPDK proxy EndpointSlices are built from the running pods                          | Positive   | `TestReconcileSpdkProxyEndpointSlices`                               |
+| U-100 | Two pods sharing a first label segment: reported rather than silently merged       | Negative   | `TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment`         |
+| U-101 | The RPC port is read from the pod's environment, falling back to its name          | Boundary   | `TestExtractSpdkProxyRpcPort_FallbackToPodName`                      |
+| U-102 | The serving certificate's revision is stamped onto the pod template                | Positive   | `TestStorageNodeSetDaemonSetTLSSecretRevisionAnnotation`             |
+| U-103 | The certificate Secret rotates: the DaemonSet rolls                                | Positive   | `TestStorageNodeSetDaemonSetReconcileRollsOnTLSSecretRevisionChange` |
+| U-104 | The TLS serving environment reaches the container                                  | Positive   | `TestStorageNodeSetDaemonSetSBTLSServeEnv`                           |
+| U-105 | A Secret that is not the storage-node-api certificate: the predicate ignores it    | Negative   | `TestIsStorageNodeSetTLSSecretPredicate`                             |
+| U-106 | The certificate Secret changes: every affected object in the namespace is enqueued | Positive   | `TestTLSSecretToStorageNodeSetRequestsEnqueuesAllInNamespace`        |
+| U-107 | Certificates and Services are reconciled together for the cert-manager provider    | Positive   | `TestReconcileServicesAndServingCertificatesForCertManagerProvider`  |
+| U-264 | An spdk-proxy pod replaced by a restart: the worker keeps its per-pod DNS record   | Regression | `TestReconcileSpdkProxyEndpointSlices_SurvivesSpdkPodReplacement`    |
+| U-265 | A worker that has left the set entirely: its EndpointSlice is deleted              | Negative   | `TestReconcileSpdkProxyEndpointSlices_RemovedWorkerLosesRecord`      |
+| U-266 | A pod update changing only container readiness enqueues the owning StorageNodeSet  | Regression | `TestSpdkProxyPodPublishStateChanged`                                |
 
 ### Operation: Lifecycle and Lock (design §7.1, §11)
 
