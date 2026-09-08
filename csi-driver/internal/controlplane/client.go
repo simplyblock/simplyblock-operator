@@ -36,9 +36,8 @@ import (
 	"strings"
 
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/nqn"
 	"k8s.io/klog"
-
-	"github.com/simplyblock/csi-driver/internal/nqn"
 )
 
 // errors deserve special care
@@ -350,7 +349,10 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 	for _, r := range result {
 		connections = append(connections, connectionInfo{IP: r.IP, Port: r.Port})
 	}
-	_, model := nqn.LvolIDFromNQN(result[0].Nqn)
+	var model string
+	if subsystem, ok := nqn.Parse(result[0].Nqn); ok {
+		model = subsystem.LvolID
+	}
 	connectionsData, err := json.Marshal(connections)
 	if err != nil {
 		return nil, err

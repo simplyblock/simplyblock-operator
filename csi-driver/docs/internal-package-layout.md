@@ -31,14 +31,13 @@ proposals.
 | `internal/csilink`                 | 1     | 124          | The link agent that dials the operator                                                                                                                      |
 | `internal/kubernetes/volumehandle` | 1     | 61           | CSI volume handle parsing                                                                                                                                   |
 | `internal/config`                  | 1     | 54           | The parsed command-line configuration                                                                                                                       |
-| `internal/nqn`                     | 1     | 40           | NQN identity parsing                                                                                                                                        |
 
-The layering below is now the compiler's to enforce, and it holds: `config`,
-`nqn`, and `volumehandle` import nothing of this module's; `controlplane`,
-`kubernetes`, and `clusters` import only those; `fabric`, `initiator`, and
-`reconnect` import only layers beneath them; `guardian`, `csilink`, and
-`csi-common` sit beside them; and `spdk` is the only package reaching across
-everything, which is what an assembly package is for.
+The layering below is now the compiler's to enforce, and it holds: `config` and
+`volumehandle` import nothing of this module's; `controlplane`, `kubernetes`,
+and `clusters` import only those; `fabric`, `initiator`, and `reconnect` import
+only layers beneath them; `guardian`, `csilink`, and `csi-common` sit beside
+them; and `spdk` is the only package reaching across everything, which is what
+an assembly package is for.
 
 `internal/spdk` is still named after a dependency the driver no longer talks to
 directly — the SPDK JSON-RPC path is gone, and what the package contains is the
@@ -108,7 +107,6 @@ csi-driver/
     controlplane/               the simplyblock REST client
     kubernetes/                 PV and PVC reads
     volumeid/                   CSI volume and snapshot handle parsing
-    nqn/                        NQN identity parsing
 
   e2e/                          unchanged; `internal/` is importable from here
 ```
@@ -123,12 +121,14 @@ constant, which was never configuration and moved to `controlplane` where its
 only reader is. The flag registration can still move here, leaving `main.go` as
 nothing but `config.Parse()` and `driver.Run()`.
 
-**`internal/nqn`** was not in the original plan. It holds `LvolIDFromNQN` and
-`HostIDFromHostNQN`, which three layers call on strings from three different
-sources: the control plane's connect response, the kernel's `list-subsys`
-output, and a Kubernetes node UID. Filing them under any one of those layers
-would have made the other two import it upward. atlas-lib's `nqn` package
-already does this work, so the package is a placeholder that step 6 deletes.
+**NQN parsing has no package here at all.** The split briefly gave it one:
+`LvolIDFromNQN` and `HostIDFromHostNQN` are called by three layers on strings
+from three sources — the control plane's connect response, the kernel's
+`list-subsys` output, and a Kubernetes node UID — so filing them under any one
+layer would have made the other two import it upward. But atlas-lib's `nqn`
+already exported both, which makes this an adoption rather than a placement
+question, and the local package was deleted the same day it was written. See
+*Overlap with atlas-lib* below.
 
 **`internal/controlplane`** took `util/jsonrpc.go` and `util/nvmf.go`:
 `APIClient`, `ClusterClient`, `Connection`, the v2 path builders, `HTTPError`,
@@ -314,10 +314,15 @@ one deletes a package rather than moving it:
 - **`internal/volumeid` against `atlas/lvol.VolumeHandle`.** `volumehandle.Parse`
   and `lvol.VolumeHandle.Split` parse the same `clusterID:poolID:volumeID`
   string, with two independent UUID regexes.
-- **NQN handling against `atlas/nqn`.** `getLvolIDFromNQN`, `hostIDFromHostNQN`,
-  and the two `fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", …)` literals in
-  `initiator.go` and `nodeserver.go` are `nqn.Parse`, `nqn.HostUUID`, and
-  `nqn.Host`.
+- **NQN handling against `atlas/nqn` — done.** `getLvolIDFromNQN` and
+  `hostIDFromHostNQN` are `nqn.Parse` and `nqn.HostUUID`, and the three
+  hand-spelled `nqn.2014-08.io.simplyblock:uuid:<uid>` literals in the node
+  service, the reconnect loop, and the DHCHAP end-to-end test are `nqn.Host`.
+  Adopting `HostUUID` tightened one edge deliberately: it requires the `:uuid:`
+  marker and a well-formed UUID, where the local copy took whatever followed the
+  last colon. No caller can reach the difference, since every host NQN this
+  driver sees comes from `nqn.Host(node.UID)`, and a `--hostid` that is not a
+  UUID could only ever have failed the connect. A test pins it.
 
 ## Module path
 
@@ -348,13 +353,12 @@ without the next:
    `csi-driver/pkg/...` pointers in `atlas-lib/README.md`, the operator's design
    documents and test plans, and two operator source comments were repointed.
 3. **Split `internal/util` (done):** into `config`, `controlplane`, `clusters`,
-   `initiator`, `reconnect`, `fabric`, and `guardian`, plus an `nqn` leaf the
-   original plan did not foresee. The package is gone. `repairFabric` and
+   `initiator`, `reconnect`, `fabric`, and `guardian`. The package is gone. `repairFabric` and
    `healMonitoredVolume` became functions, the device-presence maps became an
    API, three raw `client.API.do` call sites became named control-plane methods,
-   and `volumehandle.IsUUID` replaced two hand-rolled UUID predicates. No
-   behavior changed: the same 155 test functions run, and the same 597 cases
-   pass, before and after.
+   and `volumehandle.IsUUID` replaced two hand-rolled UUID predicates. NQN
+   parsing briefly became a local leaf and was then adopted from `atlas/nqn`
+   instead, which is where it belonged.
 4. **Extract `internal/mount`:** from `nodeserver.go`, and `internal/volumeid`
    from `controllerserver.go` and `internal/kubernetes`. Both are extractions of
    pure logic and should come with the tests that were previously impossible.

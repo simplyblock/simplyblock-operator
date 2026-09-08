@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/simplyblock/atlas/nqn"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -28,7 +29,6 @@ import (
 	"github.com/simplyblock/csi-driver/internal/fabric"
 	"github.com/simplyblock/csi-driver/internal/initiator"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
-	"github.com/simplyblock/csi-driver/internal/nqn"
 )
 
 var (
@@ -70,7 +70,7 @@ func NodeHostNQN(ctx context.Context, client kubernetes.Interface, nodeName stri
 		klog.Warningf("failed to resolve node %s for hostNQN: %v", nodeName, err)
 		return ""
 	}
-	nodeHostNQNVal = fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID)
+	nodeHostNQNVal = nqn.Host(string(node.UID))
 	return nodeHostNQNVal
 }
 
@@ -115,10 +115,11 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 
 		for _, host := range subsystems {
 			for _, subsystem := range host.Subsystems {
-				clusterID, nqnLvolID := nqn.LvolIDFromNQN(subsystem.NQN)
-				if nqnLvolID == "" {
+				parsed, ok := nqn.Parse(subsystem.NQN)
+				if !ok {
 					continue
 				}
+				clusterID, nqnLvolID := parsed.ClusterID, parsed.LvolID
 				// Prefer the sysfs UUID when available — it always identifies the
 				// exact namespace LVol. Falls back to the NQN-derived ID.
 				lvolID := device.LvolID

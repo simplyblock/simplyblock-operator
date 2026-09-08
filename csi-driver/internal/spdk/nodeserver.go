@@ -36,6 +36,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/nqn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -350,7 +351,7 @@ func (ns *nodeServer) NodeStageVolume(
 		nodeName := ns.Driver.GetNodeID()
 		node, nodeErr := ns.kubeClient.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
 		if nodeErr == nil {
-			vc["hostNQN"] = fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID)
+			vc["hostNQN"] = nqn.Host(string(node.UID))
 		} else {
 			klog.Warningf("failed to get node %s for hostNQN: %v", nodeName, nodeErr)
 		}

@@ -27,6 +27,7 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/nqn"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -303,7 +304,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 func hostNQNForNode(c kubernetes.Interface, nodeName string) string {
 	node, err := c.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	framework.ExpectNoError(err, "get node %s", nodeName)
-	return fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID)
+	return nqn.Host(string(node.UID))
 }
 
 // sbctlE runs `sbctl <args>` inside the webappapi pod like sbctl, but returns

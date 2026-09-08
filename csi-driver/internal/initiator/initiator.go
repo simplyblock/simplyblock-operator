@@ -22,13 +22,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/nqn"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
-	"github.com/simplyblock/csi-driver/internal/nqn"
 )
 
 const (
@@ -216,7 +216,9 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 	if !alreadyConnected {
 		clusterID := nvmf.clusterID
 		if clusterID == "" {
-			clusterID, _ = nqn.LvolIDFromNQN(nvmf.nqn)
+			if subsystem, ok := nqn.Parse(nvmf.nqn); ok {
+				clusterID = subsystem.ClusterID
+			}
 		}
 		// the lvolID from NQN gives the master LvolID of the subsystem
 		// Although the connection string is same for all the lvols in the subsystem,
@@ -730,7 +732,7 @@ func dhchapAuthArgs(connectCmd string) []string {
 			args = append(args, field)
 		}
 	}
-	if hostID := nqn.HostIDFromHostNQN(hostNQN); hostID != "" {
+	if hostID, ok := nqn.HostUUID(hostNQN); ok {
 		args = append(args, "--hostid="+hostID)
 	}
 	return args

@@ -744,6 +744,18 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
 }
 ```
 
+A host NQN is the same story from the other end. `nqn.Host(nodeUID)` composes
+the identity an access-controlled pool authorizes, and `nqn.HostUUID` reads it
+back out — which is what a `--hostid` has to be derived from, since the kernel
+pairs hostid with hostnqn by comparison.
+
+_Today:_ the CSI driver builds every host NQN with `nqn.Host` (its node service
+and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
+(`csi-driver/internal/initiator`), and reads the cluster and lvol out of a
+subsystem NQN with `nqn.Parse` (`internal/controlplane`, `internal/initiator`,
+`internal/reconnect`). It kept its own copies of the last two until the
+`internal/util` split, when they were adopted and deleted.
+
 #### Assemble an LVM stack on a device
 
 LVM answers "which device does this volume group live on" by scanning devices
