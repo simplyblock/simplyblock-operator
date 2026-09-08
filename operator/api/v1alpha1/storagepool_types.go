@@ -108,6 +108,11 @@ type StorageClassParameters struct {
 }
 
 // StoragePoolSpec defines the desired state of StoragePool
+//
+// A pool created with dhchap: true and no allowedNodes could never enforce them: its
+// StorageClass only gets dhchap_node_selector when allowedNodes is non-empty at creation,
+// and StorageClass parameters are immutable. Changing a non-empty allowedNodes stays allowed.
+// +kubebuilder:validation:XValidation:rule="!has(self.dhchap) || !self.dhchap || (has(self.allowedNodes) && size(self.allowedNodes) > 0)",message="dhchap requires a non-empty allowedNodes"
 type StoragePoolSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
