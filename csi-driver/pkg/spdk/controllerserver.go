@@ -68,14 +68,9 @@ const (
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
 	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
-	// paramDHCHAPNodeLabelDeprecated is the original name of the parameter above,
-	// still read so that a StorageClass written before the rename keeps working.
-	// StorageClass parameters are immutable, so such a class cannot be migrated in
-	// place — it has to be replaced, hence the alias rather than a hard cutover.
-	paramDHCHAPNodeLabelDeprecated = "dhchap_node_label"
-	topologyKeyZoneStable          = "topology.kubernetes.io/zone"
-	topologyKeyZoneBeta            = "failure-domain.beta.kubernetes.io/zone"
-	topologyKeyRegionStable        = "topology.kubernetes.io/region"
+	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
+	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
+	topologyKeyRegionStable = "topology.kubernetes.io/region"
 
 	// topologyKeyStorageNodeUUIDPrefix mirrors the Kubernetes Node label the
 	// simplyblock-operator writes for every storage-node instance co-located on
@@ -119,14 +114,8 @@ const dhchapAllowedNodeLabelValue = "allowed"
 // missing from it the first time a node is added to that pool, until the
 // plugin happens to re-register. Building the segment straight from the
 // StorageClass parameter sidesteps that registration-timing gap entirely.
-// paramDHCHAPNodeSelector wins when both names are present, so a class that
-// carries the alias as well is gated on the current parameter.
 func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
-	params := req.GetParameters()
-	key = strings.TrimSpace(params[paramDHCHAPNodeSelector])
-	if key == "" {
-		key = strings.TrimSpace(params[paramDHCHAPNodeLabelDeprecated])
-	}
+	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeSelector])
 	if key == "" {
 		return "", ""
 	}
