@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -648,8 +649,36 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Provision the mutating-webhook serving certificate at runtime (self-signed
-	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	// Make the conversion webhook usable before the manager starts.
+	//
+	// The manager syncs its caches before it runs any Runnable that is not an HTTP
+	// or webhook server, and syncing a cache over a converted kind makes the API
+	// server call this operator's conversion webhook. A CA injected by a Runnable
+	// would therefore arrive after the list that needs it: the list fails, the
+	// cache never syncs, the manager exits, and the injection never runs. See
+	// internal/webhook/bootstrap.go.
+	if err := internalwebhook.BootstrapConversionTrust(
+		context.Background(), cfg, scheme, operatorNamespace, tlsProvider,
+	); err != nil {
+		setupLog.Error(err, "unable to bootstrap the conversion webhook's trust")
+		os.Exit(1)
+	}
+	setupLog.Info("bootstrapped the conversion webhook's serving certificate and CA bundle")
+
+	// The conversion webhook serves every kind that declares more than one
+	// version, from the one /convert path. It is registered here, synchronously,
+	// rather than with the admission webhooks below: controller-runtime starts
+	// webhook servers before it syncs caches precisely so conversion can answer,
+	// and a registration deferred to a goroutine forfeits that guarantee.
+	if err := internalwebhook.SetupConversionWebhooks(mgr); err != nil {
+		setupLog.Error(err, "unable to register the CRD conversion webhook")
+		os.Exit(1)
+	}
+	setupLog.Info("registered CRD conversion webhook")
+
+	// Keep the certificate rotating. The bootstrap above only guarantees the first
+	// pass; cert-controller's rotator and the cert-manager provisioner own renewal
+	// and re-inject the bundle whenever the material changes.
 	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
 	if err != nil {
 		setupLog.Error(err, "unable to set up webhook serving certificate")
@@ -662,17 +691,6 @@ func main() {
 	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
 	go func() {
 		<-webhookReady
-		// The conversion webhook serves every kind that declares more than one
-		// version, from the one /convert path, dispatching on the payload's
-		// apiVersion. It is registered first because it is in the read path for
-		// those kinds: until it answers, a `kubectl get` on them fails rather
-		// than returning a stale shape.
-		if err := internalwebhook.SetupConversionWebhooks(mgr); err != nil {
-			setupLog.Error(err, "unable to register the CRD conversion webhook")
-			os.Exit(1)
-		}
-		setupLog.Info("registered CRD conversion webhook")
-
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")

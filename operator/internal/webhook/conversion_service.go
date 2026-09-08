@@ -18,12 +18,8 @@ package webhook
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -86,45 +82,11 @@ func (r *conversionServiceReconciler) Start(ctx context.Context) error {
 }
 
 // reconcileOnce points every converted CRD's conversion webhook at this
-// operator's namespace, skipping the ones it cannot or need not touch.
+// operator's namespace. The CA is left alone: under the self-signed provider it
+// is cert-controller's rotator that owns the bundle, and under cert-manager the
+// provisioner rewrites it on every sync.
 func (r *conversionServiceReconciler) reconcileOnce(ctx context.Context) error {
-	log := logf.FromContext(ctx).WithName("conversion-service")
-
-	for _, name := range ConvertedKindCRDNames() {
-		var crd apiextensionsv1.CustomResourceDefinition
-		if err := r.apiReader.Get(ctx, types.NamespacedName{Name: name}, &crd); err != nil {
-			// The operator and its CRDs are applied by separate steps, so
-			// starting before the CRDs exist is an ordering the operator has to
-			// tolerate rather than an error.
-			if apierrors.IsNotFound(err) {
-				// Debug level: the pass repeats, so an absent CRD would otherwise
-				// say so on every tick for as long as it is absent.
-				log.V(1).Info("converted CRD not present yet, leaving its conversion service alone", "crd", name)
-				continue
-			}
-			return fmt.Errorf("get crd %s: %w", name, err)
-		}
-
-		if crd.Spec.Conversion == nil || crd.Spec.Conversion.Webhook == nil ||
-			crd.Spec.Conversion.Webhook.ClientConfig == nil ||
-			crd.Spec.Conversion.Webhook.ClientConfig.Service == nil {
-			continue
-		}
-		svc := crd.Spec.Conversion.Webhook.ClientConfig.Service
-		if svc.Namespace == r.namespace {
-			continue
-		}
-
-		patch := client.MergeFrom(crd.DeepCopy())
-		svc.Namespace = r.namespace
-		if err := r.client.Patch(ctx, &crd, patch); err != nil {
-			return fmt.Errorf("patch crd %s conversion service namespace: %w", name, err)
-		}
-		log.Info("corrected the conversion webhook's service namespace",
-			"crd", name, "namespace", r.namespace)
-	}
-
-	return nil
+	return injectConversionTrust(ctx, r.client, r.apiReader, nil, r.namespace)
 }
 
 // SetupConversionServiceReference adds the correction to the manager. It runs

@@ -418,6 +418,48 @@ mistake visible before it is fleet-wide.
 This is the retirement's business rather than the renames', and it is stated here
 because it is the reason this document leaves one row unconverted.
 
+### 3.7 The trust has to exist before the operator starts
+
+The operator both serves the conversion webhook and reads the kinds it converts,
+and that is a cycle rather than a coincidence.
+
+**A controller-runtime manager starts its HTTP servers, then its webhook servers,
+then syncs its caches, and only then runs everything else.** The first two orders
+are deliberate and documented in the manager itself: probes and webhooks come
+first *because* a cache sync over a converted kind lists it at the hub version,
+which makes the API server convert every stored object, which calls the webhook.
+What the manager cannot order is anything that is not one of those servers.
+
+**So a CA injected by a Runnable arrives too late by construction.** The list
+fails, the cache never syncs, the manager exits, and the injection that would have
+fixed it never runs. The operator crash-loops, and retrying inside it cannot help,
+because the retry sits on the far side of the sync that is failing. This is a
+bootstrap deadlock and not a race: waiting longer never resolves it.
+
+**The serving certificate and the CA bundle are therefore provisioned before the
+manager is constructed**, through a direct client rather than the manager's. The
+two kinds this touches, `Secret` and `CustomResourceDefinition`, are core and
+apiextensions kinds that no conversion webhook stands in front of, so the
+bootstrap can always make progress no matter what state the converted kinds are
+in. Rotation stays where it was: the certificate machinery keeps running under the
+manager and re-injects whenever the material changes, and the bootstrap only
+guarantees that the first pass has already happened.
+
+**Reusing existing material matters as much as creating it.** An operator that
+issued a fresh CA on every start would invalidate the bundle its CRDs already
+carry, so every restart would open a window in which the API server rejects the
+webhook it was just told to trust. The bootstrap therefore adopts what is already
+stored whenever it is valid for the service's DNS name and not near expiry.
+
+**The alternative was to ship the CRDs with `strategy: None` and have the operator
+raise it to `Webhook` once it is serving.** That removes the cycle and replaces it
+with something worse. Under `None` the API server answers a hub-version read of a
+stored spoke object by relabeling the apiVersion and pruning every field the new
+schema does not know, so a reader sees an object with fields silently missing —
+and a controller that writes during that window persists the pruned form. A
+startup failure that is loud and self-correcting is a better trade than a
+data-losing window that is neither.
+
 ---
 
 ## 4. Sequencing
