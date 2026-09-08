@@ -144,7 +144,6 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				NodeID:       bp.NodeID,
 				PrevBackupID: bp.PrevBackupID,
 				Size:         bp.Size,
-				AllowedHosts: bp.AllowedHosts,
 				CreatedAt:    unixToTimePtr(bp.CreatedAt),
 				CompletedAt:  unixToTimePtr(bp.CompletedAt),
 			}
@@ -216,7 +215,6 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			NodeID:       bp.NodeID,
 			PrevBackupID: bp.PrevBackupID,
 			Size:         bp.Size,
-			AllowedHosts: bp.AllowedHosts,
 			CreatedAt:    unixToTimePtr(bp.CreatedAt),
 			CompletedAt:  unixToTimePtr(bp.CompletedAt),
 		}

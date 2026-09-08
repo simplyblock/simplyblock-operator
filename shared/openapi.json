@@ -6000,14 +6000,6 @@
             "type": "integer",
             "title": "Size"
           },
-          "allowed_hosts": {
-            "items": {
-              "type": "string",
-              "pattern": "nqn\\.\\d{4}-\\d{2}\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z]{2,}(?::[a-zA-Z0-9.\\-:_]+)?"
-            },
-            "type": "array",
-            "title": "Allowed Hosts"
-          },
           "created_at": {
             "type": "integer",
             "title": "Created At"
@@ -6032,7 +6024,6 @@
           "node_id",
           "status",
           "size",
-          "allowed_hosts",
           "created_at",
           "completed_at",
           "encrypted"

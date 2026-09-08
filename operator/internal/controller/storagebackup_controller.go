@@ -129,19 +129,18 @@ type backupCreateRequest struct {
 }
 
 type backupAPIResponse struct {
-	ID           string   `json:"id"`
-	S3ID         int64    `json:"s3_id"`
-	LvolID       string   `json:"lvol_id"`
-	LvolName     string   `json:"lvol_name"`
-	SnapshotID   string   `json:"snapshot_id"`
-	SnapshotName string   `json:"snapshot_name"`
-	NodeID       string   `json:"node_id"`
-	Status       string   `json:"status"`
-	PrevBackupID string   `json:"prev_backup_id"`
-	Size         int64    `json:"size"`
-	AllowedHosts []string `json:"allowed_hosts"`
-	CreatedAt    int64    `json:"created_at"`
-	CompletedAt  int64    `json:"completed_at"`
+	ID           string `json:"id"`
+	S3ID         int64  `json:"s3_id"`
+	LvolID       string `json:"lvol_id"`
+	LvolName     string `json:"lvol_name"`
+	SnapshotID   string `json:"snapshot_id"`
+	SnapshotName string `json:"snapshot_name"`
+	NodeID       string `json:"node_id"`
+	Status       string `json:"status"`
+	PrevBackupID string `json:"prev_backup_id"`
+	Size         int64  `json:"size"`
+	CreatedAt    int64  `json:"created_at"`
+	CompletedAt  int64  `json:"completed_at"`
 }
 
 type snapshotAPIResponse struct {
@@ -429,7 +428,6 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 		status.NodeID = backup.NodeID
 		status.PrevBackupID = backup.PrevBackupID
 		status.Size = backup.Size
-		status.AllowedHosts = backup.AllowedHosts
 		status.CreatedAt = unixToTimePtr(backup.CreatedAt)
 		status.CompletedAt = unixToTimePtr(backup.CompletedAt)
 	}); patchErr != nil {

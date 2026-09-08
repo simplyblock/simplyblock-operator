@@ -518,7 +518,6 @@ type BackupConfigOutput struct {
 
 // BackupDTO defines model for BackupDTO.
 type BackupDTO struct {
-	AllowedHosts []string            `json:"allowed_hosts"`
 	CompletedAt  int                 `json:"completed_at"`
 	CreatedAt    int                 `json:"created_at"`
 	Encrypted    bool                `json:"encrypted"`
