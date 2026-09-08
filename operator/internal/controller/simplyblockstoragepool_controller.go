@@ -45,7 +45,7 @@ const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 
-	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/pkg/spdk/controllerserver.go
+	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/internal/csi/controller/params.go
 )
 
 // StoragePoolReconciler reconciles a StoragePool object

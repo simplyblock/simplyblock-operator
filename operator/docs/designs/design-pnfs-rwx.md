@@ -191,7 +191,7 @@ Today's RWO data path:
 Storage-node components already exist and are relevant to the server side of pNFS:
 
 - **SNodeAPI:** a privileged, `hostNetwork` DaemonSet (`charts/spdk-csi/latest/spdk-csi/templates/storage-node.yaml`) launched with `python simplyblock_web/node_webapp.py storage_node_k8s`, health endpoint `/snode/check` on the snode API port. It host-mounts `/dev`, `/sys`, `/mnt`, `/lib/modules`, `/var/simplyblock`. It is SPDK/device-management focused. For pNFS it only grows **capability reporting** (kernel/nfs eligibility), because the export assembly itself lives in csi-node (§6.4).
-- **`csi-node`** (`csi-driver/pkg/spdk/nodeserver.go`): the CSI node plugin DaemonSet. It already owns NVMe-oF connect/reconnect and mount/format on every node. For pNFS it also runs on MDS and storage hosts and performs the server-side export assembly (XFS, mount, and `exportfs`).
+- **`csi-node`** (`csi-driver/internal/spdk/nodeserver.go`): the CSI node plugin DaemonSet. It already owns NVMe-oF connect/reconnect and mount/format on every node. For pNFS it also runs on MDS and storage hosts and performs the server-side export assembly (XFS, mount, and `exportfs`).
 - **Operator and CRDs** under `helm-charts/charts/simplyblock-operator/crds/`: `StorageCluster`, `StorageNodeSet`, `StorageNode`, `StorageNodeOps`, `StoragePool`, `ControlPlane`, `Task`, `VolumeMigration`, and the replication and backup families. Node state (`online`, `offline`, `in_restart`, and the rest) lives in `internal/utils/constants.go`.
 - Per-node status query: `GET /api/v2/clusters/{clusterID}/storage-nodes/{nodeID}/` (`getStorageNodeStatus`, `pkg/util/jsonrpc.go`).
 
@@ -345,7 +345,7 @@ consistency group that does not exist. That, and the user-facing
 
 Three **separate** concerns live on the MDS host, and conflating them is the usual mistake (full split in §8). Only **(b)** and the capability reporting below are genuinely sbcli / host-packaging changes. **(a)** and **(c)** are CSI-driver (**csi-node**) responsibilities in *this* repo:
 
-**(a) NVMe-oF connection of the backing namespace: csi-node.** The MDS host is an NVMe-oF initiator for the volume's namespace just like a client, so the existing **csi-node** service (`csi-driver/pkg/spdk/nodeserver.go` and `csi-driver/pkg/util/initiator.go`) connects it and owns reconnect, ANA, and the Guardian. This requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
+**(a) NVMe-oF connection of the backing namespace: csi-node.** The MDS host is an NVMe-oF initiator for the volume's namespace just like a client, so the existing **csi-node** service (`csi-driver/internal/spdk/nodeserver.go` and `csi-driver/internal/util/initiator.go`) connects it and owns reconnect, ANA, and the Guardian. This requires the CSI node DaemonSet to run on MDS/storage hosts (§14.1).
 
 **(b) The NFS server: a co-located system service.** The kernel `nfsd` threads plus the userspace daemons `rpc.mountd` and `rpc.statd`. Kernel `nfsd` and `/etc/exports` are host-global and must run where the XFS is actually mounted, which is also why one host serves every export bound to it. This is a **long-running daemon set started at node bring-up**, either a systemd unit on the host or a container in the storage-node DaemonSet with `hostNetwork` and access to `/proc/fs/nfsd`. Ship `nfs-utils` in the storage-node image (sbcli packaging). It is **not** an HTTP surface and nothing "serves" it on request. §8.1 and §14.1 cover provisioning. (`blkmapd`/`nfs-blkmap` is a **client-side** daemon (§10) and does *not* run on the MDS.)
 
@@ -357,7 +357,7 @@ the MDS-host csi-node to assemble it. Earlier drafts left this open between an a
 gRPC endpoint, a node-watched CR, and a synthetic stage call. It is settled: the
 operator drives export assembly over **csi-link**, the operator-to-CSI channel that
 lands in 26.4 (`atlas-lib/link` and `atlas-lib/node`, with `operator/internal/csilink`
-and `csi-driver/pkg/csilink` as the two ends). Nothing new gets invented for pNFS.
+and `csi-driver/internal/csilink` as the two ends). Nothing new gets invented for pNFS.
 
 Three properties of that channel shape this design rather than merely enabling it:
 
@@ -820,7 +820,7 @@ Keep `STAGE_UNSTAGE_VOLUME`. `NodeGetVolumeStats` uses `statfs` on the NFS mount
 
 ## 11. Volume Handle and Data Model
 
-The current handle is `{clusterID}:{poolID}:{lvolID}` and `volumehandle.Parse` enforces exactly three parts with a UUID cluster and lvol (`csi-driver/pkg/kubernetes/volumehandle/index.go`). A pNFS volume adds an MDS binding and an export, so the handle needs a form of its own.
+The current handle is `{clusterID}:{poolID}:{lvolID}` and `volumehandle.Parse` enforces exactly three parts with a UUID cluster and lvol (`csi-driver/internal/kubernetes/volumehandle/index.go`). A pNFS volume adds an MDS binding and an export, so the handle needs a form of its own.
 
 **The handle is `nfs:{clusterID}:{poolID}:{exportUUID}`,** a synthetic four-part form that `volumehandle.Parse` learns alongside the existing three-part one. `exportUUID` keys the `NFSExport` CR, and everything else is read from there. The handle stays synthetic even though this design has exactly one backing lvol, because reusing the lvol id would make the handle change identity the moment striping arrives.
 
@@ -1296,6 +1296,6 @@ mount -t nfs -o v4.1 <export-service-clusterip>:/mnt/<pvc-name> <staging-path>
 - **PR:** Persistent Reservations (SCSI-3 / NVMe): used by pNFS SCSI layout to fence clients and protect shared devices.
 - **Consistency group:** a set of lvols snapshotted or cloned atomically so a striped filesystem stays crash-consistent. Out of scope here, and the subject of [`design-pnfs-striped.md`](design-pnfs-striped.md).
 - **SNodeAPI:** the simplyblock storage-node agent (`simplyblock_web/node_webapp.py`). For pNFS it only grows capability reporting for MDS eligibility, not the export logic.
-- **`csi-node`:** the CSI node plugin (`csi-driver/pkg/spdk/nodeserver.go`). It owns NVMe-oF connect and reconnect and, for pNFS, the server-side export assembly (XFS, mount, and `exportfs`) on the MDS host.
+- **`csi-node`:** the CSI node plugin (`csi-driver/internal/spdk/nodeserver.go`). It owns NVMe-oF connect and reconnect and, for pNFS, the server-side export assembly (XFS, mount, and `exportfs`) on the MDS host.
 - **csi-link:** the operator-to-CSI channel (`atlas-lib/link`, `atlas-lib/node`) that carries export operations to the MDS host (§6.4).
 - **Export agent:** earlier term for the export executor. In this design that role is filled by **csi-node**.

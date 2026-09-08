@@ -9,8 +9,8 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 const testDriverName = "test.csi.simplyblock.io"

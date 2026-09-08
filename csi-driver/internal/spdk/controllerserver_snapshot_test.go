@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 // createSourceVolume provisions a normal volume through the controller and

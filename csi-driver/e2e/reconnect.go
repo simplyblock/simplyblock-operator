@@ -15,7 +15,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 
-	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
+	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 // The subsystem listing the suite parses, reduced to the fields it needs. The

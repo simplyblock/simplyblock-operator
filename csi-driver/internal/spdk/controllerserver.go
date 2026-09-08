@@ -28,7 +28,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/kube"
-	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
+	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -38,8 +38,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 // var errVolumeInCreation = status.Error(codes.Internal, "volume in creation")

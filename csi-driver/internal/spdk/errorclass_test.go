@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 func TestClassifyControlPlaneError_HTTPStatuses(t *testing.T) {

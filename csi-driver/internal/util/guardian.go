@@ -25,7 +25,7 @@ import (
 	"k8s.io/klog"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
 
 // defaultBrokenLvolGracePeriod is the default value for BrokenLvolGracePeriod.

@@ -30,9 +30,9 @@ import (
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	"github.com/spdk/spdk-csi/pkg/csilink"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	"github.com/simplyblock/csi-driver/internal/csilink"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 func Run(conf *util.Config) {

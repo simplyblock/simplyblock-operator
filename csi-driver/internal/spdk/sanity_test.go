@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 // ---------------------------------------------------------------------------

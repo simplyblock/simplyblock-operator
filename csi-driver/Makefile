@@ -15,7 +15,7 @@
 # build output dir
 BUILD_DIR := ./build
 # go source, scripts
-SOURCE_DIRS := cmd pkg
+SOURCE_DIRS := cmd internal
 SCRIPT_DIRS := scripts deploy e2e
 # goarch for cross building
 ifeq ($(origin GOARCH), undefined)

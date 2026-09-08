@@ -20,7 +20,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	testingexec "k8s.io/utils/exec/testing"
 
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
 
 const (

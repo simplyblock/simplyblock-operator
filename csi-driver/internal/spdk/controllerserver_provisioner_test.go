@@ -15,7 +15,7 @@ import (
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
 )
 
 // startCSIController boots the real controller behind a gRPC server (exactly as

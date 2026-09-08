@@ -35,7 +35,7 @@ Scenario phrasing follows the sibling plans under `operator/docs/tests/`.
 
 ---
 
-## 1. Unit Tests — CSI driver (`csi-driver/pkg`)
+## 1. Unit Tests — CSI driver (`csi-driver/internal`)
 
 Pure functions and server helpers, covered without external dependencies (mock `ClusterAPI` / mock HTTP).
 
@@ -64,7 +64,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 | U-14 | Malformed pNFS handle (wrong part count, non-UUID export) → `(Nil, false)` | Negative | —    |
 | U-15 | Empty / whitespace handle → `(Nil, false)`                                 | Negative | —    |
 
-#### CreateLVolData / API Client (design §6.2) — `csi-driver/pkg/util/nvmf_test.go` and `jsonrpc_test.go` (mock HTTP)
+#### CreateLVolData / API Client (design §6.2) — `csi-driver/internal/util/nvmf_test.go` and `jsonrpc_test.go` (mock HTTP)
 
 | #    | Scenario                                                                                 | Type     | Test |
 |------|------------------------------------------------------------------------------------------|----------|------|

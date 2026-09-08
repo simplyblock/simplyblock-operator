@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 // controlPlaneErrorClass is the CSI-level classification of a control-plane

@@ -48,9 +48,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi-common"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 type nodeServer struct {

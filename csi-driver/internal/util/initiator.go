@@ -39,7 +39,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
 
 const (

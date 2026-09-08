@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
 
 const testDriver = "csi.simplyblock.io"

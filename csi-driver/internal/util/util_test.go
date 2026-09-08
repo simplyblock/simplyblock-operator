@@ -21,7 +21,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 func TestVolumeContext(t *testing.T) {

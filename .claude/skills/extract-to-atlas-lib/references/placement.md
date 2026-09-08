@@ -46,32 +46,32 @@ package is unwanted, since the library is deliberately ahead of its consumers.
 It does mean that an extraction near that package should first check whether the
 thing being extracted is already sitting there unused.
 
-| Package          | operator | csi-driver | Note                                                                         |
-|------------------|----------|------------|------------------------------------------------------------------------------|
-| `ptr`            | 24       | 1          |                                                                              |
-| `kube`           | 16       | 2          |                                                                              |
-| `nvme`           | 4        | 4          |                                                                              |
-| `nvmeof`         | 4        | 2          | two connect implementations still exist, and the CSI driver uses `nvme-cli`  |
-| `lvm`            | 0        | 0          | adopted by `csi-driver/pkg/util/vdo.go` on PR #402, not yet merged to `main` |
-| `errs`           | 1        | 3          |                                                                              |
-| `errs/deferrers` | 0        | 3          |                                                                              |
-| `net`            | 1        | 0          |                                                                              |
-| `locks`          | 0        | 1          |                                                                              |
-| `nqn`            | 0        | 0          | both consumers spell the NQN out as a format string instead                  |
-| `lvol`           | 0        | 0          | both split the volume handle with `strings.Split(handle, ":")`               |
-| `errs/class`     | 0        | 0          | the operator has its own `internal/webapi/errorclass.go`                     |
-| `statemachine`   | 0        | 0          | 12 hand-rolled phase switches across 7 controller files                      |
-| `controlplane`   | 0        | 0          | see below                                                                    |
+| Package          | operator | csi-driver | Note                                                                              |
+|------------------|----------|------------|-----------------------------------------------------------------------------------|
+| `ptr`            | 24       | 1          |                                                                                   |
+| `kube`           | 16       | 2          |                                                                                   |
+| `nvme`           | 4        | 4          |                                                                                   |
+| `nvmeof`         | 4        | 2          | two connect implementations still exist, and the CSI driver uses `nvme-cli`       |
+| `lvm`            | 0        | 0          | adopted by `csi-driver/internal/util/vdo.go` on PR #402, not yet merged to `main` |
+| `errs`           | 1        | 3          |                                                                                   |
+| `errs/deferrers` | 0        | 3          |                                                                                   |
+| `net`            | 1        | 0          |                                                                                   |
+| `locks`          | 0        | 1          |                                                                                   |
+| `nqn`            | 0        | 0          | both consumers spell the NQN out as a format string instead                       |
+| `lvol`           | 0        | 0          | both split the volume handle with `strings.Split(handle, ":")`                    |
+| `errs/class`     | 0        | 0          | the operator has its own `internal/webapi/errorclass.go`                          |
+| `statemachine`   | 0        | 0          | 12 hand-rolled phase switches across 7 controller files                           |
+| `controlplane`   | 0        | 0          | see below                                                                         |
 
 ## The two legacy control-plane clients
 
 Both consumers still reach the control plane through their own client, and
 `atlas-lib/README.md` records the CSI half of this in a `_Today:_` note.
 
-| Client                        | Size        | Status                                                                                                                                |
-|-------------------------------|-------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| `operator/internal/webapi`    | 2,065 lines | **Being retired** in favor of `atlas-lib/controlplane`. Takes no investment: do not tidy it, do not extract from it, do not add to it |
-| `csi-driver/pkg/util/nvmf.go` | 341 lines   | The CSI half of the same duplication                                                                                                  |
+| Client                             | Size        | Status                                                                                                                                |
+|------------------------------------|-------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| `operator/internal/webapi`         | 2,065 lines | **Being retired** in favor of `atlas-lib/controlplane`. Takes no investment: do not tidy it, do not extract from it, do not add to it |
+| `csi-driver/internal/util/nvmf.go` | 341 lines   | The CSI half of the same duplication                                                                                                  |
 
 `atlas-lib/controlplane` already covers the operator client's surface
 (`CreateVolume`, `CreatePool`, `GetStorageNodes`, `GetStorageNodeNICs`,

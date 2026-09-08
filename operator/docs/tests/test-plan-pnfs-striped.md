@@ -32,7 +32,7 @@ names the implementing function, or `—` when nothing covers the scenario yet.
 
 ---
 
-## 1. Unit Tests — CSI driver (`csi-driver/pkg`)
+## 1. Unit Tests — CSI driver (`csi-driver/internal`)
 
 Mock `ClusterAPI` and mock HTTP. No cluster, no host commands.
 

@@ -19,7 +19,7 @@ subject. No blank line between the comment and the clause.
 package util
 ```
 
-(`csi-driver/pkg/util/initiator_device_test.go`, trimmed.)
+(`csi-driver/internal/util/initiator_device_test.go`, trimmed.)
 
 Go attaches a comment above `package` to the *package*, so in a multi-file
 package only one file should read as the package overview. The others describe

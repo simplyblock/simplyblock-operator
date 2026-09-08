@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog"
 
-	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
+	"github.com/simplyblock/csi-driver/internal/kubernetes/volumehandle"
 )
 
 // indexPersistentVolumeByCSIDriver is the IndexFunc that groups

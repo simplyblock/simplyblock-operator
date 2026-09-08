@@ -452,7 +452,7 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 // never depend on anything that can change post-registration. Cluster-scoping the
 // key (not just the value) also stops a worker hosting instances from more than one
 // SimplyBlock cluster from having one cluster's slot collide with another's.
-// Consumed by the CSI node plugin (csi-driver/pkg/spdk/nodeserver.go) to advertise
+// Consumed by the CSI node plugin (csi-driver/internal/spdk/nodeserver.go) to advertise
 // CSI topology, and by the CSI controller (createVolume) to co-locate a new volume's
 // primary with whichever worker the consuming Pod is scheduled to. Keep this literal
 // in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.

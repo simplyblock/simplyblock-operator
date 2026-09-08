@@ -1,7 +1,7 @@
 # Test Plan: Node-Side Volume Stack
 
 Related design: [`designs/design-node-volume-stack.md`](../designs/design-node-volume-stack.md)
-Harness: [`csi-driver/pkg/util`](../../../csi-driver/pkg/util), [`csi-driver/pkg/spdk`](../../../csi-driver/pkg/spdk), [`csi-driver/e2e`](../../../csi-driver/e2e)
+Harness: [`csi-driver/internal/util`](../../../csi-driver/internal/util), [`csi-driver/internal/spdk`](../../../csi-driver/internal/spdk), [`csi-driver/e2e`](../../../csi-driver/e2e)
 
 Scope: the operator, the CSI driver, and the Kubernetes surface of this
 repository. Control-plane (`sbcli`) and SPDK behavior is a dependency, faked at
@@ -42,12 +42,12 @@ written `design §n`.
 No host and no cluster. Layers are faked as recorders that log the verb, the
 index, and the artifact they received, so ordering and unwind rules are table
 tests. LVM and NVMe behavior is faked through a command runner and a sysfs
-fixture of the kind `csi-driver/pkg/util/initiator_device_test.go` already
+fixture of the kind `csi-driver/internal/util/initiator_device_test.go` already
 builds. Numbering runs continuously across the groups below.
 
 ### Plan Construction (design §3)
 
-File: `csi-driver/pkg/spdk/plan_test.go` (new)
+File: `csi-driver/internal/spdk/plan_test.go` (new)
 
 | #    | Scenario                                                                                                                                     | Type     | Test |
 |------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
@@ -140,7 +140,7 @@ File: `atlas-lib/volstack/record_test.go` (new)
 
 ### LVM Naming and Primitives (design §5.3, §5.4)
 
-File: `atlas-lib/lvm/lvm_test.go` (moved from `csi-driver/pkg/util/vdo.go`'s tests)
+File: `atlas-lib/lvm/lvm_test.go` (moved from `csi-driver/internal/util/vdo.go`'s tests)
 
 | #    | Scenario                                                                                                                                                  | Type       | Test |
 |------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
@@ -157,7 +157,7 @@ File: `atlas-lib/lvm/lvm_test.go` (moved from `csi-driver/pkg/util/vdo.go`'s tes
 
 ### Co-Tenant Detach (design §8)
 
-File: `csi-driver/pkg/util/initiator_device_test.go`, extended
+File: `csi-driver/internal/util/initiator_device_test.go`, extended
 
 | #    | Scenario                                                                                                                                  | Type     | Test                                                    |
 |------|-------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------|

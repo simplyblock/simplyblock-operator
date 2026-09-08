@@ -22,8 +22,8 @@ import (
 
 	"k8s.io/klog"
 
-	"github.com/spdk/spdk-csi/pkg/spdk"
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/simplyblock/csi-driver/internal/spdk"
+	"github.com/simplyblock/csi-driver/internal/util"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
+	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 )
 
 func pvWithHandle(name, driver, handle string) *corev1.PersistentVolume {
