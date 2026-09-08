@@ -15,6 +15,12 @@
 // and reads the ConfigMaps they write, and creates one ClusterDeploymentConfig
 // in Draft. Whether that document becomes a cluster is the reviewer's decision
 // and a different controller's job.
+//
+// It also deletes nothing, and holds no verb to. The Jobs and the reports both
+// carry an owner reference to the run, so deleting the run collects them and a
+// finished Job's own time to live collects it sooner. A delete verb with no
+// call path is blast radius a compromised controller would spend on somebody
+// else's ConfigMaps.
 
 package deployment
 
@@ -92,9 +98,9 @@ type OperatorOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile advances one operator operation by one step.

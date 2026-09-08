@@ -103,6 +103,18 @@ func (p MostAvailableNUMANode) Choose(
 			cmp.Compare(len(b.Devices), len(a.Devices)),
 			cmp.Compare(b.DeviceBytes, a.DeviceBytes),
 			cmp.Compare(b.PhysicalCores, a.PhysicalCores),
+			// A real memory node beats the bucket of devices that are on none.
+			// Pinning to a node is the whole point of the placement, so "no
+			// node in particular" is what to fall back to and never what to
+			// prefer — and the bucket is numbered -1, so comparing ids alone
+			// would rank it above node 0.
+			//
+			// The core count usually settles it first, because the unknown
+			// bucket is credited with none. That is not a guarantee: a
+			// worker whose CPU topology could not be read has no cores against
+			// any node, which Collect tolerates and records rather than
+			// failing on, and the comparison then falls through to here.
+			cmp.Compare(rank(a.Node), rank(b.Node)),
 			cmp.Compare(a.Node, b.Node),
 		)
 	})
@@ -164,6 +176,16 @@ func NUMANodeBreakdown(report nodeprobe.Report, admitted []nodeprobe.Device) []N
 		out = append(out, *byNode[id])
 	}
 	return out
+}
+
+// rank orders a bucket ahead of or behind the others before ids are compared:
+// every real memory node ranks the same, and the bucket that is not a node
+// ranks after all of them.
+func rank(node int) int {
+	if node == inventory.NUMANodeUnknown {
+		return 1
+	}
+	return 0
 }
 
 // describeNode names a memory node for a sentence, including the one that is not

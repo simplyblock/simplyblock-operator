@@ -89,6 +89,75 @@ func TestMostAvailableNUMANodeBreaksATieOnCapacityThenOnNode(t *testing.T) {
 	}
 }
 
+func TestMostAvailableNUMANodePrefersARealNodeOverNoNodeOnATie(t *testing.T) {
+	// The unknown bucket is numbered -1, so an id tie-break that simply
+	// compares numbers puts it ahead of node 0. Pinning to a real memory node
+	// is the entire point of the placement, and "no node in particular" is the
+	// answer to fall back to rather than the one to prefer.
+	//
+	// The core count usually breaks the tie first and hides this, because the
+	// unknown bucket is credited with no cores. It stops hiding it exactly when
+	// the CPU topology could not be read — which Collect tolerates and records
+	// rather than failing on, so a worker reaches the planner in that state.
+	const tb = uint64(1) << 40
+	worker := report("worker-1",
+		disk("nvme0n1", "0000:5e:00.0", 0, tb),
+		disk("nvme1n1", "0000:5f:00.0", 0, tb),
+		disk("nvme2n1", "0000:af:00.0", inventory.NUMANodeUnknown, tb),
+		disk("nvme3n1", "0000:b0:00.0", inventory.NUMANodeUnknown, tb),
+	)
+	worker.CPU.NUMANodes = nil
+	worker.Unreadable = []string{"read the CPU topology: no online CPUs"}
+
+	chosen, why := MostAvailableNUMANode{}.Choose(worker, worker.Devices)
+
+	got := addresses(chosen)
+	want := []string{"0000:5e:00.0", "0000:5f:00.0"}
+	if !slices.Equal(got, want) {
+		t.Errorf("chose %v, want node 0's pair %v: everything is equal but one "+
+			"bucket is a real memory node and the other is not", got, want)
+	}
+	if strings.Contains(why, "no memory node in particular carries") {
+		t.Errorf("the reason %q reads as though the unknown bucket won", why)
+	}
+}
+
+func TestMostAvailableNUMANodeStillUsesTheUnknownBucketWhenItIsTheOnlyOne(t *testing.T) {
+	// A virtual worker reports no memory node for anything, and its disks are
+	// still its disks: preferring real nodes must not become refusing a machine
+	// that has none.
+	const tb = uint64(1) << 40
+	worker := report("worker-1",
+		disk("nvme0n1", "0000:5e:00.0", inventory.NUMANodeUnknown, tb),
+		disk("nvme1n1", "0000:5f:00.0", inventory.NUMANodeUnknown, tb),
+	)
+
+	chosen, _ := MostAvailableNUMANode{}.Choose(worker, worker.Devices)
+
+	if len(chosen) != 2 {
+		t.Errorf("chose %d of 2 disks on a machine that reports no memory node", len(chosen))
+	}
+}
+
+func TestMostAvailableNUMANodeStillPrefersMoreDisksThanARealNode(t *testing.T) {
+	// Preferring a real node is a tie-break, not an override: four unplaced
+	// disks beat one on node 0, because the count is what a stripe is laid
+	// across.
+	const tb = uint64(1) << 40
+	worker := report("worker-1",
+		disk("nvme0n1", "0000:5e:00.0", 0, tb),
+		disk("nvme1n1", "0000:af:00.0", inventory.NUMANodeUnknown, tb),
+		disk("nvme2n1", "0000:b0:00.0", inventory.NUMANodeUnknown, tb),
+	)
+
+	chosen, _ := MostAvailableNUMANode{}.Choose(worker, worker.Devices)
+
+	if len(chosen) != 2 {
+		t.Errorf("chose %d disks, want the unplaced pair: a real node breaks a tie "+
+			"and does not outrank a larger set", len(chosen))
+	}
+}
+
 func TestMostAvailableNUMANodeSaysWhenThereWasNothingToChoose(t *testing.T) {
 	// A one-socket machine, or a machine whose disks all hang off one node. The
 	// reason has to read differently from a comparison, because there was none.

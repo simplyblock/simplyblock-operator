@@ -5,7 +5,7 @@
 # Draft. It changes nothing else: the draft is inert until somebody sets
 # spec.approved on it.
 #
-#   kubectl apply -f storage_v1alpha1_operatorops.yaml
+#   kubectl apply -f storage_v1alpha2_operatorops.yaml
 #   kubectl get oops discover-now -w
 #   kubectl get cdc
 #
