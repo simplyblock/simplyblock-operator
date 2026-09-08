@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageNodeOps`)  
-**Date:** 2026-08-28  
+**Date:** 2026-08-28 (last updated 2026-09-08)  
 **Supersedes:** `design-storagenodeset-storagenode.md` and `design-node-removal-draining.md`, both removed in the same change  
 **Test Plan:** [`tests/test-plan-storagenode.md`](../../tests/test-plan-storagenode.md)
 
@@ -411,9 +411,25 @@ says how far the operator has got, and the other says what the control plane
 reports.
 
 `status.health`, `status.hostname`, and `status.uptime` are backend observations.
-`status.resources` groups the reported CPU count, memory, volume count, and the
-device summary, and `status.ports` groups the management address and the NVMe-oF,
-logical-volume, and RPC ports.
+`status.resources` groups the reported CPU count, memory, volume count, device
+summary, and storage occupancy, and `status.ports` groups the management address
+and the NVMe-oF, logical-volume, and RPC ports.
+
+`status.resources.capacity` carries the two numbers a device's capacity carries
+([`design-storagedevice.md`](design-storagedevice.md) §4.2), because a node's is
+the sum of its devices' and a reader comparing them should not have to reconcile
+two shapes, plus the time the reading was taken. It is a measurement, and it is in
+status because a node passes the three tests
+[`design-crd-model.md`](design-crd-model.md) §7.13 sets: there is one object per
+node, the fullness of a node is what placement and capacity planning are about, and
+the reading is written with hysteresis. The controller records a sample when it is
+the first one, when the used size has moved by at least one percent of the node's
+own total, or when the total itself changed, which is what a device joining or
+leaving looks like. Everything else carries the previous value forward, so the
+patch is empty and the reconciler does not retrigger itself for as long as the node
+is serving I/O. Each volume's own occupancy is served from
+`metrics.simplyblock.io` against the claim that names it, rather than listed here
+([`design-crd-model.md`](design-crd-model.md) §7.13).
 
 `status.resources.devices` is a block of two counts rather than a string, absent
 until the control plane has reported. It is a summary rather than an inventory:
@@ -565,6 +581,10 @@ status:
     devices:
       online: 4
       total: 4
+    capacity:
+      totalBytes: 15363023929344
+      usedBytes: 7681511964672
+      sampledAt: "2026-09-08T09:14:02Z"
   ports:
     management: 10.0.3.14
     nvmeof: 4420
@@ -1617,6 +1637,16 @@ that returns**, and it arrives with the control plane's SSE work rather than wit
 this design ([`design-crd-model.md`](design-crd-model.md) §7.7). Until that lands it
 is the one external dependency this design cannot satisfy on its own.
 
+**`status.resources.capacity` comes from a second endpoint, and not from this
+table.** Neither the node list nor the node stream carries how full a node is. The
+numbers exist only in the metrics the control plane exports, where
+`snode_size_total`, `snode_size_used`, and `snode_date` carry them per node under
+an `snode` label, and the operator reads them through Prometheus with
+`atlas-lib/prometheus`. A deployment with no reachable Prometheus publishes the
+node with its capacity absent rather than zero, because a node whose occupancy is
+momentarily unknown is worth publishing and its identity and health are not in
+doubt (§3.3).
+
 **One capability the control plane does not provide.** There is no way to tell
 whether a restart has begun other than observing that the node has left `online`,
 which is the negative predicate §9 has to rely on. A restart generation, or any
@@ -2196,6 +2226,40 @@ type StorageNodeResources struct {
 	// that genuinely has no devices.
 	// +optional
 	Devices *StorageNodeDevices `json:"devices,omitempty"`
+
+	// Capacity is how much of the node's storage is in use, summed over its
+	// devices. It is a measurement rather than a declaration, so it is absent
+	// until something has measured it, and it lags reality by the interval at
+	// which the control plane's metrics are scraped.
+	// +optional
+	Capacity *StorageNodeCapacity `json:"capacity,omitempty"`
+}
+
+// StorageNodeCapacity is a node's storage occupancy, as the control plane last
+// measured it.
+//
+// It carries the same two numbers as a device's capacity, because a node's is the
+// sum of its devices' and a reader comparing the two should not have to reconcile
+// different shapes. It is written only when the reading has moved materially: a
+// sample that changed by a few blocks is not worth an etcd write, and writing
+// every sample would make the reconciler retrigger itself on its own status
+// update.
+type StorageNodeCapacity struct {
+	// TotalBytes is the storage the node's devices provide.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	TotalBytes *int64 `json:"totalBytes,omitempty"`
+
+	// UsedBytes is what they currently hold.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	UsedBytes *int64 `json:"usedBytes,omitempty"`
+
+	// SampledAt is when the control plane took the reading. It is not when the
+	// object was written, and it may be considerably older if metrics collection
+	// has stopped.
+	// +optional
+	SampledAt *metav1.Time `json:"sampledAt,omitempty"`
 }
 
 // StorageNodePorts groups the addresses and ports a node listens on.

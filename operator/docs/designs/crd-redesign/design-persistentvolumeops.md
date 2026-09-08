@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30  
+**Date:** 2026-08-30 (last updated 2026-09-08)  
 **Test Plan:** [`tests/test-plan-persistentvolumeops.md`](../../tests/test-plan-persistentvolumeops.md)
 
 This document specifies the target model. `VolumeMigration` is registered and is
@@ -605,6 +605,13 @@ exists because that condition blocked every later migration on the volume.
 production defect.** A migration whose `Validating` step is fast and whose
 `Migrating` step is fast, but which takes half an hour, is a migration spending its
 time somewhere the merged phase enum could not name.
+
+**How much of a volume is actually used is served from `metrics.simplyblock.io`,
+as a `LogicalVolumeMetrics` object named after the claim.** That is the same name and
+namespace this kind's events are mirrored onto, so an application owner deciding
+whether a volume is worth moving and an administrator reading the operation's
+audit record are looking at one identity
+([`design-crd-model.md`](design-crd-model.md) §7.13).
 
 **`stale_paths_total` should be flat at zero.** Any value above it means §5's
 `Verifying` step is not doing its job, and the consequence is not visible until a

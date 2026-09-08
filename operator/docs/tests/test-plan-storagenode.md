@@ -130,6 +130,12 @@ File: `operator/internal/controllers/node/storagenode_controller_unit_test.go`
 | U-236 | A node reporting 3 of 4 devices online: `devices.online` 3, `devices.total` 4 | Positive | —    |
 | U-237 | A node whose devices have not been reported: `devices` absent, not `{0, 0}`   | Boundary | —    |
 | U-238 | A node with zero devices online: `devices.online` is 0 and present            | Boundary | —    |
+| U-249 | The first capacity sample: `resources.capacity` written with its `sampledAt`  | Positive | —    |
+| U-250 | A sample under the one-percent threshold: the reconcile issues no patch       | Negative | —    |
+| U-251 | A sample over it: the new used size and the new sample time are written       | Positive | —    |
+| U-252 | The total changed because a device joined: written whatever the used delta is | Boundary | —    |
+| U-253 | The capacity source is unreachable: the node is published without `capacity`  | Negative | —    |
+| U-254 | A node the exporter has never measured: `capacity` absent rather than zeros   | Boundary | —    |
 
 ### Entity: Deletion (design §4.5)
 
@@ -654,11 +660,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 248       | 87      | 161         |
-| Integration | 45        | 1       | 44          |
+| Unit        | 254       | 87      | 167         |
+| Integration | 52        | 1       | 51          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **324**   | **88**  | **236**     |
+| **Total**   | **337**   | **88**  | **249**     |
 
 Eighty-seven of the eighty-eight covered scenarios are unit tests, and they
 concentrate in three places: the workload builders, the drain's volume
@@ -686,6 +692,7 @@ not exist yet, and §6 separates the two.
 | U-38 … U-40, U-43          | Positional UUID resolution for multi-socket workers                                           | `pollUUIDFromBackend` has no test reference, and the RPC-port ordering it depends on is an assumption nothing asserts                                                                                                                                                            |
 | U-44 … U-47                | Every adoption route                                                                          | No test reference at all, and adoption is the migration path off Helm and the path every pre-existing cluster takes                                                                                                                                                              |
 | U-48 … U-52, U-236 … U-238 | Steady-state sync, and the device counts                                                      | `syncStatus` has no test reference. The early return is what keeps an idle cluster from writing, and the device rows pin an ordering the string form got backward (design §15.1)                                                                                                 |
+| U-249 … U-254              | The node's capacity sample and its write threshold                                            | Planned, not built. Nothing samples a node's occupancy today, and the threshold is what keeps a node that is serving I/O from reconciling itself (design §3.3)                                                                                                                   |
 | U-56 … U-59                | Deletion while an operation runs, and the non-online cases                                    | The finalizer hold has no test, and it is what stops a delete from orphaning a backend node                                                                                                                                                                                      |
 | U-64                       | A look-alike service account in another namespace                                             | The prefix match is string-based, and nothing asserts it cannot be spoofed by a namespace name                                                                                                                                                                                   |
 | U-75, U-76                 | Workload ownership by the `StorageCluster`                                                    | Planned, not built. The objects are owned by `StorageNodeSet` today, and the reparent is design §15.3                                                                                                                                                                            |
@@ -739,6 +746,10 @@ combination nothing exercises.
 |                           | Terminal re-reconcile     | U-117                                                           |
 |                           | Deletion mid-operation    | U-119, I-19, I-27                                               |
 |                           | Host death mid-operation  | M-02                                                            |
+| Capacity sampling         | A first reading           | U-249                                                           |
+|                           | Below the write threshold | U-250                                                           |
+|                           | Above it, or a new total  | U-251, U-252                                                    |
+|                           | Unreachable or unmeasured | U-253, U-254                                                    |
 | Actor                     | Operator-raised operation | U-54, U-201                                                     |
 |                           | User-created operation    | Every operation scenario except those two                       |
 |                           | Webhook path              | U-60 … U-64, I-08, I-09                                         |

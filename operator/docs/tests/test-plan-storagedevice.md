@@ -53,23 +53,27 @@ File: `operator/internal/controllers/node/storagedevice_projection_test.go`
 
 ### Status Mapping (design §4.2)
 
-| #    | Scenario                                                                      | Type     | Test |
-|------|-------------------------------------------------------------------------------|----------|------|
-| U-11 | An online device maps to phase `Online`                                       | Positive | —    |
-| U-12 | A failed device maps to `Failed`                                              | Positive | —    |
-| U-13 | A device under test maps to `Degraded`, not `Failed`                          | Boundary | —    |
-| U-14 | A new device not yet in the layout maps to `Degraded`                         | Boundary | —    |
-| U-15 | A removed device maps to `Removed`                                            | Positive | —    |
-| U-16 | An unrecognized device status: preserved verbatim in `status.deviceStatus`    | Positive | —    |
-| U-17 | `status.capacity` carries the total and used bytes                            | Positive | —    |
-| U-18 | The control plane returns no capacity: the fields stay absent, not zero       | Boundary | —    |
-| U-19 | `status.hardware` carries the PCI address, serial, model, and namespace path  | Positive | —    |
-| U-20 | The control plane returns no hardware fields: the block stays absent          | Boundary | —    |
-| U-58 | An NVMe device: a PCI address and an `/dev/nvme*` path                        | Positive | —    |
-| U-59 | A logical block device: no PCI address, a `/dev/sd*` path                     | Positive | —    |
-| U-60 | A `Failed` device on an offline node: the phase is kept, not `Unknown`        | Boundary | —    |
-| U-21 | `status.role` reflects whether the device carries a journal, storage, or both | Positive | —    |
-| U-22 | A used-bytes value above the total: reported as given, not clamped            | Boundary | —    |
+| #    | Scenario                                                                          | Type     | Test |
+|------|-----------------------------------------------------------------------------------|----------|------|
+| U-11 | An online device maps to phase `Online`                                           | Positive | —    |
+| U-12 | A failed device maps to `Failed`                                                  | Positive | —    |
+| U-13 | A device under test maps to `Degraded`, not `Failed`                              | Boundary | —    |
+| U-14 | A new device not yet in the layout maps to `Degraded`                             | Boundary | —    |
+| U-15 | A removed device maps to `Removed`                                                | Positive | —    |
+| U-16 | An unrecognized device status: preserved verbatim in `status.deviceStatus`        | Positive | —    |
+| U-17 | `status.capacity` carries the total and used bytes                                | Positive | —    |
+| U-18 | The control plane returns no capacity: the fields stay absent, not zero           | Boundary | —    |
+| U-19 | `status.hardware` carries the PCI address, serial, model, and namespace path      | Positive | —    |
+| U-20 | The control plane returns no hardware fields: the block stays absent              | Boundary | —    |
+| U-58 | An NVMe device: a PCI address and an `/dev/nvme*` path                            | Positive | —    |
+| U-59 | A logical block device: no PCI address, a `/dev/sd*` path                         | Positive | —    |
+| U-60 | A `Failed` device on an offline node: the phase is kept, not `Unknown`            | Boundary | —    |
+| U-21 | `status.role` reflects whether the device carries a journal, storage, or both     | Positive | —    |
+| U-22 | A used-bytes value above the total: reported as given, not clamped                | Boundary | —    |
+| U-63 | `status.capacity.sampledAt` carries the time the exporter took the reading        | Positive | —    |
+| U-64 | A sample under the one-percent threshold: the reconcile issues no patch           | Negative | —    |
+| U-65 | A sample over it, or a changed total: the value and the sample time are written   | Positive | —    |
+| U-66 | No reachable metrics source: `capacity` absent and the rest of the status written | Negative | —    |
 
 ### A Device That Stops Being Reported (design §5.2)
 
@@ -246,11 +250,11 @@ node down with it and costs the cluster a node's worth of redundancy.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 57        | 0       | 57          |
+| Unit        | 66        | 0       | 66          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **87**    | **0**   | **87**      |
+| **Total**   | **96**    | **0**   | **96**      |
 
 Nothing is covered, and nothing can be: neither kind exists. The device API it reads
 from does (design §7), so this plan is a specification of a kind that can be built
@@ -261,53 +265,56 @@ endpoints still have to appear.
 
 ## 6. What Is Not Yet Covered
 
-| #                       | Gap                                                          | Reason                                                                                                                 |
-|-------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-10             | Object projection                                            | The kind does not exist. These are the rows to write first, because the projection is pure                             |
-| U-11 … U-22             | Status mapping                                               | The kind does not exist. Design §7 confirms the hardware fields are reported, so `U-19` and `U-20` are unblocked       |
-| U-23 … U-29             | A device that stops being reported                           | The kind does not exist. `U-26` to `U-28` are the rows that keep a control-plane error from deleting a fleet's objects |
-| U-30 … U-33, U-61, U-62 | Deletion, the protection, and the cascade                    | The kind does not exist                                                                                                |
-| U-34 … U-46             | `Restart` and `Test`                                         | `StorageDeviceOps` does not exist, and design §7 records the endpoints as unverified                                   |
-| U-47 … U-57             | `Remove` and the redundancy check                            | The kind does not exist. `U-48` to `U-51` are the arithmetic that stands between a removal and data loss               |
-| I-01 … I-14             | Admission, cascade, and label selection                      | Needs `envtest`, because `Required`, immutability, and garbage collection are the API server's                         |
-| E-01 … E-13             | All end-to-end scenarios                                     | Needs a live cluster with real storage hardware. The e2e harness under `test/` is not committed yet                    |
-| E-02                    | Hardware fields matching the host                            | Design §7 confirms the fields are reported, so this row verifies they match reality kind is useful in an incident      |
-| E-10, E-11              | `Remove` end to end                                          | Destroys capacity. Needs hardware somebody is willing to lose                                                          |
-| M-01 … M-03             | A pulled drive, a removal at the limit, and a device restart | Need physical access, a cluster at its redundancy limit, and a sustained workload                                      |
-| Metrics                 | The seven metrics of design §8.2                             | Designed, not built                                                                                                    |
-| Events                  | The twelve reasons of design §8.1                            | Designed, not built                                                                                                    |
-| Q1                      | Whether the control plane exposes devices                    | Design §11 records it as unverified. Every row here assumes it does                                                    |
-| Q3                      | Whether `Remove` should rewrite the node's device list       | Design §11 leaves it open, so no row asserts what happens to `spec.config.deviceNames` after a removal                 |
-| Deletion                | Objects survive an offline node                              | Design §5.2 settles it: they are kept and moved to `Unknown`, which `U-28` and `U-60` assert                           |
+| #                        | Gap                                                          | Reason                                                                                                                 |
+|--------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| U-01 … U-10              | Object projection                                            | The kind does not exist. These are the rows to write first, because the projection is pure                             |
+| U-11 … U-22, U-63 … U-66 | Status mapping                                               | The kind does not exist. Design §7 confirms the hardware fields are reported, so `U-19` and `U-20` are unblocked       |
+| U-23 … U-29              | A device that stops being reported                           | The kind does not exist. `U-26` to `U-28` are the rows that keep a control-plane error from deleting a fleet's objects |
+| U-30 … U-33, U-61, U-62  | Deletion, the protection, and the cascade                    | The kind does not exist                                                                                                |
+| U-34 … U-46              | `Restart` and `Test`                                         | `StorageDeviceOps` does not exist, and design §7 records the endpoints as unverified                                   |
+| U-47 … U-57              | `Remove` and the redundancy check                            | The kind does not exist. `U-48` to `U-51` are the arithmetic that stands between a removal and data loss               |
+| I-01 … I-14              | Admission, cascade, and label selection                      | Needs `envtest`, because `Required`, immutability, and garbage collection are the API server's                         |
+| E-01 … E-13              | All end-to-end scenarios                                     | Needs a live cluster with real storage hardware. The e2e harness under `test/` is not committed yet                    |
+| E-02                     | Hardware fields matching the host                            | Design §7 confirms the fields are reported, so this row verifies they match reality kind is useful in an incident      |
+| E-10, E-11               | `Remove` end to end                                          | Destroys capacity. Needs hardware somebody is willing to lose                                                          |
+| M-01 … M-03              | A pulled drive, a removal at the limit, and a device restart | Need physical access, a cluster at its redundancy limit, and a sustained workload                                      |
+| Metrics                  | The seven metrics of design §8.2                             | Designed, not built                                                                                                    |
+| Events                   | The twelve reasons of design §8.1                            | Designed, not built                                                                                                    |
+| Q1                       | Whether the control plane exposes devices                    | Design §11 records it as unverified. Every row here assumes it does                                                    |
+| Q3                       | Whether `Remove` should rewrite the node's device list       | Design §11 leaves it open, so no row asserts what happens to `spec.config.deviceNames` after a removal                 |
+| Deletion                 | Objects survive an offline node                              | Design §5.2 settles it: they are kept and moved to `Unknown`, which `U-28` and `U-60` assert                           |
 
 ### Axis coverage
 
-| Axis                  | Value                        | Scenarios        |
-|-----------------------|------------------------------|------------------|
-| Devices per node      | Zero                         | U-06             |
-|                       | One                          | U-07             |
-|                       | Four                         | U-01, E-01, M-03 |
-|                       | Eight hundred across a fleet | E-13             |
-| Device state          | Online                       | U-11             |
-|                       | Degraded, testing or new     | U-13, U-14       |
-|                       | Failed                       | U-12, U-51       |
-|                       | Removed                      | U-15             |
-|                       | Unrecognized                 | U-16             |
-| Device role           | Storage                      | U-21             |
-|                       | Journal                      | U-57             |
-| Redundancy headroom   | Spare                        | U-47, E-10       |
-|                       | Exactly at the limit         | U-49, E-11, M-02 |
-|                       | One below the limit          | U-50             |
-|                       | Forced past the check        | U-52, M-02       |
-|                       | Unreported                   | U-54             |
-| Disappearance cause   | Removed by an operation      | U-23             |
-|                       | Pulled physically            | U-24, E-05, M-01 |
-|                       | Control-plane error          | U-26, U-27       |
-|                       | Node offline                 | U-28, E-12       |
-| Capacity distribution | Even                         | E-03             |
-|                       | One device near full         | E-04             |
-| Namespace count       | Single                       | Most scenarios   |
-|                       | Multiple                     | I-12             |
+| Axis                  | Value                               | Scenarios        |
+|-----------------------|-------------------------------------|------------------|
+| Devices per node      | Zero                                | U-06             |
+|                       | One                                 | U-07             |
+|                       | Four                                | U-01, E-01, M-03 |
+|                       | Eight hundred across a fleet        | E-13             |
+| Device state          | Online                              | U-11             |
+|                       | Degraded, testing or new            | U-13, U-14       |
+|                       | Failed                              | U-12, U-51       |
+|                       | Removed                             | U-15             |
+|                       | Unrecognized                        | U-16             |
+| Device role           | Storage                             | U-21             |
+|                       | Journal                             | U-57             |
+| Redundancy headroom   | Spare                               | U-47, E-10       |
+|                       | Exactly at the limit                | U-49, E-11, M-02 |
+|                       | One below the limit                 | U-50             |
+|                       | Forced past the check               | U-52, M-02       |
+|                       | Unreported                          | U-54             |
+| Disappearance cause   | Removed by an operation             | U-23             |
+|                       | Pulled physically                   | U-24, E-05, M-01 |
+|                       | Control-plane error                 | U-26, U-27       |
+|                       | Node offline                        | U-28, E-12       |
+| Capacity distribution | Even                                | E-03             |
+|                       | One device near full                | E-04             |
+| Capacity sampling     | A first reading, or a material move | U-63, U-65       |
+|                       | Below the write threshold           | U-64             |
+|                       | No reachable source                 | U-66             |
+| Namespace count       | Single                              | Most scenarios   |
+|                       | Multiple                            | I-12             |
 
 **The redundancy-headroom axis is the one that matters and it has five values,
 all covered.** `U-48` to `U-52` and `M-02` are the arithmetic and the act that

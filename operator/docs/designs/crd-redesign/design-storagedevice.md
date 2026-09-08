@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30  
+**Date:** 2026-08-30 (last updated 2026-09-08)  
 **Test Plan:** [`tests/test-plan-storagedevice.md`](../../tests/test-plan-storagedevice.md)
 
 Both kinds are new. Nothing in this document exists, and §10 is what it replaces
@@ -191,7 +191,22 @@ recovers from and `Failed` is the phase it is replaced from, and keeping the two
 is what stops a suspect device rejoining the layout on the strength of one good
 reconcile.
 
-`status.capacity` groups the size, the used bytes, and the derived ratio.
+`status.capacity` groups the size, the used bytes, the derived ratio, and the time
+the reading was taken.
+
+**A device's occupancy is a measurement, and it is in status because a device
+satisfies every condition the model puts on one.** The rule is
+[`design-crd-model.md`](design-crd-model.md) §7.13: a measured number stays in a
+status when the object count is the fleet's rather than the workload's, when
+something in Kubernetes reads it, and when it is written with hysteresis. All
+three hold here. There is one object per drive, the alarm at §8.1 and the print
+columns of Appendix A read the number, and the controller writes a fresh sample
+only when the used size has moved by at least one percent of the device's own
+total or when the total itself changed, which is what a device being replaced
+looks like. `sampledAt` carries what the object otherwise cannot say, because a
+reading that stopped being taken is not the same as a device that stopped filling
+up. A volume's occupancy holds none of the three and is served from
+`metrics.simplyblock.io`.
 
 `status.hardware` groups what the device is: its type, its serial number, its model,
 the path the host sees it at, and its PCI address where it has one. Those are what
@@ -251,6 +266,7 @@ status:
   capacity:
     totalBytes: 3840755982336
     usedBytes: 1920377991168
+    sampledAt: "2026-09-08T09:14:02Z"
   hardware:
     pciAddress: "0000:5e:00.0"
     serialNumber: S4J9NX0R500123
@@ -269,6 +285,7 @@ status:
   role: Storage
   capacity:
     totalBytes: 16000900661248
+    sampledAt: "2026-09-08T09:14:02Z"
   hardware:
     serialNumber: WD-WMC4N0D9AXYZ
     model: WDC WUH721816ALE6L4
@@ -639,6 +656,17 @@ action: `self-test`, `fail`, `detach`, and the adopt call. Each is a request rat
 an observation, so a missing one removes an action and leaves the rest of the kind
 standing.
 
+**`status.capacity` is read from the control plane's exported metrics rather than
+from the device list.** The `DeviceDTO` does populate a capacity block, and the
+watch stream sends no event when the numbers in it move, so an object fed from the
+stream holds whatever the last snapshot said. The current numbers are the
+`device_size_total`, `device_size_used`, and `device_date` gauges the same service
+exports, keyed by a `device` label and read through `atlas-lib/prometheus`. A
+deployment with no reachable Prometheus therefore publishes a device with no
+`status.capacity` at all, because a device whose occupancy is momentarily unknown
+is worth publishing and a zero is the reading of an empty drive rather than the
+absence of a reading.
+
 ---
 
 ## 8. Observability
@@ -805,6 +833,12 @@ const (
 // capacity is the sum of these, and a cluster at seventy per cent with one
 // device at ninety-eight is a cluster whose own thresholds cannot see the
 // problem.
+//
+// It is a measurement rather than a declaration, so it is absent until something
+// has measured it and it is written only when the reading has moved materially. A
+// sample that changed by a few blocks is not worth an etcd write, and writing
+// every sample would make the reconciler retrigger itself on its own status
+// update.
 type DeviceCapacity struct {
 	// TotalBytes is the device's usable size.
 	// +kubebuilder:validation:Minimum=0
@@ -815,6 +849,12 @@ type DeviceCapacity struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	UsedBytes *int64 `json:"usedBytes,omitempty"`
+
+	// SampledAt is when the reading was taken. It is not when the object was
+	// written, and it may be considerably older if metrics collection has
+	// stopped.
+	// +optional
+	SampledAt *metav1.Time `json:"sampledAt,omitempty"`
 }
 
 // DeviceHardware identifies the part. These are what somebody walking into a

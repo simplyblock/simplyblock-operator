@@ -2,8 +2,8 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-19 (last updated 2026-08-28)  
-**API group:** `storage.simplyblock.io/v1alpha1`  
+**Date:** 2026-08-19 (last updated 2026-09-08)  
+**API groups:** `storage.simplyblock.io/v1alpha1`, and `metrics.simplyblock.io/v1alpha1` for the readings that are not resources (§7.13)  
 **Diagram:** [`assets/crd-overview.jpg`](assets/crd-overview.jpg)
 
 ---
@@ -38,6 +38,12 @@ whole kind (§3). **Ownership is a tree**, and that tree is simultaneously the
 creation order, the deletion order, and the mental model of the system (§5).
 Every other edge in the diagram is a reference, which looks similar on a drawing
 and behaves nothing like it when something is deleted.
+
+One group is not enough for all of it. A measurement of a volume is not desired
+state, nothing reconciles toward it, and storing one per volume would write the
+workload's I/O rate into etcd, so measurements are served from a second group,
+`metrics.simplyblock.io/v1alpha1`, by an aggregated API server rather than kept as
+resources. Which of the two a number belongs in is §7.13.
 
 ---
 
@@ -103,6 +109,8 @@ becomes permanent the moment a version ships that users are entitled to keep.
   exception to it (§7.8).
 - State that every kind reports the generation its status was computed from, and
   that writing it is not optional (§7.9).
+- State where a measurement belongs, so that a reading is served from the metrics
+  group rather than written to etcd as a resource nothing reconciles (§7.13).
 - State that backend state reaches a controller by push, so that no per-kind
   design specifies a poll (§7.7).
 - State the ownership spine as a single tree, and say what a solid edge costs
@@ -724,6 +732,10 @@ are not the same object either: the core kind is the cluster's registration
 record for a driver, and this one is the deployment of simplyblock's, which
 produces that record among the rest of what it installs.
 
+Neither table lists the `metrics.simplyblock.io` kinds, and the diagram does not
+draw them. They are served rather than stored, so they are not custom resources
+and the inventories above count custom resources (§7.13).
+
 Two boxes in the diagram are not simplyblock kinds at all and must not become
 ones. `VolumeGroupSnapshot` is the upstream ecosystem kind (§8.5). `StorageClass`, `PersistentVolumeClaim`,
 `PersistentVolume`, and `VolumeSnapshot` are core or ecosystem types the model
@@ -1073,8 +1085,10 @@ that design rather than to this table.
 
 ### 7.12 Metric names
 
-Every metric this operator exports is named
-`simplyblock_<entity>_<item>_<agg>`. The entity is the lowercased kind the metric
+Every metric this operator exports to Prometheus is named
+`simplyblock_<entity>_<item>_<agg>`. These are time series a scraper collects,
+and they are a separate surface from the `metrics.simplyblock.io` kinds a client
+reads through the Kubernetes API (§7.13). The entity is the lowercased kind the metric
 is about, which is the same spelling `storage.simplyblock.io/managed-by` carries
 (§7.3). The item is what is measured. The aggregation is one of six words, and no
 metric ends in anything else.
@@ -1098,6 +1112,77 @@ both are now `count`, so `_total` in this group never names a value that can go 
 because the question an operator asks is what has happened to a node, and the
 `action` label already says which operation it was. That keeps everything about one
 kind under one prefix, which is what a dashboard selects on.
+
+### 7.13 Where a measurement belongs
+
+Every number this operator publishes about a simplyblock object is either state
+something reconciles toward or a measurement of what the storage is doing, and
+only the first is a custom resource. A measurement is served from
+`metrics.simplyblock.io/v1alpha1`, a second API group the operator registers from
+an extension API server running inside its own process. A kind there is computed
+from the control-plane cache when a client asks for it and is never persisted,
+which is the trade `metrics.k8s.io` makes for `PodMetrics`.
+
+**Thin-provisioned usage moves continuously, and every place Kubernetes offers to
+keep it charges for the movement.** An annotation on a `PersistentVolume`
+rewritten on each sample wakes every watcher of every `PersistentVolume` in the
+cluster, and a custom resource per volume writes the same churn to etcd and hands
+the garbage collector an object whose lifecycle nothing owns. Neither buys
+anything back, because nothing reconciles toward a reading and nobody edits one.
+
+**The shape of a kind in the metrics group follows from that.** It has no `spec`
+and no `status`, because neither half of that split means anything for a value
+nobody wrote, so its fields sit at the top level of the object beside `metadata`
+and the `timestamp` of the sample. It has no deletion, no finalizer, and no
+tombstone: an object exists while the control plane reports the thing it measures,
+and a thing that goes away stops being listed. §3, §7.6, and §7.9 bind the storage
+group and not this one, and no `CustomResourceDefinition` describes these kinds at
+all. What the chart ships for them is an `APIService` and the two bindings the
+Kubernetes API server's authentication and authorization delegation needs, which
+is also what makes an ordinary `RoleBinding` on the group work.
+
+| Kind                   | Short name | Scope      | Reports                                                                                             | Named after                                                             |
+|------------------------|------------|------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| `LogicalVolumeMetrics` | `lvm`      | Namespaced | A volume's provisioned, used, free, and total bytes, and the control plane's own utilization figure | The `PersistentVolumeClaim` the volume backs, in that claim's namespace |
+
+**A reading is named for the Kubernetes object it is about, and lives where that
+object lives.** A tenant who knows their claim's name needs to learn nothing else
+to ask for its occupancy, and namespaced RBAC confines them to their own volumes
+without a single rule this group has to invent. A logical volume with no bound
+claim is therefore not served, because it has no name in this API and no namespace
+to be authorized against. The plural is its own singular, the way `endpoints` is,
+since "metrics" is already the noun.
+
+**A measured number stays in a CRD's status only when it is bounded,
+load-bearing, and written with hysteresis.** Bounded means the object count is the
+fleet's rather than the workload's, so there are as many `StorageDevice` objects
+as a cluster has drives and as many `StorageNode` objects as it has nodes.
+Load-bearing means something in Kubernetes reads it: a print column, a CEL rule,
+or the alarm that fires when a device is nearly full
+([`design-storagedevice.md`](design-storagedevice.md) §8.1). Hysteresis means the
+controller writes a sample only when it has moved materially against the object's
+own total or when the total itself changed, and records the time the reading was
+taken, so that a value which stopped being sampled is distinguishable from a
+device that stopped filling up. `StorageDevice.status.capacity` and
+`StorageNode.status.resources.capacity` satisfy all three. A per-volume reading
+satisfies none of them: the count is the workload's, nothing in the operator acts
+on it, and it moves whenever an application writes a block.
+
+**Three separate things in this repository are called metrics, and only one of
+them is this group.** §7.12 names the Prometheus time series the operator itself
+exports, which are scraped rather than served through the Kubernetes API. The
+control plane exports a third set, and those are the source the readings here are
+computed from: a logical volume's capacity block is all zeros in the control
+plane's own DTO, and the numbers exist only in the metrics the same service
+publishes. A deployment with no reachable Prometheus therefore serves the
+identities and the provisioned sizes with nothing sampled beside them, which is
+less than the whole answer and more than refusing to answer.
+
+The group depends on the same stream §7.7 does, because the volumes it lists come
+from the subscription's cache rather than from a call per read. Both arrive
+together: `design-sse-push-notifications.md` on the `sse` branch owns the stream,
+and the branch carries the group as `operator/api/metrics/v1alpha1` and its server
+as `operator/internal/metricsapi`.
 
 ---
 
@@ -1168,6 +1253,11 @@ Core Kubernetes types plus one action kind of the operator's own.
 `VolumeMigration`, moving a volume's backing logical volume to a different
 storage node, is exactly the shape. `NFSExport` belongs to this band as well,
 though it is not drawn (§7.2).
+
+How full a volume actually is belongs to this band too, and it is not a resource
+here. `LogicalVolumeMetrics` in `metrics.simplyblock.io` reports it against the
+claim's own name and namespace, which is the one place in the model where a
+number about a volume is served rather than stored (§7.13).
 
 ### 8.5 Data-protection layer
 

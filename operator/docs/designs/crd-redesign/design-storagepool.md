@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29  
+**Date:** 2026-08-29 (last updated 2026-09-08)  
 **Test Plan:** [`tests/test-plan-storagepool.md`](../../tests/test-plan-storagepool.md)
 
 This document specifies the target model. `StoragePool` is registered and in a
@@ -857,6 +857,14 @@ first indexed, which is usually well before anybody's claim reaches it.
 **`used_bytes` against `capacity_bytes` is the one a tenant operator watches**,
 and it is the only metric in this group that answers a capacity-planning question
 rather than a health one.
+
+**Which volume in a pool is the one filling it up is not answered here.** A pool
+reports its own totals, and the per-volume breakdown behind them is served from
+`metrics.simplyblock.io` against each volume's claim rather than published as a
+list on the pool or as a series per volume
+([`design-crd-model.md`](design-crd-model.md) §7.13). A tenant reads their own
+volumes there without being granted anything on the pool, and the cardinality of
+the workload stays out of both etcd and the scrape.
 
 **`storageclass_missing` and the gap between `volumes` and `bound_volumes` are
 the two integrity signals.** The first says the join's forward half is broken. The
