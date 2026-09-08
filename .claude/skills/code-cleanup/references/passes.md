@@ -121,7 +121,7 @@ site is gone.
 
 **When the primitive is missing, or is there but unexported.** That is
 `extract-to-atlas-lib`. Two live examples the twin finder reports:
-`csi-driver/pkg/util/nvmerepair.go:356` is a copy of the unexported
+`csi-driver/internal/fabric/repair.go:356` is a copy of the unexported
 `atlas-lib/nvmeof/inspect.go:498`, and `nvmerepair.go:373` is a copy of the
 unexported `atlas-lib/nvmeof/repair.go:600`. The primitive exists. It just is not
 reachable, and copying was the path of least resistance. Exporting it is the fix.

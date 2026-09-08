@@ -32,13 +32,13 @@ smell names from Fowler's refactoring catalog. See `references/source-notes.md`.
 A cleanup pass that edits one of these produces a diff that CI reverts or that
 strips someone else's copyright.
 
-| Path                                                                              | Why                                                                                     |
-|-----------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
-| `*.gen.go`, `atlas-lib/internal/cpapi/cpapi.gen.go` (19,268 lines)                | oapi-codegen output. Change the spec or the generator config                            |
-| `**/zz_generated.deepcopy.go`, `operator/config/**`, `operator/dist/install.yaml` | controller-gen and installer output. See `build-system`                                 |
-| `helm-charts/charts/**`, `csi-driver/charts/**`                                   | synced from the operator manifests by `make helm-sync`                                  |
-| `csi-driver/pkg/**` and `csi-driver/e2e/**` files carrying an Apache header (23)  | inherited upstream SPDK-CSI code. Reshaping it discards the provenance the header names |
-| Field names, types, and marker semantics under `operator/api/**`                  | a shipped field is a contract, so renaming it is a breaking change, not a rename        |
+| Path                                                                                                 | Why                                                                                         |
+|------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `*.gen.go`, `atlas-lib/internal/cpapi/cpapi.gen.go` (19,268 lines)                                   | oapi-codegen output. Change the spec or the generator config                                |
+| `**/zz_generated.deepcopy.go`, `operator/config/**`, `operator/dist/install.yaml`                    | controller-gen and installer output. See `build-system`                                     |
+| `helm-charts/charts/**`, `csi-driver/charts/**`                                                      | synced from the operator manifests by `make helm-sync`                                      |
+| The Arm copyright block in `csi-driver/Makefile`, `cmd/main.go`, and `internal/driver/driver.go` (3) | the attribution the fork owes upstream. Everywhere else in `csi-driver` it has been cleared |
+| Field names, types, and marker semantics under `operator/api/**`                                     | a shipped field is a contract, so renaming it is a breaking change, not a rename            |
 
 `operator/internal/webapi` is a special case: it is being retired in favor of
 `atlas-lib/controlplane`, so it takes no investment. Do not tidy it, do not

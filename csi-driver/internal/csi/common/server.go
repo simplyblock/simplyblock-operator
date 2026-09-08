@@ -1,0 +1,117 @@
+package csicommon
+
+import (
+	"net"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+	"k8s.io/klog"
+)
+
+type NonBlockingGRPCServer interface {
+	Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer)
+	Wait()
+	Stop()
+	ForceStop()
+}
+
+func NewNonBlockingGRPCServer() NonBlockingGRPCServer {
+	return &nonBlockingGRPCServer{}
+}
+
+type nonBlockingGRPCServer struct {
+	wg     sync.WaitGroup
+	server *grpc.Server
+}
+
+func (s *nonBlockingGRPCServer) Start(
+	endpoint string,
+	ids csi.IdentityServer,
+	cs csi.ControllerServer,
+	ns csi.NodeServer,
+) {
+	s.wg.Add(1)
+
+	go s.serve(endpoint, ids, cs, ns)
+}
+
+func (s *nonBlockingGRPCServer) Wait() {
+	s.wg.Wait()
+}
+
+func (s *nonBlockingGRPCServer) Stop() {
+	s.server.GracefulStop()
+}
+
+func (s *nonBlockingGRPCServer) ForceStop() {
+	s.server.Stop()
+}
+
+func (s *nonBlockingGRPCServer) serve(
+	endpoint string,
+	ids csi.IdentityServer,
+	cs csi.ControllerServer,
+	ns csi.NodeServer,
+) {
+	var err error
+
+	proto, addr, err := parseEndpoint(endpoint)
+	if err != nil {
+		klog.Fatal(err.Error())
+	}
+
+	if proto == "unix" {
+		addr = "/" + addr
+		if err = os.Remove(addr); err != nil && !os.IsNotExist(err) {
+			klog.Fatalf("Failed to remove %s, error: %s", addr, err.Error())
+		}
+	}
+
+	listener, err := net.Listen(proto, addr)
+	if err != nil {
+		klog.Fatalf("Failed to listen: %v", err)
+	}
+
+	opts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(logGRPC, timeoutInterceptor),
+		// The CSI sidecars connect over a local Unix socket and are wired (via
+		// csi-lib-utils' OnConnectionLoss/ExitOnConnectionLoss) to os.Exit(1) the
+		// moment their connection to the driver drops. We must therefore NEVER
+		// proactively close a healthy connection: MaxConnectionAge / MaxConnectionIdle
+		// would cycle the socket periodically and make every sidecar restart-loop.
+		// We keep only dead-peer detection (Time/Timeout), which closes a connection
+		// solely when the sidecar itself has stopped responding to pings.
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    30 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.ConnectionTimeout(30 * time.Second),
+	}
+	server := grpc.NewServer(opts...)
+	s.server = server
+
+	if ids != nil {
+		csi.RegisterIdentityServer(server, ids)
+	}
+	if cs != nil {
+		csi.RegisterControllerServer(server, cs)
+	}
+	if ns != nil {
+		csi.RegisterNodeServer(server, ns)
+	}
+
+	klog.Infof("Listening for connections on address: %#v", listener.Addr())
+
+	err = server.Serve(listener)
+	if err != nil {
+		klog.Fatalf("Failed to start GRPC server: %v", err)
+	}
+}

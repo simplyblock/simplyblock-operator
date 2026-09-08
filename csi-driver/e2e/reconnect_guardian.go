@@ -40,9 +40,9 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-GUARDIAN", func() {
 			w.induceTotalPathLoss(f)
 
 			ginkgo.By("do NOT touch the pod; wait for the guardian to restart it and restage the volume")
-			// The workload is an idle `sleep`, so it never restarts on its own — only
+			// The workload is an idle `sleep`, so it never restarts on its own. Only
 			// the guardian will replace it. A new-UID Ready pod therefore proves the
-			// guardian acted; we also confirm the volume is usable again on it. Allow
+			// guardian acted, and the test confirms the volume is usable again on it. Allow
 			// a full guardian poll cycle (default 5m) plus the restart and restage.
 			token := "recovered-" + w.ns
 			gomega.Eventually(func() error {
@@ -143,7 +143,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-GUARDIAN", func() {
 })
 
 // guardianReplacedPod reports whether a Running+Ready pod matching app=appLabel
-// exists whose UID differs from origUID — i.e. the original pod was replaced
+// exists whose UID differs from origUID, i.e., the original pod was replaced
 // without this test deleting it, which only the guardian does.
 func guardianReplacedPod(c kubernetes.Interface, ns, appLabel, origUID string) bool {
 	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + appLabel})

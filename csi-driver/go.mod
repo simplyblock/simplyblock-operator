@@ -1,4 +1,4 @@
-module github.com/spdk/spdk-csi
+module github.com/simplyblock/csi-driver
 
 go 1.26.2
 

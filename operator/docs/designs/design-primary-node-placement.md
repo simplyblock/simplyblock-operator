@@ -65,12 +65,12 @@
 **What this is.** A new volume's primary storage node is decided by one
 layered algorithm. In order, the first tier with something useful to say wins:
 
-| Tier | What it does |
-|---|---|
-| **0 — Explicit pin** | `simplyblock.io/host-id` annotation already set (by a user, or by anything else) |
-| **1 — Node/Pod affinity** | The consuming Pod's Kubernetes scheduling (`nodeSelector`, node affinity, **or pod affinity**) put it on a worker that also hosts a storage node → use that node |
-| **2 — Load-aware** | No locality signal available → pick the least-loaded eligible node |
-| **3 — Control-plane default** | None of the above fired → `sbcli`'s existing weighted-random pick |
+| Tier                          | What it does                                                                                                                                                     |
+|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **0 — Explicit pin**          | `simplyblock.io/host-id` annotation already set (by a user, or by anything else)                                                                                 |
+| **1 — Node/Pod affinity**     | The consuming Pod's Kubernetes scheduling (`nodeSelector`, node affinity, **or pod affinity**) put it on a worker that also hosts a storage node → use that node |
+| **2 — Load-aware**            | No locality signal available → pick the least-loaded eligible node                                                                                               |
+| **3 — Control-plane default** | None of the above fired → `sbcli`'s existing weighted-random pick                                                                                                |
 
 **The core idea.** Tier 1 automatically co-locates a new volume with whichever
 worker node the consuming Pod ends up scheduled to. It works identically
@@ -266,7 +266,7 @@ against at all.
 This doesn't need a bespoke scheduling integration — Kubernetes CSI has a
 generic mechanism for exactly this (topology-aware dynamic provisioning),
 which `spdk-csi` uses for other purposes too. `NodeGetInfo`
-(`pkg/spdk/nodeserver.go`) builds and reports `AccessibleTopology` for the CSI
+(`internal/csi/node`) builds and reports `AccessibleTopology` for the CSI
 node driver, sourced from labels on the k8s `Node` object
 (`buildAccessibleTopology`):
 
@@ -284,7 +284,7 @@ The external-provisioner reads these segments off each `CSINode` and — for
 `WaitForFirstConsumer` volumes — passes the *scheduled* Pod's node's segments
 as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
 `createVolume` reads this back out via `coLocatedHostID`
-(`pkg/spdk/controllerserver.go`).
+(`internal/csi/controller`).
 
 ### Mechanism
 
@@ -354,12 +354,12 @@ Tier 1 only reads the Pod's *final resolved node* out of
 `accessibility_requirements` — it has no idea, and doesn't need to know,
 which Kubernetes mechanism put the Pod there:
 
-| Scheduling mechanism | Result |
-|---|---|
-| No constraint (Pod lands anywhere) | Does nothing when the resolved node hosts no storage node (e.g. control-plane node) — `host_id` left unset, `sbcli`'s own default placement applies |
-| `nodeSelector: kubernetes.io/hostname: <worker>` | Volume's `host_id` = that worker's co-located storage-node UUID |
-| `podAffinity` (`requiredDuringSchedulingIgnoredDuringExecution`, `topologyKey: kubernetes.io/hostname`, matching an anchor Pod pinned elsewhere) | Same result — Tier 1 doesn't care that the Pod's node was resolved indirectly via another Pod's label, only that it *was* resolved to a specific node |
-| `spec.nodeName` set directly on the Pod | **Does not work — but not because of Tier 1.** Setting `nodeName` bypasses the Kubernetes scheduler entirely, so the scheduler's `VolumeBinding` plugin never runs and the `volume.kubernetes.io/selected-node` PVC annotation `WaitForFirstConsumer` depends on is never written. The PVC sits at `WaitForFirstConsumer` forever, `Provisioning` is never even attempted. This is a well-known upstream Kubernetes limitation ([kubernetes/kubernetes#89953](https://github.com/kubernetes/kubernetes/issues/89953)) that affects *every* CSI driver under `WaitForFirstConsumer`, not something specific to this feature or to `spdk-csi`. |
+| Scheduling mechanism                                                                                                                             | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|--------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| No constraint (Pod lands anywhere)                                                                                                               | Does nothing when the resolved node hosts no storage node (e.g. control-plane node) — `host_id` left unset, `sbcli`'s own default placement applies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `nodeSelector: kubernetes.io/hostname: <worker>`                                                                                                 | Volume's `host_id` = that worker's co-located storage-node UUID                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `podAffinity` (`requiredDuringSchedulingIgnoredDuringExecution`, `topologyKey: kubernetes.io/hostname`, matching an anchor Pod pinned elsewhere) | Same result — Tier 1 doesn't care that the Pod's node was resolved indirectly via another Pod's label, only that it *was* resolved to a specific node                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `spec.nodeName` set directly on the Pod                                                                                                          | **Does not work — but not because of Tier 1.** Setting `nodeName` bypasses the Kubernetes scheduler entirely, so the scheduler's `VolumeBinding` plugin never runs and the `volume.kubernetes.io/selected-node` PVC annotation `WaitForFirstConsumer` depends on is never written. The PVC sits at `WaitForFirstConsumer` forever, `Provisioning` is never even attempted. This is a well-known upstream Kubernetes limitation ([kubernetes/kubernetes#89953](https://github.com/kubernetes/kubernetes/issues/89953)) that affects *every* CSI driver under `WaitForFirstConsumer`, not something specific to this feature or to `spdk-csi`. |
 
 ### `EnableNodeAffinity` is unrelated to Tier 1
 
@@ -461,7 +461,7 @@ PVC created (user)
 ```
 
 **Why a mutating webhook, not a new backend/CSI call:** `spdk-csi`'s
-`fetchPVCAnnotations` (`pkg/spdk/controllerserver.go`) performs a **live**
+`fetchPVCAnnotations` (`internal/csi/controller`) performs a **live**
 GET of the PVC object at `CreateVolume` time — it does not rely on CSI request
 parameters cached earlier in the provisioning pipeline. A webhook that mutates
 the PVC at admission time (before the external-provisioner sidecar even
@@ -480,7 +480,7 @@ Clones (from another PVC or a VolumeSnapshot) must land on the same host as
 their source — this webhook does not special-case that, and it doesn't need
 to:
 
-- In `spdk-csi`, `createVolume` (`pkg/spdk/controllerserver.go`) checks
+- In `spdk-csi`, `createVolume` (`internal/csi/controller`) checks
   `req.GetVolumeContentSource()` **before** calling `prepareCreateVolumeReq`
   (the function that reads the `host-id` annotation). When the PVC has a data
   source, `handleVolumeContentSource` handles it via
@@ -537,10 +537,10 @@ ranking further, to only override when the imbalance is meaningful.
 
 **Eligibility filter, applied before ranking:**
 
-| Filter                       | Source | Rationale                                                                                                                                   |
-|------------------------------|---|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `status == "online"`         | `webapi.StorageNodeInfo.Status` | Never place on an offline node                                                                                                              |
-| `health_check == true`       | `webapi.StorageNodeInfo.Healthy` | Mirrors rebalancer target eligibility (Issue #130 §6 Step 5)                                                                                |
+| Filter                       | Source                                            | Rationale                                                                                                                                   |
+|------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `status == "online"`         | `webapi.StorageNodeInfo.Status`                   | Never place on an offline node                                                                                                              |
+| `health_check == true`       | `webapi.StorageNodeInfo.Healthy`                  | Mirrors rebalancer target eligibility (Issue #130 §6 Step 5)                                                                                |
 | `Subsystems < SubsystemsMax` | `webapi.StorageNodeInfo.Lvols` / `.LvolsMax` (§8) | Mirrors `sbcli`'s own `max_subsys` capacity gate (`_resolve_lvol_subsystem`) so we don't hand the backend a node it will immediately reject |
 
 There is deliberately no "is this a secondary/replica-only node" filter.
@@ -766,10 +766,10 @@ every co-located storage-node instance — reconciling additions, value updates
 
 ### 8.4 `spdk-csi` — topology + resolution extension (Tier 1, §4)
 
-- `buildAccessibleTopology` (`pkg/spdk/nodeserver.go`) forwards any Node label
+- `buildAccessibleTopology` (`internal/csi/node`) forwards any Node label
   with the `storage-node-uuid.` prefix as a topology segment, symmetric with
   the existing zone/region/`pool.<name>` handling.
-- `createVolume` (`pkg/spdk/controllerserver.go`) calls `coLocatedHostID` on
+- `createVolume` (`internal/csi/controller`) calls `coLocatedHostID` on
   `accessibility_requirements` **only when the PVC carries
   `simplyblock.io/pod-affinity: "true"`** (§4), and uses the result as
   `host_id` **only when the annotation-derived value is empty** (§3) — i.e. an
@@ -788,19 +788,19 @@ Tier 1 reads no CRD field at all for its gate (§7) — it is entirely per-PVC.
 
 ## 9. Failure Modes and Fallback
 
-| Condition | Behavior |
-|---|---|
-| `simplyblock.io/host-id` already set on the PVC (Tier 0) | Skip Tier 2 and Tier 1 — explicit pin always wins (§3) |
-| PVC lacks `simplyblock.io/pod-affinity: "true"` (§4) | Skip Tier 1 for this PVC — `createVolume` never calls `coLocatedHostID`, even if the Pod's worker hosts a co-located storage node; falls through to whatever's in `host-id` (Tier 0/2) or Tier 3 |
-| StorageClass isn't simplyblock-provisioned, or has no `cluster_id` | Skip Tier 2 |
-| `StorageCluster` not found for `cluster_id` | Skip Tier 2 (log) |
-| `VolumeAutoPlacement` nil, `LatencyBenchmarkEnabled` false, or `PrometheusURL` unset for the cluster | Skip Tier 2 — cluster hasn't opted into the load signal |
-| Backend API (`GetStorageNodes`) unreachable | Skip Tier 2 (log); `failurePolicy=Ignore` also protects at the webhook-server level |
-| Prometheus unreachable / query error | Skip Tier 2 (log) |
-| No eligible node, or none clears the load threshold (§6) | Skip Tier 2 (log) |
-| Pool has `qos_host` set (`pool.has_qos()`) | Not special-cased — `add_lvol_ha` overrides any `host_id` with `pool.qos_host` regardless, so an injected annotation is harmless but ignored. Documented, not fixed. |
-| Tier 1 finds no co-located node for this consumer (no matching topology segment, or the Pod landed on a worker with no storage node) | Falls back to whatever's in `host-id` already (Tier 0 or Tier 2's pick), then Tier 3 |
-| Consuming Pod sets `spec.nodeName` directly, bypassing the scheduler | `WaitForFirstConsumer` never resolves at all — PVC stuck, `Provisioning` never fires. Not a Tier 1 failure mode specifically; affects any `WaitForFirstConsumer` StorageClass regardless of CSI driver (§4). |
+| Condition                                                                                                                            | Behavior                                                                                                                                                                                                     |
+|--------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `simplyblock.io/host-id` already set on the PVC (Tier 0)                                                                             | Skip Tier 2 and Tier 1 — explicit pin always wins (§3)                                                                                                                                                       |
+| PVC lacks `simplyblock.io/pod-affinity: "true"` (§4)                                                                                 | Skip Tier 1 for this PVC — `createVolume` never calls `coLocatedHostID`, even if the Pod's worker hosts a co-located storage node; falls through to whatever's in `host-id` (Tier 0/2) or Tier 3             |
+| StorageClass isn't simplyblock-provisioned, or has no `cluster_id`                                                                   | Skip Tier 2                                                                                                                                                                                                  |
+| `StorageCluster` not found for `cluster_id`                                                                                          | Skip Tier 2 (log)                                                                                                                                                                                            |
+| `VolumeAutoPlacement` nil, `LatencyBenchmarkEnabled` false, or `PrometheusURL` unset for the cluster                                 | Skip Tier 2 — cluster hasn't opted into the load signal                                                                                                                                                      |
+| Backend API (`GetStorageNodes`) unreachable                                                                                          | Skip Tier 2 (log); `failurePolicy=Ignore` also protects at the webhook-server level                                                                                                                          |
+| Prometheus unreachable / query error                                                                                                 | Skip Tier 2 (log)                                                                                                                                                                                            |
+| No eligible node, or none clears the load threshold (§6)                                                                             | Skip Tier 2 (log)                                                                                                                                                                                            |
+| Pool has `qos_host` set (`pool.has_qos()`)                                                                                           | Not special-cased — `add_lvol_ha` overrides any `host_id` with `pool.qos_host` regardless, so an injected annotation is harmless but ignored. Documented, not fixed.                                         |
+| Tier 1 finds no co-located node for this consumer (no matching topology segment, or the Pod landed on a worker with no storage node) | Falls back to whatever's in `host-id` already (Tier 0 or Tier 2's pick), then Tier 3                                                                                                                         |
+| Consuming Pod sets `spec.nodeName` directly, bypassing the scheduler                                                                 | `WaitForFirstConsumer` never resolves at all — PVC stuck, `Provisioning` never fires. Not a Tier 1 failure mode specifically; affects any `WaitForFirstConsumer` StorageClass regardless of CSI driver (§4). |
 
 In every skip case the PVC ends up on `sbcli`'s existing weighted-random
 placement (Tier 3, `_get_next_3_nodes`), unmodified — this design can only
@@ -812,17 +812,17 @@ ever make placement *better or unchanged*, never worse or blocking.
 
 ### Kubernetes Events
 
-| Event | Type | Reason |
-|---|---|---|
-| Primary node selected for new PVC (any tier) | `Normal` | `PrimaryNodeSelected` |
-| Selection skipped — no signal available | (none; logged only, high frequency expected) | — |
+| Event                                        | Type                                         | Reason                |
+|----------------------------------------------|----------------------------------------------|-----------------------|
+| Primary node selected for new PVC (any tier) | `Normal`                                     | `PrimaryNodeSelected` |
+| Selection skipped — no signal available      | (none; logged only, high frequency expected) | —                     |
 
 ### Prometheus Metrics
 
-| Metric | Labels | Description |
-|---|---|---|
-| `simplyblock_placement_decisions_total` | `cluster_uuid`, `tier` (`affinity`\|`load`\|`default`), `result` (`selected`\|`skipped`) | Count of placement decisions by tier and outcome |
-| `simplyblock_placement_selected_node_deviation_pct` | `cluster_uuid`, `node_uuid` | Latency deviation of the node chosen by Tier 2, at selection time |
+| Metric                                              | Labels                                                                                   | Description                                                       |
+|-----------------------------------------------------|------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
+| `simplyblock_placement_decisions_total`             | `cluster_uuid`, `tier` (`affinity`\|`load`\|`default`), `result` (`selected`\|`skipped`) | Count of placement decisions by tier and outcome                  |
+| `simplyblock_placement_selected_node_deviation_pct` | `cluster_uuid`, `node_uuid`                                                              | Latency deviation of the node chosen by Tier 2, at selection time |
 
 ---
 

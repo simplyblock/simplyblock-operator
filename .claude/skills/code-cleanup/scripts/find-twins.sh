@@ -144,7 +144,7 @@ errs/class~an error classified by string or status code~strings\.Contains\(err\.
 statemachine~a phase advanced by a hand-rolled switch~switch [^{]*(Phase|SubPhase)
 nvme~sysfs read directly~"/sys/(class|devices)
 nvmeof~nvme-cli shelled out to~"nvme", ?"(connect|disconnect|list|list-subsys|discover)"
-controlplane~a second control-plane client~webapi\.|pkg/util/nvmf'
+controlplane~a second control-plane client~webapi\.|internal/controlplane/cluster'
   printf '%s\n' "${PATTERNS}" | while IFS='~' read -r pkg what regex; do
     [ -z "${pkg}" ] && continue
     hits="$(grep -rnE "${regex}" operator csi-driver --include='*.go' 2>/dev/null \

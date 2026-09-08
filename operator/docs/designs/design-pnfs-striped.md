@@ -317,7 +317,7 @@ group is visible to any backup tool that understands CSI.
 - **`DeleteVolumeGroupSnapshot`:** delete the backend group and its members.
 - **`GetVolumeGroupSnapshot`:** report group and member status.
 
-The service is new (`csi-driver/pkg/spdk/groupcontrollerserver.go`), registered
+The service is new (`csi-driver/internal/csi/controller/group.go`), registered
 alongside Identity, Controller, and Node, advertising
 `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT` and the identity capability
 `GROUP_CONTROLLER_SERVICE`.
@@ -354,13 +354,13 @@ Beyond the base design's table:
 
 ## 7. Open Questions
 
-| #  | Question                                                                                                                                                   | Owner        |
-|----|------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
-| S1 | Does the group-snapshot API allow members across pools, or is single-cluster and single-pool the permanent constraint (§3.2)?                              | Backend team |
-| S2 | What stripe size does an NFS metadata and bulk-data mix actually want, and is one value right for every workload (§2.1)?                                   | Spike        |
-| S3 | How long does reassembling a stripe add to the failover freeze, and does that keep NFR-2 in the base design achievable (§4)?                               | Spike        |
-| S4 | Is refusing provisioning the right answer when members cannot be placed on distinct nodes, or should a degenerate stripe be allowed with a warning (§2.2)? | Product      |
-| S5 | Can `n` be raised on an existing volume by adding members and reshaping, or is it permanently fixed (§1.2)?                                                | Product      |
+| #   | Question                                                                                                                                                   | Owner        |
+|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
+| S1  | Does the group-snapshot API allow members across pools, or is single-cluster and single-pool the permanent constraint (§3.2)?                              | Backend team |
+| S2  | What stripe size does an NFS metadata and bulk-data mix actually want, and is one value right for every workload (§2.1)?                                   | Spike        |
+| S3  | How long does reassembling a stripe add to the failover freeze, and does that keep NFR-2 in the base design achievable (§4)?                               | Spike        |
+| S4  | Is refusing provisioning the right answer when members cannot be placed on distinct nodes, or should a degenerate stripe be allowed with a warning (§2.2)? | Product      |
+| S5  | Can `n` be raised on an existing volume by adding members and reshaping, or is it permanently fixed (§1.2)?                                                | Product      |
 
 ---
 

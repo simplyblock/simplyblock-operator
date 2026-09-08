@@ -18,8 +18,8 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 	// -------------------------------------------------------------------------
 
 	// A unique StorageClass name is generated per test so parallel runs do not
-	// collide.  The SC is created by copying the default one and overriding
-	// csi.storage.k8s.io/fstype to "xfs".
+	// collide. The SC is created by copying the default one and overriding
+	// `csi.storage.k8s.io/fstype` to `xfs`.
 	ginkgo.It("XFS volume is provisioned and data persists across pod restarts", func() {
 		ns := f.Namespace.Name
 		const xfsSC = "spdkcsi-e2e-xfs"
@@ -59,7 +59,7 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		)
 
 		ginkgo.By("verify the mounted filesystem is XFS")
-		// Alpine's df supports -T; XFS mounts report type 'xfs'.
+		// Alpine's `df` supports `-T`, and an XFS mount reports type `xfs`.
 		fsType, _ := execCommandInPod(f,
 			"df -T /spdkvol | awk 'NR==2 {print $2}'",
 			ns, &xfsPodLabel)

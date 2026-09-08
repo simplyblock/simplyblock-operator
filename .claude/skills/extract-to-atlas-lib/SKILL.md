@@ -73,7 +73,7 @@ which patterns are wired and which are available but unadopted.
 | It exists with different edge behavior | Read both. Reconcile deliberately, and if one is wrong, `regression-test` |
 | Nothing like it exists                 | Extract, from here on                                                     |
 
-The second row is common and cheap. `csi-driver/pkg/util/nvmerepair.go:356` is a
+The second row is common and cheap. `csi-driver/internal/fabric/repair.go:356` is a
 copy of the unexported `atlas-lib/nvmeof/inspect.go:498`, and `nvmerepair.go:373`
 is a copy of the unexported `atlas-lib/nvmeof/repair.go:600`. Nothing needed
 designing in either case. The primitive was simply out of reach.

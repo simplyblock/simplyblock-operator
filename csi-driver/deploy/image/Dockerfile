@@ -20,7 +20,7 @@ COPY csi-driver/go.mod csi-driver/go.sum ./
 RUN go mod download
 COPY atlas-lib/ /atlas-lib/
 COPY csi-driver/cmd/ cmd/
-COPY csi-driver/pkg/ pkg/
+COPY csi-driver/internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
 FROM simplyblock/spdkcsi:base_image

@@ -1,4 +1,5 @@
 # Copyright (c) Arm Limited and Contributors.
+# Copyright (c) Simplyblock GmbH
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +16,7 @@
 # build output dir
 BUILD_DIR := ./build
 # go source, scripts
-SOURCE_DIRS := cmd pkg
+SOURCE_DIRS := cmd internal
 SCRIPT_DIRS := scripts deploy e2e
 # goarch for cross building
 ifeq ($(origin GOARCH), undefined)

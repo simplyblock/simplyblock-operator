@@ -34,12 +34,12 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-FULLLOSS", func() {
 		// Unlike SPDKCSI-RECONNECT (which drops ONE of several paths and lets the
 		// monitor reconnect it in place), this exercises TOTAL path loss: the whole
 		// NVMe-oF subsystem is disconnected, so the kernel removes the device and
-		// the in-place mount is dead — it can only recover when the pod is restarted
+		// the in-place mount is dead, and can only recover when the pod is restarted
 		// and the volume is restaged on the replacement pod's NodePublish.
 		//
 		// In production the guardian is what restarts the pod after detecting the
-		// broken lvol. The test does NOT wait for that; it force-deletes the pod
-		// itself (grace period 0) to stand in for the guardian's restart — this
+		// broken lvol. The test does not wait for that. It force-deletes the pod
+		// itself (grace period 0) to stand in for the guardian's restart. This
 		// keeps the test deterministic (no wait for the guardian's poll cycle) and
 		// biases toward the race where the replacement pod's NodePublish runs before
 		// kubelet unstages the old mount. We then verify the replacement pod comes
@@ -47,7 +47,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-FULLLOSS", func() {
 		//
 		// Because an unclean total loss can roll back the filesystem journal, we
 		// assert the volume is writable+readable again rather than that the exact
-		// pre-outage marker survived. Run for raw block, ext4 and xfs, since each
+		// pre-outage marker survived. Run for raw block, `ext4`, and `xfs`, since each
 		// filesystem behaves differently when its backing device disappears.
 		modes := []fullLossMode{
 			{name: "raw block", block: true},
@@ -74,7 +74,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-FULLLOSS", func() {
 				)
 
 				ginkgo.By("wait for the replacement pod to restage the mount and make the volume usable")
-				// Total path loss leaves the in-place mount dead (I/O error); it
+				// Total path loss leaves the in-place mount dead (I/O error), and it
 				// recovers when the replacement pod's NodePublish restages the volume.
 				// Poll until it is writable+readable again. The generous timeout also
 				// covers the fallback where the guardian, not the test's force-delete,
@@ -139,7 +139,7 @@ func createPinnedDeployment(c kubernetes.Interface, ns, name, appLabel, pvcName,
 					// goes through the scheduler. With WaitForFirstConsumer
 					// StorageClasses the scheduler is what stamps the
 					// volume.kubernetes.io/selected-node annotation that triggers
-					// provisioning; bypassing it with NodeName leaves the PVC Pending.
+					// provisioning, and bypassing it with NodeName leaves the PVC Pending.
 					Affinity: &corev1.Affinity{
 						NodeAffinity: &corev1.NodeAffinity{
 							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -225,7 +225,7 @@ func writeMarker(f *framework.Framework, ns, appLabel string, m fullLossMode, ma
 
 // verifyVolumeUsableE writes a fresh token to the volume and reads it back from
 // the current app=appLabel pod, returning an error if the volume is not usable
-// (e.g. still on a dead mount, or no ready pod). It proves the volume recovered
+// (e.g., still on a dead mount, or no ready pod). It proves the volume recovered
 // without relying on pre-outage data surviving an unclean total path loss, which
 // can roll back the ext4/xfs journal.
 func verifyVolumeUsableE(f *framework.Framework, ns, appLabel string, m fullLossMode, token string) error {

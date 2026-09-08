@@ -17,8 +17,14 @@ type VolumeHandle string
 // Split decomposes the handle into the cluster, pool, and volume UUIDs it
 // encodes. It returns an error unless the handle is exactly three
 // colon-separated UUIDs.
+//
+// Surrounding whitespace is trimmed first. A handle is read back out of a
+// PersistentVolume, which is a YAML document a human may have written or
+// edited, so a leading indent or a trailing newline says how the value was
+// transported and not what it names. Whitespace inside the handle is left
+// alone: that is a malformed value, and it still fails.
 func (h VolumeHandle) Split() (clusterID, poolID, volumeID uuid.UUID, err error) {
-	parts := strings.Split(string(h), ":")
+	parts := strings.Split(strings.TrimSpace(string(h)), ":")
 	if len(parts) != 3 {
 		return uuid.Nil, uuid.Nil, uuid.Nil,
 			fmt.Errorf("invalid volume handle %q: want clusterID:poolID:volumeID", h)

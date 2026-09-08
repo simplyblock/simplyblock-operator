@@ -7,7 +7,7 @@
 // an outage the driver recovers from by connecting again, and it is the wrong
 // tool for any defect that only exists while the device node is still there and
 // its reads no longer work. Blackholing the endpoints leaves every controller in
-// place, reconnecting, so the head survives and I/O against it fails — which is
+// place, reconnecting, so the head survives and I/O against it fails, which is
 // the state a node actually sits in between losing the fabric and ctrl_loss_tmo
 // expiring.
 package e2e
@@ -26,7 +26,7 @@ import (
 )
 
 // blackholeImage is the image the blackhole pod runs. It only has to hold a
-// shell and nsenter; the iptables it drives is the host's own.
+// shell and nsenter. The iptables it drives is the host's own.
 const blackholeImage = "alpine:3"
 
 // parsePathEndpoint pulls "host:port" out of an nvme-cli path address, which is
@@ -71,7 +71,7 @@ func pathEndpoints(sub *nvmeSubsystem) []string {
 // This is not cosmetic, and it is not the test making the failure worse than it
 // is. With the driver's own settings a controller queues I/O for the whole of
 // ctrl_loss_tmo, so a reader of the device blocks in uninterruptible I/O rather
-// than seeing an error — unkillable, and invisible to any timeout the test could
+// than seeing an error: unkillable, and invisible to any timeout the test could
 // wrap around it. fast_io_fail_tmo is what converts that wait into the EIO a
 // real reader eventually gets, and it is the only way to reach that state on a
 // bounded schedule.

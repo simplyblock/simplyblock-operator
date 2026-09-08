@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -45,7 +46,7 @@ const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 
-	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/pkg/spdk/controllerserver.go
+	dhchapNodeSelectorParam = "dhchap_node_selector" // read by paramDHCHAPNodeSelector in csi-driver/internal/csi/controller/params.go
 )
 
 // StoragePoolReconciler reconciles a StoragePool object
@@ -499,7 +500,7 @@ func (r *StoragePoolReconciler) syncStoragePoolHosts(
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
 		}
-		desired = append(desired, fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID))
+		desired = append(desired, nqn.Host(string(node.UID)))
 	}
 
 	// Fetch current backend state to use as applied list.

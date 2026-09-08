@@ -123,7 +123,7 @@ against its own manifest.
 Assert that a reading reaches the right decision. The rows mirror design §6's two
 tables, and every row that must refuse is asserted to refuse.
 
-File: `csi-driver/pkg/spdk/nodeserver_stage_test.go`, and once the stack lands the
+File: `csi-driver/internal/csi/node/stage_test.go`, and once the stack lands the
 layer tests under `atlas-lib/volstack/layers/`.
 
 ### `filesystem` Dispatch (design §6)

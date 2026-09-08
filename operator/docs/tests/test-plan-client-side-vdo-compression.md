@@ -125,7 +125,7 @@ device scoping, and volume-group/logical-volume identity.
 
 ## 4. CSI Driver: Topology and `PersistentVolume` Pinning
 
-`### vdoCapableSegment (design §4)` (`csi-driver/pkg/spdk/controllerserver_test.go`)
+`### vdoCapableSegment (design §4)` (`csi-driver/internal/csi/controller/controller_test.go`)
 
 | #    | Scenario                                                                   | Type     | Test                    |
 |------|----------------------------------------------------------------------------|----------|-------------------------|
@@ -136,7 +136,7 @@ device scoping, and volume-group/logical-volume identity.
 
 ## 5. Manual Scenarios (Live Cluster)
 
-`csi-driver/pkg/util/vdo.go` itself has no direct unit tests (design §9): its
+`csi-driver/internal/mount/vdo.go` itself has no direct unit tests (design §9): its
 only logic is a one-line delegation per RPC concern into already-tested
 `atlas-lib/lvm/vdo` functions. What unit tests structurally cannot reach is
 whether `dm-vdo` is actually present and behaves as assumed, and whether a real
@@ -225,7 +225,7 @@ unit tests cannot reach (design §9).
 
 | Gap                                                                     | Reason                                                                                                                                              |
 |-------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `csi-driver/pkg/util/vdo.go`'s own delegation lines                     | No direct unit test file exists for this wiring. Every branch is a one-line call into already-tested `atlas-lib/lvm/vdo` functions (design §5, §9). |
+| `csi-driver/internal/mount/vdo.go`'s own delegation lines               | No direct unit test file exists for this wiring. Every branch is a one-line call into already-tested `atlas-lib/lvm/vdo` functions (design §5, §9). |
 | `advertiseVDOCapability`'s marker-file poll and label patch (design §4) | No unit or manual scenario in this plan exercises the DaemonSet `postStart` install path or the polling goroutine directly.                         |
 | Server-side and client-side compression enabled together on one pool    | Open question (design §8, Q1). No defined expected behavior to test against yet.                                                                    |
 | A non-RHEL-family node's capability install failing gracefully          | Open question (design §8, Q3). Current behavior is whatever `dnf`'s absence produces, not a validated path.                                         |

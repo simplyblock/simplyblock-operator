@@ -48,12 +48,13 @@ That is what the repository already does: of 318 hand-written Go files, 244 have
 no header. The 74 that do are history, and knowing which is which matters,
 because two of them will try to add one to *your* file:
 
-| Where headers exist                                                                                                 | Why                                                                                        | What to do                                                                                                        |
-|---------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
-| `operator/api/v1alpha1/*_types.go` (17), `operator/internal/controller/*` (29), `operator/test/e2e`, `operator/cmd` | scaffolded by `kubebuilder create api` / `create webhook`, which injects the Apache header | **delete the header** from a newly scaffolded file before committing it                                           |
-| `operator/api/**/zz_generated.deepcopy.go`                                                                          | `controller-gen object:headerFile="hack/boilerplate.go.txt"` writes it                     | leave it: generated output, and never copy that boilerplate into a hand-written file                              |
-| `csi-driver/pkg/**`, `csi-driver/e2e/**` (23)                                                                       | inherited from the upstream Arm/Intel SPDK-CSI code                                        | leave the header where it is. Stripping someone else's copyright from inherited code is not a formatting decision |
-| `atlas-lib` (0 of 97)                                                                                               | written here, from scratch                                                                 | the pattern to copy                                                                                               |
+| Where headers exist                                                                                                 | Why                                                                                            | What to do                                                                                            |
+|---------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
+| `operator/api/v1alpha1/*_types.go` (17), `operator/internal/controller/*` (29), `operator/test/e2e`, `operator/cmd` | scaffolded by `kubebuilder create api` / `create webhook`, which injects the Apache header     | **delete the header** from a newly scaffolded file before committing it                               |
+| `operator/api/**/zz_generated.deepcopy.go`                                                                          | `controller-gen object:headerFile="hack/boilerplate.go.txt"` writes it                         | leave it: generated output, and never copy that boilerplate into a hand-written file                  |
+| `csi-driver/Makefile`, `cmd/main.go`, `internal/driver/driver.go` (3)                                               | the entry points, which name the upstream the driver was forked from                           | leave both copyright lines where they are: Arm's, and the `Copyright (c) Simplyblock GmbH` beneath it |
+| every other `csi-driver` file (0)                                                                                   | the inherited headers have been cleared; what the driver carries now is simplyblock's own work | the pattern to copy                                                                                   |
+| `atlas-lib` (0 of 97)                                                                                               | written here, from scratch                                                                     | the pattern to copy                                                                                   |
 
 Editing a file that already has a header is not an invitation to remove it. Only
 new files are in question.
@@ -94,15 +95,15 @@ check all three (comments in Go, Python, and YAML are checked).
 
 ## Where the file goes, and what to run after
 
-| New file                     | Directory                                                | After adding it                                                                                           |
-|------------------------------|----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-| CRD type                     | `operator/api/v1alpha1/<kind>_types.go`                  | `make -C operator manifests generate`, then `make helm-sync`                                              |
-| Reconciler                   | `operator/internal/controller/<kind>_controller.go`      | register it in `cmd/main.go`, then `make -C operator manifests` if it carries `+kubebuilder:rbac` markers |
-| Domain logic                 | `operator/internal/<domain>/`                            | nothing                                                                                                   |
-| Shared node primitive        | `atlas-lib/<concern>/` (public) or `atlas-lib/internal/` | nothing                                                                                                   |
-| CSI logic                    | `csi-driver/pkg/util/` or `csi-driver/pkg/<server>/`     | nothing                                                                                                   |
-| Chart template               | `helm-charts/charts/simplyblock-operator/templates/`     | never hand-write into `crds/` or `templates/roles/`, which are synced                                     |
-| Design document or test plan | `operator/docs/designs/`, `operator/docs/tests/`         | see the `design-doc` skill                                                                                |
+| New file                     | Directory                                                 | After adding it                                                                                           |
+|------------------------------|-----------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| CRD type                     | `operator/api/v1alpha1/<kind>_types.go`                   | `make -C operator manifests generate`, then `make helm-sync`                                              |
+| Reconciler                   | `operator/internal/controller/<kind>_controller.go`       | register it in `cmd/main.go`, then `make -C operator manifests` if it carries `+kubebuilder:rbac` markers |
+| Domain logic                 | `operator/internal/<domain>/`                             | nothing                                                                                                   |
+| Shared node primitive        | `atlas-lib/<concern>/` (public) or `atlas-lib/internal/`  | nothing                                                                                                   |
+| CSI logic                    | `csi-driver/internal/` or `csi-driver/internal/<server>/` | nothing                                                                                                   |
+| Chart template               | `helm-charts/charts/simplyblock-operator/templates/`      | never hand-write into `crds/` or `templates/roles/`, which are synced                                     |
+| Design document or test plan | `operator/docs/designs/`, `operator/docs/tests/`          | see the `design-doc` skill                                                                                |
 
 Adding an RBAC marker or a CRD field without regenerating is the most common way
 a new file breaks CI. See the `build-system` skill for the drift gates.

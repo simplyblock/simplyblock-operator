@@ -1,19 +1,3 @@
-/*
-Copyright (c) Arm Limited and Contributors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package e2e
 
 import (
@@ -27,6 +11,7 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/nqn"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,7 +40,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 	// to its allowed_hosts list. This exercises the whole chain end-to-end: the
 	// node plugin must present that exact NQN (and, once the control plane wires
 	// per-connection secrets, the matching DHCHAP key) on the real `nvme connect`
-	// it runs — not just on the /connect API call it uses to fetch connection
+	// it runs, not just on the /connect API call it uses to fetch connection
 	// info. A pool/host mismatch here reproduces the bug this test exists to
 	// catch: the connect silently used the wrong identity and the backend
 	// rejected it, so DHCHAP-gated volumes never mounted at all.
@@ -83,7 +68,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			poolID := sbctlPoolIDByName(f, poolName)
 			gomega.Expect(poolID).NotTo(gomega.BeEmpty(), "pool %q not found in sbctl pool list", poolName)
 			// Registered last (LIFO), so this runs only after the StorageClass/PVC/
-			// Deployment below are already gone — but the backend's async volume
+			// Deployment below are already gone, but the backend's async volume
 			// deletion triggered by the PVC's reclaim can still lag behind that,
 			// so retry until the pool is actually empty rather than failing once.
 			ginkgo.DeferCleanup(func() {
@@ -100,7 +85,7 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			// max_namespace_per_subsys=1 gives this volume its own NVMe-oF
 			// subsystem, so its NQN (and the PV's "model" attribute) carry this
 			// volume's own lvol id rather than a shared subsystem's master lvol
-			// id — see the same rationale in setupManagedWorkload.
+			// id. See the same rationale in setupManagedWorkload.
 			createStorageClassWithParams(f.ClientSet, scName, map[string]string{
 				scParamClusterID:             clusterID,
 				"pool_name":                  poolName,
@@ -137,17 +122,17 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			ginkgo.By("verify an unauthorized host is genuinely rejected by the backend authorization gate")
 			// The K8s scheduler would normally keep a pod off a node the pool
 			// doesn't allow (via the provisioned PV's nodeAffinity, built from
-			// dhchap_node_selector), but that's a separate gate from the one this
-			// bug was about. Call /connect
-			// directly with an unregistered host NQN — the same request path the
-			// CSI driver takes — to confirm the backend itself still refuses it
+			// dhchap_node_selector), but that's a separate gate from the one this bug
+			// was about. Call /connect directly with an unregistered host NQN, the
+			// same request path the CSI driver takes, to confirm the backend itself
+			// still refuses it
 			// independent of anything Kubernetes-side.
 			lvolID := lvolIDForPVC(f.ClientSet, ns, pvcName)
 			pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 			unauthorizedNQN := "nqn.2014-08.io.simplyblock:uuid:00000000-0000-0000-0000-000000000000"
 			status, body := connectAsHost(f, pluginPod, pluginContainer, clusterID, poolID, lvolID, unauthorizedNQN)
 			// Accept 404 (backend returned "not found in allowed hosts") or 0
-			// (backend dropped the TCP connection before sending an HTTP response —
+			// (backend dropped the TCP connection before sending an HTTP response:
 			// also a valid transport-level rejection, seen when the backend's DHCHAP
 			// gate closes the socket rather than returning a 4xx).
 			gomega.Expect(status).To(gomega.Or(gomega.Equal(404), gomega.Equal(0)),
@@ -184,11 +169,11 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 	})
 
 	// #403: CreateVolume never populated AccessibleTopology for StorageClasses
-	// that select their cluster directly via cluster_id — the common case, and
+	// that select their cluster directly via cluster_id, the common case, and
 	// the one a DHCHAP-gated pool's StorageClass uses. Without it,
 	// external-provisioner never set PersistentVolume.spec.nodeAffinity, so a
 	// pod consuming an already-bound PVC could be deleted and recreated onto
-	// any node — even one outside the pool's allowed nodes — with no drain or
+	// any node, even one outside the pool's allowed nodes, with no drain or
 	// failure needed, a plain restart was enough. The backend's DHCHAP gate
 	// (tested above) still rejects the connection from the wrong node, so the
 	// bug surfaced as the pod's volume simply never mounting again.
@@ -298,16 +283,16 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 })
 
 // hostNQNForNode computes the host NQN the operator and CSI node plugin
-// derive for nodeName — nqn.2014-08.io.simplyblock:uuid:<node.UID> — so tests
+// derive for nodeName (nqn.2014-08.io.simplyblock:uuid:<node.UID>) so tests
 // can register exactly the identity the real connect path will present.
 func hostNQNForNode(c kubernetes.Interface, nodeName string) string {
 	node, err := c.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	framework.ExpectNoError(err, "get node %s", nodeName)
-	return fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID)
+	return nqn.Host(string(node.UID))
 }
 
 // sbctlE runs `sbctl <args>` inside the webappapi pod like sbctl, but returns
-// the exec error instead of failing the test — for callers (e.g. a retried
+// the exec error instead of failing the test, for callers (e.g., a retried
 // "pool delete" that can legitimately fail while the pool's last volume is
 // still being reclaimed) that need to handle failure themselves.
 func sbctlE(f *framework.Framework, args string) error {
@@ -351,8 +336,8 @@ func sbctlPoolIDByName(f *framework.Framework, name string) string {
 
 // connectAsHost calls the control plane's GET .../connect?host_nqn=hostNQN
 // directly from inside a csi-node pod, using that pod's own mounted
-// credentials (the exact request path the CSI driver itself takes — see
-// getLvolConnections in pkg/util/jsonrpc.go). This lets a test probe the
+// credentials (the exact request path the CSI driver itself takes: see
+// getLvolConnections in internal/controlplane/client.go). This lets a test probe the
 // backend's authorization decision for an arbitrary host NQN without going
 // through the Go CSI client or the Kubernetes scheduler. Returns the HTTP
 // status code and response body.
@@ -548,7 +533,7 @@ func pvForPVC(c kubernetes.Interface, ns, pvcName string) *corev1.PersistentVolu
 }
 
 // pvNodeAffinityRequires reports whether pv.Spec.NodeAffinity has a required
-// term matching key=value via an "In" match expression — the shape
+// term matching key=value via an "In" match expression, the shape
 // external-provisioner writes from a CSI CreateVolumeResponse's
 // AccessibleTopology.
 func pvNodeAffinityRequires(pv *corev1.PersistentVolume, key, value string) bool {
@@ -573,7 +558,7 @@ func pvNodeAffinityRequires(pv *corev1.PersistentVolume, key, value string) bool
 
 // clearDeploymentNodeAffinity removes the pod template's affinity via a
 // strategic merge patch, triggering a rollout of a replacement pod that
-// carries no placement pin of the test's own — so where that pod lands is
+// carries no placement pin of the test's own, so where that pod lands is
 // governed solely by the PV's own nodeAffinity (or, pre-fix, by nothing).
 func clearDeploymentNodeAffinity(c kubernetes.Interface, ns, name string) {
 	patch := []byte(`{"spec":{"template":{"spec":{"affinity":null}}}}`)
