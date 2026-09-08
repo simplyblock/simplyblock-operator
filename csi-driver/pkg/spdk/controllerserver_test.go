@@ -276,7 +276,7 @@ func TestCoLocatedHostID(t *testing.T) {
 func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 	const labelKey = "storage.simplyblock.io/pool.my-pool"
 
-	t.Run("no dhchap_node_label parameter", func(t *testing.T) {
+	t.Run("no dhchap_node_selector parameter", func(t *testing.T) {
 		req := &csi.CreateVolumeRequest{Parameters: map[string]string{}}
 		if key, val := dhchapAllowedNodeSegment(req); key != "" || val != "" {
 			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
@@ -290,7 +290,7 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 		// won't be registered there yet, so a nil/empty requirement here must
 		// still produce the segment.
 		req := &csi.CreateVolumeRequest{
-			Parameters: map[string]string{paramDHCHAPNodeLabel: labelKey},
+			Parameters: map[string]string{paramDHCHAPNodeSelector: labelKey},
 		}
 		key, val := dhchapAllowedNodeSegment(req)
 		if key != labelKey || val != dhchapAllowedNodeLabelValue {
@@ -300,7 +300,7 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 
 	t.Run("ignores AccessibilityRequirements entirely", func(t *testing.T) {
 		req := &csi.CreateVolumeRequest{
-			Parameters: map[string]string{paramDHCHAPNodeLabel: labelKey},
+			Parameters: map[string]string{paramDHCHAPNodeSelector: labelKey},
 			AccessibilityRequirements: &csi.TopologyRequirement{
 				Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
 					labelKey: "some-other-value",
