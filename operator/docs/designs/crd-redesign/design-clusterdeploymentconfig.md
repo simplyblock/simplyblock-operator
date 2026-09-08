@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-08-30)  
+**Date:** 2026-08-29 (last updated 2026-09-08)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-clusterdeploymentconfig.md`](../../tests/test-plan-clusterdeploymentconfig.md)  
 **Example:** [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml)  
@@ -170,7 +170,7 @@ spec:
           mgmtInterface: eth1
           dataInterfaces: [eth2]
           devices:
-            block: [/dev/sdb, /dev/sdc]
+            nvme: ["0000:5e:00.0"]
 ```
 
 **Three levels of grouping, and each one earns its place.** A node set carries
@@ -206,10 +206,15 @@ lock.
 
 **A group's devices are an explicit list, never a filter.** `nvme` names NVMe
 devices by PCI address and `block` names logical block devices by path, which are
-the two classes simplyblock accepts as backend storage, and between them they
-are every device the group's workers hand to simplyblock. Both expand into the
+the two classes simplyblock accepts as backend storage, and whichever one a group
+carries is every device its workers hand to simplyblock. Both expand into the
 node's `config.deviceNames`, which takes a PCI address and a device path in one
 list ([`design-storagenode.md`](design-storagenode.md) §3.1).
+
+`block` is the same shape with paths in place of addresses, and the example above
+is an NVMe deployment because that is the class a fleet usually has. What decides
+which member a group carries is the class the whole document is for, which is the
+paragraph after next.
 
 **Each member validates the shape it accepts**, so `nvme` takes a PCI address and
 nothing else and `block` takes a path under `/dev` and nothing else. The node's
@@ -219,17 +224,30 @@ Splitting the two members is what makes the validation possible at all: one mixe
 list could only be checked against the union of both shapes, which accepts a PCI
 address written where a path was meant.
 
-**A group may name both classes, and mostly should not.** Nothing rejects a group
-whose workers hand over an NVMe device and a SATA disk together, because the node
-accepts the mixed list, but the two classes have different performance and
-different failure behavior and a group is the unit that is supposed to be
-uniform. Draft validation says so in `status.message` (§4.1) and blocks nothing:
-it is a deployment that is usually a mistake and occasionally exactly what was
-meant, which is the shape of an advisory rather than a rule. There is no allow list to evaluate, no
-model to match, and no size range to fall inside, because a document whose
-meaning depends on what the hardware turns out to be is not a document a reviewer
-can approve. Filters belong to the run that produces the list, and §8.1 is where
-they are given.
+**One class per document, and the schema is what holds it.** A cluster is built
+out of one class of backend storage, because an erasure-coding stripe placed
+across both is written and rebuilt at the slower class's rate
+([`design-storagecluster.md`](design-storagecluster.md) §3.1). A document
+describes one cluster, so every group of every node set names the same member:
+either all of them carry `nvme` or all of them carry `block`, and a group naming
+both is not a group this API accepts. Two CEL rules say it, one on the selection
+and one on the spec (Appendix A), which makes it a rule about the document's
+structure rather than about the world and therefore one that holds for a draft as
+firmly as for an approval (§5.1).
+
+**The class is derived, and `spec.cluster` does not restate it.** The groups'
+device lists already say which class the deployment uses, so `CreatingCluster`
+reads it off them and stamps `StorageCluster.spec.deviceClass` with it (§4.2). The
+fact is stated once, in the place a reviewer is reading anyway, which is the same
+reason `spec.environment` resolves into node flags rather than being written on
+both. For a growth document the class is settled before the document exists, by
+the cluster `spec.clusterRef` names, and naming devices of the other one is what
+§5.1 rejects.
+
+**There is no allow list to evaluate, no model to match, and no size range to fall
+inside**, because a document whose meaning depends on what the hardware turns out
+to be is not a document a reviewer can approve. Filters belong to the run that
+produces the list, and §8.1 is where they are given.
 
 **A group expands to one `StorageNode` per worker per slot.** The slot count comes
 from the cluster's `spec.storageNodes.socketsToUse` and `nodesPerSocket`
@@ -318,7 +336,8 @@ an immutable document, and no mechanism below the reviewer prevents that.
   approved, control plane ready
     │
     ▼
-  Validating        ← workers exist, devices are plausible, no conflict (§6)
+  Validating        ← workers exist, devices are plausible and of the cluster's
+                      class, no conflict (§6)
     │  clean
     ▼
   CreatingCluster   ← create or resolve the StorageCluster
@@ -332,6 +351,13 @@ an immutable document, and no mechanism below the reviewer prevents that.
     ▼
   phase: Expanded
 ```
+
+**`CreatingCluster` stamps the device class it read off the groups.** The document
+carries no field for it (§3.1), so the step takes the member every group used and
+writes it to `StorageCluster.spec.deviceClass`, where it is immutable from that
+moment ([`design-storagecluster.md`](design-storagecluster.md) §3.2). Resolving an
+existing cluster writes nothing: the cluster's class already holds, and a document
+whose groups disagree with it was rejected at approval (§5.1).
 
 **`CreatingNodes` resolves the document's shorthands as it writes.** Each node
 gets its set's `sizing`, its group's devices as one `config.deviceNames` list
@@ -394,10 +420,19 @@ it found in `status.message` (§4.1) so that a reviewer fixes it in place.
 **The edit that sets `spec.approved` to true is validated against the Kubernetes
 API.** Every worker named by every group has to exist as a Node,
 `spec.clusterRef` has to resolve to a `StorageCluster` when it is set and to
-nothing when it is not (§6), and no other approved config may already own the
-cluster this one would create. All three are answerable from objects the operator
-already caches, which is what makes them cheap enough to answer inside an
+nothing when it is not (§6), the class the groups name has to match that cluster's
+`spec.deviceClass` where one is named, and no other approved config may already
+own the cluster this one would create. All four are answerable from objects the
+operator already caches, which is what makes them cheap enough to answer inside an
 admission request.
+
+**The class check is the one of the four that has a schema half.** That every
+group agrees is CEL's (§3.1), and it holds from the first draft. What admission
+adds is the comparison a schema cannot make, against a cluster that exists: a
+growth document naming block devices for an NVMe cluster is a document whose nodes
+would be rejected one at a time by `StorageNodeValidator`
+([`design-storagenode.md`](design-storagenode.md) §3.4), which is a slower way to
+learn it and leaves a half-expanded deployment behind.
 
 **Devices are not on that list, because deciding what a cluster could use is
 discovery's job (§8).** The inspection that knows whether a device is mounted,
@@ -612,30 +647,46 @@ question a reviewer answers. §3.1 is what the answer then buys.
 It also means two documents written against one Kubernetes cluster agree on it
 without anybody coordinating, since both runs read the same evidence.
 
-**Two classes of backend storage, and one of them is opt-in.** NVMe devices are
-the class simplyblock has always accepted, and logical block devices are the
-class 26.4 adds, so discovery has to be told which of them it is looking for.
-`spec.discover.deviceFilter.enableLogicalBlockDevices` reports both classes, and
-leaving it unset reports NVMe only. Unset is the conservative default for two
-reasons. Upgrading to 26.4 must not change what a discovery run reports, and the
-block class is the broader and the less uniform of the two even after the
-availability rule of §8.2 has excluded everything in use, so a deployment that
-only ever meant to use NVMe should not have to review a longer list in order to
-say so.
+**Two classes of backend storage, and a run scans one of them.** NVMe devices are
+the class simplyblock has always accepted, and logical block devices are the class
+26.4 adds. `spec.discover.deviceFilter.enableLogicalBlockDevices` scans the block
+class, and leaving it unset scans NVMe. It selects rather than adds, because the
+draft a run writes describes one cluster and a cluster is built out of one class
+([`design-storagecluster.md`](design-storagecluster.md) §3.1): a run reporting
+both would write a document no reviewer could approve and no CEL rule would admit
+(§3.1).
 
-The two classes are the two members of a group's `devices` (§3.1). NVMe
-candidates become `nvme` entries and block candidates become `block` entries, so
-what discovery scans decides which half of that block a draft can carry.
+Unset is the conservative default for two reasons. Upgrading to 26.4 must not
+change what a discovery run reports, and NVMe is what every deployment before it
+was built out of, so a fleet that never meant to use anything else needs no field
+to say so.
+
+The class a run scans is therefore the member its draft's groups carry (§3.1).
+NVMe candidates become `nvme` entries and block candidates become `block` entries,
+and no draft holds both.
 
 **`spec.discover.deviceFilter` narrows the candidates before they are written.**
-It carries the four filters `StorageNode` accepts, a PCI allow list, a PCI deny
-list, a model, and a size range, and it is the only place in either kind that a
-device is described by a rule. The three PCI filters narrow the NVMe class alone,
-because a logical block device has no PCI address to match, and `driveSizeRange`
-narrows both. On a fleet that is uniform about which slot holds
-the boot device, one deny list keeps that device out of every group of every
-draft, which is the difference between a reviewer correcting one document and a
-reviewer correcting each of twenty groups.
+It is the only place in either kind that a device is described by a rule, and it
+has one set of filters per class. `pcieAllowList`, `pcieDenyList`, and `pcieModel`
+narrow the NVMe class, matching on an address and a model string only an NVMe
+device has. `blockAllowList` and `blockDenyList` narrow the block class, matching
+device paths. `driveSizeRange` and `enablePartitionedDevices` apply to whichever
+class the run is scanning, because a size and a partition table are properties of
+any device.
+
+**A filter for the class the run is not scanning is refused.** A PCI list beside
+`enableLogicalBlockDevices: true` describes devices this run will never look at,
+and a block list without it does the same in the other direction, so a CEL rule on
+the filter rejects both combinations (Appendix B). Ignoring them instead would
+leave an administrator reading a narrowed run that was never narrowed, and the
+draft they would then review is the whole fleet's disks.
+
+On a fleet that is uniform about which slot holds the boot device, one deny list
+keeps that device out of every group of every draft, which is the difference
+between a reviewer correcting one document and a reviewer correcting each of
+twenty groups. The block class has the same shape of problem and the same answer:
+`/dev/sda` is the root disk on most of them, and one entry in `blockDenyList`
+keeps it out.
 
 **The filter is an input, and it is not written down.** What the draft carries is
 the explicit list the filter produced (§3.1), so a config states which devices a
@@ -703,7 +754,7 @@ Both kinds are new, so both tables are new infrastructure.
 |----------------------------------------------------------|-----------|--------------------------|---------------------------|
 | A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`         | `ClusterDeploymentConfig` |
 | A draft names a device no node advertises                | `Warning` | `DeviceNotFound`         | `ClusterDeploymentConfig` |
-| A draft has a group mixing NVMe and block devices        | `Warning` | `MixedDeviceClasses`     | `ClusterDeploymentConfig` |
+| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`    | `ClusterDeploymentConfig` |
 | A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`       | `ClusterDeploymentConfig` |
 | Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`   | `ClusterDeploymentConfig` |
 | Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`          | `ClusterDeploymentConfig` |
@@ -724,10 +775,12 @@ request, so what the administrator gets is the webhook's message on their own
 terminal and there is no object to record it against. The signal for that path is
 the metric below.
 
-**`MixedDeviceClasses` is the one that does not block anything.** It is a
-`Warning` because a group whose workers hand over an NVMe device and a SATA disk
-together is usually a mistake, and it is only an event because occasionally it is
-not (§3.1). Approval proceeds either way.
+**`DeviceClassMismatch` is a draft-time reading of a rule admission also
+enforces.** A growth document whose groups name block devices for an NVMe cluster
+is rejected when somebody approves it (§5.1), and the event is what says so while
+the document is still editable, in the same way `WorkerNotFound` does. Nothing
+emits an event for a document that mixes the two classes within itself, because
+CEL refuses to store one at all (§3.1).
 
 **`AwaitingApproval` is the one that changes how the kind is used.** A valid
 draft that nobody has approved looks identical to a controller that has not
@@ -868,7 +921,12 @@ type KubernetesEnvironment string
 // what lands here is the result. It expands to the matching fields of
 // StorageNode.spec.config, which carry the same meanings.
 //
-// +kubebuilder:validation:XValidation:rule="has(self.nvme) || has(self.block)",message="a device selection names NVMe addresses, block devices, or both"
+// One member and not both. A cluster is built out of one class of backend
+// storage, so a group hands over NVMe devices or logical block devices, and the
+// rule below is the half of that a single group can be checked against. That
+// every group of the document agrees is the spec's rule.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.nvme) != has(self.block)",message="a device selection names NVMe addresses or block devices, not both"
 type DeviceSelection struct {
 	// Nvme names NVMe devices by PCI address ("0000:5e:00.0").
 	// +kubebuilder:validation:items:Pattern=`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$`
@@ -878,8 +936,8 @@ type DeviceSelection struct {
 
 	// Block names logical block devices by path ("/dev/sdb"). It expands into the
 	// same config.deviceNames as Nvme, which takes a PCI address and a device
-	// path in one list. A group setting both is accepted and discouraged, since a
-	// group is meant to be uniform hardware.
+	// path in one list. It is the alternative to Nvme rather than a companion of
+	// it: the two classes are not mixed within a cluster.
 	// +kubebuilder:validation:items:Pattern=`^/dev/[a-zA-Z0-9._/-]+$`
 	// +listType=set
 	// +optional
@@ -973,8 +1031,15 @@ type ClusterTemplate struct {
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
 // reviewable document.
+//
+// The third rule is the device class one. A document describes one cluster and a
+// cluster is built out of one class of backend storage, so every group of every
+// node set names the same member of its DeviceSelection. The expansion reads the
+// class off them and stamps it onto the cluster it creates, which is why the
+// document carries no field for it.
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -1125,11 +1190,20 @@ const (
 // an input to discovery and never appears in the document discovery writes: a
 // ClusterDeploymentConfig carries the explicit list the filter produced, not the
 // rule that produced it.
+//
+// The filters come in two sets, one per device class, and a run scans one class.
+// The two rules below reject the set belonging to the class this run is not
+// scanning, because a filter that will never be applied is one an administrator
+// reads as having narrowed a draft that was never narrowed.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.pcieAllowList) || has(self.pcieDenyList) || has(self.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
+// +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !(has(self.blockAllowList) || has(self.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 type DeviceFilter struct {
-	// EnableLogicalBlockDevices reports a worker's available logical block
-	// devices alongside its available NVMe devices. Unset reports NVMe only, so
-	// that upgrading to 26.4 does not change what a discovery run reports and a
-	// deployment that only ever meant to use NVMe has no longer list to review.
+	// EnableLogicalBlockDevices scans a worker's available logical block devices
+	// instead of its available NVMe devices. It selects the class rather than
+	// adding one, because the draft a run writes describes one cluster and a
+	// cluster is built out of one class. Unset scans NVMe, so that upgrading to
+	// 26.4 does not change what a discovery run reports.
 	// +optional
 	EnableLogicalBlockDevices *bool `json:"enableLogicalBlockDevices,omitempty"`
 
@@ -1144,7 +1218,8 @@ type DeviceFilter struct {
 
 	// PcieAllowList restricts candidates to these PCI addresses. This and the two
 	// PCI filters below narrow the NVMe class alone, because a logical block
-	// device has no PCI address to match.
+	// device has no PCI address to match, so setting any of them on a run that
+	// scans the block class is rejected by the rule on this type.
 	// +listType=set
 	// +optional
 	PcieAllowList []string `json:"pcieAllowList,omitempty"`
@@ -1160,8 +1235,25 @@ type DeviceFilter struct {
 	// +optional
 	PcieModel string `json:"pcieModel,omitempty"`
 
-	// DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the PCI
-	// filters, it narrows both classes.
+	// BlockAllowList restricts candidates to these device paths ("/dev/sdb").
+	// This and BlockDenyList are the block class's half of the filter, and they
+	// require EnableLogicalBlockDevices for the same reason the PCI filters
+	// forbid it.
+	// +kubebuilder:validation:items:Pattern=`^/dev/[a-zA-Z0-9._/-]+$`
+	// +listType=set
+	// +optional
+	BlockAllowList []string `json:"blockAllowList,omitempty"`
+
+	// BlockDenyList excludes these device paths. On a fleet that boots from
+	// /dev/sda, this is the one entry that keeps the root disk out of every group
+	// of every draft.
+	// +kubebuilder:validation:items:Pattern=`^/dev/[a-zA-Z0-9._/-]+$`
+	// +listType=set
+	// +optional
+	BlockDenyList []string `json:"blockDenyList,omitempty"`
+
+	// DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
+	// per-class filters, it applies to whichever class the run is scanning.
 	// +optional
 	DriveSizeRange string `json:"driveSizeRange,omitempty"`
 }

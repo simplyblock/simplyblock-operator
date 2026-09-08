@@ -1202,8 +1202,9 @@ resource is the actor.
 ### 8.2 Cluster and fleet layer
 
 `StorageCluster` is the unit of a simplyblock backend cluster, carrying the
-erasure-coding layout, the fabric type, the HA mode, the port ranges, the
-capacity thresholds, and the policies for volume migration and auto-rebalancing.
+erasure-coding layout, the fabric type, the class of device it is built out of,
+the HA mode, the port ranges, the capacity thresholds, and the policies for volume
+migration and auto-rebalancing.
 Much of its spec is immutable once set, because those fields describe on-disk and
 on-wire layout that cannot be changed under a live cluster. Everything mutable at
 the cluster level that is not expressible as desired state, meaning activate,

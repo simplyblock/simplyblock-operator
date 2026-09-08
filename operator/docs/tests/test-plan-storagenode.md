@@ -155,18 +155,25 @@ File: `operator/internal/controllers/node/storagenode_controller_unit_test.go`
 
 File: `operator/internal/webhook/storagenode_validator_test.go`
 
-| #     | Scenario                                                                    | Type     | Test                       |
-|-------|-----------------------------------------------------------------------------|----------|----------------------------|
-| U-60  | A user changing `spec.workerNode`: denied with the migration hint           | Negative | `TestStorageNodeValidator` |
-| U-61  | The operator's service account changing `spec.workerNode`: allowed          | Positive | `TestStorageNodeValidator` |
-| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection | Negative | `TestStorageNodeValidator` |
-| U-63  | A create rather than an update: allowed, since there is no old value        | Boundary | `TestStorageNodeValidator` |
-| U-64  | A service account in another namespace named like the operator's: denied    | Negative | —                          |
-| U-239 | A user changing `spec.config.pcieAllowList`: denied                         | Negative | —                          |
-| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed | Positive | —                          |
-| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                      | Negative | —                          |
-| U-242 | The operator re-sizing `spec.config.sizing`: allowed                        | Positive | —                          |
-| U-243 | An update touching none of the guarded fields: admitted without inspection  | Negative | —                          |
+| #     | Scenario                                                                            | Type     | Test                       |
+|-------|-------------------------------------------------------------------------------------|----------|----------------------------|
+| U-60  | A user changing `spec.workerNode`: denied with the migration hint                   | Negative | `TestStorageNodeValidator` |
+| U-61  | The operator's service account changing `spec.workerNode`: allowed                  | Positive | `TestStorageNodeValidator` |
+| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection         | Negative | `TestStorageNodeValidator` |
+| U-63  | A create rather than an update: allowed, since there is no old value                | Boundary | `TestStorageNodeValidator` |
+| U-64  | A service account in another namespace named like the operator's: denied            | Negative | —                          |
+| U-239 | A user changing `spec.config.pcieAllowList`: denied                                 | Negative | —                          |
+| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed         | Positive | —                          |
+| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                              | Negative | —                          |
+| U-242 | The operator re-sizing `spec.config.sizing`: allowed                                | Positive | —                          |
+| U-243 | An update touching none of the guarded fields: admitted without inspection          | Negative | —                          |
+| U-255 | A `config.deviceNames` entry that is a path on an `NVMe` cluster: denied            | Negative | —                          |
+| U-256 | A `config.deviceNames` of PCI addresses on an `NVMe` cluster: admitted              | Positive | —                          |
+| U-257 | A `config.deviceNames` entry that is an address on a `LogicalBlock` cluster: denied | Negative | —                          |
+| U-258 | A list holding an address and a path: denied whichever class the cluster is         | Negative | —                          |
+| U-259 | A bare device name: read as a path and classed as block, not as unknown             | Boundary | —                          |
+| U-260 | `config.pcieDenyList` set on a `LogicalBlock` cluster: denied                       | Negative | —                          |
+| U-261 | `config.pcieDenyList` set on an `NVMe` cluster: admitted                            | Positive | —                          |
 
 ### Workload: DaemonSet, Services, and RBAC (design §5.1)
 
@@ -660,11 +667,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 254       | 87      | 167         |
+| Unit        | 261       | 87      | 174         |
 | Integration | 52        | 1       | 51          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **337**   | **88**  | **249**     |
+| **Total**   | **344**   | **88**  | **256**     |
 
 Eighty-seven of the eighty-eight covered scenarios are unit tests, and they
 concentrate in three places: the workload builders, the drain's volume
@@ -699,6 +706,7 @@ not exist yet, and §6 separates the two.
 | U-78 … U-84                | The per-slot storage-node-uuid labels                                                         | The most consequential labels in the operator, and the only covered part is the node-type label. A wrong key here breaks CSI provisioning                                                                                                                                        |
 | U-90 … U-94                | Per-node divergence in the ConfigMap                                                          | Only the cluster-uniform half is covered. The shell-quoting row matters because device names reach a sourced file                                                                                                                                                                |
 | U-244 … U-247, I-40 … I-45 | The widened `deviceNames`                                                                     | Design §3.1 has the field take a PCI address and a device path in one list. Nothing implements either form yet, and `I-44` and `I-45` are what hold the item pattern                                                                                                             |
+| U-255 … U-261              | The device class the cluster fixes                                                            | Design §3.4 has the webhook compare every entry against `StorageCluster.spec.deviceClass` and refuse the PCI filters on a block cluster. Neither the field nor the comparison exists, and `U-258` is the row that keeps a mixed list out of a cluster of either class            |
 | U-116 … U-124              | Terminal re-reconcile, the acquire race, and the cluster gate                                 | The lock's happy paths are covered and its concurrent ones are not. The cluster gate applies to one action today, design §7.1 widens it                                                                                                                                          |
 | U-125 … U-134              | Every single-step action                                                                      | `runSimpleAction` has no test reference, and its skip-if-already-there behavior is what design §7.2 replaces `status.triggered` with                                                                                                                                             |
 | U-144 … U-146              | Classification boundaries                                                                     | The buckets are covered individually and their overlaps are not                                                                                                                                                                                                                  |
@@ -721,38 +729,43 @@ not exist yet, and §6 separates the two.
 The axes are the ones that actually break this operator. A blank cell is a
 combination nothing exercises.
 
-| Axis                      | Value                     | Scenarios                                                       |
-|---------------------------|---------------------------|-----------------------------------------------------------------|
-| Cluster node count        | Single node               | U-155, E-24                                                     |
-|                           | Two nodes                 | U-155                                                           |
-|                           | Three nodes               | E-13, E-20, E-23, M-02, M-03                                    |
-|                           | Five or more              | E-02, E-25, M-05                                                |
-|                           | Asymmetric node sizes     | —                                                               |
-| Sockets per worker        | One                       | Every scenario except those below                               |
-|                           | Two or more               | U-21, U-30, U-31, U-39, U-40, U-205, E-04                       |
-| Namespace count           | Single namespace          | Every scenario except those below                               |
-|                           | Multiple namespaces       | U-72, U-145, U-177, I-23, I-26                                  |
-| simplyblock cluster count | One cluster               | Every scenario except those below                               |
-|                           | Several in one Kubernetes | U-81, I-21                                                      |
-|                           | Cross-cluster             | — (not applicable: no node operation spans Kubernetes clusters) |
-| Failure domains           | Not enabled               | U-11                                                            |
-|                           | Enabled and set           | U-10                                                            |
-|                           | Enabled and unset         | U-09, U-13                                                      |
-|                           | Partially set             | —                                                               |
-| Object scale              | Zero volumes              | U-139, U-140, U-169, E-11                                       |
-|                           | A handful                 | U-152, E-10, E-13                                               |
-|                           | 100 or more               | E-25                                                            |
-| Lifecycle and restart     | Mid-step restart          | U-172, M-01                                                     |
-|                           | Terminal re-reconcile     | U-117                                                           |
-|                           | Deletion mid-operation    | U-119, I-19, I-27                                               |
-|                           | Host death mid-operation  | M-02                                                            |
-| Capacity sampling         | A first reading           | U-249                                                           |
-|                           | Below the write threshold | U-250                                                           |
-|                           | Above it, or a new total  | U-251, U-252                                                    |
-|                           | Unreachable or unmeasured | U-253, U-254                                                    |
-| Actor                     | Operator-raised operation | U-54, U-201                                                     |
-|                           | User-created operation    | Every operation scenario except those two                       |
-|                           | Webhook path              | U-60 … U-64, I-08, I-09                                         |
+| Axis                      | Value                      | Scenarios                                                       |
+|---------------------------|----------------------------|-----------------------------------------------------------------|
+| Cluster node count        | Single node                | U-155, E-24                                                     |
+|                           | Two nodes                  | U-155                                                           |
+|                           | Three nodes                | E-13, E-20, E-23, M-02, M-03                                    |
+|                           | Five or more               | E-02, E-25, M-05                                                |
+|                           | Asymmetric node sizes      | —                                                               |
+| Sockets per worker        | One                        | Every scenario except those below                               |
+|                           | Two or more                | U-21, U-30, U-31, U-39, U-40, U-205, E-04                       |
+| Namespace count           | Single namespace           | Every scenario except those below                               |
+|                           | Multiple namespaces        | U-72, U-145, U-177, I-23, I-26                                  |
+| simplyblock cluster count | One cluster                | Every scenario except those below                               |
+|                           | Several in one Kubernetes  | U-81, I-21                                                      |
+|                           | Cross-cluster              | — (not applicable: no node operation spans Kubernetes clusters) |
+| Failure domains           | Not enabled                | U-11                                                            |
+|                           | Enabled and set            | U-10                                                            |
+|                           | Enabled and unset          | U-09, U-13                                                      |
+|                           | Partially set              | —                                                               |
+| Object scale              | Zero volumes               | U-139, U-140, U-169, E-11                                       |
+|                           | A handful                  | U-152, E-10, E-13                                               |
+|                           | 100 or more                | E-25                                                            |
+| Lifecycle and restart     | Mid-step restart           | U-172, M-01                                                     |
+|                           | Terminal re-reconcile      | U-117                                                           |
+|                           | Deletion mid-operation     | U-119, I-19, I-27                                               |
+|                           | Host death mid-operation   | M-02                                                            |
+| Device class              | NVMe, matching             | U-256, U-261                                                    |
+|                           | Block, matching            | U-259                                                           |
+|                           | An entry of the other one  | U-255, U-257                                                    |
+|                           | A list holding both        | U-258                                                           |
+|                           | A filter for the other one | U-260                                                           |
+| Capacity sampling         | A first reading            | U-249                                                           |
+|                           | Below the write threshold  | U-250                                                           |
+|                           | Above it, or a new total   | U-251, U-252                                                    |
+|                           | Unreachable or unmeasured  | U-253, U-254                                                    |
+| Actor                     | Operator-raised operation  | U-54, U-201                                                     |
+|                           | User-created operation     | Every operation scenario except those two                       |
+|                           | Webhook path               | U-60 … U-64, I-08, I-09                                         |
 
 **The asymmetric-node row is the significant blank.** Every drain and every
 migration picks a target from the online peers by round-robin, which spreads by

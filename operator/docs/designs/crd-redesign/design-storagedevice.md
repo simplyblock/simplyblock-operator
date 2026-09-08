@@ -221,6 +221,13 @@ device. The control plane reports no device type, so the presence of `pciAddress
 distinction, and this design adds no type field to restate what one field's presence
 already says.
 
+**Every device of one cluster is of that cluster's class**, which
+`StorageCluster.spec.deviceClass` declares and admission holds a node to
+([`design-storagecluster.md`](design-storagecluster.md) §3.1). So the presence of
+`pciAddress` agrees with the cluster across every object, and a device that
+disagrees with it is a control-plane report worth reading twice rather than a
+device this kind has to accommodate.
+
 **No role is restricted by how a device is attached.** A journal, a storage slice, or
 both are what `status.role` reports, and nothing ties those to the transport. Whether a
 journal on a spinning disk is a placement anybody wants is a question for whoever

@@ -7,6 +7,11 @@
 # copying from here should know: spec.approved is false in everything discovery writes
 # (§5), and the device lists are explicit rather than a rule, because the deviceFilter
 # that produced them is an input to the run and is not carried into the document (§8.1).
+#
+# Two documents: an NVMe deployment, and the same shape for a fleet of logical block
+# devices. They are separate documents because they are separate clusters: a cluster is
+# built out of one class of device, so the two classes never appear in one document
+# (§3.1).
 
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ClusterDeploymentConfig
@@ -56,9 +61,9 @@ spec:
               - "0000:5e:00.0"
               - "0000:5f:00.0"
 
-        # Logical block devices are named by path, and are the class 26.4 adds. A
-        # group carries one class or the other, whichever discovery was asked to
-        # report (§8.1).
+        # Every group of every node set names the same class, which is the class
+        # the cluster is built out of (§3.1). This document is an NVMe deployment,
+        # so no group in it carries a block list.
         - name: mars
           workers:
             - worker5
@@ -66,9 +71,8 @@ spec:
           dataInterfaces:
             - eth2
           devices:
-            block:
-              - /dev/sdb
-              - /dev/sdc
+            nvme:
+              - "0000:60:00.0"
 
     - name: rack-b
       sizing:
@@ -89,3 +93,49 @@ spec:
           devices:
             nvme:
               - "0000:5e:00.0"
+
+---
+# The second class, as its own deployment. Logical block devices are named by path and
+# are the class 26.4 adds, and a document that named them beside the NVMe addresses
+# above would be rejected by the spec's CEL rule rather than deployed as a mixed
+# cluster.
+#
+# Nothing else about the document changes. The cluster template carries no device class
+# of its own: the expansion reads it off these lists and stamps it onto the
+# StorageCluster it creates (§4.2).
+
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ClusterDeploymentConfig
+metadata:
+  name: archive
+  namespace: simplyblock
+
+spec:
+  approved: false
+  environment: Vanilla
+  edgeCluster: false
+
+  cluster:
+    name: archive
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+
+  nodeSets:
+    - name: rack-c
+      sizing:
+        maxSubsystemCount: 100
+        vcpuCount: 15
+        minHugePagesSize: 16G
+      groups:
+        - name: ceres
+          workers:
+            - worker6
+            - worker7
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          devices:
+            block:
+              - /dev/sdb
+              - /dev/sdc

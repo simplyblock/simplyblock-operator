@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageClusterOps`)  
-**Date:** 2026-08-28  
+**Date:** 2026-08-28 (last updated 2026-09-08)  
 **Supersedes:** `design-storageclusterops.md`, removed in the same change  
 **Test Plan:** [`tests/test-plan-storagecluster.md`](../../tests/test-plan-storagecluster.md)
 
@@ -139,8 +139,43 @@ cluster's volume encryption keys, and is a block rather than a field, which is
 the last part of this section. `enableFailureDomains` opts the cluster into
 failure-domain mode, where every node must declare a fault group so the control
 plane can spread chunks across independent ones. `enableNodeAffinity` selects
-affinity-based placement for storage components. All eight are enforced immutable
-once set, in two spellings that mean the same thing (§3.2).
+affinity-based placement for storage components. `deviceClass` names the one class
+of backend storage the cluster is built out of. All nine are enforced immutable, in
+two spellings that mean the same thing (§3.2).
+
+**A cluster is built out of one class of device, and `deviceClass` is which.**
+NVMe devices are the class simplyblock has always accepted and logical block
+devices are the class 26.4 adds, and a cluster uses one of them. The two differ in
+latency and in failure behavior, and an erasure-coding stripe is placed across
+whatever devices the layout finds, so a cluster holding both writes single stripes
+across two performance classes and rebuilds them at the slower one's rate. That is
+a property of the cluster's layout rather than of any node, which is what puts the
+field here and keeps it in the immutable group: the class cannot change under data
+already written with it.
+
+```go
+// DeviceClass is the class of backend storage every node in this cluster hands
+// over. It describes on-disk layout, so it cannot change under a live cluster.
+// +kubebuilder:validation:Enum=NVMe;LogicalBlock
+// +kubebuilder:default=NVMe
+// +k8s:immutable
+DeviceClass StorageClusterDeviceClass `json:"deviceClass,omitempty"`
+```
+
+**The default is what every cluster that exists already is.** `NVMe` is the only
+class the backend accepted before 26.4, so a defaulted field reads the registered
+fleet correctly without anybody editing it, and a deployment that wants the other
+class says so once. Defaulting also makes the field never absent, which is what
+lets the immutability rule apply from creation (§3.2).
+
+Everything below the cluster is checked against it. A `StorageNode` whose
+`config.deviceNames` names a device of the other class is rejected at admission,
+and the PCI filters are rejected outright on a `LogicalBlock` cluster, because a
+logical block device has no PCI address to match
+([`design-storagenode.md`](design-storagenode.md) §3.4). A deployment config
+states the class in its groups' device lists rather than in a field of its own,
+and the expansion stamps what those lists say onto the cluster it creates
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §3.1).
 
 **Uniform SPDK sizing, required and cluster-scoped on purpose.**
 
@@ -294,13 +329,13 @@ from wherever the field sits, so this is a Kubernetes-side regrouping only.
 
 ### 3.2 Immutability
 
-Eight spec fields are enforced immutable. Every one of them is optional, and the
+Nine spec fields are enforced immutable. Eight of them are optional, and the
 enforcement is immutable once set: the field may be filled in later, and from that
 point it can be neither changed nor removed.
 
 | Spelling                                         | Fields                                                                       |
 |--------------------------------------------------|------------------------------------------------------------------------------|
-| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`                                 |
+| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`                  |
 | Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort` |
 
 `+k8s:immutable` generates two rules. controller-gen v0.21.0 emits a field-level
@@ -314,6 +349,11 @@ rule, which is the once-set semantics.
 On a `Required` field the parent rule is omitted and the field rule applies from
 creation, since the field is never absent. `StorageClusterOps.spec.clusterRef` and
 `spec.action` are that case (§5.1).
+
+**`deviceClass` is the ninth field and the one that is defaulted rather than
+optional** (§3.1). A defaulted field is never absent either, so it takes the same
+form as a `Required` one: the field rule applies from creation, and there is no
+first assignment to allow because `NVMe` is written the moment the object is.
 
 The type-level CEL form expresses the same intent at greater length and guards
 only the value, so the six fields carrying it take `+k8s:immutable` on the next
@@ -447,6 +487,7 @@ spec:
   snodeApiPort: 50001
   enableFailureDomains: true
   enableNodeAffinity: true
+  deviceClass: NVMe
   kms:
     vault:
       baseURL: https://vault.example.com:8200
@@ -1322,6 +1363,7 @@ has to carry it.
 | Sizing read live by every node                                                      | Stamped onto a node at creation (§3.1)                         | Behavioral. A cluster-wide sizing edit stops reaching existing nodes, which is what makes a rolling hardware upgrade expressible                                                                                                                                                                                                                                          |
 | `StripeSpec`, `WarningThresholdSpec`, `CriticalThresholdSpec` Go field names        | `Stripe`, `WarningThreshold`, `CriticalThreshold` (Appendix A) | Go only. The JSON tags already read `stripe`, `warningThreshold`, and `criticalThreshold`, so nothing changes on the wire                                                                                                                                                                                                                                                 |
 | No `spec.storageNodes`                                                              | The workload group (Appendix A)                                | Additive, and required by the `StorageNodeSet` retirement. `design-storagenode.md` §5 specifies it                                                                                                                                                                                                                                                                        |
+| No device class anywhere                                                            | `spec.deviceClass`, defaulted to `NVMe` (§3.1)                 | Additive, and inert for every cluster that exists: `NVMe` is the only class the backend accepted before 26.4, so the default describes the registered fleet and the immutability rule starts holding from the first write                                                                                                                                                 |
 | Six misnamed boolean toggles                                                        | `enableXyz` or `disableXyz` (`design-crd-model.md` §7.5)       | Spec renames, owned by `design-crd-model.md` §9.6, and §3.1 for the two this kind names                                                                                                                                                                                                                                                                                   |
 | `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.enableDataRealignment` (§3.1)                            | Spec rename and a move up one level, and the `enable` form fixes the default at off                                                                                                                                                                                                                                                                                       |
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                        | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
@@ -1559,6 +1601,22 @@ type BackupStoreSpec struct {
 	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 }
 
+// StorageClusterDeviceClass is the class of backend storage a cluster is built
+// out of. The values are the two classes simplyblock accepts, spelled as the
+// standards that name them are, which is the exception design-crd-model.md §7.8
+// carries for a word this group did not invent.
+// +kubebuilder:validation:Enum=NVMe;LogicalBlock
+type StorageClusterDeviceClass string
+
+const (
+	// StorageClusterDeviceClassNVMe is a cluster whose nodes hand over NVMe
+	// devices, named by PCI address.
+	StorageClusterDeviceClassNVMe StorageClusterDeviceClass = "NVMe"
+	// StorageClusterDeviceClassLogicalBlock is a cluster whose nodes hand over
+	// logical block devices, named by path. The backend accepts them from 26.4.
+	StorageClusterDeviceClassLogicalBlock StorageClusterDeviceClass = "LogicalBlock"
+)
+
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
 type StorageClusterSpec struct {
@@ -1638,6 +1696,18 @@ type StorageClusterSpec struct {
 	// +optional
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+
+	// DeviceClass is the class of backend storage every node in this cluster
+	// hands over: NVMe devices named by PCI address, or logical block devices
+	// named by path. A cluster is built out of one of them, because an
+	// erasure-coding stripe placed across both is written and rebuilt at the
+	// slower class's rate. It describes on-disk layout, so it cannot change under
+	// a live cluster, and it defaults to NVMe because that is the only class the
+	// backend accepted before 26.4.
+	// +kubebuilder:validation:Enum=NVMe;LogicalBlock
+	// +kubebuilder:default=NVMe
+	// +k8s:immutable
+	DeviceClass StorageClusterDeviceClass `json:"deviceClass,omitempty"`
 
 	// KMS selects where the cluster stores volume encryption keys. Switching
 	// providers on a live cluster is at least as unsupportable as changing one

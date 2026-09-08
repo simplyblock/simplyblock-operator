@@ -284,13 +284,25 @@ because a node's devices are one set however each of them was reached. A bare
 device name is read as a path under `/dev`, which is what the registered field
 accepted and what keeps every manifest that sets it valid (§15.1).
 
-**Mixing the two classes on one node is allowed and is usually wrong.** NVMe and
-non-NVMe devices differ in latency and in failure behavior, so erasure-coding
-chunks placed across both are placed across two performance classes. Nothing here
-rejects it, because a node built deliberately out of what a machine actually has
-is a real deployment. The advisory belongs where the decision is made instead:
-[`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §3.1
-emits `MixedDeviceClasses` on the document that produced the node.
+**Which of the two a node names is the cluster's decision, and mixing them is
+rejected.** A cluster is built out of one class of backend storage, named by
+`StorageCluster.spec.deviceClass`
+([`design-storagecluster.md`](design-storagecluster.md) §3.1), because an
+erasure-coding stripe placed across both classes is written and rebuilt at the
+slower one's rate. So every entry of a node's list is of its cluster's class, a
+list holding both is rejected at admission, and so is a list of the class the
+cluster is not (§3.4). One field still carries both spellings, because a node's
+devices are one set however each of them was reached and the cluster is what says
+which spelling that set is written in.
+
+**The PCI filters belong to an NVMe cluster and to no other.**
+`config.pcieAllowList`, `config.pcieDenyList`, and `config.pcieModel` match on
+something a logical block device does not have, so on a `LogicalBlock` cluster
+they are rejected rather than ignored (§3.4). What selects devices there is the
+explicit list, which is what a deployment config writes in either case: the
+include and exclude lists that narrowed the candidates are a discovery input and
+never reach the node
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §8.1).
 
 **`config.pcieAllowList` is a filter and stays separate.** Both fields now take a
 PCI address, and they are not two spellings of one thing: `deviceNames` says use
@@ -496,14 +508,25 @@ a manually configured storage node: the operator will build a workload for it, w
 ConfigMap entry, and add it to the cluster the reference names. So the same webhook
 compares the node's sizing against the cluster it is joining and rejects a mismatch.
 
-| Field                             | Rejected when                                        |
-|-----------------------------------|------------------------------------------------------|
-| `config.sizing.vcpuCount`         | It differs from the cluster's stamp value            |
-| `config.sizing.maxSubsystemCount` | It differs from the cluster's stamp value            |
-| `config.sizing.minHugePagesSize`  | It is set and differs from the cluster's stamp value |
+| Field                                                      | Rejected when                                                             |
+|------------------------------------------------------------|---------------------------------------------------------------------------|
+| `config.sizing.vcpuCount`                                  | It differs from the cluster's stamp value                                 |
+| `config.sizing.maxSubsystemCount`                          | It differs from the cluster's stamp value                                 |
+| `config.sizing.minHugePagesSize`                           | It is set and differs from the cluster's stamp value                      |
+| `config.deviceNames`                                       | An entry is of a class other than the cluster's `spec.deviceClass`        |
+| `config.pcieAllowList`, `config.pcieDenyList`, `pcieModel` | Any of them is set and the cluster's `spec.deviceClass` is `LogicalBlock` |
 
-**These three and not others, because the control plane assumes them uniform.** §3.1
-states why: a node whose huge pages and core layout disagree with its peers gets a
+**The device rows are the cluster's layout reaching down one level.** An entry is
+of the NVMe class when it is a PCI address and of the block class when it is a
+path, and a bare name is a path (§3.1), so the class of every entry is decidable
+from the string. A mixed list is therefore rejected on a cluster of either class,
+and a uniform list of the wrong class is rejected too. The PCI filters go with it:
+they match on an address a logical block device does not have, so on a
+`LogicalBlock` cluster they select nothing and rejecting them says that, where
+ignoring them would leave somebody reading a filter that never ran.
+
+**The sizing rows are three and not others, because the control plane assumes them
+uniform.** §3.1 states why: a node whose huge pages and core layout disagree with its peers gets a
 layout the cluster cannot place erasure-coding chunks across evenly. `vcpuCount` and
 `maxSubsystemCount` are `Required`, so a hand-written node states them and cannot
 inherit them by omission, which is exactly the case where a typed value silently
@@ -2078,10 +2101,11 @@ type StorageNodeConfig struct {
 	// DeviceNames names the devices to use. An entry is a PCI address
 	// ("0000:5e:00.0") or a device path ("/dev/sdb"), which are the two classes
 	// simplyblock accepts as backend storage, and a bare name ("nvme0n1") is read
-	// as a path under /dev. One list carries both classes, and mixing them on one
-	// node is accepted and usually wrong (§3.1). Set explicitly, it overrides
-	// every filter below. Immutable: it selects which physical devices the node
-	// owns.
+	// as a path under /dev. One list carries both spellings, and every entry is of
+	// the class its cluster declares in StorageCluster.spec.deviceClass: a list
+	// mixing the two, or naming the class the cluster is not, is rejected by the
+	// StorageNode validating webhook (§3.4). Set explicitly, it overrides every
+	// filter below. Immutable: it selects which physical devices the node owns.
 	// +kubebuilder:validation:items:Pattern=`^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]|/dev/[a-zA-Z0-9._/-]+|[a-zA-Z0-9._-]+)$`
 	// +optional
 	// +k8s:immutable
@@ -2090,7 +2114,10 @@ type StorageNodeConfig struct {
 	// PcieAllowList selects devices by PCI address. It is the one device field a
 	// migration writes, merging spec.migrate.newSsdPcie into it so devices added
 	// on the target host survive a later rebuild, so it is guarded by the
-	// StorageNode validating webhook rather than by a marker.
+	// StorageNode validating webhook rather than by a marker. This and the two
+	// PCI filters below belong to an NVMe cluster: the webhook rejects them on a
+	// cluster whose deviceClass is LogicalBlock, because a logical block device
+	// has no PCI address to match (§3.4).
 	// +optional
 	PcieAllowList []string `json:"pcieAllowList,omitempty"`
 

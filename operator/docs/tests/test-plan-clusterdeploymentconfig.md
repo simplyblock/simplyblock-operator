@@ -147,18 +147,18 @@ removed. Their IDs are retired rather than reused.
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #    | Scenario                                                                             | Type     | Test |
-|------|--------------------------------------------------------------------------------------|----------|------|
-| U-76 | A group's `devices.nvme`: the node's `pcieAllowList` carries exactly those addresses | Positive | —    |
-| U-77 | A group's `devices.block`: the node's `deviceNames` carries exactly those names      | Positive | —    |
-| U-78 | A group naming both: both node fields are set, and neither is widened                | Positive | —    |
-| U-79 | A group whose `devices` is absent: the node inherits no device fields                | Boundary | —    |
-| U-80 | A `deviceFilter` allow list: only those addresses reach the draft                    | Positive | —    |
-| U-81 | A `deviceFilter` deny list: the denied address reaches no group of the draft         | Negative | —    |
-| U-82 | A `deviceFilter` model and size range: only matching devices reach the draft         | Positive | —    |
-| U-83 | A `deviceFilter` matching nothing: an empty draft with a message saying so           | Boundary | —    |
-| U-84 | `deviceFilter` absent: every advertised device reaches the draft, boot device too    | Boundary | —    |
-| U-85 | The draft carries the resolved list and no filter anywhere in its spec               | Negative | —    |
+| #        | Scenario                                                                                                    | Type     | Test |
+|----------|-------------------------------------------------------------------------------------------------------------|----------|------|
+| U-76     | A group's `devices.nvme`: the node's `deviceNames` carries exactly those addresses                          | Positive | —    |
+| U-77     | A group's `devices.block`: the node's `deviceNames` carries exactly those names                             | Positive | —    |
+| ~~U-78~~ | A group naming both classes. Withdrawn: the selection rule rejects it, and `I-40` is where that is asserted | —        | —    |
+| U-79     | A group whose `devices` is absent: the node inherits no device fields                                       | Boundary | —    |
+| U-80     | A `deviceFilter` allow list: only those addresses reach the draft                                           | Positive | —    |
+| U-81     | A `deviceFilter` deny list: the denied address reaches no group of the draft                                | Negative | —    |
+| U-82     | A `deviceFilter` model and size range: only matching devices reach the draft                                | Positive | —    |
+| U-83     | A `deviceFilter` matching nothing: an empty draft with a message saying so                                  | Boundary | —    |
+| U-84     | `deviceFilter` absent: every advertised device reaches the draft, boot device too                           | Boundary | —    |
+| U-85     | The draft carries the resolved list and no filter anywhere in its spec                                      | Negative | —    |
 
 `U-85` is the row that keeps design §8.1's rule true, since a discovery run that
 copied its own filter into the document would make the document mean something
@@ -199,24 +199,24 @@ hole in the gate rather than a convenience.
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #     | Scenario                                                                               | Type     | Test |
-|-------|----------------------------------------------------------------------------------------|----------|------|
-| U-116 | `environment: OpenShift`: every node gets the four flags that distribution implies     | Positive | —    |
-| U-117 | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's     | Positive | —    |
-| U-118 | `environment` absent: no distribution flag is stamped, and none is invented            | Boundary | —    |
-| U-119 | A node edited after expansion to flip one flag: nothing re-stamps it                   | Negative | —    |
-| U-120 | A group naming both `nvme` and `block`: expanded, with `MixedDeviceClasses` emitted    | Boundary | —    |
-| U-121 | A group naming both: `config.deviceNames` carries the addresses and the paths together | Positive | —    |
-| U-122 | `MixedDeviceClasses` does not hold approval or expansion                               | Negative | —    |
-| U-123 | Discovery against a cluster this operator deployed: claimed workers are not candidates | Negative | —    |
-| U-124 | The same run: an unclaimed worker beside claimed ones is a candidate                   | Positive | —    |
-| U-125 | The same run: a device an existing node owns is not a candidate                        | Negative | —    |
-| U-126 | The same run writes a growth document, with `clusterRef` set and only new node sets    | Positive | —    |
-| U-127 | Every worker and device already claimed: an empty draft, not a duplicate of the first  | Boundary | —    |
-| U-128 | `spec.environment` from node labels alone                                              | Positive | —    |
-| U-129 | `spec.environment` from a service only that distribution registers                     | Positive | —    |
-| U-130 | Conflicting evidence: one distribution is concluded and the reason is in the message   | Boundary | —    |
-| U-131 | Two runs against one Kubernetes cluster: the same `spec.environment` both times        | Positive | —    |
+| #         | Scenario                                                                                                                     | Type     | Test |
+|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-116     | `environment: OpenShift`: every node gets the four flags that distribution implies                                           | Positive | —    |
+| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —    |
+| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —    |
+| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —    |
+| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —    |
+| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —    |
+| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —    |
+| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —    |
+| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —    |
+| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —    |
+| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —    |
+| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —    |
+| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —    |
+| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —    |
+| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —    |
+| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —    |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -265,20 +265,49 @@ simplyblock a disk another subsystem is writing to.
 
 File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #     | Scenario                                                                        | Type     | Test |
-|-------|---------------------------------------------------------------------------------|----------|------|
-| U-101 | `enableLogicalBlockDevices` unset: only NVMe devices reach the draft            | Boundary | —    |
-| U-102 | `enableLogicalBlockDevices` true: both classes reach the draft                  | Positive | —    |
-| U-103 | A worker with block devices and no NVMe device, flag unset: no devices reported | Negative | —    |
-| U-104 | The same worker with the flag set: its block devices reach `devices.block`      | Positive | —    |
-| U-105 | NVMe candidates land in `devices.nvme` and block candidates in `devices.block`  | Positive | —    |
-| U-106 | A PCI deny list with the flag set: block devices are unaffected by it           | Boundary | —    |
-| U-107 | A `driveSizeRange` with the flag set: it narrows both classes                   | Positive | —    |
-| U-108 | A mounted block device: excluded whatever the class flag says                   | Negative | —    |
+| #         | Scenario                                                                                                                             | Type     | Test |
+|-----------|--------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-101     | `enableLogicalBlockDevices` unset: only NVMe devices reach the draft                                                                 | Boundary | —    |
+| ~~U-102~~ | `enableLogicalBlockDevices` true: both classes reach the draft. Withdrawn: the flag selects a class, and `U-135` is what it does now | —        | —    |
+| U-103     | A worker with block devices and no NVMe device, flag unset: no devices reported                                                      | Negative | —    |
+| U-104     | The same worker with the flag set: its block devices reach `devices.block`                                                           | Positive | —    |
+| U-105     | NVMe candidates land in `devices.nvme` and block candidates in `devices.block`                                                       | Positive | —    |
+| ~~U-106~~ | A PCI deny list with the flag set. Withdrawn: the combination is rejected, and `I-44` is where that is asserted                      | —        | —    |
+| ~~U-107~~ | A `driveSizeRange` with the flag set: it narrows both classes. Withdrawn: one class is scanned, and `U-138` is what it narrows       | —        | —    |
+| U-108     | A mounted block device: excluded whatever the class flag says                                                                        | Negative | —    |
 
 `U-108` is the row that keeps the two flags from being read as one thing.
 Enabling a class widens which devices are considered, and it never waives the
 availability rule that decides which of them are reported.
+
+### The Device Class of a Cluster (design §3.1, §4.2, §5.1, §8.1)
+
+Files: `operator/internal/controllers/deployment/operatorops_discover_test.go`,
+`operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`,
+and `operator/internal/webhook/clusterdeploymentconfig_validator_test.go`
+
+A cluster is built out of one class of device. What CEL rejects outright is
+`I-40` onward; these are the rows for the parts a schema cannot see.
+
+| #     | Scenario                                                                                            | Type     | Test |
+|-------|-----------------------------------------------------------------------------------------------------|----------|------|
+| U-135 | `enableLogicalBlockDevices` true: only block devices reach the draft, and no NVMe device does       | Positive | —    |
+| U-136 | The same run with a `blockDenyList`: the denied path reaches no group of the draft                  | Negative | —    |
+| U-137 | The same run with a `blockAllowList`: only those paths reach the draft                              | Positive | —    |
+| U-138 | The same run with a `driveSizeRange`: it narrows the block class                                    | Positive | —    |
+| U-139 | A worker advertising both kinds with the flag unset: only its NVMe devices reach the draft          | Boundary | —    |
+| U-140 | Expanding an all-`nvme` document: the created cluster carries `deviceClass: NVMe`                   | Positive | —    |
+| U-141 | Expanding an all-`block` document: the created cluster carries `deviceClass: LogicalBlock`          | Positive | —    |
+| U-142 | Expanding against a resolved cluster: its `deviceClass` is read and never rewritten                 | Negative | —    |
+| U-143 | A draft naming the class its `clusterRef` cluster is not: `DeviceClassMismatch` in `status.message` | Negative | —    |
+| U-144 | A draft naming the class its cluster is: no mismatch is reported                                    | Positive | —    |
+| U-145 | Approving a growth document whose class matches the referenced cluster: admitted                    | Positive | —    |
+| U-146 | Approving a growth document whose class differs: denied, naming the class each side has             | Negative | —    |
+| U-147 | Approving a document that creates its cluster: no comparison is made, since there is no cluster     | Boundary | —    |
+
+`U-142` is the row that keeps the stamp one-way. A growth document adds nodes to
+a cluster whose class is already immutable, so an expansion that wrote the field
+again would either be a no-op or an error, and only the first of those is correct.
 
 ---
 
@@ -328,6 +357,14 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-31 | `enablePartitionedDevices` outside a boolean: rejected by the schema                                  | Negative | —    |
 | I-32 | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating` | Negative | —    |
 | I-33 | Approving a config naming a partitioned device: accepted and expanded                                 | Positive | —    |
+| I-40 | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                          | Negative | —    |
+| I-41 | Two groups of one node set naming different classes: rejected by the spec's CEL rule                  | Negative | —    |
+| I-42 | Two node sets naming different classes: rejected by the same rule                                     | Negative | —    |
+| I-43 | Every group of every node set naming `block`: accepted                                                | Positive | —    |
+| I-44 | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                  | Negative | —    |
+| I-45 | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                     | Negative | —    |
+| I-46 | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                         | Positive | —    |
+| I-47 | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                      | Positive | —    |
 
 ---
 
@@ -351,6 +388,7 @@ place discovery's central question can be answered.
 | E-13     | A cluster built from logical block devices serves I/O                                                 | Positive | —    |
 | E-14     | A partitioned device forced into a group: the node comes up using it                                  | Positive | —    |
 | E-15     | A device mounted on the worker: no draft and no expansion ever claims it                              | Negative | —    |
+| E-16     | A block-device deployment end to end: the cluster reports `deviceClass: LogicalBlock` and serves I/O  | Positive | —    |
 
 `E-09` and `E-10` covered the same removed action, and their IDs are retired too.
 
@@ -407,16 +445,20 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 125       | 0       | 125         | 1         |
-| Integration | 39        | 0       | 39          | 0         |
-| E2E         | 11        | 0       | 11          | 2         |
+| Unit        | 131       | 0       | 131         | 8         |
+| Integration | 47        | 0       | 47          | 0         |
+| E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **177**   | **0**   | **177**     | **3**     |
+| **Total**   | **192**   | **0**   | **192**     | **10**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
-neither a scenario nor a gap. All three are the adoption path design §8.1 no longer
-has: discovery reads the cluster it runs in and makes no backend call.
+neither a scenario nor a gap. Three are the adoption path design §8.1 no longer
+has, since discovery reads the cluster it runs in and makes no backend call. The
+other seven are the mixed-class deployment: a cluster is built out of one class of
+device (design §3.1), so the rows that expanded a mixed document, advised against
+it, or combined a filter with the class it does not select describe behavior the
+design replaced with a rejection.
 
 Nothing is covered, and nothing can be: neither kind exists. Every row is a
 specification, and the plan's value before implementation is that it says what
@@ -432,26 +474,27 @@ against a fake client.
 
 ## 6. What Is Not Yet Covered
 
-| #             | Gap                                                          | Reason                                                                                                                                      |
-|---------------|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-11   | Draft validation                                             | The kind does not exist                                                                                                                     |
-| U-12 … U-26   | Expansion                                                    | The kind does not exist. These are the rows to write first, because they are pure and they are what the document is for                     |
-| U-27 … U-34   | Create-only semantics                                        | The kind does not exist. `U-32` to `U-34` are the rows that keep a typo from becoming a data-loss event (design §6)                         |
-| U-35 … U-45   | Approval and deletion                                        | The kind does not exist                                                                                                                     |
-| U-46 … U-62   | Discovery                                                    | `OperatorOps` does not exist, and there is no discovery code of any kind in the repository                                                  |
-| U-63 … U-75   | `OperatorOps` lifecycle                                      | The kind does not exist                                                                                                                     |
-| U-76 … U-85   | Device selection and the discovery filter                    | Neither kind exists. `U-85` is the row that holds design §8.1's rule that a filter is an input and never a stored field                     |
-| U-86 … U-100  | The approval webhook                                         | Neither the kind nor the webhook exists. `U-98` and `U-99` are the rows that keep discovery unexempted, which design §5.2 requires          |
-| U-101 … U-108 | Backend device classes                                       | Neither kind exists, and design §12 Q4 leaves open which `StorageNode` field a `devices.block` entry expands into                           |
-| U-109 … U-115 | Device availability                                          | Neither kind exists. Mount and busy state is the node's own answer, so these rows fake the inventory and `E-15` is what proves the real one |
-| U-116 … U-131 | Environment, mixing, and re-discovery                        | Neither kind exists. These are the rows the resolved questions of design §12 turned from undecided into testable                            |
-| U-132 … U-134 | Device validation before expansion                           | Neither kind exists. These replace the admission-time device check that design §5.1 hands to discovery                                      |
-| I-01 … I-39   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither                                |
-| E-01 … E-15   | All end-to-end scenarios                                     | Needs a live deployment with real devices. The e2e harness under `test/` is not committed yet                                               |
-| E-02          | Distinguishing the boot device                               | Design §8.2 says discovery cannot do this, so the row asserts that it reports rather than chooses. It needs real hardware                   |
-| M-02, M-03    | Device availability and its override, and a duplicate config | Need a worker with a mounted, a partitioned, and an idle device, and a running cluster                                                      |
-| Metrics       | The eight metrics of design §9.2                             | Designed, not built                                                                                                                         |
-| Q1            | The `KubernetesEnvironment` to flag mapping                  | Design §12 states it only for `OpenShift`, so `U-117` asserts that `Vanilla` differs from it without asserting what it is                   |
+| #             | Gap                                                          | Reason                                                                                                                                                                                 |
+|---------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-01 … U-11   | Draft validation                                             | The kind does not exist                                                                                                                                                                |
+| U-12 … U-26   | Expansion                                                    | The kind does not exist. These are the rows to write first, because they are pure and they are what the document is for                                                                |
+| U-27 … U-34   | Create-only semantics                                        | The kind does not exist. `U-32` to `U-34` are the rows that keep a typo from becoming a data-loss event (design §6)                                                                    |
+| U-35 … U-45   | Approval and deletion                                        | The kind does not exist                                                                                                                                                                |
+| U-46 … U-62   | Discovery                                                    | `OperatorOps` does not exist, and there is no discovery code of any kind in the repository                                                                                             |
+| U-63 … U-75   | `OperatorOps` lifecycle                                      | The kind does not exist                                                                                                                                                                |
+| U-76 … U-85   | Device selection and the discovery filter                    | Neither kind exists. `U-85` is the row that holds design §8.1's rule that a filter is an input and never a stored field                                                                |
+| U-86 … U-100  | The approval webhook                                         | Neither the kind nor the webhook exists. `U-98` and `U-99` are the rows that keep discovery unexempted, which design §5.2 requires                                                     |
+| U-101 … U-108 | Backend device classes                                       | Neither kind exists. Both members expand into `config.deviceNames`, which design §3.1 settles, so what these rows hold is which class a run scans                                      |
+| U-109 … U-115 | Device availability                                          | Neither kind exists. Mount and busy state is the node's own answer, so these rows fake the inventory and `E-15` is what proves the real one                                            |
+| U-116 … U-131 | Environment, mixing, and re-discovery                        | Neither kind exists. These are the rows the resolved questions of design §12 turned from undecided into testable                                                                       |
+| U-132 … U-134 | Device validation before expansion                           | Neither kind exists. These replace the admission-time device check that design §5.1 hands to discovery                                                                                 |
+| U-135 … U-147 | The device class of a cluster                                | Neither kind exists. `U-140` to `U-142` are the rows that hold the stamp one-way, and `U-145` to `U-147` the comparison a schema cannot make                                           |
+| I-01 … I-47   | Every admission rule and the real-API-server expansion       | Needs `envtest`, because CEL and `Required` are enforced by the API server and a fake client applies neither. `I-40` to `I-47` are the two device-class rules, which exist only as CEL |
+| E-01 … E-16   | All end-to-end scenarios                                     | Needs a live deployment with real devices. The e2e harness under `test/` is not committed yet                                                                                          |
+| E-02          | Distinguishing the boot device                               | Design §8.2 says discovery cannot do this, so the row asserts that it reports rather than chooses. It needs real hardware                                                              |
+| M-02, M-03    | Device availability and its override, and a duplicate config | Need a worker with a mounted, a partitioned, and an idle device, and a running cluster                                                                                                 |
+| Metrics       | The eight metrics of design §9.2                             | Designed, not built                                                                                                                                                                    |
+| Q1            | The `KubernetesEnvironment` to flag mapping                  | Design §12 states it only for `OpenShift`, so `U-117` asserts that `Vanilla` differs from it without asserting what it is                                                              |
 
 ### Axis coverage
 
@@ -486,18 +529,23 @@ against a fake client.
 |                    | Block devices (`block`)                | U-77, I-37                 |
 |                    | A shape in the wrong member            | I-35, I-38                 |
 |                    | A malformed shape                      | I-36, I-39                 |
-|                    | Both in one group                      | U-78                       |
+|                    | Both in one group                      | I-40                       |
+|                    | Two groups disagreeing                 | I-41, I-42                 |
 |                    | Neither declared                       | U-79, I-20                 |
 | Availability       | Idle, unpartitioned                    | U-109, U-115               |
 |                    | Mounted                                | U-110, U-114, E-02, E-15   |
 |                    | Busy without a mount                   | U-111                      |
 |                    | Partitioned, not waived                | U-112                      |
 |                    | Partitioned, waived                    | U-113, E-14                |
-| Backend class      | NVMe only                              | U-101, U-103               |
-|                    | Logical block only                     | U-104, E-12, E-13          |
-|                    | Both on one worker                     | U-102, U-105               |
+| Backend class      | NVMe only                              | U-101, U-103, U-140        |
+|                    | Logical block only                     | U-104, U-135, U-141, E-13  |
+|                    | Both on one worker, NVMe scanned       | U-139                      |
+|                    | Both on one worker, block scanned      | U-135, E-12                |
+|                    | Disagreeing with the cluster's class   | U-143, U-146               |
 | Discovery filter   | Absent                                 | U-84                       |
 |                    | Allow, deny, model, size               | U-80, U-81, U-82           |
+|                    | The block class's lists                | U-136, U-137, I-46         |
+|                    | A list for the class not scanned       | I-44, I-45                 |
 |                    | Matches nothing                        | U-83                       |
 | Distribution       | OpenShift                              | U-54, U-116                |
 |                    | Vanilla or unrecognized                | U-55, U-117                |

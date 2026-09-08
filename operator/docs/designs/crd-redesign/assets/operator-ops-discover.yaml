@@ -4,8 +4,9 @@
 # what an administrator writes by hand to ask the operator what hardware it can see,
 # and what the object looks like once it has answered.
 #
-# Three documents: the smallest run that does anything, a run narrowed to the workers
-# and the devices somebody intends to use, and the same object after it succeeded.
+# Four documents: the smallest run that does anything, a run narrowed to the workers and
+# the devices somebody intends to use, the same object after it succeeded, and a run
+# against a fleet of logical block devices.
 
 # The smallest useful discovery run. Every schedulable worker is inspected, every
 # device each one advertises is reported, and the config is named after the run's
@@ -50,9 +51,6 @@ spec:
         - "0000:00:1f.2"
       # Anything smaller than this is a system disk on these machines.
       driveSizeRange: 1T-16T
-      # Report spinning disks alongside NVMe drives, which the backend accepts from
-      # 26.4 onward. Unset reports NVMe only.
-      enableLogicalBlockDevices: true
 
 ---
 # The same object once the run finished, showing what a reader looks at afterward.
@@ -77,7 +75,6 @@ spec:
       pcieDenyList:
         - "0000:00:1f.2"
       driveSizeRange: 1T-16T
-      enableLogicalBlockDevices: true
 status:
   phase: Succeeded
   step:
@@ -87,3 +84,30 @@ status:
   observedGeneration: 1
   startedAt: "2026-08-31T09:14:02Z"
   completedAt: "2026-08-31T09:14:51Z"
+
+---
+# A run against the other class of device. enableLogicalBlockDevices scans logical block
+# devices instead of NVMe drives rather than alongside them, because the draft a run
+# writes describes one cluster and a cluster is built out of one class (§8.1).
+#
+# The filters follow the class. blockDenyList keeps the root disk out, and the PCI
+# filters of the run above are refused here: they match on an address a logical block
+# device does not have, so a run that named both would be narrowed by neither.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: OperatorOps
+metadata:
+  name: discover-archive-disks
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: archive-draft
+    nodeSelector:
+      node-role.kubernetes.io/simplyblock-archive: ""
+    deviceFilter:
+      # Scan the block class, which the backend accepts from 26.4 onward.
+      enableLogicalBlockDevices: true
+      # The disk every worker in this fleet boots from.
+      blockDenyList:
+        - /dev/sda
+      driveSizeRange: 4T-20T
