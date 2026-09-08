@@ -14,6 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -302,5 +303,126 @@ func TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace(t *testing.T) {
 	}
 	if got := devices.Items[0].Namespace; got != nodeNamespace {
 		t.Errorf("device created in namespace %q, want the owning node's %q", got, nodeNamespace)
+	}
+}
+
+// sdReconcilerWithInterceptor is [sdReconciler] with client interceptors, so a
+// test can make a write fail the way the API server does.
+func sdReconcilerWithInterceptor(
+	t *testing.T, cache DeviceCache, funcs interceptor.Funcs, objs ...client.Object,
+) *StorageDeviceReconciler {
+	t.Helper()
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageDevice{}).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
+		WithObjects(objs...).
+		WithInterceptorFuncs(funcs).
+		Build()
+	return &StorageDeviceReconciler{Client: c, Scheme: scheme, Devices: cache}
+}
+
+func sdConflictErr() error {
+	return apierrors.NewConflict(
+		simplyblockv1alpha1.GroupVersion.WithResource("storagedevices").GroupResource(), sdName(), nil,
+	)
+}
+
+func sdOnlineCache() *fakeDeviceCache {
+	return &fakeDeviceCache{synced: true, devices: map[string]subscriptions.DeviceDTO{
+		sdName(): {
+			ID: sdDevice, ClusterID: sdCluster, StorageNodeID: sdNodeID,
+			Status: "online", Size: 3840755982336,
+			Capacity: subscriptions.DeviceCapacityDTO{SizeUsed: 1920377991168},
+		},
+	}}
+}
+
+// Regression: 2026-09-08-storagedevice-conflict — the mirror is enqueued both by
+// its own writes and by the control-plane stream, and the stream does not wait
+// for the informer cache to catch up. A reconcile can therefore start from a
+// cached object older than the one the API server holds, and its write is
+// rejected with a 409. The mirror surfaced that as a reconcile error, which on a
+// three-node cluster meant one logged failure per node during device
+// registration.
+//
+// The desired state here is derived from the control-plane cache rather than
+// from the object, so a conflict is never a lost decision: re-reading and
+// writing again converges on the same result.
+func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
+	existing := &simplyblockv1alpha1.StorageDevice{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+		Spec:       simplyblockv1alpha1.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
+	}
+
+	statusUpdates := 0
+	r := sdReconcilerWithInterceptor(t, sdOnlineCache(), interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context, c client.Client, subResourceName string,
+			obj client.Object, opts ...client.SubResourceUpdateOption,
+		) error {
+			if subResourceName == "status" {
+				statusUpdates++
+				if statusUpdates == 1 {
+					return sdConflictErr()
+				}
+			}
+			return c.Status().Update(ctx, obj, opts...)
+		},
+	}, sdNodeObject(), existing)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("a 409 on the status write must be retried, not surfaced: %v", err)
+	}
+	if statusUpdates < 2 {
+		t.Fatalf("expected the status write to be retried, got %d attempt(s)", statusUpdates)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha1.StorageDevicePhaseOnline {
+		t.Errorf("status lost after the conflict retry: %+v", sd.Status)
+	}
+	if sd.Status.Capacity == nil || *sd.Status.Capacity.TotalBytes != 3840755982336 {
+		t.Errorf("capacity lost after the conflict retry: %+v", sd.Status.Capacity)
+	}
+}
+
+// The spec write races the same way the status write does: the mirror owns the
+// whole creation path, so a device whose object exists but carries no spec yet
+// is written on the next reconcile, and that write can be rejected too.
+func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
+	// No spec: the mirror must fill it in, which is the write that conflicts.
+	existing := &simplyblockv1alpha1.StorageDevice{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+	}
+
+	updates := 0
+	r := sdReconcilerWithInterceptor(t, sdOnlineCache(), interceptor.Funcs{
+		Update: func(
+			ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption,
+		) error {
+			updates++
+			if updates == 1 {
+				return sdConflictErr()
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, sdNodeObject(), existing)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("a 409 on the spec write must be retried, not surfaced: %v", err)
+	}
+	if updates < 2 {
+		t.Fatalf("expected the spec write to be retried, got %d attempt(s)", updates)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Spec.NodeRef != sdNodeCR || sd.Spec.DeviceID != sdDevice {
+		t.Errorf("spec lost after the conflict retry: %+v", sd.Spec)
 	}
 }

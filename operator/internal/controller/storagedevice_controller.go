@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -127,7 +128,7 @@ func (r *StorageDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	switch {
 	case inCache && len(scope) == 2:
-		return r.upsert(ctx, req.NamespacedName, scope, dto, exists, &sd)
+		return r.upsert(ctx, req.NamespacedName, scope, dto)
 
 	case exists:
 		// The device is gone from the control plane, but only a synced scope can
@@ -155,8 +156,6 @@ func (r *StorageDeviceReconciler) upsert(
 	key client.ObjectKey,
 	scope cpinformer.Scope,
 	dto subscriptions.DeviceDTO,
-	exists bool,
-	sd *simplyblockv1alpha1.StorageDevice,
 ) (ctrl.Result, error) {
 	node, err := r.nodeFor(ctx, key.Namespace, scope[1])
 	if err != nil {
@@ -185,30 +184,48 @@ func (r *StorageDeviceReconciler) upsert(
 		NodeID:    scope[1],
 	}
 
-	if !exists {
-		*sd = simplyblockv1alpha1.StorageDevice{
-			ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name},
-			Spec:       spec,
+	// The mirror is enqueued by its own writes and, independently, by the
+	// control-plane stream, which does not wait for the informer cache to catch
+	// up. A reconcile can therefore start from a cached object older than the one
+	// the API server holds, and its write is rejected with a conflict. Read the
+	// object again and write again rather than surfacing that: what the object
+	// should say is computed from the control-plane cache and not from the object,
+	// so a retry converges on the same result instead of losing a decision.
+	//
+	// The re-read is served by the same cache, so this narrows the window rather
+	// than closing it; a cache that is still behind after the backoff returns the
+	// conflict and the reconcile is requeued as before.
+	return ctrl.Result{}, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var sd simplyblockv1alpha1.StorageDevice
+		err := r.Get(ctx, key, &sd)
+		switch {
+		case apierrors.IsNotFound(err):
+			sd = simplyblockv1alpha1.StorageDevice{
+				ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name},
+				Spec:       spec,
+			}
+			if err := controllerutil.SetControllerReference(node, &sd, r.Scheme); err != nil {
+				return err
+			}
+			if err := r.Create(ctx, &sd); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		case sd.Spec != spec:
+			sd.Spec = spec
+			if err := r.Update(ctx, &sd); err != nil {
+				return err
+			}
 		}
-		if err := controllerutil.SetControllerReference(node, sd, r.Scheme); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, sd); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else if sd.Spec != spec {
-		sd.Spec = spec
-		if err := r.Update(ctx, sd); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
 
-	status.ObservedGeneration = sd.Generation
-	if !reflect.DeepEqual(sd.Status, status) {
+		status.ObservedGeneration = sd.Generation
+		if reflect.DeepEqual(sd.Status, status) {
+			return nil
+		}
 		sd.Status = status
-		return ctrl.Result{}, r.Status().Update(ctx, sd)
-	}
-	return ctrl.Result{}, nil
+		return r.Status().Update(ctx, &sd)
+	})
 }
 
 // nodeFor returns the StorageNode carrying the given backend node id, or nil
