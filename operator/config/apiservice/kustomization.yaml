@@ -1,0 +1,8 @@
+# The aggregated metrics API's cluster-facing objects: the APIService that
+# registers the group, and the Service the kube-apiserver proxies to.
+#
+# The RBAC that makes the delegated authentication work lives in config/rbac
+# instead, with the rest of the operator's permissions.
+resources:
+- apiservice.yaml
+- service.yaml

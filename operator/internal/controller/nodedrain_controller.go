@@ -59,6 +59,7 @@ const (
 	nodeStatusOffline    = "offline"
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
+	nodeStatusInCreation = "in_creation"
 )
 
 // NodeDrainCoordinatorReconciler coordinates graceful simplyblock node shutdown

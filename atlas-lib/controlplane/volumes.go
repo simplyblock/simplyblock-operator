@@ -19,7 +19,7 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 	if err != nil {
 		return lvol.Volume{}, err
 	}
-	resp, err := c.api.ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetWithResponse(ctx, cluster, pool, volume)
+	resp, err := c.api.ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetWithResponse(ctx, cluster, pool, volume, nil)
 	if err != nil {
 		return lvol.Volume{}, fmt.Errorf("volume %s: %w", h, err)
 	}
@@ -129,7 +129,7 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetWithResponse(ctx, cluster, pool)
+	resp, err := c.api.ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetWithResponse(ctx, cluster, pool, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list volumes in %s/%s: %w", clusterID, poolID, err)
 	}

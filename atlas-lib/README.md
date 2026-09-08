@@ -111,6 +111,12 @@ atlas/
 │       ├── client.go       Remote(conn) + the nvme resolver interfaces, remoted
 │       ├── convert.go      nvme snapshot types ↔ wire form (total, both directions)
 │       └── storagev1/      SubsystemService + DeviceService (buf-generated, committed)
+├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
+│   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
+│   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
+│   ├── capacity.go         Capacity + VolumeCapacity / DeviceCapacity (size + sample date)
+│   ├── volumeio.go         VolumeIO: per-volume IOPS + throughput
+│   └── latency.go          ClusterLatencies / ClusterLatencySamples (p50/p99), ErrLatencyDataNotReady
 ├── statemachine/           Deterministic state machine declared as data
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
@@ -271,6 +277,102 @@ for _, n := range nodes {
 // The data-plane addresses a node exports (traddr candidates for a connect).
 nics, err := client.ListStorageNodeNICs(ctx, clusterID, best.ID)
 ```
+
+#### Read how full a volume or a device is
+
+The control plane's own DTOs are not the source for this. A `VolumeDTO` carries
+a capacity block and reports zeros in it, and while a `DeviceDTO` is populated,
+the device watch stream sends no event when the numbers move, so anything fed by
+that stream is only as fresh as its last snapshot. The metrics the same service
+exports are the source that has the current answer.
+
+```go
+provider, err := prometheus.New(prometheusURL) // the Prometheus base URL
+if err != nil {
+    handleError(err)
+}
+
+// One query per call, keyed by volume UUID. A volume with no sample is absent
+// rather than present and zero.
+capacity, err := provider.VolumeCapacity(ctx, clusterID)
+if err != nil {
+    handleError(err)
+}
+
+for _, handle := range handles {
+    _, _, volumeID := handle.Split()
+    c, ok := capacity[volumeID]
+    if !ok || !c.Sampled() {
+        continue // never measured, which is not the same as empty
+    }
+    report(volumeID, c.Used, c.Total, c.SampledAt)
+}
+```
+
+Every value is a scrape, so it is at most one scrape interval old, and
+Prometheus offers no push or watch for samples, so a caller reads at the moment
+it needs a number. A cache adds staleness on top of the scrape interval and has
+no event to invalidate it. `DeviceCapacity` is the same call keyed by device UUID.
+
+_Today:_ `operator/internal/metricsapi/storage.go` reads `VolumeCapacity` once
+per cluster per request to serve the measured half of a `LogicalVolumeMetrics`
+reading, and takes the provisioned size from the volume itself.
+`DeviceCapacity` has no caller:
+`operator/internal/controller/storagedevice_controller.go` still publishes the
+device capacity its subscription cached, which the device stream never updates.
+
+#### Rank nodes by write latency
+
+The rebalancer compares each node against its own baseline, so it needs one
+reading per node across every cluster it is considering.
+
+```go
+provider, err := prometheus.New(prometheusURL)
+if err != nil {
+    handleError(err)
+}
+
+// One query for every cluster named. p50 is the stable signal; p99 is dominated
+// by journal, erasure-coding, and high-availability tail spikes.
+byCluster, err := provider.ClusterLatencies(ctx, clusterIDs, prometheus.PercentileP50)
+if errors.Is(err, prometheus.ErrLatencyDataNotReady) {
+    return // the probe has not finished its first cycle; wait rather than fail
+} else if err != nil {
+    handleError(err)
+}
+
+for nodeID, latencyNS := range byCluster[clusterID] {
+    compareToBaseline(nodeID, latencyNS)
+}
+```
+
+A node with no measurement is absent from the result rather than zero, because
+zero latency and no reading are not the same claim.
+
+The baseline each reading is compared against comes from the same series over a
+window rather than from its latest sample, so that one bad scrape does not move
+it. `ClusterLatencySamples` returns every sample in `[now-window, now]` per
+node, unrounded, for the caller to reduce:
+
+```go
+// The step should match the cadence the probe sidecar publishes at: finer
+// repeats a sample, coarser drops readings the window contains.
+samples, err := provider.ClusterLatencySamples(
+    ctx, clusterIDs, prometheus.PercentileP50, 6*time.Hour, 5*time.Minute,
+)
+if err != nil {
+    handleError(err)
+}
+
+for nodeID, window := range samples[clusterID] {
+    setBaseline(nodeID, rejectOutliersAndTakeMedian(window))
+}
+```
+
+_Today:_ `operator/internal/autoplacement/storage_node_selector.go` calls
+`ClusterLatencies`, `baseline_strategy.go` calls `ClusterLatencySamples` for the
+rolling-window baseline, and `logical_volume_selector.go` calls `VolumeIO` to
+score candidates.
 
 ### Kubernetes correlation
 

@@ -286,6 +286,32 @@ spec:
               resources:
                 description: Resources groups compute and storage resource metrics.
                 properties:
+                  capacity:
+                    description: |-
+                      Capacity is how much of the node's storage is in use, summed over its
+                      devices. It is a measurement rather than a declaration, so it is absent
+                      until something has measured it, and it lags reality by the interval at
+                      which the control plane's metrics are scraped.
+                    properties:
+                      sampledAt:
+                        description: |-
+                          SampledAt is when the control plane took the reading. It is not when the
+                          object was written, and it may be considerably older if metrics
+                          collection has stopped.
+                        format: date-time
+                        type: string
+                      totalBytes:
+                        description: TotalBytes is the storage the node's devices
+                          provide.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      usedBytes:
+                        description: UsedBytes is what they currently hold.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                    type: object
                   cpu:
                     description: CPU is the number of SPDK CPU cores allocated to
                       this node.

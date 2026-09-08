@@ -1,0 +1,25 @@
+# Lets the aggregated metrics API server read the cluster's request-header
+# configuration.
+#
+# The kube-apiserver proxies to an extension API server as itself, presenting a
+# client certificate and passing the original caller in request headers. The
+# extension server must know which CA to trust for that certificate and which
+# header names to believe, and both live in the extension-apiserver-authentication
+# ConfigMap in kube-system. This is the standard, narrow RoleBinding for it: one
+# namespace, one ConfigMap, read-only.
+#
+# The Role is created by the kube-apiserver itself, so only the binding is
+# declared here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: metrics-apiserver-extension-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+- kind: ServiceAccount
+  name: controller-manager
+  namespace: system

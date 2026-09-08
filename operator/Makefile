@@ -79,8 +79,21 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
-generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: openapi
+openapi: openapi-gen ## Generate the OpenAPI v3 definitions the aggregated metrics API server serves.
+	"$(OPENAPI_GEN)" \
+		--output-file zz_generated.openapi.go \
+		--output-dir ./api/metrics/v1alpha1 \
+		--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1 \
+		--go-header-file hack/boilerplate.go.txt \
+		k8s.io/apimachinery/pkg/apis/meta/v1 \
+		k8s.io/apimachinery/pkg/api/resource \
+		k8s.io/apimachinery/pkg/runtime \
+		k8s.io/apimachinery/pkg/version \
+		github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

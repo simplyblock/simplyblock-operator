@@ -1,0 +1,17 @@
+# The Service the kube-apiserver reaches the aggregated metrics API through. It
+# is separate from the webhook Service because it fronts a different port on the
+# same pods, and because its DNS name is what the aggregated API's serving
+# certificate is issued for.
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-apiserver
+  namespace: system
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 6443
+  selector:
+    control-plane: controller-manager
+    app.kubernetes.io/name: simplyblock-operator
