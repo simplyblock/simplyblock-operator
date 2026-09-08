@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	ginkgo "github.com/onsi/ginkgo/v2"
@@ -93,8 +94,13 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 	})
 
 	// -------------------------------------------------------------------------
-	// ext4 filesystem (default): subdirectory writes survive pod restart
+	// The default class: subdirectory writes survive pod restart
 	// -------------------------------------------------------------------------
+
+	// The name says ext4 and the spec is kept under it, but the filesystem is
+	// whichever one the default class formats, and in operator mode that is the
+	// pool's declared filesystem: XFS unless a StoragePool asks for ext4. What
+	// the spec asserts holds either way, so nothing below may name a filesystem.
 
 	ginkgo.It("ext4 volume supports nested directory writes that persist across pod restarts", func() {
 		ns := f.Namespace.Name
@@ -120,10 +126,22 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		// longer resolves) disarms the guard with no other symptom. A cluster is
 		// the only place that shows up: the unit tests patch a fake client, which
 		// has no RBAC to get wrong.
+		//
+		// What the annotation is compared against is the mounted filesystem
+		// rather than a filesystem named here, because the two have to agree and
+		// only one of them is this spec's to know. The default class formats what
+		// its pool declares, which is XFS unless a StoragePool says otherwise, so
+		// a literal would assert how the cluster under test happens to be
+		// configured instead of whether the driver recorded what it staged.
+		mounted, _ := execCommandInPod(f, "df -T /spdkvol | awk 'NR==2 {print $2}'", ns, &testPodLabel)
+		mounted = strings.TrimSpace(mounted)
+		gomega.Expect(mounted).NotTo(gomega.BeEmpty(), "read the filesystem mounted at /spdkvol")
+
 		gomega.Eventually(func() (string, error) {
 			return pvcAnnotation(f, ns, defaultPVCName, annotationOnDiskFilesystem)
-		}, 2*time.Minute, 5*time.Second).Should(gomega.Equal("ext4"),
-			"the node plugin never recorded the on-disk filesystem on claim %s", defaultPVCName)
+		}, 2*time.Minute, 5*time.Second).Should(gomega.Equal(mounted),
+			"the node plugin never recorded %s, the filesystem mounted at /spdkvol, on claim %s",
+			mounted, defaultPVCName)
 
 		ginkgo.By("create a subdirectory and write data")
 		execCommandInPod(f, "mkdir -p /spdkvol/subdir/nested", ns, &testPodLabel)
