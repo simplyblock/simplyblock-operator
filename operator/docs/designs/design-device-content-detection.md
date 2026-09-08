@@ -470,7 +470,7 @@ whether that trade is available at all is P0-1.
 ## 8. Consumers
 
 **Before the stack lands**, the reading has one call site: `stageVolume` in
-`csi-driver/internal/spdk/nodeserver.go`, which replaces its `blkid` preflight with
+`csi-driver/internal/csi/node`, which replaces its `blkid` preflight with
 `blockdev.Read` and dispatches on the reading exactly as §6's `filesystem` table
 specifies. This is the whole of Phase 1's behavior change, and it is what makes
 Phase 1 shippable without waiting for

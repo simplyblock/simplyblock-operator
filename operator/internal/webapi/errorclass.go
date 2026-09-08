@@ -9,7 +9,8 @@ import (
 
 // APIErrorClass classifies a simplyblock control-plane error into retry policy.
 //
-// Adapted from the CSI driver's controlPlaneErrorClass (internal/spdk/errorclass.go).
+// Adapted from the CSI driver's controlPlaneErrorClass
+// (csi-driver/internal/csi/controller/errorclass.go).
 // gRPC codes are omitted since the operator does not speak gRPC.
 type APIErrorClass struct {
 	// Retryable indicates the operation may succeed if retried (transient failure).

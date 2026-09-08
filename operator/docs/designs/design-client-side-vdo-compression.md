@@ -34,7 +34,7 @@ each command to a device only where LVM's own identity resolution needs it (§3)
 layer on top: it owns the one-volume-group-per-lvol naming convention, the
 create-or-reactivate idempotence a CSI `NodeStageVolume` retry needs, and the
 fallback path for a backing device that has gone unreachable without a clean
-unstage. Neither layer knows anything about Kubernetes or CSI. `csi-driver/internal/util/vdo.go`
+unstage. Neither layer knows anything about Kubernetes or CSI. `csi-driver/internal/mount/vdo.go`
 (§5) is eighty-five lines of wiring between them and the node plugin's RPC
 handlers.
 
@@ -366,7 +366,7 @@ in the DHCHAP case (issue #403).
 
 ## 5. CSI Driver Wiring
 
-`csi-driver/internal/util/vdo.go` is thin wiring: one shared `lvm.Manager`, and one
+`csi-driver/internal/mount/vdo.go` is thin wiring: one shared `lvm.Manager`, and one
 function per RPC concern, each delegating straight into `atlas-lib/lvm/vdo`.
 Every call site shares one gate:
 
@@ -378,7 +378,7 @@ func vdoParams(vc map[string]string) (compression, deduplication, wantsVDO bool)
 }
 ```
 
-**`NodeStageVolume`** (`internal/spdk/nodeserver.go`): after `initiator.Connect`, if
+**`NodeStageVolume`** (`internal/csi/node`): after `initiator.Connect`, if
 `wantsVDO`, calls `ResolveClonedVDO` unconditionally, then `CreateOrAttachVDO`.
 The *returned* device path, not the raw NVMe-oF path, is what gets formatted and
 mounted.
@@ -428,7 +428,7 @@ DaemonSet. `templates/node-rbac.yaml` grants the node ServiceAccount `patch` and
 ## 7. Failure Modes Found and Fixed
 
 Every one of these was found live, against a real cluster, and each is fixed in
-`csi-driver/internal/util/vdo.go`'s history (now folded into `atlas-lib/lvm`) before
+`csi-driver/internal/mount/vdo.go`'s history (now folded into `atlas-lib/lvm`) before
 the code that carried it shipped:
 
 - **Duplicate-PV ambiguity.** A simplyblock NVMe-oF HA volume presents two
@@ -490,8 +490,8 @@ the code that carried it shipped:
 operation in §3, against a fake command runner, with no `lvm2` binary or kernel
 module required (`atlas-lib/lvm/vdo/stack_test.go`, `volume_test.go`, and the
 general-purpose primitive tests under `atlas-lib/lvm/*_test.go`). `vdoCapableSegment`
-(§4) has direct coverage in `csi-driver/internal/spdk/controllerserver_test.go`.
-`csi-driver/internal/util/vdo.go` itself, the thin wiring in §5, has no direct unit
+(§4) has direct coverage in `csi-driver/internal/csi/controller/controller_test.go`.
+`csi-driver/internal/mount/vdo.go` itself, the thin wiring in §5, has no direct unit
 tests of its own: every branch it adds over the functions it calls is one `if`
 around a delegation, and the fake-runner tests already cover the delegated
 behavior.

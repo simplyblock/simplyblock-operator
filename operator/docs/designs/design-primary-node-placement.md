@@ -266,7 +266,7 @@ against at all.
 This doesn't need a bespoke scheduling integration — Kubernetes CSI has a
 generic mechanism for exactly this (topology-aware dynamic provisioning),
 which `spdk-csi` uses for other purposes too. `NodeGetInfo`
-(`internal/spdk/nodeserver.go`) builds and reports `AccessibleTopology` for the CSI
+(`internal/csi/node`) builds and reports `AccessibleTopology` for the CSI
 node driver, sourced from labels on the k8s `Node` object
 (`buildAccessibleTopology`):
 
@@ -284,7 +284,7 @@ The external-provisioner reads these segments off each `CSINode` and — for
 `WaitForFirstConsumer` volumes — passes the *scheduled* Pod's node's segments
 as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
 `createVolume` reads this back out via `coLocatedHostID`
-(`internal/spdk/controllerserver.go`).
+(`internal/csi/controller`).
 
 ### Mechanism
 
@@ -461,7 +461,7 @@ PVC created (user)
 ```
 
 **Why a mutating webhook, not a new backend/CSI call:** `spdk-csi`'s
-`fetchPVCAnnotations` (`internal/spdk/controllerserver.go`) performs a **live**
+`fetchPVCAnnotations` (`internal/csi/controller`) performs a **live**
 GET of the PVC object at `CreateVolume` time — it does not rely on CSI request
 parameters cached earlier in the provisioning pipeline. A webhook that mutates
 the PVC at admission time (before the external-provisioner sidecar even
@@ -480,7 +480,7 @@ Clones (from another PVC or a VolumeSnapshot) must land on the same host as
 their source — this webhook does not special-case that, and it doesn't need
 to:
 
-- In `spdk-csi`, `createVolume` (`internal/spdk/controllerserver.go`) checks
+- In `spdk-csi`, `createVolume` (`internal/csi/controller`) checks
   `req.GetVolumeContentSource()` **before** calling `prepareCreateVolumeReq`
   (the function that reads the `host-id` annotation). When the PVC has a data
   source, `handleVolumeContentSource` handles it via
@@ -766,10 +766,10 @@ every co-located storage-node instance — reconciling additions, value updates
 
 ### 8.4 `spdk-csi` — topology + resolution extension (Tier 1, §4)
 
-- `buildAccessibleTopology` (`internal/spdk/nodeserver.go`) forwards any Node label
+- `buildAccessibleTopology` (`internal/csi/node`) forwards any Node label
   with the `storage-node-uuid.` prefix as a topology segment, symmetric with
   the existing zone/region/`pool.<name>` handling.
-- `createVolume` (`internal/spdk/controllerserver.go`) calls `coLocatedHostID` on
+- `createVolume` (`internal/csi/controller`) calls `coLocatedHostID` on
   `accessibility_requirements` **only when the PVC carries
   `simplyblock.io/pod-affinity: "true"`** (§4), and uses the result as
   `host_id` **only when the annotation-derived value is empty** (§3) — i.e. an

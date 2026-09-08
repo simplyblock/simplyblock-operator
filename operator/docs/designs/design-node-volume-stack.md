@@ -120,7 +120,7 @@ unwinds with only `Release`, and `Destroy` has a different caller entirely.
 
 ## 1. Background
 
-`NodeStageVolume` in `csi-driver/internal/spdk/nodeserver.go` performs a fixed
+`NodeStageVolume` in `csi-driver/internal/csi/node` performs a fixed
 sequence: parse the volume handle, refresh the connection from the control plane,
 build a `util.SpdkCsiInitiator` from the volume context, call `Connect` for a
 device path, then call `stageVolume`, which is a single
@@ -562,7 +562,7 @@ Wraps the existing NVMe-oF connect. `Ensure` asks the control plane where the
 volume lives, builds one target per endpoint, connects them in the control plane's
 priority order, and waits for the namespace device, which is the flow
 `atlas-lib`'s `nvmeof.ConnectPaths` and `nvmeof.WaitForDevice` implement and which
-`csi-driver/internal/util/initiator.go` implements today with `nvme-cli`. Which of the
+`csi-driver/internal/initiator/initiator.go` implements today with `nvme-cli`. Which of the
 two implements it is a separate migration and not this design's business. The
 layer's contract is the same either way.
 
@@ -990,7 +990,7 @@ disconnected on one volume's behalf, even while it happens to hold only that
 volume.
 
 The node service does not use that gate today. `selectDisconnectTarget` in
-`csi-driver/internal/util/initiator.go` counts the namespace devices the by-id glob
+`csi-driver/internal/initiator/initiator.go` counts the namespace devices the by-id glob
 currently matches and disconnects when the count reaches one, which is the
 weaker, enumerate-the-neighbors answer. Moving the decision behind `fabric`'s
 `Release` is what replaces it, and the existing behavior for a subsystem that
@@ -1120,8 +1120,8 @@ of the same set, one on the MDS host and one on every client. They belong in
 | `atlas-lib/volstack/`        | `Layer`, `State`, `Artifact`, `Geometry`, the optional interfaces, the runner, and the stack record                                 |
 | `atlas-lib/volstack/layers/` | The layer implementations                                                                                                           |
 | `atlas-lib/volstack/plans/`  | The plan shapes: one constructor per row of §3's table, and the LVM naming rule they derive from a volume                           |
-| `atlas-lib/lvm/`             | The LVM and device-mapper primitives PR #402 wrote as `csi-driver/internal/util/vdo.go`                                             |
-| `csi-driver/internal/spdk`   | The selection: a pure function from `VolumeContext`, `VolumeCapability`, and `Role` to which shape, and the values it is built with |
+| `atlas-lib/lvm/`             | The LVM and device-mapper primitives PR #402 wrote as `csi-driver/internal/mount/vdo.go`                                            |
+| `csi-driver/internal/csi`    | The selection: a pure function from `VolumeContext`, `VolumeCapability`, and `Role` to which shape, and the values it is built with |
 
 **Selection stays in the CSI driver, and the shapes do not.** Which layers a kind
 of volume is made of is a property of the storage rather than of Kubernetes, and
@@ -1443,7 +1443,7 @@ safe. As a key, that answer changes a returned value. As a choice between "per
 volume" and "host-wide," it would change the contract.
 
 The keys are acquired against a registry in `atlas-lib/locks`, generalized from
-`csi-driver/internal/util`'s `VolumeLocks`: the same map of mutexes, keyed by a string
+`csi-driver/internal`'s `VolumeLocks`: the same map of mutexes, keyed by a string
 instead of by a volume ID, with `locks.WithLock` scoping each acquisition to one
 call so that a verb returning early or panicking cannot leave a key held.
 `VolumeLocks` becomes a caller of it rather than a second implementation.

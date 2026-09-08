@@ -39,7 +39,7 @@ Scenario phrasing follows the sibling plans under `operator/docs/tests/`.
 
 Pure functions and server helpers, covered without external dependencies (mock `ClusterAPI` / mock HTTP).
 
-#### StorageClass Parsing & CreateVolume Planning (design §9.2–9.3) — `internal/spdk/controllerserver_test.go`
+#### StorageClass Parsing & CreateVolume Planning (design §9.2–9.3) — `internal/csi/controller/controller_test.go`
 
 | #    | Scenario                                                                                                           | Type     | Test |
 |------|--------------------------------------------------------------------------------------------------------------------|----------|------|
@@ -55,7 +55,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 | U-10 | `pnfs=true` with `volumeMode=Block` → rejected                                                                     | Negative | —    |
 | U-11 | Non-integer `stripe_count` → `InvalidArgument`                                                                     | Negative | —    |
 
-#### Volume Handle (design §11) — `internal/kubernetes/volumehandle/index_test.go`
+#### Volume Handle (design §11) — `atlas-lib/lvol/handle_test.go`
 
 | #    | Scenario                                                                   | Type     | Test |
 |------|----------------------------------------------------------------------------|----------|------|
@@ -64,7 +64,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 | U-14 | Malformed pNFS handle (wrong part count, non-UUID export) → `(Nil, false)` | Negative | —    |
 | U-15 | Empty / whitespace handle → `(Nil, false)`                                 | Negative | —    |
 
-#### CreateLVolData / API Client (design §6.2) — `csi-driver/internal/util/nvmf_test.go` and `jsonrpc_test.go` (mock HTTP)
+#### CreateLVolData / API Client (design §6.2) — `csi-driver/internal/controlplane/cluster_test.go` and `jsonrpc_test.go` (mock HTTP)
 
 | #    | Scenario                                                                                 | Type     | Test |
 |------|------------------------------------------------------------------------------------------|----------|------|
@@ -73,7 +73,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 | U-18 | Connect info for `n` members returns `n` connection sets                                 | Positive | —    |
 | U-19 | Group-snapshot with a missing member → error surfaced                                    | Negative | —    |
 
-#### Node Stage / Publish Planning (design §10) — `internal/spdk/nodeserver_test.go` (new)
+#### Node Stage / Publish Planning (design §10) — `internal/csi/nodeserver_test.go` (new)
 
 | #    | Scenario                                                                                                 | Type     | Test |
 |------|----------------------------------------------------------------------------------------------------------|----------|------|
@@ -110,7 +110,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 
 ---
 
-## 3. Sanity Tests (`internal/spdk/sanity_test.go`)
+## 3. Sanity Tests (`internal/csi/sanity_test.go`)
 
 | #      | Scenario                                                                                                         | Type     | Test |
 |--------|------------------------------------------------------------------------------------------------------------------|----------|------|

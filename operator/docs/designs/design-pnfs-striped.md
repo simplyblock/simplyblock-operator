@@ -317,7 +317,7 @@ group is visible to any backup tool that understands CSI.
 - **`DeleteVolumeGroupSnapshot`:** delete the backend group and its members.
 - **`GetVolumeGroupSnapshot`:** report group and member status.
 
-The service is new (`csi-driver/internal/spdk/groupcontrollerserver.go`), registered
+The service is new (`csi-driver/internal/csi/controller/group.go`), registered
 alongside Identity, Controller, and Node, advertising
 `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT` and the identity capability
 `GROUP_CONTROLLER_SERVICE`.
