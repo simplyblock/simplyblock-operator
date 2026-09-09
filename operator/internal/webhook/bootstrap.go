@@ -7,10 +7,15 @@
 // v1alpha2, which makes the API server convert every stored v1alpha1 object,
 // which calls this operator's conversion webhook.
 //
-// So a CA injected by a Runnable arrives too late by construction: the list fails,
-// the cache never syncs, the manager exits, and the injection that would have
-// fixed it never runs. The operator crash-loops, and no amount of retrying inside
-// it helps, because the retry is on the far side of the sync that is failing.
+// So a CA injected by a Runnable arrives too late by construction: the list
+// fails, and the injection that would have fixed it never runs, because it sits
+// on the far side of the sync that is failing.
+//
+// The symptom is worse than a crash. WaitForCacheSync blocks until the context is
+// cancelled rather than giving up, and the health probes are served by the HTTP
+// servers that started first, so the pod goes Ready and stays Ready while
+// reconciling nothing at all. There is no restart to notice and no CrashLoopBackOff
+// to find: the operator looks healthy and is inert.
 //
 // The fix is to be finished before the manager begins. Nothing here uses the
 // manager or its client: it reads and writes through a direct client, and the two

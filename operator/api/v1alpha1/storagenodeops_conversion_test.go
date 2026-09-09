@@ -55,7 +55,7 @@ func TestStorageNodeOpsActionConvertsBothWays(t *testing.T) {
 }
 
 func TestStorageNodeOpsConvertToRenamesNodeRefAndRemove(t *testing.T) {
-	filter := "^system-.*"
+	filter := testSystemVolumeFilter
 
 	src := &StorageNodeOps{
 		Spec: StorageNodeOpsSpec{
@@ -150,7 +150,7 @@ func TestStorageNodeOpsConvertToAllocatesMigrateForNewSsdPcieAlone(t *testing.T)
 
 func TestStorageNodeOpsRoundTripsThroughTheHub(t *testing.T) {
 	started := metav1.Now()
-	filter := "^system-.*"
+	filter := testSystemVolumeFilter
 	force := true
 	reattach := false
 

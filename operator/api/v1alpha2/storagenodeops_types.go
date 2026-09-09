@@ -192,7 +192,6 @@ type StorageNodeOpsStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=snops
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=".spec.nodeRef"

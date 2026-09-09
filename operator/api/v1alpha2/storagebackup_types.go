@@ -115,7 +115,6 @@ type StorageBackupStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=".spec.pvcRef.name"

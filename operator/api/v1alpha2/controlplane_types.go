@@ -57,7 +57,6 @@ type ControlPlaneStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Initializing while FDB is not ready; Available once the control plane is operational"

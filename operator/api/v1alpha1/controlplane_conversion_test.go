@@ -16,6 +16,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// testSystemVolumeFilter is the drain's system-volume pattern, shared by the
+// conversion tests that carry a RemoveSpec through a round trip.
+const testSystemVolumeFilter = "^system-.*"
+
 const testImage = "quay.io/simplyblock-io/simplyblock:26.2.2"
 
 func TestControlPlaneConvertToRegroupsImage(t *testing.T) {

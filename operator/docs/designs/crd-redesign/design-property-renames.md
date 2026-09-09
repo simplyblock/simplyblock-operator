@@ -431,10 +431,16 @@ which makes the API server convert every stored object, which calls the webhook.
 What the manager cannot order is anything that is not one of those servers.
 
 **So a CA injected by a Runnable arrives too late by construction.** The list
-fails, the cache never syncs, the manager exits, and the injection that would have
-fixed it never runs. The operator crash-loops, and retrying inside it cannot help,
-because the retry sits on the far side of the sync that is failing. This is a
-bootstrap deadlock and not a race: waiting longer never resolves it.
+fails, and the injection that would have fixed it never runs, because it sits on
+the far side of the sync that is failing. This is a bootstrap deadlock rather than
+a race: waiting longer never resolves it.
+
+**The symptom is quieter than a crash, which is what makes it worth stating.**
+The cache sync blocks until the process is cancelled rather than giving up, and
+the health probes are served by the HTTP servers that started before it. The pod
+therefore reports Ready and keeps reporting Ready while reconciling nothing. There
+is no restart to notice and no `CrashLoopBackOff` to find — the operator looks
+healthy and is inert, which is the hardest shape of failure to attribute.
 
 **The serving certificate and the CA bundle are therefore provisioned before the
 manager is constructed**, through a direct client rather than the manager's. The

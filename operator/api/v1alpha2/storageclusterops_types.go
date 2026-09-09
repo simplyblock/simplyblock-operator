@@ -118,7 +118,6 @@ type StorageClusterOpsStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=scops
 // +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=".spec.clusterRef"
