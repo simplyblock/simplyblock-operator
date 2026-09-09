@@ -72,7 +72,9 @@ FROM docker.io/library/node:22-alpine AS prepare
 ARG KEEP_MOCKS=0
 WORKDIR /src
 COPY . .
-RUN node deploy/build/prepare.mjs --keep-mocks="${KEEP_MOCKS}" --out /out
+# prepare.mjs parses --flag=value (its arg reader treats a space-separated
+# value as a separate token), so pass --out with an "=".
+RUN node deploy/build/prepare.mjs --keep-mocks="${KEEP_MOCKS}" --out=/out
 
 # ---- stage 3: runtime -------------------------------------------------------
 FROM docker.io/library/nginx:1.27-alpine
