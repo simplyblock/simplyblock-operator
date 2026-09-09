@@ -9,26 +9,25 @@
 
 ## Phasing Overview
 
-| Phase       | Status  | Scope                                                                                                                                           | Sections           |
-|-------------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| **Phase 1** | Planned | Group membership at provisioning, and policy attachment through the `ReplicationPolicy` CRD, so a group replicates as one crash-consistent unit | §4, §5, §6, §7, §8 |
-| **Phase 2** | Planned | Kubernetes-native group snapshots through the CSI GroupController service and `VolumeGroupSnapshot` objects                                     | §5.4, §8.2, §9.2   |
+| Phase       | Status  | Scope                                                                                                                                                                                            | Sections           |
+|-------------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| **Phase 1** | Planned | A standalone consistency group in the control plane: membership at provisioning, a group snapshot as one crash-consistent generation, and a listing that shows which snapshots belong to a group | §4, §5, §6, §7, §8 |
+| **Phase 2** | Planned | The Kubernetes-native surface: a `VolumeGroupSnapshot` snapshots the group through the CSI GroupController service                                                                               | §5.3, §9, §10      |
 
-Phase 1 is independently shippable: it delivers group-consistent replication and disaster recovery driven by a PVC label and one optional policy field, using the backend snapshot cadence that a `ReplicationPolicy` already schedules. No `VolumeGroupSnapshot` object is involved. Phase 2 adds the Kubernetes-native snapshot and restore surface on top of the same backend group, and it depends on the CSI GroupController work and the external-snapshotter group feature being enabled.
+Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
 
 ---
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                     | Kind                    | Blocks                             | Status                                                                         |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------|--------------------------------------------------------------------------------|
-| P0-1 | Backend group-first REST surface: standalone consistency-group create, member remove, group snapshot take and delete, and policy attach and detach, all scoped to a cluster                      | Control plane (`sbcli`) | Phase 1 and Phase 2                | Not shipped                                                                    |
-| P0-2 | Volume-create accepts a `consistency_group` field and, inside one atomic create, ensures the group, joins the volume, and enforces placement                                                     | Control plane (`sbcli`) | Phase 1 group birth and membership | Not shipped                                                                    |
-| P0-3 | Group-wide fail-over generation resolution: every member of a consistency group fails over to the same replicated generation                                                                     | Control plane (`sbcli`) | Phase 1 disaster recovery          | Shipped (verified 2026-09-07)                                                  |
-| P0-4 | `bdev_lvol_snapshot_group`: one frozen SPDK call that snapshots every member of a logical volume store at a single point in time                                                                 | Storage plane (SPDK)    | Group snapshots in both phases     | Shipped (verified 2026-09-07)                                                  |
-| P0-5 | external-snapshotter `VolumeGroupSnapshot` CRDs (`v1beta1`) installed, and the `CSIVolumeGroupSnapshot` feature gate enabled on both the `snapshot-controller` and the `csi-snapshotter` sidecar | Ecosystem / Kubernetes  | Phase 2                            | Images at `v8.2.0` support it, but the CRDs and the gate are not enabled today |
+| #    | Prerequisite                                                                                                                                                                                                      | Kind                    | Blocks             | Status                                                                                                         |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|--------------------|----------------------------------------------------------------------------------------------------------------|
+| P0-1 | `bdev_lvol_snapshot_group`: one frozen SPDK call that snapshots every member of a logical volume store at a single point in time                                                                                  | Storage plane (SPDK)    | Phase 1            | Shipped (verified 2026-09-07)                                                                                  |
+| P0-2 | A standalone consistency-group backend: a group that exists without a replication policy, with create, member-remove, snapshot take, snapshot delete, and a group-aware snapshot listing, all scoped to a cluster | Control plane (`sbcli`) | Phase 1            | Partial: a policy-coupled group exists on the `replication-features` branch (§1); the standalone form does not |
+| P0-3 | Volume-create accepts a `consistency_group` field and, inside one atomic create, ensures the group, joins the volume, and enforces placement                                                                      | Control plane (`sbcli`) | Phase 1 membership | Not shipped as a standalone path                                                                               |
+| P0-4 | external-snapshotter `VolumeGroupSnapshot` CRDs (`v1beta1`) installed, and the `CSIVolumeGroupSnapshot` feature gate enabled on both the `snapshot-controller` and the `csi-snapshotter` sidecar                  | Ecosystem / Kubernetes  | Phase 2            | Images at `v8.2.0` support it, but the CRDs and the gate are not enabled today                                 |
 
-Without P0-1 and P0-2 the operator has nothing to attach to and the CSI provisioner has no field to send, so Phase 1 cannot start. P0-3 and P0-4 are the two backend capabilities that are already live, and they are what make a group's snapshots and its fail-over crash-consistent rather than a set of independent per-volume operations. Without P0-5 the Phase 2 CSI GroupController has no Kubernetes objects to reconcile, so Phase 1 (label plus policy field, no `VolumeGroupSnapshot`) is the whole feature until the gate is turned on.
+P0-1 is the one primitive the whole design rests on, and it is live. P0-2 and P0-3 are the backend work that turns the existing policy-coupled group into a standalone object and lets a volume join a group at creation. Without P0-4 the Phase 2 CSI GroupController has no Kubernetes objects to reconcile, so Phase 1 (the backend group plus `sbctl`) is the whole feature until the gate is turned on.
 
 ---
 
@@ -37,53 +36,53 @@ Without P0-1 and P0-2 the operator has nothing to attach to and the CSI provisio
 1. [Background](#1-background)
 2. [Goals and Non-Goals](#2-goals-and-non-goals)
 3. [Architecture Overview](#3-architecture-overview)
-4. [Data Model Changes](#4-data-model-changes)
-5. [Group Lifecycle](#5-group-lifecycle)
-6. [State Machine — Policy Attachment](#6-state-machine--policy-attachment)
-7. [Controller Design](#7-controller-design)
-8. [Backend API Requirements](#8-backend-api-requirements)
-9. [Configuration](#9-configuration)
-10. [Failure Modes and Fallback](#10-failure-modes-and-fallback)
-11. [Observability](#11-observability)
-12. [Testing Strategy](#12-testing-strategy)
-13. [Migration Strategy](#13-migration-strategy)
-14. [Open Questions](#14-open-questions)
-
-Appendices:
-
-- [Appendix A: `replicationpolicy_types.go`](#appendix-a-replicationpolicy_typesgo)
+4. [Group Lifecycle](#4-group-lifecycle)
+5. [Snapshotting a Consistency Group](#5-snapshotting-a-consistency-group)
+6. [Representing Group Snapshots in the Control Plane](#6-representing-group-snapshots-in-the-control-plane)
+7. [Cloning a Consistency Group](#7-cloning-a-consistency-group)
+8. [Membership Changes and Snapshot Validity](#8-membership-changes-and-snapshot-validity)
+9. [CSI GroupController](#9-csi-groupcontroller)
+10. [Backend API Requirements](#10-backend-api-requirements)
+11. [Scenarios](#11-scenarios)
+12. [Failure Modes and Fallback](#12-failure-modes-and-fallback)
+13. [Observability](#13-observability)
+14. [Testing Strategy](#14-testing-strategy)
+15. [Migration Strategy](#15-migration-strategy)
+16. [Open Questions](#16-open-questions)
 
 ---
 
 ## Overview
 
-A consistency group is a set of volumes that snapshot and fail over as one crash-consistent unit. A single frozen backend call (`bdev_lvol_snapshot_group`) takes one snapshot of every member at the same point in time, so a database whose data and write-ahead log live on separate volumes can be restored to a coherent state rather than to two moments that do not agree.
+A consistency group is a set of volumes that snapshot as one crash-consistent unit. A single frozen backend call (`bdev_lvol_snapshot_group`) takes one snapshot of every member at the same point in time, so a database whose data and write-ahead log live on separate volumes can be restored to a state that actually existed rather than to two moments that do not agree.
 
-This design gives the group a Kubernetes-native identity and lifecycle without adding a new CRD. A group is named by a **label on its member PVCs**, `storage.simplyblock.io/consistency-group`, which sits in the same family as the shipped `storage.simplyblock.io/replication-policy` annotation. The group is born from the first volume that carries the label, its members are pinned to one storage node and logical volume store so the frozen snapshot is possible, and it dies with its last member.
+This design makes the consistency group a first-class concept in its own right. A group is named by a **label on its member PVCs**, `storage.simplyblock.io/consistency-group`. The group is born from the first volume that carries the label, its members are pinned to one storage node and logical volume store so the frozen snapshot is possible, and it dies with its last member. A **`VolumeGroupSnapshot`** is the Kubernetes representation of one snapshot of the group, and each snapshot it produces is one **generation** the control plane can list, clone, and reason about by membership.
 
-Two channels carry intent, and each carries exactly one thing. The **label** decides membership, read by the CSI provisioner at volume creation and passed to the backend. The **`ReplicationPolicy` CRD** decides replication, through a new optional `spec.consistencyGroupName` field that attaches a policy to an existing group. Membership belongs to the group and replication follows from membership, which is the inverse of the per-volume model that a `ReplicationPolicy` uses today.
+| Concern          | Mechanism                                                | Decided when                             |
+|------------------|----------------------------------------------------------|------------------------------------------|
+| Group membership | PVC label `storage.simplyblock.io/consistency-group`     | Volume creation, one-way                 |
+| Group placement  | First member's node and logical volume store             | Volume creation, immutable for the group |
+| A group snapshot | `VolumeGroupSnapshot` (Kubernetes) or `sbctl` (headless) | On demand                                |
+| One generation   | `group_seq` on every member snapshot of that snapshot    | At snapshot time                         |
 
-| Concern                        | Channel                                              | Decided when                             |
-|--------------------------------|------------------------------------------------------|------------------------------------------|
-| Group membership               | PVC label `storage.simplyblock.io/consistency-group` | Volume creation, one-way                 |
-| Group placement                | First member's node and logical volume store         | Volume creation, immutable for the group |
-| Replication of the group       | `ReplicationPolicy.spec.consistencyGroupName`        | When the policy CR names the group       |
-| Snapshot generations (Phase 1) | The attached policy's cadence                        | Backend, on the policy interval          |
-| Snapshot generations (Phase 2) | `VolumeGroupSnapshot` object                         | On demand, from Kubernetes               |
-
-A reader who stops here has the whole model: label for membership, policy field for replication, and the group living exactly as long as its members.
+Replication and backup of a consistency group are deliberately not part of this design (§2). A reader who stops here has the model: a persistent group defined by a label, snapshotted as a `VolumeGroupSnapshot`, with each snapshot a generation the control plane represents by its membership.
 
 ---
 
 ## 1. Background
 
-Cross-cluster replication is already policy-driven. `design-snapshot-replication-policy.md` established the three-tier hierarchy the operator reconciles: a `ReplicationPair` manages a backend replication target, a `ReplicationPolicy` manages a backend replication policy and its cadence, and one `ReplicationSlot` per PVC tracks the per-volume replication state. A volume joins a policy through the `storage.simplyblock.io/replication-policy` annotation on its StorageClass or PVC, and the operator creates a `ReplicationSlot` for each bound PVC.
+**The SPDK primitive is live.** `bdev_lvol_snapshot_group` freezes I/O across a set of volumes on one logical volume store, snapshots them all, and unfreezes, producing one crash-consistent set of snapshots (P0-1, verified on a live cluster 2026-09-07). Everything else in this design is about giving that primitive a first-class identity, a Kubernetes surface, and a legible representation.
 
-Every one of those operations is **per volume**. A `ReplicationPolicy` takes a snapshot of each of its volumes on its own schedule, and a fail-over resolves each volume to its own newest replicated snapshot. For volumes that hold independent data this is correct. For a set of volumes that hold one application's state it is not: two volumes snapshotted a few seconds apart, or failed over to two different replicated generations, restore an application to a state that never existed.
+**Consistency groups exist today only as a sub-feature of replication policies.** On the `replication-features` and `retain_source_lvolID` branches (deployed to the test cluster, not on the branch currently checked out), a `ConsistencyGroup` record is created *by* a replication policy (`create_group_for_policy`), and its snapshots are taken on the policy's replication cadence. The record already carries the shape this design needs:
 
-The backend already has the primitive that fixes this. `bdev_lvol_snapshot_group` freezes I/O across a set of volumes on one logical volume store, snapshots them all, and unfreezes, producing one crash-consistent generation. The backend records a consistency group, its membership epochs, and a monotonic generation counter, and group-wide fail-over generation resolution is live (P0-3). What is missing is a Kubernetes-native way to declare which volumes form a group and to point replication at that group. This design supplies it.
+- `members`, a map of lvol id to a membership epoch `{joined_seq, removed_seq}`.
+- `last_group_seq`, a monotonic generation counter.
+- `node_id` and `lvs_name`, the pinned placement every member shares.
+- `included_in_seq(lvol_id, seq)`, which decides whether a member belongs to a generation.
 
-The one operator-side attempt so far, a boolean `enableConsistencyGroup` on `ReplicationPolicy` that made the policy own and create the group, was reverted. It encoded the wrong ownership: a policy that creates a group cannot express a group that has no policy, a group replicated by two policies, or a group that outlives a policy. §13 covers the shift from that model.
+But it also carries `policy_id`, and the group is created, snapshotted, and deleted through the policy. `create_group_snapshot(policy_id)` names each member snapshot `repl_cg_<group8>_<seq>_<lvol8>_<ts>` and stamps `group_id` and `group_seq` on the `SnapShot` record. This design keeps the membership and generation model and removes the policy from the middle of it.
+
+**The representation gap.** The `SnapShot` model carries `group_id` and `group_seq`, but `list_snapshots` does not surface either. A group snapshot appears in `sbctl snapshot list` as an ordinary snapshot, and the only way to tell that a snapshot belongs to a group, or which generation it is, is to parse the `repl_cg_` name. The consistency-group regression test has to do exactly that. Making group membership legible in the listing is a first-class goal of this design (§6), because a snapshot a user cannot identify as part of a group is a snapshot they cannot safely restore as part of one.
 
 ---
 
@@ -91,122 +90,76 @@ The one operator-side attempt so far, a boolean `enableConsistencyGroup` on `Rep
 
 ### Goals
 
-- A set of volumes snapshots as one crash-consistent generation, and restores from one generation, verified by hashed cross-volume data rather than by timestamps.
-- Group membership is declared by a PVC label and requires no new CRD.
+- A set of volumes snapshots as one crash-consistent generation, verified by hashed cross-volume data rather than by timestamps.
+- Group membership is declared by a PVC label and requires no new simplyblock CRD.
 - A group is born from its first member volume and deleted with its last, with no separate create or delete step for the common Kubernetes path.
-- Members are colocated on one storage node and logical volume store, which the frozen group snapshot requires, and a volume that cannot be colocated fails creation loudly, because a member off the group's store cannot be part of the frozen snapshot.
+- Members are colocated on one storage node and logical volume store, which the frozen group snapshot requires, and a volume that cannot be colocated fails creation loudly.
 - Membership is one-way: a volume's membership window is fixed at creation and closes permanently on removal, so generation math never reasons about gaps in one volume's history.
-- A `ReplicationPolicy` attaches to a group through one optional field, and the attach and detach lifecycle is observable through events and conditions on the policy CR.
-- A policy naming a group that does not exist is rejected at creation by a validating webhook, so a typo fails at `kubectl apply` rather than parking the policy in a waiting state, while a backend that is unreachable at admission fails open rather than blocking policy creation.
-- Every backend call the operator retries is idempotent, and every blocked or waiting reconcile state emits an event.
+- The control plane represents a group snapshot as a listable generation, and every member snapshot names its group and generation, so a snapshot's group membership is answerable without parsing a name (§6).
+- A group snapshot is restorable per member, and the restored set is crash-consistent because the source generation was frozen (§7).
+- A member that leaves the group does not invalidate the generations that already contain it (§8).
 
 ### Non-Goals
 
-- **Per-member replication policies.** A group is replicated by at most one `ReplicationPolicy`, because the crash-consistent guarantee is a property of the group and not of any single member.
-- **Re-adding a removed volume to a group.** A removed volume never rejoins. Re-establishing a member is done by creating a new volume that carries the label, handled in §5.3.
-- **Group-wide restore as a single Kubernetes operation.** Restore is per member, each from the matching member snapshot of one generation. The group guarantees the generations are mutually consistent, and reassembling the set is the consumer's operation (§5.4).
-- **Ad-hoc groups over arbitrary volumes.** A group's members must share one logical volume store, so a label applied to volumes scattered across nodes cannot form a group. Placement is decided at provisioning (§5.2).
-- **A ConsistencyGroup CRD.** The group's Kubernetes identity is the label, and its lifecycle is driven by volume creation and deletion. A CRD would add a second source of truth for membership that the label already owns.
+- **Replication of a consistency group.** Cross-cluster replication and fail-over of a group are future work. This design leaves the `ConsistencyGroup` record independent of any replication policy so that work can attach later without re-shaping the group.
+- **Backup of a consistency group.** S3 or object backup of a group's generations is future work, on the same independent record.
+- **Per-member snapshot policies.** A generation is a property of the whole group, not of any single member.
+- **Group-wide restore as a single Kubernetes operation.** The CSI specification has no group-restore verb, so restore is per member (§7). A single-call restore exists only on the headless `sbctl` path, and only as a convenience.
+- **Ad-hoc groups over arbitrary volumes.** A group's members must share one logical volume store, so a label applied to volumes scattered across nodes cannot form a group. Placement is decided at provisioning (§4.2).
+- **A simplyblock ConsistencyGroup CRD.** The group's Kubernetes identity is the label, and its lifecycle is driven by volume creation and deletion. A CRD would add a second source of truth for membership that the label already owns.
 
 ---
 
 ## 3. Architecture Overview
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Kubernetes Control Plane                         │
-│                                                                         │
-│   ┌──────────────────────────────┐   ┌───────────────────────────────┐ │
-│   │   CSI provisioner (spdkcsi)  │   │   ReplicationPolicyReconciler │ │
-│   │  1. read PVC label           │   │  1. resolve group by name     │ │
-│   │     storage.simplyblock.io/  │   │  2. wait until group exists   │ │
-│   │     consistency-group        │   │  3. attach / detach policy    │ │
-│   │  2. pass consistency_group   │   │  4. write Ready + GroupAttached│ │
-│   │     to volume create         │   │     conditions and events     │ │
-│   └──────────────────────────────┘   └───────────────────────────────┘ │
-│                                                                         │
-│   ┌──────────────────────────────┐  Phase 2                            │
-│   │  CSI GroupController (spdkcsi)│  advertises GROUP_CONTROLLER_SERVICE│ │
-│   │  CreateVolumeGroupSnapshot    │  driven by the csi-snapshotter      │ │
-│   │  DeleteVolumeGroupSnapshot    │  sidecar and VolumeGroupSnapshot CRs│ │
-│   │  GetVolumeGroupSnapshot       │                                     │ │
-│   └──────────────────────────────┘                                     │
-│                                                                         │
-│  PVC label  storage.simplyblock.io/consistency-group                    │
-│  ReplicationPolicy  spec.consistencyGroupName  status.conditions        │
-│  VolumeGroupSnapshot / VolumeGroupSnapshotContent   (Phase 2)           │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Control Plane                           │
+│                                                                           │
+│   ┌──────────────────────────────┐   ┌─────────────────────────────────┐ │
+│   │   CSI provisioner (spdkcsi)  │   │  CSI GroupController (spdkcsi)   │ │
+│   │  1. read PVC label           │   │  advertises                     │ │
+│   │     storage.simplyblock.io/  │   │  GROUP_CONTROLLER_SERVICE        │ │
+│   │     consistency-group        │   │  CreateVolumeGroupSnapshot       │ │
+│   │  2. pass consistency_group   │   │  DeleteVolumeGroupSnapshot       │ │
+│   │     to volume create         │   │  GetVolumeGroupSnapshot          │ │
+│   └──────────────────────────────┘   └─────────────────────────────────┘ │
+│                                          ▲ driven by the csi-snapshotter  │
+│                                          │ sidecar + VolumeGroupSnapshot   │
+│  PVC label  storage.simplyblock.io/consistency-group                      │
+│  VolumeGroupSnapshot / VolumeGroupSnapshotContent   (Phase 2)             │
+│  materialized VolumeSnapshot per member, backref to the VolumeGroupSnapshot│
+└──────────────────────────────────────────────────────────────────────────┘
               │ HTTP (webapi client, service-account bearer token)
 ┌─────────────▼──────────────────────────────────────────────────────────┐
 │                        simplyblock Backend API                          │
 │  POST   /api/v2/clusters/{id}/storage-pools/{pid}/volumes                │
 │           body carries consistency_group  (ensure group, join, place)   │
-│  POST   /api/v2/clusters/{id}/consistency-groups/{gid}/attachments       │
-│  DELETE /api/v2/clusters/{id}/consistency-groups/{gid}/attachments/{pid} │
 │  POST   /api/v2/clusters/{id}/consistency-groups/{gid}/snapshots         │
-│  DELETE /api/v2/clusters/{id}/consistency-groups/{gid}/members/{lvid}     │
+│  GET    /api/v2/clusters/{id}/consistency-groups/{gid}/snapshots         │
+│  DELETE /api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}   │
+│  GET    /api/v2/clusters/{id}/snapshots?consistency_group={gid}          │
 └──────────────────────────────────────────────────────────────────────────┘
               │ JSON-RPC
 ┌─────────────▼──────────────────────────────────────────────────────────┐
 │                        Storage node (SPDK)                              │
-│  bdev_lvol_snapshot_group   one frozen snapshot per member (P0-4)       │
+│  bdev_lvol_snapshot_group   one frozen snapshot per member (P0-1)       │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**The label is the only membership source of truth.** The CSI provisioner reads it and passes it to the backend, which decides the group. The operator never writes the label and never decides membership. This keeps the two channels from disagreeing: one object (the PVC) declares membership, and one object (the `ReplicationPolicy`) declares replication.
+**The label is the only membership source of truth.** The CSI provisioner reads it and passes it to the backend, which decides the group. Nothing in Kubernetes stores group membership separately, so there is no second source of truth to disagree with the backend.
 
-**A validating webhook checks the group at admission, and the reconciler owns the rest.** A group exists only in the backend, so the webhook (§7.6) resolves the named group through the backend API and rejects a policy that names one that does not exist, failing a typo at `kubectl apply`. The check is point-in-time: a group deleted after admission is the reconciler's concern, which holds the policy in `WaitingForGroup` until a member re-creates the group. §6 is the state machine.
+**There is no operator reconciler in this design.** Membership is set by the provisioner at volume creation, and snapshots are taken by the CSI GroupController driven by the csi-snapshotter sidecar. The operator is not in the group-snapshot path.
 
-**Phase 2 is a second, independent driver of the same backend group.** The CSI GroupController translates a `VolumeGroupSnapshot` into a backend group snapshot call. It never creates or mutates the group, because membership and placement were fixed at provisioning. It looks the group up, verifies the resolved member set, and takes one generation.
-
----
-
-## 4. Data Model Changes
-
-No new CRD. One optional field is added to `ReplicationPolicySpec`, and the reconciler begins writing the `Ready` and `Conditions` fields that the type already declares but never sets today.
-
-### 4.1 ReplicationPolicy Spec — `consistencyGroupName`
-
-```go
-// ConsistencyGroupName attaches this policy to the consistency group of the
-// same name, so the group's volumes replicate as one crash-consistent unit
-// rather than each on its own schedule. The group is named by the
-// storage.simplyblock.io/consistency-group label on its member PVCs and is
-// created by the first labeled volume, so this reference names a backend
-// object, not a Kubernetes kind: it is validated by format here, and a
-// validating webhook rejects the policy at creation when no group of this
-// name exists (§7.6). A group is replicated by at most one policy.
-// +optional
-ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
-```
-
-The field is a name, not a `*Ref`, because it does not resolve to a Kubernetes object. It follows the `sourceClusterID` precedent in this API group in taking a format rule on the type rather than a Kubernetes-object reference. It departs from that precedent in one way: a validating webhook confirms the named group exists in the backend at creation (§7.6), because a policy that names a nonexistent group is almost always a typo, and failing it at `kubectl apply` is cheaper than parking it in a waiting state a user has to notice. The check is point-in-time and additive: group existence is mutable (a group dies with its last member, §5.4), so the reconciler still handles a group that disappears after admission (§6). The field is mutable, and a change is a detach followed by an attach (§6), which the reconciler walks through conditions rather than performing silently.
-
-**Under consideration: `*string` rather than `string`.** The appendix declares the field as a plain `string`, where the empty value means unset. A `*string` would carry the same meaning (an empty string and a nil pointer both read as no group), but it states the field's optionality more obviously at the call site, since a nil check is unambiguous where an empty-string check is a convention. This is a spelling choice, not a behavior change, and it is not yet adopted: the appendix keeps `string` until the decision is taken.
-
-The whole type as it will be written is in [Appendix A](#appendix-a-replicationpolicy_typesgo).
-
-### 4.2 ReplicationPolicy Status
-
-The design starts writing status fields the type already declares but the reconciler never sets today, and it adds one status field and the condition-merge markers those writes require:
-
-- `status.ready` is set true once the backend policy exists and, when `consistencyGroupName` is set, once the group attachment has been made. It is false while the policy waits for its group.
-- `status.conditions` gains a `GroupAttached` condition alongside the `Ready` condition. The reconciler writes conditions for the first time (§11), because the attach lifecycle is the first policy behavior that a user or another controller waits on. The field gains the `+listType=map` and `+listMapKey=type` markers so a server-side-apply patch merges conditions by type rather than replacing the list.
-- `status.observedGeneration` is added so a spec edit can be waited on, which the state machine (§6) and its tests depend on: it is written on every status patch.
-
-The shipped `spec.mode` enum uses lowercase values (`failover`, `migration`) rather than the PascalCase this API group defines. That is a pre-existing shipped field, and changing its casing is a breaking change out of this design's scope, so the appendix reproduces it as it stands.
-
-### 4.3 Backend records (informative, owned by `sbcli`)
-
-The backend, not the operator, owns the consistency-group record, its membership epochs (`joined_seq` and `removed_seq` per member), the monotonic `last_group_seq` generation counter, and the pinned placement (node and logical volume store). The operator reads group existence and attachment state through the API (§8) and never persists group state itself. These records are listed here so the API contract in §8 is legible, not because the operator writes them.
+**The persistent group versus the ephemeral VolumeGroupSnapshot.** Upstream Kubernetes has no persistent group: a `VolumeGroupSnapshot` selects PVCs by label at snapshot time, and the "group" is whatever the selector matched. simplyblock needs a *persistent* backend group, because `bdev_lvol_snapshot_group` requires every member on one logical volume store, and that placement must be arranged at provisioning, not discovered at snapshot time. So a `VolumeGroupSnapshot` in this design snapshots an *existing* backend group, and its selector must resolve to exactly the group's current membership (§9). This is the one place the design departs from the upstream model, and §11 plays the consequence through.
 
 ---
 
-## 5. Group Lifecycle
+## 4. Group Lifecycle
 
-### 5.1 Birth and membership at provisioning
+### 4.1 Birth and membership at provisioning
 
-A group is born from the first volume that carries the `storage.simplyblock.io/consistency-group` label. The CSI provisioner reads the label with the volume context that `--extra-create-metadata` already supplies, and passes `consistency_group=<name>` to the backend volume-create call (P0-2). Inside one atomic create the backend ensures the group exists, joins the volume, and enforces placement:
+A group is born from the first volume that carries the `storage.simplyblock.io/consistency-group` label. The CSI provisioner reads the label with the volume context that `--extra-create-metadata` already supplies, and passes `consistency_group=<name>` to the backend volume-create call (P0-3). Inside one atomic create the backend ensures the group exists, joins the volume, and enforces placement:
 
 ```
 PVC labeled storage.simplyblock.io/consistency-group: db-group
@@ -223,348 +176,268 @@ backend, atomically inside volume create:
                            open the member epoch
 ```
 
-**Membership is fixed at creation.** A label added to a PVC after its volume exists does not join the volume to the group, because the join happens only in the create path. This is a deliberate constraint that keeps membership decidable from one event rather than from the mutable state of a label over time.
+**Membership is fixed at creation.** A label added to a PVC after its volume exists does not join the volume to the group, because the join happens only in the create path. This keeps membership decidable from one event rather than from the mutable state of a label over time.
 
-**Concurrent first volumes converge on one group.** Two volumes created at the same time with the same label must not create two groups. Ensure-group is idempotent by cluster and name (§8), and the volume that loses the race joins the group the winner created, under the winner's placement pin.
+**Concurrent first volumes converge on one group.** Two volumes created at the same time with the same label must not create two groups. Ensure-group is idempotent by cluster and name (§10), and the volume that loses the race joins the group the winner created, under the winner's placement pin.
 
-### 5.2 Placement is two-tier
+### 4.2 Placement is two-tier
 
 The frozen group snapshot operates on one logical volume store, so every member must live on one store on one node.
 
 - **Node and logical volume store colocation is mandatory.** The first member pins the group. A later labeled volume is placed on the pinned node, and if it cannot be placed there the volume create fails. It does not join the group unpinned, and it does not land on another node, because the frozen group snapshot operates on one store and cannot reach a member placed off it.
 - **NVMe subsystem colocation is best effort.** A member shares the group's subsystem when the StorageClass is namespaced (`max_namespace_per_subsys` greater than one) and the subsystem has a free namespace slot. When it does not, the member is placed on the pinned node in its own subsystem. Subsystem sharing is an efficiency, not a correctness requirement.
 
-### 5.3 Membership is one-way
+### 4.3 Membership is one-way
 
-A member's epoch opens at creation and closes permanently when the volume is removed from the group or deleted. The same volume never rejoins. The backend records membership as a `joined_seq` and `removed_seq` window per volume, and a one-way rule keeps those windows unambiguous: a generation contains a member if and only if the generation number falls inside the member's open window, and no member has more than one window to reason about.
+A member's epoch opens at creation and closes permanently when the volume leaves the group. The same volume never rejoins. The backend records membership as `{joined_seq, removed_seq}` per volume, and `included_in_seq(lvol_id, seq)` decides whether a member belongs to a generation: `joined_seq <= seq` and (`removed_seq == 0` or `seq <= removed_seq`). A one-way rule keeps those windows unambiguous, and no member has more than one window to reason about.
 
-Re-establishing a member is done by creating a new volume that carries the label, for example, a clone of the removed one. It joins as a new member with a fresh epoch under its own logical volume identity. The generation math never sees a volume leave and return.
+Re-establishing a member is done by creating a new volume that carries the label, for example, a clone of the removed one. It joins as a new member with a fresh epoch under its own logical volume identity, at `last_group_seq + 1`, so earlier generations do not contain it. The generation math never sees a volume leave and return.
 
-### 5.4 Snapshots, restore, and death (Phase 2 for the Kubernetes-native path)
+### 4.4 Death with the last member
 
-**Generations.** In Phase 1, generations are produced by the attached policy's cadence: the backend takes one group snapshot per interval, stamped with the next `group_seq`. In Phase 2, a `VolumeGroupSnapshot` produces a generation on demand. Both land in the same group as peer generations, and a group may carry both.
-
-**Restore is per member.** Each member snapshot of one generation is an ordinary volume clone source. The group guarantees that the generations of one `group_seq` are a single crash-consistent cut, and the operator reassembles nothing: a restore creates one volume per member from that generation's matching member snapshot. This is the model the consistency-group regression test verifies, restoring every member from one generation and asserting a cross-volume prefix property over hashed records.
-
-**Death with the last member.** A group lives exactly as long as its members. Deleting the last volume of a group deletes the group, as a cascade inside that volume's deletion: any attached policy is detached, the remaining generations are pruned, and the group record is removed. A `VolumeGroupSnapshot` deletion never removes the group, and only ever removes its own generation. Deleting the last member therefore destroys the group's remaining restore points, which is the intended symmetry of a group that exists only while its volumes do, and the backend logs and events that widening because it is the one place a volume deletion also deletes snapshots.
+A group lives exactly as long as its members. Removing the last member deletes the group record. What happens to the group's generations when a member leaves is the subject of §8, and it is the one place where a volume operation can widen into snapshot deletion, so the backend logs and events it.
 
 ---
 
-## 6. State Machine — Policy Attachment
+## 5. Snapshotting a Consistency Group
 
-A `ReplicationPolicy` with `spec.consistencyGroupName` set drives an attach lifecycle. The state is derived on each reconcile from the policy spec, the backend group's existence, and the backend attachment state. It is not a persisted phase field, because it is reconstructable from those three facts on any reconcile or restart.
+### 5.1 A snapshot is one generation
 
-The group exists at creation, because the webhook (§7.6) rejects a policy naming a group that does not. `WaitingForGroup` is therefore not a creation-time state: it is reached only when a group is deleted under a live policy (its last member removed, §5.4), after which the reconciler holds the policy there until a member re-creates the group.
+A group snapshot freezes I/O across every current member, snapshots them all with one `bdev_lvol_snapshot_group` call, and unfreezes. It produces one **generation**: a `group_seq` value stamped on every member snapshot taken, so the set is identifiable and mutually crash-consistent. The operation is all-or-nothing: a failure anywhere unfreezes and rolls back the partial snapshots, and the generation counter does not advance.
 
-```
-  spec.consistencyGroupName set
-    │
-    ▼
-  WaitingForGroup   ← backend reports no group of this name yet;
-    │                 requeue, emit GroupAttachPending on the policy CR
-    │  group exists
-    ▼
-  Attaching         ← POST .../consistency-groups/{gid}/attachments {policy_id}
-    │  attach acknowledged
-    ▼
-  Attached          ← status.ready = true, GroupAttached = True, emit GroupAttached
-    │
-    │  spec.consistencyGroupName changed
-    ▼
-  Detaching         ← DELETE the old attachment, then re-enter Attaching for the new
-    │                 group; emit GroupDetached, full re-replication follows
-    ▼
-  (Attaching for the new group)
+The generation is identified as `{group_uuid}:{group_seq}`. Each member snapshot carries `group_id` (the group) and `group_seq` (the generation), which is what §6 surfaces.
 
-  spec.consistencyGroupName cleared, or policy CR deleted
-    │
-    ▼
-  Detaching         ← DELETE the attachment; emit GroupDetached
-```
+### 5.2 Membership at snapshot time
 
-| Condition                                                               | Sub-phase                | Result                                                                                                                                                                                                                                                       |
-|-------------------------------------------------------------------------|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Group deleted under a live policy (last member removed), not re-created | WaitingForGroup          | Requeue indefinitely with `GroupAttachPending` every reconcile, `status.ready = false`. No error, because a member may re-create the group. A group that never existed is rejected at admission (§7.6), so this state is only ever reached after a deletion. |
-| Backend unreachable during attach                                       | Attaching                | Requeue with backoff, `GroupAttached = False` reason `BackendError`. No spec change, so the next reconcile retries the same attach.                                                                                                                          |
-| Backend group deleted while attached (last member removed)              | Attached                 | Backend auto-detaches. The reconciler observes no attachment and no group, sets `GroupAttached = False` reason `GroupGone`, and re-enters WaitingForGroup rather than erroring.                                                                              |
-| Operator restart mid-attach                                             | any                      | State is re-derived from spec plus backend state, so the attach resumes or is confirmed idempotently (§8).                                                                                                                                                   |
-| `spec.consistencyGroupName` changed on a policy with active replication | Detaching then Attaching | Detach stops replication and deletes the internal replication snapshots on both sides, then the new group re-replicates in full. Surfaced by `GroupDetached` then `GroupAttached`, never silent.                                                             |
+A snapshot includes exactly the members whose epoch is open at the current `group_seq`. A late joiner that joined at generation 5 is absent from generations 1 through 4, and a member removed at generation 7 is absent from generation 8 onward. The snapshot is a faithful cut of the membership as it stands, no more and no less.
 
-The reconciler never blocks. Every wait is a requeue, and every held decision emits an event on the policy CR (§11).
+### 5.3 The Kubernetes path (Phase 2)
+
+A `VolumeGroupSnapshot` is the Kubernetes representation of one group snapshot:
+
+1. The user creates a `VolumeGroupSnapshot` naming a class and a label selector on `storage.simplyblock.io/consistency-group`.
+2. The snapshot-controller resolves the selector to bound PVCs, creates a `VolumeGroupSnapshotContent` with the resolved volume handles, and binds the two.
+3. The csi-snapshotter sidecar calls the CSI `CreateVolumeGroupSnapshot` with the handles.
+4. The CSI GroupController verifies the handle set equals the group's current membership, then takes one generation through the backend (§9, §10).
+5. The snapshot-controller materializes one `VolumeSnapshot` and `VolumeSnapshotContent` per member, each carrying `status.volumeGroupSnapshotName` back to the group snapshot.
+
+The result is one `VolumeGroupSnapshot`, one backend generation, and one `VolumeSnapshot` per member. The materialized per-member `VolumeSnapshot` objects are what a restore consumes (§7).
 
 ---
 
-## 7. Controller Design
+## 6. Representing Group Snapshots in the Control Plane
 
-### 7.1 Location
+This is the section the current code does not address, and the one a user feels first.
 
-`operator/internal/controllers/replication/replicationpolicy_controller.go`, extending the existing `ReplicationPolicyReconciler`. No new controller. This work relocates the replication controller family into a domain package, `internal/controllers/replication/`, following the layout the newer controllers already use (`internal/controllers/controlplane/`) rather than the flat `internal/controller/` the replication reconcilers live in today. The `ReplicationPair`, `ReplicationPolicy`, `ReplicationSlot`, and `ReplicationOps` reconcilers, and their unit and integration test files, move together into the new package, so the consistency-group work lands in the package it belongs to rather than growing the flat one.
+### 6.1 The gap today
 
-The attach lifecycle is folded into the existing `ReplicationPolicy` reconcile, after the backend policy is ensured and before the slot count is computed. Every status patch sets `status.observedGeneration` to the reconciled `metadata.generation`, using an optimistic-lock patch so a status computed from an older generation does not overwrite a newer one.
+The `SnapShot` model carries `group_id` and `group_seq`, and `create_group_snapshot` stamps both. But `list_snapshots` builds a display dict with `UUID`, `Name`, `LVol ID`, `Base Snapshot`, `Clones`, `Status`, and a few more, and **neither `group_id` nor `group_seq` is among them**. In `sbctl snapshot list`, a group snapshot is indistinguishable from an ordinary one, and the only signal of membership is the `repl_cg_<group8>_<seq>_<lvol8>_<ts>` name. A representation that requires parsing a name is a representation that breaks the moment the name format changes, and it is invisible to `--json` consumers that read fields.
 
-### 7.2 Reconciliation Trigger
+### 6.2 Surface the group on every snapshot
 
-The reconciler already requeues every 30 seconds (`replPolicyRequeueInterval`) and watches `ReplicationSlot` and `ReplicationPair`. The group attachment needs no new watch, because a group is a backend object and not a Kubernetes one: the periodic requeue is what re-checks whether a `WaitingForGroup` policy's group has appeared. A shorter requeue (10 seconds, matching the existing pair-not-ready wait) applies while in `WaitingForGroup`, so a group that appears is attached promptly.
+`list_snapshots` and `snapshot get` gain the group fields the model already holds:
 
-### 7.3 Concurrency and Mutual Exclusion
+- `group_id`: the consistency group the snapshot belongs to, empty for an ordinary snapshot.
+- `group_seq`: the generation, zero for an ordinary snapshot.
 
-A group is replicated by at most one policy, which the backend enforces on attach: a second policy attaching to an already-attached group receives a conflict, which the reconciler surfaces as `GroupAttached = False` reason `GroupAlreadyAttached` rather than retrying. Two policies naming the same group is a user error, made visible rather than resolved by a race.
+In the human table these render as one `Group` column (the group's short id or name) and one `Gen` column, shown only when any snapshot in the listing carries a group. In `--json` they are always present, so a consumer reads a field rather than a name. `snapshot list` gains a `--consistency-group <id>` filter, so a caller can list exactly one group's snapshots without client-side name matching.
 
-### 7.4 Interaction with Existing Controllers
+### 6.3 Represent the generation, not only the member snapshot
 
-The `PVCAnnotationWatcher` that creates a `ReplicationSlot` per annotated PVC is unchanged. A consistency-group member is a volume like any other, and if its PVC also carries the `storage.simplyblock.io/replication-policy` annotation it gets a slot as usual. The group attachment is a policy-level operation and does not create or delete slots, so the two mechanisms do not race. When a policy is attached to a group, the group's replication is driven by the group attachment, and per-PVC slots for the same volumes are redundant: §14 carries the question of whether the operator should refuse the annotation on a labeled PVC or let both coexist.
+A per-snapshot `group_seq` answers "which generation is this member snapshot," but an operator also asks "what generations does this group have, and is each one complete." A group-scoped listing answers that:
 
-### 7.5 RBAC
+`GET /api/v2/clusters/{id}/consistency-groups/{gid}/snapshots` returns one row per generation: the `group_seq`, the creation time, the expected member count (from `included_in_seq` over the membership at that `group_seq`), the present member count, and per-member `{lvol_id, snapshot_id, ready}`. A generation whose present count is below its expected count is incomplete (a member snapshot was pruned or its volume hard-deleted, §8), and the listing says so rather than leaving it to be discovered at restore time.
 
-No new RBAC. The reconciler already holds `replicationpolicies`, `replicationpolicies/status`, and `replicationpolicies/finalizers`, and the attach calls go to the backend over HTTP, not to the Kubernetes API. The recorder needed for events (§11) uses the manager's existing event client. The webhook (§7.6) needs a `ValidatingWebhookConfiguration` and the manager's existing serving certificate, not a new Kubernetes role, because it too reaches the backend over HTTP rather than the Kubernetes API.
+### 6.4 The Kubernetes representation
 
-### 7.6 Validating Webhook
-
-A validating webhook on `ReplicationPolicy` create and update rejects the object when `spec.consistencyGroupName` is set and no group of that name exists in the backend. It calls the same group-resolve endpoint the reconciler uses (`GET /api/v2/clusters/{id}/consistency-groups?name={name}`, §8.1) and admits the object only when the group resolves.
-
-- **The webhook fails open.** Its `failurePolicy` is `Ignore`, so a backend that is unreachable at admission admits the policy rather than blocking every `ReplicationPolicy` apply on a backend blip. A name that slips through during an outage lands in the reconciler, which surfaces it as `WaitingForGroup` (§6, §10). The webhook makes the common typo cheap to catch, and it never becomes a cluster-wide outage amplifier.
-- **It checks existence, not readiness.** Existence at admission is what the webhook decides, and it is decided once, because an admission decision is never revisited. Whether the group is later deleted is the reconciler's concern, which is why the webhook does not replace the `GroupGone` path (§6).
-- **It imposes an ordering on a group's first use.** Because a group is born from its first labeled volume, a `ReplicationPolicy` naming a brand-new group is rejected until at least one labeled PVC has been provisioned. This matches the group-first model: the group is created first, and a policy attaches to it.
+On the Kubernetes side, one generation is one `VolumeGroupSnapshot`, and `groupSnapshotHandle` on its `VolumeGroupSnapshotContent` is `{group_uuid}:{group_seq}`. The per-member `VolumeSnapshotContent` objects carry each member's snapshot handle, and the `volumeSnapshotHandlePairList` maps each source volume handle to its member snapshot. A user reading `kubectl get volumegroupsnapshot` sees the generation as one object, and `kubectl get volumesnapshot -l ...` sees its members, each backref'd by `status.volumeGroupSnapshotName`. The Kubernetes and control-plane representations agree by construction, because both are derived from the same `group_id` and `group_seq`.
 
 ---
 
-## 8. Backend API Requirements
+## 7. Cloning a Consistency Group
 
-The operator reaches the backend through the generic `webapi` client (`Do(ctx, method, endpoint, body)`), the same path the reconciler already uses for `replication/policies`. Every endpoint below is scoped to a cluster and interpolates the resolved cluster UUID.
+### 7.1 Restore is per member
 
-### 8.1 Phase 1 — attachment (operator)
+The CSI specification has no group-restore verb. A `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member (§5.3), and each is an ordinary `dataSource` for a new PVC. Cloning a group is therefore N per-member clones, one for each member snapshot of one generation. This matches the reference implementation (Ceph-CSI restores a group's members individually), and it is the only path the Kubernetes API offers.
 
-| Method   | Endpoint                                                                 | Notes                                                                                                                                                                                         |
-|----------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`                   | Resolve a group by name. Returns the group and its id, or empty when no group of that name exists yet. Idempotent. Called by both the reconciler and the validating webhook (§7.6).           |
-| `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments`             | Attach a policy to a group. Body `{policy_id}`. Idempotent: attaching an already-attached policy returns success, and attaching a group already attached to a different policy returns `409`. |
-| `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments/{policy_id}` | Detach. Idempotent: detaching a policy that is not attached returns success. Stops replication and deletes the internal replication snapshots on both sides.                                  |
+The restored set is crash-consistent without any group machinery, because the source generation was one frozen cut. The clones do not need to be a group to be mutually consistent. They need to be a group only if the user intends to keep snapshotting them together going forward.
 
-The group-birth path is not an operator call. The CSI provisioner sends `consistency_group` on the existing volume-create (`POST /api/v2/clusters/{id}/storage-pools/{pid}/volumes`), and the backend ensures the group, joins the volume, and enforces placement atomically (P0-2). Ensure-group is idempotent by cluster and name, which is what lets concurrent first volumes converge (§5.1).
+### 7.2 The clones form a new group only if labeled
 
-### 8.2 Phase 2 — group snapshots (CSI GroupController)
+If the restore PVCs carry `storage.simplyblock.io/consistency-group: <new-name>`, they birth a new group at provisioning (§4.1), pinned to wherever the first restored volume lands, with fresh epochs. If they are unlabeled, they are independent volumes that happen to be mutually consistent. The design does not couple the two: restoring the data and forming a new group are separate decisions.
 
-| Method   | Endpoint                                                           | Notes                                                                                                                                                                                                                         |
-|----------|--------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots`         | Take one generation. Returns `{group_seq, members: [{lvol_id, snapshot_id}]}`. Idempotent by an external snapshot name the sidecar supplies: a retry with a name the backend already stamped returns the existing generation. |
-| `GET`    | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}`   | Read a generation's readiness and member snapshot handles.                                                                                                                                                                    |
-| `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}`   | Delete one generation and all its member snapshots atomically. Never deletes the group.                                                                                                                                       |
-| `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/members/{lvol_id}` | Close a member's epoch, one-way. The add path does not exist: joining happens only at volume create.                                                                                                                          |
+A subtlety the user must know: a *new* group must satisfy the mandatory placement rule (§4.2), so a group-forming restore has to place all its clones on one node and store. A restore that only wants the consistent data, with no intent to re-snapshot as a group, should leave the PVCs unlabeled and avoid that constraint.
 
-The CSI GroupController maps `CreateVolumeGroupSnapshot` to the take-generation call, returning `group_snapshot_id = {group_uuid}:{group_seq}` and per-member snapshot handles. `DeleteVolumeGroupSnapshot` maps to the delete-generation call. Both must treat a missing group or generation as success, because a group deleted with its last member (§5.4) leaves `VolumeGroupSnapshot` objects that later delete against nothing.
+### 7.3 The headless convenience
+
+Because the group is a first-class control-plane object, `sbctl` can offer a single-call group clone that Kubernetes cannot: `sbctl consistency-group clone <gid> <seq> --into <new-name>` loops over the generation's member snapshots, clones each into a new volume, and optionally forms a new group from the clones. Whether to build this convenience, versus leaving group clone to N per-member clones, is Open Question 3. It is a `sbctl`-only path either way, because the CSI API has no group-restore verb to expose it through.
 
 ---
 
-## 9. Configuration
+## 8. Membership Changes and Snapshot Validity
 
-### 9.1 Membership label
+This section answers the question directly: does a volume leaving the group invalidate the snapshots that already contain it? The answer is no, with one action that is the exception, and the section is precise about which.
 
-| Annotation                                 | Values                 | Effect                                                                                                                                |
-|--------------------------------------------|------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| `storage.simplyblock.io/consistency-group` | A group name, on a PVC | The volume joins (or creates) the named group at provisioning. Read once, at volume create. A label added later has no effect (§5.1). |
+### 8.1 Prior generations are immutable cuts
 
-The key sits in the `storage.simplyblock.io/` family with the shipped `storage.simplyblock.io/replication-policy` annotation. It is a label rather than an annotation because the Phase 2 `VolumeGroupSnapshot` selector matches on PVC labels, and annotations are not selectable in the Kubernetes API, so the one key must be a label to serve both the provisioning join and the snapshot selector.
+A generation is a snapshot of the membership as it stood at that `group_seq`. When member V leaves at generation k (`removed_seq = k`), `included_in_seq` still reports V as present in generations 1 through k and absent from k+1 onward. Generations 1 through k remain valid, immutable, crash-consistent cuts that include V. Restoring generation 3 recreates every member the group had at generation 3, V among them. Leaving does not reach back and alter history.
 
-### 9.2 Policy field
+### 8.2 Detach preserves history; delete is the exception
 
-| Field                       | Type   | Default | Description                                                                                                                                                                       |
-|-----------------------------|--------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.consistencyGroupName` | string | unset   | Attaches the policy to the named group. Mutable: a change is a detach then attach with full re-replication (§6). Unset means an ordinary per-volume policy, unchanged from today. |
+The one action that can invalidate a prior generation is deleting the member's snapshot data, and that turns on how the volume leaves:
 
----
+- **Detach (leave the group, keep the volume).** The member's epoch closes, and its snapshots in prior generations are untouched. Every generation that contained the member stays fully restorable. This is the history-preserving exit, and it is what "a volume leaves the group" should mean by default.
+- **Delete the volume.** Deleting a member volume must not silently delete the group snapshots that prior generations depend on. In SPDK a snapshot is a read-only blob with its own identity, so the member's group snapshots can outlive the volume, and prior generations stay restorable. The backend must therefore preserve a member's group snapshots when the volume is deleted, and only a deliberate delete of the generation itself (§10) removes them. A volume delete that also destroyed its group snapshots would silently invalidate every prior generation the member belonged to, which is the one data-loss path this section exists to forbid.
 
-## 10. Failure Modes and Fallback
+### 8.3 Incomplete generations are reported, not hidden
 
-| Failure                                                        | Detection                                       | Behavior                                                                                                                                                                     |
-|----------------------------------------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A labeled volume cannot be placed on the group's pinned node   | Backend rejects the volume create               | The `CreateVolume` fails, the PVC stays Pending with the backend error surfaced through the provisioner. The volume does not join the group unpinned.                        |
-| A policy names a group that does not exist, at creation        | Validating webhook resolves no group            | The create or update is rejected (§7.6), so a typo fails at `kubectl apply`. The reconciler never sees the object.                                                           |
-| The backend is unreachable when the webhook runs               | Webhook's backend call errors                   | The webhook fails open (`failurePolicy: Ignore`), the policy is admitted, and a bad name surfaces later as `WaitingForGroup`. A backend blip never blocks policy creation.   |
-| A group is deleted under a live policy, then never re-created  | Reconciler resolves no group                    | `WaitingForGroup`, `GroupAttachPending` on every reconcile, `status.ready = false`. Correct behavior that looks like a hang, which is why it emits an event each time (§11). |
-| Two policies name one group                                    | Backend `409` on the second attach              | `GroupAttached = False` reason `GroupAlreadyAttached`. Not retried, because it is a user error to resolve, not a transient fault.                                            |
-| Backend unreachable during attach or detach                    | HTTP error from `webapi`                        | Requeue with backoff. The attach and detach calls are idempotent (§8), so a retry after a partial success converges.                                                         |
-| Group deleted while a policy is attached                       | Reconciler observes no group                    | Backend auto-detaches on last-member deletion. The reconciler re-enters `WaitingForGroup` rather than erroring, so re-provisioning a member re-attaches the same policy.     |
-| Phase 2: `VolumeGroupSnapshot` deleted after its group is gone | GroupController resolves no group or generation | Delete returns success. A missing handle is not an error, matching CSI snapshot-delete semantics.                                                                            |
+If a member's snapshot in some generation is gone (pruned, or its volume hard-deleted under a policy that did not preserve it), that generation is incomplete: restoring it produces fewer volumes than the membership at that `group_seq` calls for. The group-scoped listing (§6.3) reports the present count against the expected count, and a restore of an incomplete generation warns rather than silently returning a partial set. The membership epochs are what make "expected" computable: the listing knows exactly which members a generation should have.
 
-Every path degrades to a defined state: a failed create leaves a Pending PVC, a missing group leaves a waiting policy, and a conflict leaves a visibly refused attachment. None leaves a group half-formed or a policy silently unreplicated.
+### 8.4 The migration hazard
+
+A group's members are pinned to one logical volume store (§4.2). If a member is migrated to another node, the group can no longer be frozen on one store, and a later group snapshot fails. Migration of a group member is therefore either refused, or it moves the whole group's placement pin, and which of the two is Open Question 2. Until it is settled, a group snapshot that finds a member off the pinned store fails loudly (§12) rather than snapshotting an inconsistent subset.
+
+### 8.5 Orphaned Kubernetes snapshots
+
+When a member PVC is deleted, the materialized `VolumeSnapshot` objects that reference it in prior generations are orphaned from their source PVC but remain valid, pre-provisioned snapshot objects, and they stay restorable. This mirrors ordinary `VolumeSnapshot` behavior, where a snapshot outlives its source claim.
 
 ---
 
-## 11. Observability
+## 9. CSI GroupController
 
-**Baseline.** The `ReplicationPolicy` reconciler emits no Kubernetes events and writes no conditions today: the `status.conditions` field is declared and never set, and the reconciler surfaces blocked states only through logs and requeues. This design adds the first events and the first conditions on the policy CR, so the whole surface below is new work on the operator side. The group-internal metrics named at the end are the backend's to export, not the operator's.
+### 9.1 The service
+
+`spdkcsi` gains the CSI GroupController service, advertising `GROUP_CONTROLLER_SERVICE` and the `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT` capability, and implementing `CreateVolumeGroupSnapshot`, `DeleteVolumeGroupSnapshot`, and `GetVolumeGroupSnapshot`. The driver advertises no group capability today (`ControllerGetCapabilities` returns the per-volume set), so this is new.
+
+### 9.2 Selector must equal membership
+
+`CreateVolumeGroupSnapshot` receives the volume handles the snapshot-controller resolved from the label selector. Because the backend group is persistent and placement-pinned (§3), the driver does not snapshot whatever the selector matched. It resolves the group from the handles, and it verifies the handle set equals the group's current membership. A selector that resolves to a set differing from the membership (a PVC labeled after creation, a member not matched, a non-member matched) is refused with `FAILED_PRECONDITION`, because snapshotting a set the group does not represent would produce a generation that is not a faithful cut of the group. This is the mechanical consequence of §3, and Open Question 1 is whether `FAILED_PRECONDITION` is the desired handling.
+
+### 9.3 The mapping
+
+`CreateVolumeGroupSnapshot` maps to the backend take-generation call and returns `group_snapshot_id = {group_uuid}:{group_seq}` plus one `{snapshot_id, source_volume_id, ready, creation_time}` per member. `DeleteVolumeGroupSnapshot` maps to the delete-generation call. `GetVolumeGroupSnapshot` maps to the group-scoped generation read (§6.3). Delete must treat a missing group or generation as success, because a group deleted with its last member leaves `VolumeGroupSnapshot` objects that later delete against nothing.
+
+---
+
+## 10. Backend API Requirements
+
+The driver and `sbctl` reach the backend over HTTP. Every endpoint is scoped to a cluster.
+
+| Method   | Endpoint                                                         | Notes                                                                                                                                                                                 |
+|----------|------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `POST`   | `/api/v2/clusters/{id}/storage-pools/{pid}/volumes`              | Existing create, extended with a `consistency_group` field: ensure the group, join the volume, enforce placement, all atomically. Ensure-group is idempotent by cluster and name.     |
+| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`           | Resolve a group by name. Returns the group, its id, its pinned placement, and its members with epochs, or empty when no such group exists.                                            |
+| `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots`       | Take one generation. Returns `{group_seq, members: [{lvol_id, snapshot_id}]}`. Idempotent by an external snapshot name the sidecar supplies: a retry returns the existing generation. |
+| `GET`    | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots`       | List generations: per generation the `group_seq`, creation time, expected and present member counts, and per-member `{lvol_id, snapshot_id, ready}` (§6.3).                           |
+| `GET`    | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}` | Read one generation's readiness and member snapshot handles.                                                                                                                          |
+| `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}` | Delete one generation and all its member snapshots atomically. Never deletes the group.                                                                                               |
+| `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/members/{lvid}`  | Detach a member, closing its epoch one-way. Preserves the member's snapshots in prior generations (§8.2).                                                                             |
+| `GET`    | `/api/v2/clusters/{id}/snapshots?consistency_group={gid}`        | The per-snapshot listing (§6.2), extended with `group_id` and `group_seq` on every row and a group filter.                                                                            |
+
+The group-birth path is the volume-create field, not a separate call, so a volume joins its group in the same operation that creates it. Ensure-group idempotency by cluster and name is what lets concurrent first volumes converge (§4.1).
+
+---
+
+## 11. Scenarios
+
+Each scenario is played through against the model above. Where another implementation informs the design, it is named.
+
+### 11.1 Snapshot a healthy group
+
+A `db-group` has three members on one store. A `VolumeGroupSnapshot` selects them. The GroupController verifies the three handles equal the membership, takes generation 4, and returns three member snapshots stamped `group_seq = 4`. The snapshot-controller materializes three `VolumeSnapshot` objects. `sbctl snapshot list --consistency-group db-group` shows three rows at `Gen 4`, and the group-scoped listing shows generation 4 with present three of expected three. This is the happy path, and it is what the regression test's hashed writer verifies for crash consistency.
+
+### 11.2 Clone the group from generation 4
+
+The user creates three PVCs, each `dataSource` a member `VolumeSnapshot` of generation 4. The three clones are mutually crash-consistent because generation 4 was one frozen cut. If the PVCs are labeled `db-group-restored`, they form a new group pinned wherever the first clone lands; if unlabeled, they are three consistent but independent volumes. There is no single group-restore call in Kubernetes, matching Ceph-CSI. The headless `sbctl consistency-group clone db-group 4 --into db-group-restored` is the one-call alternative (Open Question 3).
+
+### 11.3 A member leaves after generation 4
+
+Member V is detached at generation 5 (`removed_seq = 5`). Generation 4 still lists three members including V and stays fully restorable. Generation 6, taken after the detach, lists two members. Nothing about generation 4 changed. If instead V's volume is deleted, V's generation-4 snapshot is preserved (§8.2), so generation 4 remains complete and restorable. The group-scoped listing shows generation 6 with expected two, present two, and generation 4 with expected three, present three.
+
+### 11.4 A member is hard-deleted without preserving its snapshots
+
+This is the forbidden path (§8.2), included to show what the design prevents. If a volume delete also destroyed the member's group snapshots, generation 4 would drop to present two of expected three, and a restore of generation 4 would silently return two volumes for a three-volume application. The design forbids the volume delete from destroying group snapshots, and the group-scoped listing reports any incompleteness that arises another way rather than hiding it.
+
+### 11.5 Partial failure during a group snapshot
+
+`bdev_lvol_snapshot_group` fails on the third member. The backend unfreezes, rolls back the two snapshots already taken, and does not advance `group_seq`. No partial generation exists, and the `VolumeGroupSnapshot` reports not-ready with the error. This all-or-nothing contract matches the CSI group-snapshot requirement and Ceph-CSI's behavior, and the existing `create_group_snapshot` already implements the rollback.
+
+### 11.6 Selector drift
+
+A user labels a fourth PVC `db-group` after its volume was created. Because membership is fixed at creation (§4.1), the volume is not a group member, but the `VolumeGroupSnapshot` selector now matches four PVCs. The GroupController finds the handle set does not equal the three-member group and refuses with `FAILED_PRECONDITION` (§9.2) rather than snapshotting a four-way set the group does not represent. The fix is to remove the stray label, or to have created the fourth volume with the label so it is a real member.
+
+### 11.7 A member migrates off the pinned store
+
+Live migration moves member V to another node. The group can no longer be frozen on one store. The next group snapshot finds V off the pinned store and fails loudly (§8.4, §12), rather than snapshotting the two members still on the store and calling it a group generation. Whether migration of a group member is refused outright is Open Question 2.
+
+---
+
+## 12. Failure Modes and Fallback
+
+| Failure                                                        | Detection                               | Behavior                                                                                                                                              |
+|----------------------------------------------------------------|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A labeled volume cannot be placed on the group's pinned node   | Backend rejects the volume create       | The `CreateVolume` fails, the PVC stays Pending with the backend error surfaced through the provisioner. The volume does not join the group unpinned. |
+| A `VolumeGroupSnapshot` selector does not equal the membership | GroupController compares handle set     | `FAILED_PRECONDITION`, the snapshot is refused. No partial generation is taken (§9.2).                                                                |
+| A member is off the pinned store at snapshot time              | Backend finds a member on another store | The group snapshot fails loudly. No generation is taken (§8.4).                                                                                       |
+| `bdev_lvol_snapshot_group` fails mid-group                     | The RPC returns an error                | Unfreeze, roll back partial snapshots, do not advance `group_seq`. All-or-nothing (§11.5).                                                            |
+| A generation is incomplete (a member snapshot is gone)         | Present count below expected count      | The group-scoped listing reports it, and a restore of that generation warns rather than returning a partial set (§8.3).                               |
+| A `VolumeGroupSnapshot` is deleted after its group is gone     | GroupController resolves no group       | Delete returns success. A missing handle is not an error, matching CSI snapshot-delete semantics.                                                     |
+
+Every path degrades to a defined state: a failed create leaves a Pending PVC, a refused snapshot leaves no generation, and an incomplete generation is reported rather than silently restored short.
+
+---
+
+## 13. Observability
+
+**Baseline.** Group snapshots are a control-plane operation, and the observability is the backend's. There is no operator reconciler in this design, so there are no operator events or conditions to add. The metrics below are the backend's to export.
 
 ### Kubernetes Events
 
-Events land on the `ReplicationPolicy` CR. It is the object the user owns, it carries the attach intent in its spec, and it outlives every attach and detach it drives, which a member PVC or a backend group does not.
-
-| Event                                                                        | Type    | Reason                 |
-|------------------------------------------------------------------------------|---------|------------------------|
-| The policy is waiting because its consistency group does not exist yet       | Normal  | `GroupAttachPending`   |
-| The policy has been attached to its consistency group                        | Normal  | `GroupAttached`        |
-| The policy has been detached from its consistency group                      | Normal  | `GroupDetached`        |
-| The group is already replicated by another policy, so this attach is refused | Warning | `GroupAlreadyAttached` |
-| The attach or detach call to the backend failed                              | Warning | `GroupAttachFailed`    |
-
-`GroupAttachPending` is the load-bearing one: a policy waiting for a group that never gets a member is indistinguishable from a stalled controller without it, so the waiting state emits an event on every reconcile rather than only on entry.
+The Kubernetes-visible object is the `VolumeGroupSnapshot`, and the snapshot-controller and csi-snapshotter already emit the standard snapshot events on it (creating, ready, error). This design adds no operator events. The one event worth ensuring the driver surfaces is the selector-mismatch refusal, so a `FAILED_PRECONDITION` is legible on the `VolumeGroupSnapshot` rather than only in the sidecar log.
 
 ### Prometheus Metrics
 
-| Metric                                               | Labels              | Description                                                                                         |
-|------------------------------------------------------|---------------------|-----------------------------------------------------------------------------------------------------|
-| `simplyblock_replicationpolicy_group_attach_total`   | `cluster`, `result` | Counter of attach and detach outcomes, `result` one of `attached`, `detached`, `conflict`, `error`. |
-| `simplyblock_replicationpolicy_group_attach_pending` | `cluster`           | Gauge of policies currently in `WaitingForGroup`.                                                   |
+| Metric                                                 | Labels              | Description                                                                                        |
+|--------------------------------------------------------|---------------------|----------------------------------------------------------------------------------------------------|
+| `simplyblock_consistency_group_members`                | `cluster`, `group`  | Gauge of current member count per group.                                                           |
+| `simplyblock_consistency_group_generation`             | `cluster`, `group`  | Gauge of the latest `group_seq` per group.                                                         |
+| `simplyblock_consistency_group_snapshot_total`         | `cluster`, `result` | Counter of group snapshot outcomes, `result` one of `taken`, `precondition_failed`, `rolled_back`. |
+| `simplyblock_consistency_group_incomplete_generations` | `cluster`, `group`  | Gauge of generations whose present member count is below their expected count.                     |
 
-`simplyblock_replicationpolicy_group_attach_pending` is the alert: a value that stays above zero is a policy naming a group no volume ever creates, which is the silent misconfiguration this feature can produce. The counter's `conflict` result is the second signal, catching two policies pointed at one group.
-
-The group's own health, its member count and current generation, is backend state. The backend exports it as `simplyblock_consistency_group_members` and `simplyblock_consistency_group_generation`, labeled by `cluster` and group, and the operator does not restate it.
+`simplyblock_consistency_group_incomplete_generations` is the load-bearing one: a value above zero is a generation that will restore short, which is the silent failure §8 exists to prevent, so it is the alert. The `precondition_failed` result on the snapshot counter is the second signal, catching selector drift and migration hazards before a user notices a refused snapshot.
 
 ---
 
-## 12. Testing Strategy
+## 14. Testing Strategy
 
 Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-plan-consistency-groups.md`](../tests/test-plan-consistency-groups.md)
 
-- **Unit:** the attach lifecycle as a pure reconcile against a fake client and a mock backend: `WaitingForGroup` when the group resolves empty, attach when it appears, detach on cleared field or deletion, the `409` conflict path, and re-derivation of state after a simulated restart. This is the operator's own coverage and the bulk of what this design can prove without a cluster.
-- **Integration:** the reconcile loop against `envtest` and a mock backend, asserting the conditions and events land on the `ReplicationPolicy` CR and that a mutated `consistencyGroupName` walks detach then attach.
+- **Unit:** the membership epoch math (`included_in_seq` over join and remove at various generations), the group-scoped listing's expected-versus-present computation, and the GroupController's selector-equals-membership check, all without a cluster.
+- **Integration:** the CSI GroupController against a mock backend and the snapshot-controller under `envtest`, asserting a `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member and that a drifted selector is refused.
 - **E2E:** the cross-volume consistency claim, which only a live cluster proves: provision labeled members, run a hashed round-robin writer across them, take generations, restore every member from one generation, and assert the group prefix property and a passing negative control against a mixed-generation restore. This mirrors the existing consistency-group regression script and is where the crash-consistency guarantee is actually verified.
 - **Load / long-running:** group snapshot cadence under sustained write load, asserting the generation counter advances and no member's snapshot diverges by more than one write from the others.
 
-The risk concentrates in the E2E cross-volume assertion and in the placement failure path (a member that cannot colocate must fail creation, not join unpinned). Those two must not be cut if the schedule slips. Phase 2 scenarios (`VolumeGroupSnapshot` create, restore, and delete-after-group-gone) become testable only once P0-5 enables the group feature gate.
+The risk concentrates in the E2E cross-volume assertion, the placement failure path (a member that cannot colocate must fail creation), and the delete-preserves-snapshots rule (§8.2), which is the one data-loss path. Those must not be cut if the schedule slips. Phase 2 scenarios (`VolumeGroupSnapshot` create, clone, and delete-after-group-gone) become testable only once P0-4 enables the group feature gate.
 
 ---
 
-## 13. Migration Strategy
+## 15. Migration Strategy
 
-The reverted `enableConsistencyGroup` boolean on `ReplicationPolicy` never shipped, so there are no operator objects to convert. The migration is one of model, from the backend's current policy-owned group to the group-first model this design requires.
+The consistency group exists today only as a sub-feature of a replication policy (§1). This design makes it standalone.
 
-- **Today (backend):** a `ReplicationPolicy` with a consistency-group flag creates and owns a group, and volume membership is set by attaching a volume to the policy.
-- **Target:** a group is a standalone backend object born from its first labeled volume, and a policy attaches to it. Membership belongs to the group, and policy coverage follows from membership.
+- **Today (backend, `replication-features` branch):** a `ReplicationPolicy` with a consistency-group flag creates and owns a `ConsistencyGroup` (`policy_id` set), and snapshots are taken on the policy's replication cadence.
+- **Target:** a `ConsistencyGroup` is a first-class record born from its first labeled volume, snapshotted on demand through a `VolumeGroupSnapshot` or `sbctl`, with `policy_id` unset. Replication, if it is added later, attaches to the standalone group rather than owning it.
 
-The backend refactor (P0-1, P0-2) makes `policy_id` optional on the group record, adds the standalone create and the attachment association, and adds the volume-create `consistency_group` field. Until it lands, the operator field in §4.1 has nothing to attach to, which is why Phase 1 is gated on P0-1 and P0-2. The group-wide fail-over resolution (P0-3) is already live and is unaffected by the ownership change, because it reads the group record and its epochs regardless of how the group was created.
-
----
-
-## 14. Open Questions
-
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                             | Owner              |
-|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| 1   | **Annotation on a labeled PVC.** Should the operator refuse the `storage.simplyblock.io/replication-policy` annotation on a PVC that also carries the consistency-group label, or let a redundant per-PVC slot coexist with the group attachment? Refusing is cleaner but adds a webhook rule.                                                                                       | Operator team      |
-| 2   | **Label key prefix.** The design uses `storage.simplyblock.io/consistency-group` to match the shipped replication annotation family, while the placement pins use the `simplyblock.io/` prefix. Confirm the `storage.simplyblock.io/` choice before it ships, because a label key cannot be changed without breaking every manifest that sets it.                                    | Operator team      |
-| 3   | **Phase 2 selector versus fixed membership.** A `VolumeGroupSnapshot` carries a PVC label selector, but group membership is fixed at provisioning. When a selector resolves to a set that differs from the group's current membership, the GroupController must refuse with `FAILED_PRECONDITION`. Confirm this is the desired behavior rather than snapshotting the selector's set. | CSI / Backend team |
-| 4   | **Backend attachment cardinality.** This design assumes at most one `ReplicationPolicy` and, separately, at most one backup policy per group. Confirm the backend enforces one replication attachment and returns `409` on a second, which §7.3 and §10 depend on.                                                                                                                   | Backend team       |
+The backend work (P0-2, P0-3) makes `policy_id` optional on the group record, adds the standalone create through the volume-create field, adds the group-scoped snapshot listing, and surfaces `group_id` and `group_seq` in the per-snapshot listing. The membership epoch model and `bdev_lvol_snapshot_group` are unchanged, so a group created either way snapshots identically. Existing policy-coupled groups keep working as the compatible special case until the policy coupling is removed in a later change.
 
 ---
 
-## Appendix A: `replicationpolicy_types.go`
+## 16. Open Questions
 
-The type as it is to be written, with the `consistencyGroupName` field added to the spec. This is the only full copy: the numbered sections quote the field, not the type.
-
-```go
-// ReplicationPolicySpec defines the desired replication schedule and retention.
-type ReplicationPolicySpec struct {
-	// PairRef is the name of the ReplicationPair that defines the source and target clusters.
-	// Multiple ReplicationPolicies may reference the same pair with different schedules.
-	// +kubebuilder:validation:Required
-	PairRef string `json:"pairRef"`
-
-	// Mode controls replication semantics.
-	// failover: target is a DR standby; volumes are read-only on the target.
-	// migration: planned online cutover to the target cluster.
-	// +kubebuilder:validation:Enum=failover;migration
-	// +kubebuilder:default=failover
-	// +optional
-	Mode string `json:"mode,omitempty"`
-
-	// Interval is how often a replication snapshot is taken (e.g. "5m", "1h").
-	// +kubebuilder:default="5m"
-	// +optional
-	Interval string `json:"interval,omitempty"`
-
-	// SnapshotRetention is the minimum number of snapshots to retain on the target.
-	// +kubebuilder:validation:Minimum=2
-	// +kubebuilder:default=3
-	// +optional
-	SnapshotRetention int32 `json:"snapshotRetention,omitempty"`
-
-	// ConsistencyGroupName attaches this policy to the consistency group of the
-	// same name, so the group's volumes replicate as one crash-consistent unit
-	// rather than each on its own schedule. The group is named by the
-	// storage.simplyblock.io/consistency-group label on its member PVCs and is
-	// created by the first labeled volume, so this reference names a backend
-	// object, not a Kubernetes kind: it is validated by format here and resolved
-	// by the reconciler, which waits until the group exists. A group is
-	// replicated by at most one policy.
-	// +optional
-	ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
-}
-
-// ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
-type ReplicationPolicyStatus struct {
-	// Ready is true when the backend ReplicationPolicy has been created, and,
-	// when ConsistencyGroupName is set, once the group attachment has been made.
-	// +optional
-	Ready bool `json:"ready,omitempty"`
-
-	// ObservedGeneration is the .metadata.generation this status was computed
-	// from, so a stale status can be told from a current one and a spec edit
-	// can be waited on.
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-
-	// BackendPolicyID is the UUID of the backend ReplicationPolicy resource.
-	// +optional
-	BackendPolicyID string `json:"backendPolicyID,omitempty"`
-
-	// SlotCount is the number of ReplicationSlot CRs currently managed by this policy.
-	// +optional
-	SlotCount int32 `json:"slotCount,omitempty"`
-
-	// ActiveOpsRef is the name of the currently running ReplicationOps CR.
-	// Empty when no operation is in progress.
-	// +optional
-	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
-
-	// Conditions holds standard Kubernetes condition types, including Ready and
-	// GroupAttached.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=repl
-// +kubebuilder:printcolumn:name="Pair",type=string,JSONPath=".spec.pairRef"
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
-// +kubebuilder:printcolumn:name="Interval",type=string,JSONPath=".spec.interval"
-// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.consistencyGroupName"
-// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready"
-// +kubebuilder:printcolumn:name="Slots",type=integer,JSONPath=".status.slotCount"
-// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
-
-// ReplicationPolicy defines the replication schedule and retention for volumes replicated
-// between the clusters defined by a ReplicationPair.
-// A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
-// annotation. The operator automatically creates one ReplicationSlot per bound PVC.
-// When ConsistencyGroupName is set, the policy instead replicates a consistency group as one
-// crash-consistent unit.
-// Deletion is blocked while any ReplicationSlots reference this policy.
-type ReplicationPolicy struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   ReplicationPolicySpec   `json:"spec,omitempty"`
-	Status ReplicationPolicyStatus `json:"status,omitempty"`
-}
-
-// +kubebuilder:object:root=true
-
-// ReplicationPolicyList contains a list of ReplicationPolicy.
-type ReplicationPolicyList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ReplicationPolicy `json:"items"`
-}
-```
+| #   | Question                                                                                                                                                                                                                                                                                                                               | Owner              |
+|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| 1   | **Selector versus fixed membership.** A `VolumeGroupSnapshot` selector that resolves to a set differing from the group's membership is refused with `FAILED_PRECONDITION` (§9.2). Confirm this is the desired handling, rather than snapshotting the selector's set or the intersection.                                               | CSI / Backend team |
+| 2   | **Migration of a group member.** A member migrated off the pinned store breaks future group snapshots (§8.4). Should migration of a group member be refused, or should it move the whole group's placement pin? Until settled, a snapshot with a member off the store fails loudly.                                                    | Backend team       |
+| 3   | **Headless group clone.** Should `sbctl` offer a one-call `consistency-group clone <gid> <seq>` that clones every member of a generation (§7.3), or is group clone left to N per-member clones? The Kubernetes path is per-member either way.                                                                                          | Backend team       |
+| 4   | **Label key prefix.** The design uses `storage.simplyblock.io/consistency-group` to sit in the shipped `storage.simplyblock.io/` annotation family, while the placement pins use the `simplyblock.io/` prefix. Confirm the choice before it ships, because a label key cannot be changed without breaking every manifest that sets it. | Operator team      |
+| 5   | **Deleting a member volume with group snapshots.** §8.2 requires a volume delete to preserve the member's group snapshots. Confirm the backend delete path preserves them rather than cascading, since this is the one data-loss path in the design.                                                                                   | Backend team       |
