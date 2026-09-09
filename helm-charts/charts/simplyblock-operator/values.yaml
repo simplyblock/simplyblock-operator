@@ -834,6 +834,78 @@ controlCenter:
   tolerations: []
   podAnnotations: {}
 
+# Upstream Ramen (RamenDR) — optional, both halves off by default.
+#
+# Ramen splits across the two cluster roles, and so does this chart:
+#   * management cluster ("hub"):   --set ramen.hub.enabled=true
+#     runs the hub operator that reconciles DRPolicy, DRPlacementControl and
+#     DRCluster. It drives placement through Open Cluster Management, so the
+#     cluster needs the OCM hub (RHACM or standalone OCM) installed.
+#   * managed clusters:             --set ramen.drCluster.enabled=true
+#     runs the dr-cluster operator that executes the protection: it reconciles
+#     VolumeReplicationGroups on the cluster where the volumes live. Enable it
+#     in the same install that deploys the local simplyblock operator.
+#
+# Manifests are vendored verbatim from RamenDR/ramen v0.1.0-rc1 (config/hub,
+# config/dr-cluster, config/crd/bases) and only parameterized for namespace,
+# image and resources. Object names are kept upstream (ramen-hub-operator,
+# ramen-dr-cluster-operator) because Ramen refers to its own names at runtime.
+ramen:
+  image:
+    repository: quay.io/ramendr/ramen-operator
+    tag: v0.1.0-rc1
+    pullPolicy: IfNotPresent
+
+  # All Ramen objects land in their upstream namespace, not the release
+  # namespace. createNamespace can be disabled if it already exists.
+  namespace: ramen-system
+  createNamespace: true
+
+  # The Ramen CRDs ship as templates (never in crds/) so they stay optional:
+  # on a cluster where Ramen already exists — RHACM/ODF installs it — they
+  # MUST NOT be redefined; set installCRDs=false there. The vendored CRDs
+  # carry helm.sh/resource-policy: keep, so an uninstall leaves them (and all
+  # DR state) in place. Only the CRDs for the enabled halves are installed.
+  installCRDs: true
+
+  # S3 store profiles shared by both operators — Ramen persists cluster data
+  # to S3 for failover. Entries follow upstream RamenConfig s3StoreProfiles:
+  #   - s3ProfileName: east
+  #     s3Bucket: ramen-metadata
+  #     s3CompatibleEndpoint: https://s3.example.com
+  #     s3Region: us-east-1
+  #     s3SecretRef: {name: ramen-s3-secret}
+  s3StoreProfiles: []
+
+  hub:
+    enabled: false
+    replicas: 1
+    # merged over the upstream RamenConfig defaults (deep merge, this wins)
+    config: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 200Mi
+      limits:
+        cpu: 100m
+        memory: 300Mi
+
+  drCluster:
+    enabled: false
+    replicas: 1
+    # merged over the upstream RamenConfig defaults (deep merge, this wins)
+    config: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 200Mi
+      limits:
+        cpu: 100m
+        memory: 300Mi
+
+  nodeSelector: {}
+  tolerations: []
+
 tls:
   enabled: false
 

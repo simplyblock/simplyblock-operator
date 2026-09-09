@@ -1,0 +1,13 @@
+{{/*
+  Ramen's namespace, shared by whichever halves are enabled (upstream default
+  ramen-system). Rendered once here rather than in the hub/dr-cluster
+  templates, so enabling both on one cluster does not define it twice.
+*/}}
+{{- if and .Values.ramen.createNamespace (or .Values.ramen.hub.enabled .Values.ramen.drCluster.enabled) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.ramen.namespace }}
+  labels:
+    control-plane: controller-manager
+{{- end }}

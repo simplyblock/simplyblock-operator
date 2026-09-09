@@ -1,0 +1,198 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: drclusterconfigs.ramendr.openshift.io
+spec:
+  group: ramendr.openshift.io
+  names:
+    kind: DRClusterConfig
+    listKind: DRClusterConfigList
+    plural: drclusterconfigs
+    singular: drclusterconfig
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DRClusterConfig is the Schema for the drclusterconfigs API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              DRClusterConfigSpec defines the desired state of DRClusterConfig
+              It carries information regarding the cluster identity as known at the OCM hub cluster. It is also used to
+              advertise required replication schedules on the cluster, if an equivalent DRPolicy resource is created for
+              the same at the hub cluster.
+              It is expected to be watched and used by storage providers that require meta information regarding the cluster
+              and to prepare and manage required storage resources.
+              It also reports detected configuration and health of the cluster, which is used by the OCM hub cluster to process
+              further cross cluster configuration (specifically peerClasses) and report health of the cluster at the hub.
+            properties:
+              clusterID:
+                description: ClusterID would carry the ManagedCluster identity from
+                  the ManagedCluster claim value for `id.k8s.io`
+                type: string
+                x-kubernetes-validations:
+                - message: ClusterID is immutable
+                  rule: self == oldSelf
+              replicationSchedules:
+                description: |-
+                  ReplicationSchedules desired from storage providers for replicating Persistent Volume data to a peer cluster.
+                  Values are in the form <num><m,h,d>. Where <num> is a number, 'm' indicates minutes, 'h' means hours and
+                  'd' stands for days.
+                  Typically used to generate VolumeReplicationClass resources with the desired schedules by storage
+                  provider reconcilers
+                items:
+                  type: string
+                type: array
+            required:
+            - clusterID
+            type: object
+          status:
+            description: DRClusterConfigStatus defines the observed state of DRClusterConfig
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              networkFenceClasses:
+                description: |-
+                  NetworkFenceClass lists all the classes that match the provisioner on the cluster that can be used for fencing
+                  operations
+                items:
+                  type: string
+                type: array
+              storageAccessDetails:
+                description: StorageAccessDetails lists the storage access information
+                  for each storage provisioner detected on the cluster.
+                items:
+                  description: StorageAccessDetail contains storage access information
+                    for a specific storage provisioner.
+                  properties:
+                    cidrs:
+                      description: |-
+                        CIDRs is a list of CIDRs that need network access for this storage provisioner.
+                        These CIDRs are extracted from CSIAddonsNode resources that match NetworkFenceClasses for this provisioner.
+                      items:
+                        type: string
+                      type: array
+                    storageProvisioner:
+                      description: StorageProvisioner is the name of the storage provisioner
+                      type: string
+                  required:
+                  - cidrs
+                  - storageProvisioner
+                  type: object
+                type: array
+              storageClasses:
+                description: StorageClasses lists the detected storage classes on
+                  the cluster that carry the ramen storageid label
+                items:
+                  type: string
+                type: array
+              volumeGroupReplicationClasses:
+                description: |-
+                  VolumeGroupReplicationClasses lists the detected volume group replication classes on the cluster that carry the
+                  ramen replicationid label
+                items:
+                  type: string
+                type: array
+              volumeGroupSnapshotClasses:
+                description: |-
+                  VolumeGroupSnapshotClasses lists the detected volume group snapshot classes on the cluster that carry the ramen
+                  storageid label
+                items:
+                  type: string
+                type: array
+              volumeReplicationClasses:
+                description: |-
+                  VolumeReplicationClasses lists the detected volume replication classes on the cluster that carry the ramen
+                  replicationid label
+                items:
+                  type: string
+                type: array
+              volumeSnapshotClasses:
+                description: |-
+                  VolumeSnapshotClasses lists the detected volume snapshot classes on the cluster that carry the ramen
+                  storageid label
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

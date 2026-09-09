@@ -108,6 +108,45 @@ To lint the chart:
 helm lint charts/simplyblock-operator
 ```
 
+## Optional: upstream Ramen (disaster recovery)
+
+The chart can deploy [RamenDR](https://github.com/RamenDR/ramen), the
+OCM-based DR orchestrator the Control Center's DR views drive. It is **off by
+default** and split the way Ramen itself is, across the two cluster roles:
+
+| Flag | Where | What it runs |
+|------|-------|--------------|
+| `ramen.hub.enabled=true` | management cluster | the **hub** operator — reconciles `DRPolicy`, `DRPlacementControl`, `DRCluster`; drives placement through Open Cluster Management (needs the OCM hub / RHACM installed) |
+| `ramen.drCluster.enabled=true` | each managed cluster | the **dr-cluster** operator — reconciles `VolumeReplicationGroup` and executes the protection where the volumes live; enable it alongside the local simplyblock operator |
+
+```bash
+# management cluster
+helm upgrade --install simplyblock-operator simplyblock/simplyblock-operator \
+  -n simplyblock --set ramen.hub.enabled=true
+
+# each managed cluster
+helm upgrade --install simplyblock-operator simplyblock/simplyblock-operator \
+  -n simplyblock --set ramen.drCluster.enabled=true
+```
+
+The manifests are vendored verbatim from **RamenDR/ramen v0.1.0-rc1**
+(`config/hub`, `config/dr-cluster`, `config/crd/bases`) under
+`charts/simplyblock-operator/ramen/`, parameterized only for namespace, image,
+resources and the `RamenConfig` (`ramen.hub.config` / `ramen.drCluster.config`
+deep-merge over upstream defaults; `ramen.s3StoreProfiles` is shared). Object
+names are kept upstream (`ramen-hub-operator`, `ramen-dr-cluster-operator`,
+namespace `ramen-system`) because Ramen refers to its own names at runtime.
+
+Ramen's CRDs are rendered as **templates**, not from `crds/`, so they stay
+optional: only the halves you enable get their CRDs, and on a cluster where
+Ramen already exists (RHACM/ODF ships it) set `ramen.installCRDs=false` so the
+chart does not redefine them. The vendored CRDs carry
+`helm.sh/resource-policy: keep`, so uninstalling the release never removes them
+or the DR objects they hold.
+
+To refresh the vendored Ramen manifests after bumping the pinned version, see
+`charts/simplyblock-operator/ramen/README.md`.
+
 ## Links
 
 - [Simplyblock Documentation](https://docs.simplyblock.io)
