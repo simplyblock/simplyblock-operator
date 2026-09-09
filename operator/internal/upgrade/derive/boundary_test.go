@@ -230,6 +230,20 @@ func TestBoundary_TheLimitsAreTheAPIServersOwn(t *testing.T) {
 	}
 }
 
+func TestBoundary_EveryRowDeclaresWhereItHasToBeUnique(t *testing.T) {
+	// There is no default, because the wrong default is how three storage nodes
+	// on three separate workers came to be reported as three objects fighting
+	// over one label. A row that leaves it out is a row nobody decided about.
+	for id, rule := range declared(t) {
+		switch rule.Space() {
+		case upgrade.SpaceShared, upgrade.SpaceCluster, upgrade.SpaceNamespace:
+		default:
+			t.Errorf("%s declares no space, so the uniqueness check would guess "+
+				"whether repetition is a collision", id)
+		}
+	}
+}
+
 func TestBoundary_EveryRowDeclaresWhatResolvesIt(t *testing.T) {
 	// A finding with no remediation is a gap in the check rather than in the
 	// cluster, and §19.11 requires that every violation names the change that

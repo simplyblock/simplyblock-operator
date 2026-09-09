@@ -65,20 +65,37 @@ const (
 	FixNone Fix = "none needed"
 )
 
-// Space is where a derived identifier has to be unique, which decides what
-// counts as two objects colliding.
+// Space is whether a derived identifier has to be unique, and if so where,
+// which is what decides whether two objects deriving one string is a collision
+// or the intended outcome.
 //
-// The distinction only matters because discovery reads every namespace. A
-// ConfigMap name is unique per namespace, so two StorageNodeSets of one name in
-// two namespaces derive one string and no collision. A label value written onto
-// a Node, and the name of a cluster-scoped object, have no namespace to be kept
-// apart by, so the same two sets do collide there.
+// Most derived labels are selectors, and repetition is the point of them: every
+// worker of a set carries the same set label, and every pod on a draining node
+// carries the same drain label. Treating "derived" as "unique" reports those as
+// collisions, which is a finding about the checker rather than about the
+// cluster.
+//
+// Where uniqueness is real, the namespace decides its extent. A ConfigMap name
+// is unique per namespace, so two StorageNodeSets of one name in two namespaces
+// derive one string and collide with nothing. A cluster-scoped object's name,
+// and a value that stakes an exclusive claim on a cluster-scoped object, have no
+// namespace to be kept apart by.
+//
+// Every row declares one. There is no default, because the wrong default is how
+// a check comes to report three storage nodes on three separate workers as
+// three objects fighting over one label.
 type Space string
 
 const (
-	// SpaceCluster is an identifier with no namespace in its uniqueness: a
-	// label written onto a Node or another cluster-scoped object, a key on
-	// one, or the name of a cluster-scoped object such as a StorageClass.
+	// SpaceShared is an identifier several objects are expected to derive
+	// identically, which is every label that exists to be selected on. The
+	// uniqueness check skips these rows, and the length checks do not.
+	SpaceShared Space = "no one place"
+
+	// SpaceCluster is an identifier that must be unique across the cluster: a
+	// cluster-scoped object's name, or a value that claims a cluster-scoped
+	// object exclusively, such as the label a StorageNodeSet claims its
+	// workers with.
 	SpaceCluster Space = "the cluster"
 
 	// SpaceNamespace is an identifier unique within one namespace, which is
@@ -115,9 +132,7 @@ type Derivation interface {
 	// Fix is what a report tells the user to do about a violation of this row.
 	Fix() Fix
 
-	// Space is where the derived identifier has to be unique, which is what
-	// decides whether two objects in two namespaces deriving one string are a
-	// collision or a coincidence.
+	// Space is whether the derived identifier has to be unique, and where.
 	Space() Space
 
 	// Inputs enumerates what this cluster would hand the formula. Each input

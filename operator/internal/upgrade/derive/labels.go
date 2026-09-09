@@ -91,7 +91,7 @@ func storageClassClusterLabel() Rule {
 		Where:      "StorageClass label storage.simplyblock.io/cluster",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixUseUUID,
-		Unique:     upgrade.SpaceCluster,
+		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
@@ -115,7 +115,7 @@ func storageClassPoolLabel() Rule {
 		Where:      "StorageClass label storage.simplyblock.io/pool",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixUseUUID,
-		Unique:     upgrade.SpaceCluster,
+		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
@@ -177,7 +177,7 @@ func workerLabel() Rule {
 		Where:      "StorageNode label storage.simplyblock.io/worker",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
-		Unique:     upgrade.SpaceCluster,
+		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input
@@ -217,6 +217,7 @@ func drainNodeLabel() Rule {
 		Where:      "Pod label simplyblock.io/drain-node",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input
@@ -241,6 +242,14 @@ func drainNodeLabel() Rule {
 // overflow, and a worker with a hundred million sockets is not the failure this
 // audit is about. The row is declared anyway, so the audit is complete and so
 // that a later release widening the prefix is caught rather than assumed safe.
+//
+// It shares its space, because the key is written per worker Node
+// (slotsByWorker in the set's controller) rather than once per cluster. Three
+// storage nodes on three workers, each at socket 0, each write this key onto
+// their own Node, which is the normal shape of a three-node cluster. The
+// invariant that would be worth checking is two storage nodes claiming one
+// slot on one worker, and that is a placement question rather than a derived
+// name, since this row does not carry the worker the key lands on.
 func storageNodeUUIDLabelKey() Rule {
 	return Rule{
 		RuleID:     IDStorageNodeUUIDKey,
@@ -248,7 +257,7 @@ func storageNodeUUIDLabelKey() Rule {
 		Where:      "Node label key simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixNone,
-		Unique:     upgrade.SpaceCluster,
+		Unique:     upgrade.SpaceShared,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
 			Prefix:    "storage-node-uuid.",

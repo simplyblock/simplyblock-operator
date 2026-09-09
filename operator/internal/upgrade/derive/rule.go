@@ -36,9 +36,10 @@ type Rule struct {
 	// name rather than from how long it is.
 	Resolution upgrade.Fix
 
-	// Unique says where the derived value has to be unique. It defaults to
-	// [upgrade.SpaceNamespace], which is every namespaced object's name, so a
-	// row whose value lands on a cluster-scoped object has to say so.
+	// Unique says whether the derived value has to be unique, and where. Every
+	// row states one: a row that left it out would be read as unique by
+	// default, and most of the labels here are selectors that several objects
+	// are meant to derive identically.
 	Unique upgrade.Space
 
 	// Build is the formula.
@@ -56,14 +57,7 @@ func (r Rule) Model() upgrade.Model       { return r.Which }
 func (r Rule) Formula() atlaskube.Formula { return r.Build }
 func (r Rule) Fix() upgrade.Fix           { return r.Resolution }
 
-// Space defaults to one namespace, which is every namespaced object's name, so
-// a row whose value lands somewhere with no namespace has to say so.
-func (r Rule) Space() upgrade.Space {
-	if r.Unique == "" {
-		return upgrade.SpaceNamespace
-	}
-	return r.Unique
-}
+func (r Rule) Space() upgrade.Space { return r.Unique }
 
 func (r Rule) Inputs(ctx context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 	if r.Enumerate == nil {

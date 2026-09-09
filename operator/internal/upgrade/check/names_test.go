@@ -293,3 +293,77 @@ func TestNames_TheChecksAreDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestUnique_ASharedLabelIsNotACollision(t *testing.T) {
+	// Three storage nodes on three separate workers, each at socket 0, each
+	// writing the per-slot topology key onto its own worker Node. That is the
+	// normal shape of a three-node cluster, and reporting it was a finding
+	// about this check rather than about the cluster.
+	cluster := cluster("cluster-a")
+	cluster.Status.UUID = "2f4f0300-9993-4289-be95-59414fc8a54d"
+
+	socket := int32(0)
+	names := []string{"node-nkdvy6", "node-ovhfui", "node-qp872q"}
+	objects := make([]client.Object, 0, len(names)+1)
+	objects = append(objects, cluster)
+	for _, name := range names {
+		node := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageNodeSpec{SocketIndex: &socket},
+		}
+		node.Labels = map[string]string{"storage.simplyblock.io/worker": "worker-" + name}
+		objects = append(objects, node)
+	}
+
+	for _, finding := range run(t, IDDerivedNamesUnique, scopeOver(t, objects...)) {
+		t.Errorf("a label several objects are meant to share was reported as a "+
+			"collision:\n%s", finding)
+	}
+}
+
+func TestUnique_SeveralStorageNodesOnOneWorkerIsNotACollision(t *testing.T) {
+	// A worker with several sockets carries one StorageNode per socket, and
+	// every one of them names the same worker.
+	names := []string{"node-a", "node-b"}
+	objects := make([]client.Object, 0, len(names))
+	for _, name := range names {
+		node := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "default",
+				Labels: map[string]string{"storage.simplyblock.io/worker": "worker-1"},
+			},
+		}
+		objects = append(objects, node)
+	}
+
+	for _, finding := range run(t, IDDerivedNamesUnique, scopeOver(t, objects...)) {
+		t.Errorf("two sockets of one worker were reported as colliding:\n%s", finding)
+	}
+}
+
+func TestUnique_ACollisionOnABoundedRowSaysToRenameRatherThanToTruncate(t *testing.T) {
+	// Bounding an input does not separate two objects that are both within the
+	// limit, so telling a user to add a MaxLength marker would be advice that
+	// cannot work.
+	scope := scopeOver(t, nodeSet("set-a", "cluster-a"))
+	scope.Adopt(&simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "team-a"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+	})
+
+	findings := run(t, IDDerivedNamesUnique, scope)
+	var seen bool
+	for _, finding := range findings {
+		if finding.Rule != derive.IDNodeSetLabel {
+			continue
+		}
+		seen = true
+		if !strings.Contains(finding.Remediation, "rename") {
+			t.Errorf("the remediation is %q, which does not separate two names "+
+				"that both fit", finding.Remediation)
+		}
+	}
+	if !seen {
+		t.Fatalf("the set label reported no collision across two namespaces:\n%v", findings)
+	}
+}

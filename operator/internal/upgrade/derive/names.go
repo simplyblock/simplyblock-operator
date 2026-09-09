@@ -102,6 +102,7 @@ func perNodeConfigMapName() Rule {
 		Where:      "ConfigMap name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
 		Enumerate:  fromNodeSetNames,
 	}
@@ -116,6 +117,7 @@ func storageNodeDaemonSetName() Rule {
 		Where:      "DaemonSet name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
 		Enumerate:  fromNodeSetNames,
 	}
@@ -131,6 +133,7 @@ func apiEndpointSliceName() Rule {
 		Where:      "EndpointSlice name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
 		Enumerate:  fromNodeSetNames,
 	}
@@ -146,6 +149,7 @@ func perNodeConfigMapNameTarget() Rule {
 		Where:      "ConfigMap name, once the cluster is the parent",
 		Which:      upgrade.ModelTarget,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
 		Enumerate:  fromNodeSetClusters,
 	}
@@ -161,6 +165,7 @@ func storageNodeDaemonSetNameTarget() Rule {
 		Where:      "DaemonSet name, once the cluster is the parent",
 		Which:      upgrade.ModelTarget,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
 		Enumerate:  fromNodeSetClusters,
 	}
@@ -174,6 +179,7 @@ func apiEndpointSliceNameTarget() Rule {
 		Where:      "EndpointSlice name, once the cluster is the parent",
 		Which:      upgrade.ModelTarget,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
 		Enumerate:  fromNodeSetClusters,
 	}
@@ -188,6 +194,7 @@ func clusterSecretName() Rule {
 		Where:      "Secret name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-cluster-"},
 		Enumerate:  fromClusterNames,
 	}
@@ -203,6 +210,7 @@ func upgradeSecretName() Rule {
 		Where:      "Secret name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build: atlaskube.Formula{
 			Kind:   atlaskube.ObjectName,
 			Prefix: "simplyblock-",
@@ -221,6 +229,7 @@ func nodeRemoveOpsName() Rule {
 		Where:      "StorageNodeOps name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-remove"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(nodes(s)))
@@ -241,6 +250,7 @@ func restoredBackupName() Rule {
 		Where:      "restored resource name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-restored"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(restores(s)))
@@ -262,6 +272,7 @@ func importedBackupName() Rule {
 		Where:      "imported resource name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-imported"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(imports(s)))
@@ -292,6 +303,7 @@ func replicationSlotName() Rule {
 		Where:      "ReplicationSlot name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceNamespace,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input

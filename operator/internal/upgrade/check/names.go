@@ -104,15 +104,13 @@ func derivedNamesFit(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Check {
 // an object's own identity rather than a derived name, and belongs to
 // namespace-collapse.
 //
-// **What counts as a collision depends on where the value has to be unique.**
-// Discovery reads every namespace, so two StorageNodeSets of one name in two
-// namespaces derive one ConfigMap name and collide with nothing, because a
-// ConfigMap name is unique per namespace. The same two sets do collide on the
-// node label they claim workers with, which lands on a Node and has no
-// namespace to be kept apart by. So a row's Space decides whether the grouping
-// carries the source's namespace, and a row that got that wrong would either
-// miss every real collision or report one against every namespaced name in the
-// cluster.
+// **A row's Space decides what a collision even is here**, and most rows are
+// not in this check at all. A label that exists to be selected on is derived
+// identically by every object it applies to, so a shared row is skipped: every
+// worker of a set carries the same set label, and every storage node on a
+// worker names the same worker. Of the rows that do have to be unique, the
+// namespace decides the extent, since a ConfigMap name repeated in two
+// namespaces collides with nothing while a cluster-scoped object's name does.
 func derivedNamesUnique(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Check {
 	return upgrade.CheckFunc{
 		RuleID:  IDDerivedNamesUnique,
@@ -126,6 +124,13 @@ func derivedNamesUnique(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Chec
 
 			for _, row := range walk {
 				s.Report.Item(string(row.ID()))
+				if row.Space() == upgrade.SpaceShared {
+					// A selector, which several objects are meant to derive
+					// identically. Every worker of a set carries the same set
+					// label, and reporting that is a finding about this check
+					// rather than about the cluster.
+					continue
+				}
 
 				inputs, err := row.Inputs(ctx, s)
 				if err != nil {
@@ -248,8 +253,20 @@ func collides(row upgrade.Derivation, g group) upgrade.Finding {
 		Summary: fmt.Sprintf("%d objects derive one %s, which has to be unique in %s",
 			len(g.sources), row.Written(), row.Space()),
 		Detail:      fmt.Sprintf("= %s\n%s", g.value, why(row)),
-		Remediation: string(row.Fix()),
+		Remediation: collisionFix(row),
 	}
+}
+
+// collisionFix is what resolves a collision, which is not always what resolves
+// an overflow. Truncate-and-hash resolves both, because the digest covers the
+// parts individually and two distinct inputs therefore reach two values.
+// Bounding an input does not: two objects can be within the limit and still
+// share a name, and renaming one of them is the only thing that separates them.
+func collisionFix(row upgrade.Derivation) string {
+	if row.Fix() == upgrade.FixTruncateAndHash {
+		return string(upgrade.FixTruncateAndHash)
+	}
+	return "rename one of the objects, so the two stop deriving one value"
 }
 
 // why says whether the finding is about a cluster that is already broken or one
