@@ -108,7 +108,7 @@ const (
 	AnnoPool = "simplyblock.io/pool"
 	// LabelPoolPrefix opens the per-pool label the operator puts on every node in
 	// a StoragePool's AllowedNodes
-	LabelPoolPrefix  = "storage.simplyblock.io/pool."
+	LabelPoolPrefix  = "storage.simplyblock.io/storage-pool."
 	LabelPoolAllowed = "allowed"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
