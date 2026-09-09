@@ -5146,11 +5146,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BackupManifest"
-                  },
-                  "title": "Response Clusters Backups Export Api V2 Clusters  Cluster Id  Backups Export Get"
+                  "$ref": "#/components/schemas/BackupExport"
                 }
               }
             }
@@ -9033,24 +9029,16 @@
       "_ImportManifests": {
         "properties": {
           "metadata": {
-            "items": {
-              "$ref": "#/components/schemas/BackupManifest"
-            },
-            "type": "array",
-            "title": "Metadata"
-          },
-          "location": {
-            "$ref": "#/components/schemas/BackupLocation"
+            "$ref": "#/components/schemas/BackupExport"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "metadata",
-          "location"
+          "metadata"
         ],
         "title": "_ImportManifests",
-        "description": "Manifests carried in the request itself, e.g. from an export file.\n\nThe location is named separately because a manifest does not carry one --\nit describes its objects, not how to reach them. Which bucket an export\nfile's backups are in is the caller's to state, and stating it is what lets\nthe file be imported against a copy of the bucket rather than only against\nthe original."
+        "description": "An export carried in the request itself, e.g. read from a file.\n\nNothing beside it names a bucket: an export groups its manifests by the\nlocation each was read from, so the caller states nothing the document has\nnot already recorded, and backups from several buckets import in one go."
       },
       "_MigrationParams": {
         "properties": {
@@ -9294,6 +9282,51 @@
           "spdk_image"
         ],
         "title": "_UpdateParams"
+      },
+      "LocatedManifests": {
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/BackupLocation"
+          },
+          "manifests": {
+            "items": {
+              "$ref": "#/components/schemas/BackupManifest"
+            },
+            "type": "array",
+            "title": "Manifests"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "location",
+          "manifests"
+        ],
+        "title": "LocatedManifests",
+        "description": "Manifests that were read from one location, and that location."
+      },
+      "BackupExport": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/LocatedManifests"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "groups"
+        ],
+        "title": "BackupExport",
+        "description": "Backups carried out of a cluster in a file, grouped by where they live.\n\nGrouped rather than one location for the whole document because a cluster\ncan hold backups in several buckets at once -- its own, plus any it has\nimported -- and stamping all of them with a single bucket leaves the ones it\ndoes not describe unrestorable, which is discovered during the recovery they\nwere meant to serve.\n\nA group's manifests are all in one bucket by construction: a chain cannot\nspan buckets, so the only way to collect backups from several is to walk\nmore than one chain."
       }
     },
     "securitySchemes": {

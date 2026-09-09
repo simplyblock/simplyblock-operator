@@ -533,6 +533,22 @@ type BackupDTO struct {
 	Status       string              `json:"status"`
 }
 
+// BackupExport Backups carried out of a cluster in a file, grouped by where they live.
+//
+// Grouped rather than one location for the whole document because a cluster
+// can hold backups in several buckets at once -- its own, plus any it has
+// imported -- and stamping all of them with a single bucket leaves the ones it
+// does not describe unrestorable, which is discovered during the recovery they
+// were meant to serve.
+//
+// A group's manifests are all in one bucket by construction: a chain cannot
+// span buckets, so the only way to collect backups from several is to walk
+// more than one chain.
+type BackupExport struct {
+	Groups        []LocatedManifests `json:"groups"`
+	SchemaVersion *int               `json:"schema_version,omitempty"`
+}
+
 // BackupLocation Where a backup's objects are, and how to interpret them. Never secret.
 //
 // Every field here affects whether the objects can be read back at all, which
@@ -779,6 +795,17 @@ type HashicorpVaultSettings struct {
 	CertRole     *string `json:"cert_role,omitempty"`
 	KvMount      *string `json:"kv_mount,omitempty"`
 	TransitMount *string `json:"transit_mount,omitempty"`
+}
+
+// LocatedManifests Manifests that were read from one location, and that location.
+type LocatedManifests struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location  BackupLocation   `json:"location"`
+	Manifests []BackupManifest `json:"manifests"`
 }
 
 // ManagementNodeDTO defines model for ManagementNodeDTO.
@@ -1225,21 +1252,24 @@ type UnderscoreImportFromBucket struct {
 	Bucket BackupConfigInput `json:"bucket"`
 }
 
-// UnderscoreImportManifests Manifests carried in the request itself, e.g. from an export file.
+// UnderscoreImportManifests An export carried in the request itself, e.g. read from a file.
 //
-// The location is named separately because a manifest does not carry one --
-// it describes its objects, not how to reach them. Which bucket an export
-// file's backups are in is the caller's to state, and stating it is what lets
-// the file be imported against a copy of the bucket rather than only against
-// the original.
+// Nothing beside it names a bucket: an export groups its manifests by the
+// location each was read from, so the caller states nothing the document has
+// not already recorded, and backups from several buckets import in one go.
 type UnderscoreImportManifests struct {
-	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	// Metadata Backups carried out of a cluster in a file, grouped by where they live.
 	//
-	// Every field here affects whether the objects can be read back at all, which
-	// is why the whole model is embedded in each backup rather than looked up from
-	// the cluster that happened to create it.
-	Location BackupLocation   `json:"location"`
-	Metadata []BackupManifest `json:"metadata"`
+	// Grouped rather than one location for the whole document because a cluster
+	// can hold backups in several buckets at once -- its own, plus any it has
+	// imported -- and stamping all of them with a single bucket leaves the ones it
+	// does not describe unrestorable, which is discovered during the recovery they
+	// were meant to serve.
+	//
+	// A group's manifests are all in one bucket by construction: a chain cannot
+	// span buckets, so the only way to collect backups from several is to walk
+	// more than one chain.
+	Metadata BackupExport `json:"metadata"`
 }
 
 // UnderscoreMigrationParams defines model for _MigrationParams.
@@ -11432,13 +11462,13 @@ type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse struct 
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *[]BackupManifest
+	JSON200 *BackupExport
 	// JSON422 the response for an HTTP 422 `application/json` response
 	JSON422 *HTTPValidationError
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse) GetJSON200() *[]BackupManifest {
+func (r ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse) GetJSON200() *BackupExport {
 	return r.JSON200
 }
 
@@ -17210,7 +17240,7 @@ func ParseClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse(rs
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest []BackupManifest
+		var dest BackupExport
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

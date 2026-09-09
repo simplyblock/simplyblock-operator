@@ -11,24 +11,22 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// backupConfigBody is what GET /clusters/{id}/backup-config returns: a full
-// BackupConfig, credentials included and masked. The import endpoint takes a
-// BackupLocation and forbids unknown fields, so the two extra keys here are the
-// point of the test.
-const backupConfigBody = `{
-	"bucket_name": "simplyblock-backup-src",
-	"region": "eu-central-1",
-	"endpoint": "http://minio:9000",
-	"secondary_target": 0,
-	"with_compression": true,
-	"snapshot_backups": true,
-	"verify_tls": false,
-	"use_path_style": true,
-	"credentials": {
-		"access_key_id": "**********",
-		"secret_access_key": "**********"
-	},
-	"s3_thread_pool_size": 32
+// exportBody is what GET /clusters/{id}/backups/export returns: manifests
+// grouped by the bucket each lives in. Two groups, because a cluster that has
+// imported from elsewhere holds backups in more than its own bucket, and the
+// import has to keep them apart.
+const exportBody = `{
+	"schema_version": 1,
+	"groups": [
+		{
+			"location": {"bucket_name": "simplyblock-backup-src", "region": "eu-central-1"},
+			"manifests": [{"backup_id": "b1"}]
+		},
+		{
+			"location": {"bucket_name": "imported-from"},
+			"manifests": [{"backup_id": "b2"}]
+		}
+	]
 }`
 
 func importTestClient(t *testing.T, handler func(*http.Request) (*http.Response, error)) *webapi.Client {
@@ -47,13 +45,15 @@ func jsonResponse(body string) *http.Response {
 	}
 }
 
-func TestBackupImportSendsBucketLocation(t *testing.T) {
+func TestBackupImportForwardsTheExportDocument(t *testing.T) {
 	var importBody map[string]json.RawMessage
+	var paths []string
 
 	apiClient := importTestClient(t, func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
 		switch req.URL.Path {
-		case "/api/v2/clusters/src-uuid/backup-config":
-			return jsonResponse(backupConfigBody), nil
+		case "/api/v2/clusters/src-uuid/backups/export":
+			return jsonResponse(exportBody), nil
 		case "/api/v2/clusters/dst-uuid/backups/import":
 			payload, err := io.ReadAll(req.Body)
 			if err != nil {
@@ -62,7 +62,7 @@ func TestBackupImportSendsBucketLocation(t *testing.T) {
 			if err := json.Unmarshal(payload, &importBody); err != nil {
 				t.Fatalf("unmarshal import body: %v", err)
 			}
-			return jsonResponse(`{"imported": 3}`), nil
+			return jsonResponse(`{"imported": 2}`), nil
 		default:
 			t.Fatalf("unexpected path %s", req.URL.Path)
 			return nil, nil
@@ -70,120 +70,93 @@ func TestBackupImportSendsBucketLocation(t *testing.T) {
 	})
 
 	r := &BackupImportReconciler{}
-	location, err := r.fetchBackupLocation(context.Background(), apiClient, "src-uuid")
+	exported, err := r.exportBackup(context.Background(), apiClient, "src-uuid", "b1")
 	if err != nil {
-		t.Fatalf("fetchBackupLocation: %v", err)
-	}
-	if location.BucketName != "simplyblock-backup-src" {
-		t.Fatalf("bucket = %q", location.BucketName)
+		t.Fatalf("exportBackup: %v", err)
 	}
 
-	imported, err := r.importBackup(context.Background(), apiClient, "dst-uuid",
-		json.RawMessage(`[{"backup_id":"b1"}]`), location)
+	imported, err := r.importBackup(context.Background(), apiClient, "dst-uuid", exported)
 	if err != nil {
 		t.Fatalf("importBackup: %v", err)
 	}
-	if imported != 3 {
-		t.Fatalf("imported = %d, want 3", imported)
+	if imported != 2 {
+		t.Fatalf("imported = %d, want 2", imported)
 	}
 
-	// The control plane's _ImportManifests requires both; without the location it
-	// rejects the body outright, which is how this path broke silently before.
-	if _, ok := importBody["metadata"]; !ok {
-		t.Fatal("import body has no metadata")
-	}
-	rawLocation, ok := importBody["location"]
-	if !ok {
-		t.Fatal("import body has no location")
-	}
-
-	var sent map[string]any
-	if err := json.Unmarshal(rawLocation, &sent); err != nil {
-		t.Fatalf("unmarshal location: %v", err)
-	}
-
-	// BackupLocation is extra="forbid", so anything beyond its own fields is a 422
-	// — and `credentials` would additionally hand the source cluster's keys back
-	// to an endpoint that has no use for them.
-	allowed := map[string]bool{
-		"bucket_name": true, "region": true, "endpoint": true,
-		"secondary_target": true, "with_compression": true,
-		"snapshot_backups": true, "verify_tls": true, "use_path_style": true,
-	}
-	for key := range sent {
-		if !allowed[key] {
-			t.Errorf("location carries %q, which the import endpoint forbids", key)
+	// The source cluster is asked for the backups and nothing else. It used to
+	// be asked for its backup configuration too, purely to learn the bucket --
+	// which made an import require the source to still be up, exactly what a
+	// recovery cannot assume.
+	for _, path := range paths {
+		if strings.Contains(path, "backup-config") {
+			t.Errorf("import consulted %s; the export already says where the backups are", path)
 		}
 	}
 
-	for key, want := range map[string]any{
-		"bucket_name":      "simplyblock-backup-src",
-		"region":           "eu-central-1",
-		"endpoint":         "http://minio:9000",
-		"with_compression": true,
-		"verify_tls":       false,
-		"use_path_style":   true,
-	} {
-		if sent[key] != want {
-			t.Errorf("location[%q] = %v, want %v", key, sent[key], want)
+	// _ImportManifests forbids unknown fields, so a stray `location` beside the
+	// document is a 422 rather than something the control plane ignores.
+	if _, ok := importBody["location"]; ok {
+		t.Error("import body carries a location; the export document holds them")
+	}
+	raw, ok := importBody["metadata"]
+	if !ok {
+		t.Fatal("import body has no metadata")
+	}
+
+	var sent struct {
+		Groups []struct {
+			Location struct {
+				BucketName string `json:"bucket_name"`
+			} `json:"location"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &sent); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if len(sent.Groups) != 2 {
+		t.Fatalf("sent %d groups, want 2", len(sent.Groups))
+	}
+	for i, want := range []string{"simplyblock-backup-src", "imported-from"} {
+		if got := sent.Groups[i].Location.BucketName; got != want {
+			t.Errorf("group %d bucket = %q, want %q", i, got, want)
 		}
 	}
 }
 
-func TestBackupImportLocationOmitsUnresolvedFields(t *testing.T) {
-	// A cluster backing up to AWS names neither region nor endpoint: the SDK
-	// resolves both. Sending "" instead would read as a deliberate choice.
+func TestBackupImportRefusesAnEmptyExport(t *testing.T) {
+	// A document with groups but no manifests describes nothing. Passing it on
+	// would import zero backups and report success.
 	apiClient := importTestClient(t, func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(`{
-			"bucket_name": "b",
-			"region": null,
-			"endpoint": null,
-			"secondary_target": 0,
-			"with_compression": false,
-			"snapshot_backups": true,
-			"verify_tls": true,
-			"use_path_style": false,
-			"credentials": null
-		}`), nil
+		return jsonResponse(`{"schema_version": 1, "groups": [
+			{"location": {"bucket_name": "b"}, "manifests": []}
+		]}`), nil
 	})
 
 	r := &BackupImportReconciler{}
-	location, err := r.fetchBackupLocation(context.Background(), apiClient, "src-uuid")
-	if err != nil {
-		t.Fatalf("fetchBackupLocation: %v", err)
+	_, err := r.exportBackup(context.Background(), apiClient, "src-uuid", "b1")
+	if err == nil {
+		t.Fatal("expected an error for an export describing no backups")
 	}
-
-	encoded, err := json.Marshal(location)
-	if err != nil {
-		t.Fatalf("marshal location: %v", err)
-	}
-	var sent map[string]any
-	if err := json.Unmarshal(encoded, &sent); err != nil {
-		t.Fatalf("unmarshal location: %v", err)
-	}
-
-	for _, key := range []string{"region", "endpoint"} {
-		if _, present := sent[key]; present {
-			t.Errorf("location carries %q; an unresolved field must be absent", key)
-		}
+	if !strings.Contains(err.Error(), "no completed backups") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestBackupImportRefusesClusterWithoutBackupConfig(t *testing.T) {
+func TestBackupImportRefusesAMissingBackup(t *testing.T) {
 	apiClient := importTestClient(t, func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusNotFound,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"detail":"no backup configuration"}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"detail":"not found"}`)),
 		}, nil
 	})
 
 	r := &BackupImportReconciler{}
-	_, err := r.fetchBackupLocation(context.Background(), apiClient, "src-uuid")
+	_, err := r.exportBackup(context.Background(), apiClient, "src-uuid", "b1")
 	if err == nil {
-		t.Fatal("expected an error for a cluster with no backup configuration")
+		t.Fatal("expected an error for a backup the source cluster does not have")
 	}
-	if !strings.Contains(err.Error(), "no backup configuration") {
+	if !strings.Contains(err.Error(), "not found on source cluster") {
 		t.Fatalf("error = %v", err)
 	}
 }

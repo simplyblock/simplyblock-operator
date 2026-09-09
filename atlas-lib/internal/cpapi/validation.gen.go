@@ -103,6 +103,28 @@ func (d *BackupDTO) UnmarshalJSON(data []byte) error {
 	return Validate(data, d)
 }
 
+// UnmarshalJSON decodes and validates a BackupExport.
+func (d *BackupExport) UnmarshalJSON(data []byte) error {
+	type plain BackupExport // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = BackupExport(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a BackupLocation.
+func (d *BackupLocation) UnmarshalJSON(data []byte) error {
+	type plain BackupLocation // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = BackupLocation(v)
+	return Validate(data, d)
+}
+
 // UnmarshalJSON decodes and validates a BackupManifest.
 func (d *BackupManifest) UnmarshalJSON(data []byte) error {
 	type plain BackupManifest // shed this method, so the decode below does not recurse
@@ -177,6 +199,17 @@ func (d *DeviceHealthInfoDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = DeviceHealthInfoDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a LocatedManifests.
+func (d *LocatedManifests) UnmarshalJSON(data []byte) error {
+	type plain LocatedManifests // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = LocatedManifests(v)
 	return Validate(data, d)
 }
 
