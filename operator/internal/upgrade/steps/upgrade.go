@@ -22,6 +22,8 @@ import (
 	"context"
 	"fmt"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
 )
 
@@ -41,9 +43,11 @@ const (
 
 // What each group of steps waits on, said once so the reasons do not drift.
 const (
-	needsConversion = "the conversion webhook of §29.3 and the conversion functions of §29.2 do not exist"
-	needsV1Alpha2   = "the v1alpha2 types of §29.1 cover two of the eleven new kinds and none of the seven converting ones"
-	needsHelmSDK    = "Helm's Go SDK is not a dependency yet (§29.4), and the release is read through it rather than through kubectl"
+	needsConversion  = "the conversion webhook of §29.3 and the conversion functions of §29.2 do not exist"
+	needsV1Alpha2    = "the v1alpha2 types of §29.1 cover two of the eleven new kinds and none of the seven converting ones"
+	needsHelmSDK     = "Helm's Go SDK is not a dependency yet (§29.4), and the release is upgraded through it"
+	needsChartRender = "classifying an object as a survivor needs the new chart rendered, which is Helm's Go SDK (§29.4); " +
+		"reading the deployed release needs nothing, so the objects below are the real ones"
 )
 
 // Upgrade returns §9.1's sequence.
@@ -90,13 +94,7 @@ func Upgrade() []upgrade.Step {
 			blocked: needsConversion,
 			needs:   []upgrade.ID{IDVerifyCRDVersions},
 		},
-		planned{
-			id:      IDHandOverRelease,
-			summary: "annotates what the Helm release is about to stop containing, so the upgrade prunes nothing",
-			verb:    upgrade.VerbAnnotate,
-			blocked: needsHelmSDK,
-			needs:   []upgrade.ID{IDVerifyCRDVersions},
-		},
+		handOverRelease{described: described{id: IDHandOverRelease, blocked: needsChartRender}},
 		planned{
 			id:      IDUpgradeOperator,
 			summary: "upgrades the operator, translating the deployed release's values into the new chart's spellings",
@@ -180,4 +178,82 @@ func (p planned) Verify(context.Context, *upgrade.Scope, upgrade.Subject) error 
 // act, which would mean the runner's refusal had been bypassed.
 func errNotImplemented(p planned) error {
 	return fmt.Errorf("%s is described and not implemented: %s", p.id, p.blocked)
+}
+
+// The Helm metadata §12 reads and writes. helm.sh/resource-policy is read from
+// the live object rather than from the stored release manifest, which is what
+// makes annotating in the cluster enough, and meta.helm.sh/release-name is what
+// marks an object as one a release installed.
+const (
+	annoResourcePolicy = "helm.sh/resource-policy"
+	annoReleaseName    = "meta.helm.sh/release-name"
+
+	policyKeep = "keep"
+)
+
+// handOverRelease annotates what the Helm release is about to stop containing.
+//
+// §12 is the riskiest step of the upgrade: the chart that carries the new
+// operator carries the operator and nothing else, so the upgrade that installs
+// it is also the upgrade that deletes the running data plane, and four of the
+// prunes would end the upgrade rather than degrade the cluster.
+//
+// It describes per object because that is what it does per object. Which
+// objects survive needs the new chart rendered, which is the half Helm's SDK
+// owns, but which objects the release installed needs only the release, so the
+// subjects below are the real ones rather than a placeholder.
+type handOverRelease struct {
+	described
+}
+
+func (h handOverRelease) ID() upgrade.ID     { return h.id }
+func (handOverRelease) Stage() upgrade.Stage { return upgrade.StageUpgrade }
+func (handOverRelease) Phase() upgrade.Phase { return "" }
+
+func (handOverRelease) Requires() []upgrade.ID {
+	return []upgrade.ID{IDVerifyCRDVersions}
+}
+
+func (handOverRelease) Description() string {
+	return "annotates every object the Helm release installed that has to survive the upgrade that stops containing it"
+}
+
+// Describe names one object of the release.
+//
+// The operator's own objects are described too. Which of them the new chart
+// still contains is the classification this step cannot yet make, and guessing
+// it from a name would be the table §12.1 says the set is never read from.
+func (h handOverRelease) Describe(_ context.Context, _ *upgrade.Scope, subject upgrade.Subject) (*upgrade.Action, error) {
+	if subject.IsUpgrade() || subject.Object == nil {
+		return nil, nil
+	}
+	if !installedByHelm(subject.Object) || alreadyKept(subject.Object) {
+		return nil, nil
+	}
+	return &upgrade.Action{
+		Rule:   h.id,
+		Verb:   upgrade.VerbAnnotate,
+		Object: subject.Ref,
+		Detail: annoResourcePolicy + "=" + policyKeep + ", if the new chart no longer contains it",
+	}, nil
+}
+
+// Done claims an object of the release that already carries the annotation.
+func (handOverRelease) Done(_ context.Context, _ *upgrade.Scope, subject upgrade.Subject) (bool, error) {
+	if subject.IsUpgrade() || subject.Object == nil {
+		return false, nil
+	}
+	return installedByHelm(subject.Object) && alreadyKept(subject.Object), nil
+}
+
+// installedByHelm reports an object a Helm release owns, which is the metadata
+// Helm writes on everything it installs and §12.3 removes once the operator has
+// adopted it.
+func installedByHelm(obj client.Object) bool {
+	return obj.GetAnnotations()[annoReleaseName] != ""
+}
+
+// alreadyKept reports an object Helm will already refuse to prune.
+func alreadyKept(obj client.Object) bool {
+	return obj.GetAnnotations()[annoResourcePolicy] == policyKeep
 }
