@@ -228,6 +228,13 @@ func (r *TextReporter) Action(action Action) {
 // subject carries no information, and repeating it under the step says the step
 // twice.
 func (r *TextReporter) Plan(plan Plan) {
+	r.line("")
+	if len(plan.Tasks) == 0 {
+		r.line("  %s has nothing to do on this cluster.", plan.Stage)
+		return
+	}
+	r.line("  What %s would do", plan.Stage)
+
 	for _, phase := range plan.Phases() {
 		if phase != "" {
 			r.line("")

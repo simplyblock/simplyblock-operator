@@ -52,8 +52,8 @@ func newPreflightCommand(global *globalOptions) *cobra.Command {
 			session.Reporter.Block("The ownership spine, and what the migration does to it",
 				spine.Render(spine.Build(session.Runner.Scope)))
 
-			// The plan is for the stage the cluster is positioned for, which is
-			// read from the cluster rather than passed by the user (§27).
+			// Which stage the cluster is ready for, read from the cluster
+			// rather than passed by the user (§27).
 			position, err := upgrade.Positioned(ctx, session.Runner.Scope)
 			if err != nil {
 				return err
@@ -63,27 +63,43 @@ func newPreflightCommand(global *globalOptions) *cobra.Command {
 				fmt.Sprintf("This cluster is positioned for %s", position.Stage),
 				[]string{position.Because})
 
-			plan, err := session.Runner.Plan(ctx, position.Stage)
+			// The checks belong to the run rather than to either stage, so they
+			// run once. Every one of them is registered for all three anyway,
+			// and running them per stage would print each finding twice.
+			findings, err := session.Runner.Check(ctx, upgrade.StagePreflight)
 			if err != nil {
 				return err
 			}
-			session.Reporter.Plan(plan)
 
-			// A stage whose steps this build does not carry produces an empty
-			// plan, and an empty plan and a cluster with nothing to do look
-			// identical. Saying which is the difference between a report and a
-			// silence.
-			steps, err := session.Runner.Catalog.StepsFor(position.Stage, session.Runner.Scope.Options)
-			if err == nil && len(steps) == 0 {
-				session.Reporter.Progress(
-					"no %s steps are registered in this build, so the plan above is empty "+
-						"because nothing implements that stage yet, not because there is nothing to do",
-					position.Stage)
+			// Both stages, not only the one the cluster is ready for. What a
+			// user checking a plan wants is everything that has to happen to
+			// their cluster, and the migration is the half that touches their
+			// data, so reporting only the stage that comes next hides it
+			// behind an upgrade that has not run.
+			var blocked int
+			for _, stage := range []upgrade.Stage{upgrade.StageUpgrade, upgrade.StageMigrate} {
+				tasks, err := session.Runner.Tasks(ctx, stage)
+				if err != nil {
+					return err
+				}
+
+				plan := upgrade.Plan{Stage: stage, Tasks: tasks}
+				if stage == position.Stage {
+					plan.Findings = findings
+				}
+				session.Reporter.Plan(plan)
+				blocked += len(plan.Unimplemented())
 			}
 
-			if plan.Blocked() {
+			if blocked > 0 {
+				session.Reporter.Progress(
+					"%d task(s) across both stages are described and not implemented, "+
+						"so neither stage can be run to completion yet", blocked)
+			}
+
+			if findings.Blocked() {
 				return fmt.Errorf("preflight failed: %d violations, and no changes were made",
-					len(plan.Findings.Errors()))
+					len(findings.Errors()))
 			}
 			return nil
 		},

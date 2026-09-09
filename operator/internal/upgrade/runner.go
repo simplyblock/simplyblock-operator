@@ -121,6 +121,30 @@ func (r *Runner) skippedChecks(stage Stage) []Check {
 	})
 }
 
+// Tasks reports what one stage's steps would do, without running its checks.
+//
+// It is separate from [Runner.Plan] because the preflight reports both stages
+// and the checks belong to the run rather than to either of them: running them
+// once per stage would print every finding twice.
+func (r *Runner) Tasks(ctx context.Context, stage Stage) ([]Task, error) {
+	steps, err := r.Catalog.StepsFor(stage, r.Scope.Options)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]Task, 0, len(steps))
+	for _, step := range steps {
+		task, err := r.planStep(ctx, step)
+		if err != nil {
+			return nil, err
+		}
+		if len(task.Subtasks) > 0 {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
+}
+
 // Plan asks every rule of a stage what it would do, and changes nothing. It is
 // the whole of the preflight and the first thing the other two stages report.
 func (r *Runner) Plan(ctx context.Context, stage Stage) (Plan, error) {
@@ -135,17 +159,11 @@ func (r *Runner) Plan(ctx context.Context, stage Stage) (Plan, error) {
 		plan.Skipped = append(plan.Skipped, skipped.ID())
 	}
 
-	steps, err := r.Catalog.StepsFor(stage, r.Scope.Options)
+	tasks, err := r.Tasks(ctx, stage)
 	if err != nil {
 		return plan, err
 	}
-	for _, step := range steps {
-		task, err := r.planStep(ctx, step)
-		if err != nil {
-			return plan, err
-		}
-		plan.Add(task)
-	}
+	plan.Add(tasks...)
 	return plan, nil
 }
 

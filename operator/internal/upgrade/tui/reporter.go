@@ -98,7 +98,17 @@ func (r *Reporter) Action(action upgrade.Action) {
 // Plan renders the hierarchy as one block, so a redrawing bar cannot land in
 // the middle of it.
 func (r *Reporter) Plan(plan upgrade.Plan) {
+	if len(plan.Tasks) == 0 {
+		r.program.Send(printMsg{
+			text:       fmt.Sprintf("  %s has nothing to do on this cluster.", plan.Stage),
+			blankAfter: true,
+		})
+		r.Findings(plan.Findings)
+		return
+	}
+
 	var b strings.Builder
+	fmt.Fprintf(&b, "  %s\n", styleSection.Render("What "+string(plan.Stage)+" would do"))
 
 	for _, phase := range plan.Phases() {
 		if phase != "" {
