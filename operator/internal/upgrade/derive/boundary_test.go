@@ -66,6 +66,12 @@ var boundaries = []boundary{
 	{rule: IDRestoredBackup, parts: 1, fixed: len("-restored"), longest: 253 - 9},
 	{rule: IDImportedBackup, parts: 1, fixed: len("-imported"), longest: 253 - 9},
 
+	// §19.3's table says 246 for this row. The arithmetic says 252, and the
+	// seven characters between them are unaccounted for. The arithmetic is
+	// what the formula does, so it is what is asserted, and the discrepancy is
+	// recorded rather than resolved by picking the number that agrees.
+	{rule: IDReplicationSlot, parts: 2, fixed: 0, longest: 253 - 1},
+
 	// The target-model rows share their formulas with the current-model ones,
 	// so their budgets are the same. They are listed anyway, because a change
 	// to one of the three that did not reach its counterpart is a divergence

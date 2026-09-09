@@ -34,9 +34,10 @@ const (
 	IDNamespaces        upgrade.ID = "discover-namespaces"
 	IDPersistentVolumes upgrade.ID = "discover-persistent-volumes"
 
-	// The two read across every namespace rather than inside the installation.
+	// Read across every namespace rather than inside the installation.
 	IDClustersEverywhere   upgrade.ID = "discover-storage-clusters-everywhere"
 	IDMigrationsEverywhere upgrade.ID = "discover-volume-migrations-everywhere"
+	IDClaimsEverywhere     upgrade.ID = "discover-persistent-volume-claims"
 )
 
 // SimplyblockKinds are the custom resources the migration reads.
@@ -156,15 +157,20 @@ func CoreKinds() []upgrade.Discoverer {
 	}
 }
 
-// EscapingKinds are the kinds read across every namespace rather than inside the
-// installation, because the identifier each of them derives has no namespace in
-// it and two namespaces therefore reach one value.
+// ClusterWideKinds are the kinds read across every namespace rather than inside
+// the installation.
+//
+// Two reasons put a kind here, and both mean the question being asked is not
+// about one installation. The first two rows derive an identifier with no
+// namespace in it, so two namespaces reach one value. The claims are the other
+// reason: they live wherever a workload does, which is any namespace but this
+// one, and §16.3's annotation keys sit on them.
 //
 // The list is deliberately short. Reading a kind this way costs a list against
 // the whole cluster and puts another tenant's objects where a check could
 // mistake them for this installation's, so a kind is here because a named check
 // cannot answer its question otherwise, and for no other reason.
-func EscapingKinds() []upgrade.Discoverer {
+func ClusterWideKinds() []upgrade.Discoverer {
 	return []upgrade.Discoverer{
 		Kind{
 			RuleID: IDClustersEverywhere,
@@ -179,6 +185,14 @@ func EscapingKinds() []upgrade.Discoverer {
 			Summary: "reads the VolumeMigration objects of every namespace, because the kind that " +
 				"absorbs them is cluster-scoped",
 			List:       &simplyblockv1alpha1.VolumeMigrationList{},
+			Namespaced: true,
+			View:       ViewClusterWide,
+		},
+		Kind{
+			RuleID: IDClaimsEverywhere,
+			Summary: "reads the PersistentVolumeClaim objects of every namespace, because §16.3's " +
+				"annotation keys sit on them and a claim lives where its workload does",
+			List:       &corev1.PersistentVolumeClaimList{},
 			Namespaced: true,
 			View:       ViewClusterWide,
 		},

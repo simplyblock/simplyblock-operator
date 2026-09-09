@@ -7,6 +7,7 @@ package derive
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -186,5 +187,51 @@ func TestInputs_ARowSkipsASourceThatCannotYetDeriveOne(t *testing.T) {
 
 	if got := derived(t, IDStorageNodeDaemonSetTarget, scope); len(got) != 0 {
 		t.Fatalf("derived %v from a set with no cluster", got)
+	}
+}
+
+func TestInputs_ReplicationSlotJoinsThePolicyAndTheClaim(t *testing.T) {
+	// The claim is in a workload namespace and reaches the row through the
+	// cluster-wide graph, which is where a claim lives.
+	scope := graphOver(t)
+	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "data", Namespace: "team-a",
+			Annotations: map[string]string{
+				"storage.simplyblock.io/replication-policy": "nightly",
+			},
+		},
+	})
+
+	got := derived(t, IDReplicationSlot, scope)
+	if len(got) != 1 || got[0] != "nightly-data" {
+		t.Fatalf("derived %v, want the name replicationSlotName builds", got)
+	}
+}
+
+func TestInputs_ReplicationSlotHonorsTheOldAnnotationSpelling(t *testing.T) {
+	// §16.3's keys are mid-move, and a claim carrying only the old spelling
+	// still produces a slot.
+	scope := graphOver(t)
+	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "data", Namespace: "team-a",
+			Annotations: map[string]string{"simplyblock.io/replication-policy": "nightly"},
+		},
+	})
+
+	if got := derived(t, IDReplicationSlot, scope); len(got) != 1 {
+		t.Fatalf("derived %v from a claim carrying the old spelling, want one name", got)
+	}
+}
+
+func TestInputs_AClaimWithNoPolicyProducesNoSlotName(t *testing.T) {
+	scope := graphOver(t)
+	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team-a"},
+	})
+
+	if got := derived(t, IDReplicationSlot, scope); len(got) != 0 {
+		t.Fatalf("derived %v from a claim that names no policy", got)
 	}
 }

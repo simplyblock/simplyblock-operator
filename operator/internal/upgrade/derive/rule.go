@@ -10,6 +10,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	corev1 "k8s.io/api/core/v1"
+
 	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
@@ -64,6 +66,7 @@ var (
 	nodeSetGVK = gvk("StorageNodeSet")
 	nodeGVK    = gvk("StorageNode")
 	restoreGVK = gvk("BackupRestore")
+	claimGVK   = schema.GroupVersionKind{Version: "v1", Kind: "PersistentVolumeClaim"}
 	importGVK  = gvk("BackupImport")
 )
 
@@ -95,4 +98,12 @@ func restores(s *upgrade.Scope) []*simplyblockv1alpha1.BackupRestore {
 
 func imports(s *upgrade.Scope) []*simplyblockv1alpha1.BackupImport {
 	return upgrade.Typed[*simplyblockv1alpha1.BackupImport](s.Graph, importGVK)
+}
+
+// claims reads the cluster-wide graph rather than the installation's, because a
+// claim lives in the namespace of the workload that mounts it. Unlike another
+// tenant's StorageCluster, a claim in a workload namespace is this
+// installation's data plane, so its derived names are this upgrade's problem.
+func claims(s *upgrade.Scope) []*corev1.PersistentVolumeClaim {
+	return upgrade.Typed[*corev1.PersistentVolumeClaim](s.ClusterWide, claimGVK)
 }

@@ -34,15 +34,15 @@ type Scope struct {
 	// a [Discoverer] has run.
 	Graph *Graph
 
-	// ClusterWide is the same kinds read across every namespace, and it holds
-	// only the kinds that need it.
+	// ClusterWide is the kinds read across every namespace, and it holds only
+	// the kinds that need it.
 	//
-	// It exists because two of §19.8's uniqueness routes escape a namespace. A
-	// StorageCluster's name reaches the workers as a node label carrying
-	// nothing else, so two clusters of one name in two namespaces claim the
-	// same machines, and a kind that becomes cluster-scoped loses the namespace
-	// that was keeping its objects apart. Neither is visible from inside one
-	// installation.
+	// Two questions need it, and neither is about one installation. Two of
+	// §19.8's uniqueness routes escape a namespace, since a StorageCluster's
+	// name reaches the workers as a node label carrying nothing else and a kind
+	// that becomes cluster-scoped loses the namespace that kept its objects
+	// apart. And the annotation keys of §16.3 sit on objects that live wherever
+	// a workload does, which is any namespace but this one.
 	//
 	// It is a second graph rather than a wider first one because almost every
 	// check wants the installation and would draw a wrong conclusion from

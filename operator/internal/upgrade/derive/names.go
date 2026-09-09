@@ -16,6 +16,7 @@ import (
 
 	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/keys"
 )
 
 // The identities of the object-name rows.
@@ -29,6 +30,7 @@ const (
 	IDNodeRemoveOps        upgrade.ID = "name-storage-node-remove-ops"
 	IDRestoredBackup       upgrade.ID = "name-restored-backup"
 	IDImportedBackup       upgrade.ID = "name-imported-backup"
+	IDReplicationSlot      upgrade.ID = "name-replication-slot"
 
 	IDPerNodeConfigMapTarget     upgrade.ID = "name-per-node-config-map-target"
 	IDStorageNodeDaemonSetTarget upgrade.ID = "name-storage-node-daemon-set-target"
@@ -48,6 +50,7 @@ func Names() []upgrade.Derivation {
 		nodeRemoveOpsName(),
 		restoredBackupName(),
 		importedBackupName(),
+		replicationSlotName(),
 
 		perNodeConfigMapNameTarget(),
 		storageNodeDaemonSetNameTarget(),
@@ -267,6 +270,60 @@ func importedBackupName() Rule {
 			return out, nil
 		},
 	}
+}
+
+// replicationSlotName is <policy>-<pvc>, the ReplicationSlot a claim annotated
+// with a replication policy produces (pvcreplication_controller.go).
+//
+// It is the roomiest row and still reachable, because it joins two names that
+// Kubernetes each allows to be 253 characters long. The arithmetic leaves the
+// two of them 252 characters between them, where §19.3's table says 246. The
+// seven characters are unaccounted for, and the arithmetic is what this row
+// carries, so the discrepancy shows up as a number somebody can check rather
+// than as a limit nobody derived.
+//
+// The claims come from the cluster-wide graph, since a claim lives where its
+// workload does.
+func replicationSlotName() Rule {
+	return Rule{
+		RuleID:     IDReplicationSlot,
+		Summary:    "bounds the ReplicationSlot name a claim and its policy derive together",
+		Where:      "ReplicationSlot name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName},
+		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
+			var out []upgrade.Input
+			for _, claim := range claims(s) {
+				policy := replicationPolicyOf(claim.Annotations)
+				if policy == "" {
+					// A claim with no policy produces no slot, so there is no
+					// name to check rather than an empty one to report.
+					continue
+				}
+				out = append(out, upgrade.Input{
+					Source: s.Ref(claim),
+					Parts:  []string{policy, claim.Name},
+				})
+			}
+			return out, nil
+		},
+	}
+}
+
+// replicationPolicyOf reads the policy a claim names, under either spelling.
+// The keys are mid-move (§16.3), and a claim annotated only with the old one
+// still produces a slot.
+func replicationPolicyOf(annotations map[string]string) string {
+	for _, key := range []string{
+		keys.NewPrefix + "replication-policy",
+		keys.OldPrefix + "replication-policy",
+	} {
+		if value := annotations[key]; value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // fromNodeSetNames is the input for a name derived from a StorageNodeSet.
