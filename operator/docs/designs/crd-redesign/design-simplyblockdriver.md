@@ -2,13 +2,14 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-31  
+**Date:** 2026-08-31 (last updated 2026-09-09)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-simplyblockdriver.md`](../../tests/test-plan-simplyblockdriver.md)  
 **Example:** [`assets/releases.yaml`](assets/releases.yaml)
 
-The kind does not exist. The chart installs the CSI driver today, so §8 is a list
-of what this replaces rather than a migration.
+The kind does not exist, and the chart installs the CSI driver today, so every
+cluster already running simplyblock holds the objects this kind is to own. §4.3
+is how the operator takes them over, and §8 is what changes when it has.
 
 ---
 
@@ -39,6 +40,12 @@ core `CSIDriver` registration they produce.
 It is a bootstrap-layer kind the operator installs and versions
 ([`design-crd-model.md`](design-crd-model.md) §8.1), beside the `ControlPlane`
 rather than under it.
+
+**On an existing cluster the first of these objects adopts a deployment rather
+than making one.** The chart has installed the driver for as long as the product
+has shipped, so the reconcile that establishes this kind meets a node plugin on
+every worker and a controller plugin provisioning volumes for workloads that are
+running. §4.3 is that handover, and it is the path every upgraded cluster takes.
 
 **The driver is a client of the control plane, and takes two things from it.**
 The endpoint and credentials it provisions volumes through reach it in the
@@ -84,6 +91,11 @@ place, and §5 is what it does with them.
   event as a controller plugin that is not running (§4.2).
 - Specify which version ordering the deployment requires, and what the operator
   does when it does not hold (§5).
+- Specify how a deployment the chart installed becomes this kind's, without
+  deleting an object, restarting a plugin that did not have to restart, or
+  changing a running configuration (§4.3).
+- Specify how many of these objects a Kubernetes cluster holds, and what stops a
+  second one (§3.4).
 
 ### Non-Goals
 
@@ -134,6 +146,19 @@ Restricting it is for a cluster where some workers are deliberately not storage
 clients, and the tolerations beside it exist because the node plugin usually has
 to run where workloads run rather than where the operator does.
 
+**`controllerNodeSelector` and `controllerTolerations` place the controller
+plugin.** The unprefixed pair is the node plugin's, because that placement
+decides which workers can attach a volume, and the prefixed pair is ordinary pod
+placement for the one workload that provisions them. The chart carries both as
+`controller.nodeSelector` and `controller.tolerations`, which makes them state a
+running deployment has and §4.3 has to be able to express.
+
+**`enableVolumeSnapshots` decides whether snapshot support is part of this
+deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
+`spec.driverName`, plus the CRDs and a controller where the cluster serves
+neither (§4.1). False applies none of them, which is the chart's
+`snapshotclass.create` and `snapshotcontroller.create` as one field.
+
 ### 3.2 Immutability
 
 **`driverName` is immutable, and it is the field most likely to be edited by
@@ -175,6 +200,12 @@ cluster depend on what this one installed.
 `status.version` is the version the deployed driver reports, published so that a
 skew against `ControlPlane.status.version` is visible on one screen (§5).
 
+`status.origin` is `Adopted` where the first reconcile met objects it did not
+create and `Created` where it made all of them. It is decided once and never
+revised, because what it records is where the running deployment came from
+rather than what the controller did most recently, and on every cluster upgraded
+from a chart install it reads `Adopted` (§4.3).
+
 `status.observedGeneration` and `status.message` follow the group conventions
 ([`design-crd-model.md`](design-crd-model.md) §3.1, §7.9).
 
@@ -184,6 +215,53 @@ an ambiguity every reader resolves by group. The two are not the same object
 either: the core kind is the cluster's registration record, and this one is the
 deployment that produces that record among the rest of what it installs
 ([`design-crd-model.md`](design-crd-model.md) §7.2).
+
+### 3.4 The singleton
+
+**A Kubernetes cluster holds one `SimplyblockDriver`**, not one per namespace, and
+the second is rejected when it is written.
+
+**Twelve of the objects it owns are cluster-scoped** (§4.3): five `ClusterRole`
+and `ClusterRoleBinding` pairs, the `CSIDriver` registration, and the
+`VolumeSnapshotClass`. Two objects deriving those names do not get a copy each.
+They get one object written twice. The bindings are where that surfaces, because
+each names a `ServiceAccount` together with the namespace it lives in, so two
+controllers writing one binding alternate its subject and the deployment not
+currently named loses the permissions its sidecars provision with. Neither
+deployment is reliably broken and neither is reliably working, which is the shape
+that takes longest to find.
+
+**Below the names the contention is not a naming question at all.** The node
+plugin registers at `/var/lib/kubelet/plugins/<driverName>/csi.sock` and mounts
+that directory from the host, and the kubelet registers one plugin per driver
+name. Two node plugins on one worker contend for a path and a registration that
+no object name reaches.
+
+**Enforcement is a validating webhook**, `SimplyblockDriverValidator` in
+`operator/internal/webhook/simplyblockdriver_validator.go`, which denies a
+`CREATE` where a `SimplyblockDriver` already exists in any namespace and carries
+`failurePolicy=fail` like every other validator the operator serves. The
+`ControlPlane` singleton is enforced by convention instead
+([`design-controlplane.md`](design-controlplane.md) §3.1), and what separates the
+two is what a second object does: a `ControlPlane` under another name is ignored
+and sits inert, and a second `SimplyblockDriver` is reconciled.
+
+**The controller refuses as well, for the object the webhook did not see.** A
+webhook is deployed, upgraded, and occasionally not running, and an object written
+in that window is one admission never re-examines. So a `SimplyblockDriver` that
+is not the oldest in the Kubernetes cluster holds at `Installing`, applies
+nothing, names the object that holds the deployment in `status.message`, and emits
+`DuplicateDriver` (§6.1). The creation timestamp decides it, and the namespace and
+name decide a tie, so that both controllers reach the same answer from the same
+list without a lock between them.
+
+**The namespace the object lives in is the one whose control plane configures it**
+(§4.1), while the driver it deploys serves every workload in the Kubernetes
+cluster, because a `StorageClass` is cluster-scoped and a claim in any namespace
+may name one ([`design-crd-model.md`](design-crd-model.md) §5). A second
+simplyblock deployment in another namespace therefore has pools whose classes
+provision through a driver holding no credentials for its control plane, which is
+§9 Q6.
 
 ---
 
@@ -195,11 +273,24 @@ deployment that produces that record among the rest of what it installs
 ### 4.1 What it applies
 
 The node `DaemonSet`, the controller `StatefulSet`, the RBAC both need, the node
-configuration `ConfigMap`, and the core `CSIDriver` registration. Every one of
-them becomes a child of the `SimplyblockDriver` by controller reference, so that
-deleting the object removes the deployment and the ownership spine starts at a
-real edge rather than at a Helm release
-([`design-crd-model.md`](design-crd-model.md) §5).
+configuration `ConfigMap`, and the core `CSIDriver` registration. Deleting the
+`SimplyblockDriver` removes all of them, so the ownership spine starts at a real
+edge rather than at a Helm release
+([`design-crd-model.md`](design-crd-model.md) §5), and §4.3 is the inventory.
+
+**Two mechanisms carry that ownership, because half the set is cluster-scoped.**
+The workloads, their `ServiceAccounts`, the `ConfigMap`, and the `Secrets` are
+namespaced and become children by controller reference, which hands their removal
+to the garbage collector. The `CSIDriver` registration, the `ClusterRole` and
+`ClusterRoleBinding` pairs the sidecars and the node plugin need, and the
+`VolumeSnapshotClass` are cluster-scoped, and Kubernetes treats a cluster-scoped
+object owned by a namespaced one as having an owner it cannot resolve, which
+leaves it uncollected rather than owned
+([`design-crd-model.md`](design-crd-model.md) §7.3). Those carry
+`storage.simplyblock.io/managed-by: simplyblockdriver` instead, and a finalizer on
+the `SimplyblockDriver` deletes them. It is the same split
+[`design-storagepool.md`](design-storagepool.md) §4.4 makes for the `StorageClass`
+a pool produces, and for the same reason.
 
 **The two plugins carry the CSI sidecars.** The controller `StatefulSet` runs
 `csi-provisioner`, `csi-attacher`, `csi-resizer`, `csi-snapshotter`, and
@@ -269,6 +360,145 @@ it, which is why the word is `Unavailable` rather than a claim about data.
 matches no worker is a configuration a person wrote, and the phase that suits it
 is one that says so in `status.message` rather than one that pretends the
 deployment is broken.
+
+### 4.3 Adoption
+
+**Every cluster running simplyblock already holds this deployment**, because the
+chart installs it (§8). So the first `SimplyblockDriver` in such a namespace does
+not create a driver. It takes one over while volumes are attached and workloads
+are running on them.
+
+The window this reconcile closes, and the `helm.sh/resource-policy: keep`
+annotations that hold the objects open across the chart upgrade, are
+[`design-api-upgrade.md`](design-api-upgrade.md) §12. What that document leaves to
+this one is what the controller does when it meets them.
+
+#### The object set
+
+| Object                              | Name                                                                                | Ownership after adoption |
+|-------------------------------------|-------------------------------------------------------------------------------------|--------------------------|
+| `DaemonSet`                         | `simplyblock-csi-node`                                                              | Controller reference     |
+| `StatefulSet`                       | `simplyblock-csi-controller`                                                        | Controller reference     |
+| `ServiceAccount`                    | `simplyblock-csi-node-sa`, `simplyblock-csi-controller-sa`                          | Controller reference     |
+| `ConfigMap`                         | `simplyblock-csi-cm`, `simplyblock-csi-nodeservercm`                                | Controller reference     |
+| `Secret`                            | `simplyblock-csi-secret`, `simplyblock-csi-secret-v2`                               | Controller reference     |
+| `ClusterRole`, `ClusterRoleBinding` | `simplyblock-csi-{node,provisioner,attacher,resizer,health-monitor}-{role,binding}` | `managed-by` label       |
+| `CSIDriver`                         | `spec.driverName`                                                                   | `managed-by` label       |
+| `VolumeSnapshotClass`               | `simplyblock-csi-snapshotclass`                                                     | `managed-by` label       |
+
+**The three `snapshot.storage.k8s.io` CRDs and the `snapshot-controller` are not
+in it.** The chart puts the controller in `kube-system` and annotates both it and
+the CRDs `helm.sh/resource-policy: keep` already, so Helm leaves them where they
+are. An adopted deployment finds the API served, applies nothing, and records
+`status.snapshotSupport: Detected` (§4.1). That is what the field says, whether
+this object's controller brought snapshot support to the cluster, and it did not.
+What the handover leaves unowned is §9 Q2.
+
+**`ConfigMap/simplyblock-clusters` is not in it either**, despite the name. It is
+the storage-node controller's, mounted by that workload and not by either plugin.
+
+#### The names the controller derives are the names that are running
+
+**Every name in the table except the registration's is
+`<object name>-csi-<component>`, and the chart writes the same strings
+literally.** The `SimplyblockDriver` an upgraded cluster gets is named
+`simplyblock`, beside the `ControlPlane` of that name
+([`design-controlplane.md`](design-controlplane.md) §3.1), so the derivation lands
+on the running objects and adoption is a `Get` on each rather than a mapping table
+maintained against chart history. The `CSIDriver` is the exception because it is
+named by `spec.driverName`, which is the name the cluster provisions through
+rather than a name this object gets to pick.
+
+**One object means the derivation needs no namespace in it** (§3.4). The twelve
+cluster-scoped names carry none, and nothing else in the Kubernetes cluster
+derives them, so `simplyblock-csi-node-role` identifies one object the way
+`simplyblock-csi-node` identifies one `DaemonSet` in one namespace.
+
+#### The spec is seeded from what is running
+
+**The first reconcile after adoption has to be a no-op**, because these objects
+were rendered from Helm values and are about to be rendered from a spec. A field
+the translation cannot express is not a translation that fails visibly. It is a
+running deployment reconfigured on the reconcile that adopts it, which is the
+property [`design-api-upgrade.md`](design-api-upgrade.md) §12.3 captures and
+diffs for.
+
+| Running state                                                         | Field                                                                              |
+|-----------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `image.csi`                                                           | `spec.image`                                                                       |
+| `Always`, the chart's pull policy, against this kind's `IfNotPresent` | `spec.imagePullPolicy`, written by the translation rather than left to the default |
+| The name the live `CSIDriver` carries, from `driverName`              | `spec.driverName`, read from the registration rather than defaulted                |
+| `controller.replicas`                                                 | `spec.controllerReplicas`                                                          |
+| `controller.nodeSelector`, `controller.tolerations`                   | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                 |
+| `snapshotclass.create`, `snapshotcontroller.create`                   | `spec.enableVolumeSnapshots` (§3.1)                                                |
+| The seven sidecar image and tag values                                | Nothing, deliberately                                                              |
+
+**`driverName` is read rather than defaulted, and it is the row that would cost
+the most.** The field is immutable (§3.2), so a translation that omits it defaults
+to `csi.simplyblock.io` on a deployment that registered under another name, and
+the object then declares one driver while the cluster attaches volumes through
+another. Nothing later corrects it, because the correction is an edit admission
+rejects.
+
+**The sidecars are the operator's release rather than the deployment's
+configuration**, which is §3.1's argument for one image, one level out: a
+controller plugin assembled from seven independently pinned tags is a combination
+nothing tested. So the seven values do not translate, and adoption replaces the
+sidecar images with the ones this operator ships. That is a rolling restart of
+both plugins and no data-path interruption, and it is the only difference
+adoption is expected to produce, which is what lets the installer's comparison
+exclude it and nothing else. §9 Q5 is whether a pin ever has to survive.
+
+#### Taking the objects over
+
+```text
+1. Read every object of the set that exists
+2. Compare what the spec cannot change against what is running
+3. Take field ownership from Helm's field manager
+4. Annotate helm.sh/resource-policy: keep wherever Helm release metadata is present
+5. Set the controller reference, or the managed-by label where the object is
+   cluster-scoped
+6. Verify both are live on every object
+7. Remove the Helm labels and annotations, keeping the resource policy
+```
+
+**Step 2 is where adoption can refuse**, and two comparisons run there. The first
+is `driverName` against the live registration, for the reason above. The second is
+the control-plane endpoint and credentials the operator resolves against the ones
+the adopted `ConfigMap` and `Secrets` carry, because §4.1 has the operator rewrite
+them and a driver pointed at a backend other than the one its volumes are on fails
+at attach time on every workload at once. A mismatch in either holds the phase at
+`Installing` with `status.message` naming both values, emits `AdoptionRefused`
+(§6.1), and changes nothing. The counts of §4.2 are still published, because the
+plugins are running and what is blocked is the handover rather than the driver.
+
+**Step 3 is a server-side apply that takes the conflict deliberately.** Helm wrote
+these objects under its own field manager, so an apply that does not claim the
+fields meets what Helm recorded rather than replacing it.
+
+**Step 4 is what makes an adoption outside the upgrade safe.** The installer
+annotates before `helm upgrade` for the supported path, and an administrator who
+creates the object against a chart-installed deployment by hand has had no such
+step, which leaves the driver in a release Helm still tracks and prunes.
+Annotating from the controller closes that, and Helm reads the annotation from the
+live object rather than from the stored manifest
+([`design-api-upgrade.md`](design-api-upgrade.md) §12.2), so annotating is enough.
+
+**Step 7 removes seven keys and keeps one.** The `app.kubernetes.io/managed-by`,
+`heritage`, `release`, `revision`, `chart`, and `chartVersion` labels and the
+`meta.helm.sh/release-name` and `meta.helm.sh/release-namespace` annotations all
+record a release that no longer contains the object, and something later reads a
+leftover claim as a live one. `helm.sh/resource-policy: keep` stays, because what
+it says, that this object outlives the release, is the part that became
+permanently true.
+
+**Adoption is in place at every step.** Nothing in the sequence deletes an object
+and applies a replacement, because recreating the node `DaemonSet` restarts every
+node plugin in the cluster at once and recreating the `CSIDriver` registration
+takes the cluster's ability to attach a volume away for as long as it is absent.
+
+**`status.origin` records which of the two happened** (§3.3), and `DriverAdopted`
+is the event (§6.1).
 
 ---
 
@@ -392,12 +622,27 @@ The kind is new, so both tables are new infrastructure.
 | The driver is more than one release behind the control plane | `Warning` | `VersionTooOld`     | `SimplyblockDriver` |
 | A `nodeSelector` matches no schedulable worker               | `Normal`  | `NoMatchingWorkers` | `SimplyblockDriver` |
 | The snapshot controller was applied                          | `Normal`  | `SnapshotsEnabled`  | `SimplyblockDriver` |
+| A running deployment was taken over rather than created      | `Normal`  | `DriverAdopted`     | `SimplyblockDriver` |
+| Adoption stopped on what the spec cannot change              | `Warning` | `AdoptionRefused`   | `SimplyblockDriver` |
+| A second object reached the API server past the webhook      | `Warning` | `DuplicateDriver`   | `SimplyblockDriver` |
 
 **`VersionSkew` and `VersionTooOld` are the two the kind was built for.** Every
 other row here reports a deployment's health, and these two report combinations
 that are otherwise discoverable only by attaching a volume and watching it fail. A
 control plane exactly one release ahead of the driver produces neither, which is
 the supported state of §5.
+
+**`AdoptionRefused` fires on a deployment that is working**, which is what makes
+it worth an event rather than a phase. The plugins are serving, volumes attach,
+and what has stopped is the handover, so nothing else in the cluster reports that
+the objects still belong to a Helm release. It repeats on every reconcile that
+finds the same mismatch, because the condition is standing rather than momentary.
+
+**`DuplicateDriver` lands on the object that is not running anything.** The
+webhook of §3.4 denies the second object at admission and leaves no object to
+carry an event, so this row exists for the one that was written while the webhook
+was not serving. It is the only report that object gets, since a deployment that
+applies nothing has no plugins to derive a phase from.
 
 ### 6.2 Prometheus metrics
 
@@ -429,27 +674,44 @@ snapshot controller appears only when asked for. The phase derivation is the sam
 shape and belongs beside it.
 
 `driverName` immutability is one marker and belongs in `envtest`, because the
-rejection is the API server's.
+rejection is the API server's. The singleton of §3.4 splits across both harnesses
+for the same reason: the webhook's denial is admission and needs a real API
+server, and the controller's refusal is a comparison over a list and belongs
+beside the other fake-client rows.
+
+Adoption divides the same way. Which objects the controller reaches for, which
+of the two ownership mechanisms each one gets, and which Helm keys survive step 7
+are all decidable against a fake client seeded with the objects the chart writes,
+and so is every refusal of §4.3's step 2. The part that is not is field ownership,
+because taking a field from another manager is the API server's behavior and a
+fake client has no field managers at all, so it belongs in `envtest` beside the
+immutability marker.
 
 The risk unit tests do not reach is the skew itself, which needs a driver and a
 control plane at two versions and a volume to attach, and it is where §1 says the
-failure actually lands.
+failure actually lands. Adoption has one of the same shape: a chart-installed
+cluster with attached volumes, upgraded, is the only place where a plugin that
+restarts when it did not have to shows up as anything a test can see.
 
 ---
 
 ## 8. What This Replaces
 
-Nothing is migrated, because the kind does not exist. What changes is where the
-driver's deployment comes from.
+The objects do not change and their owner does. Every cluster running
+simplyblock has the deployment already, applied by the chart, and §4.3 is the
+reconcile that takes it over in place.
 
-| Today                                              | After                                                       |
-|----------------------------------------------------|-------------------------------------------------------------|
-| The chart renders the node `DaemonSet`             | The controller applies it (§4.1)                            |
-| The chart renders the controller `StatefulSet`     | The controller applies it (§4.1)                            |
-| The chart renders the `CSIDriver` registration     | The controller applies it, owned by the `SimplyblockDriver` |
-| The driver's version is a Helm release's           | `spec.image`, compared against the control plane's (§5)     |
-| The snapshot controller is a chart value           | `spec.enableVolumeSnapshots` (§3.1)                         |
-| Nothing compares driver and control-plane versions | `VersionSkew` and the two gauges (§6)                       |
+| Today                                               | After                                                       |
+|-----------------------------------------------------|-------------------------------------------------------------|
+| The chart renders the node `DaemonSet`              | The controller applies it (§4.1)                            |
+| The chart renders the controller `StatefulSet`      | The controller applies it (§4.1)                            |
+| The chart renders the `CSIDriver` registration      | The controller applies it, owned by the `SimplyblockDriver` |
+| The driver's version is a Helm release's            | `spec.image`, compared against the control plane's (§5)     |
+| The snapshot controller is a chart value            | `spec.enableVolumeSnapshots` (§3.1)                         |
+| Nothing compares driver and control-plane versions  | `VersionSkew` and the two gauges (§6)                       |
+| The RBAC and the snapshot class belong to a release | The `managed-by` label and a finalizer (§4.1, §4.3)         |
+| `helm uninstall` removes the driver                 | It leaves it running, and deleting the object removes it    |
+| Seven chart values pin the seven sidecar images     | The operator's release pins them (§4.3)                     |
 
 **Moving the install out of the chart is not free**, and it is the same cost
 [`design-controlplane.md`](design-controlplane.md) §5.1 names for the control
@@ -458,16 +720,25 @@ controller's apply is none of those. It cannot be a flag day either, for the sam
 reason and with the same unanswered question, which
 [`design-controlplane.md`](design-controlplane.md) §12 records as its Q2.
 
+**What a user loses is a value, and what they lose it to is a field.** Each row
+above moves one setting from `values.yaml` to a spec, and §4.3's translation table
+is where the two are matched up. The seven sidecar rows are the ones with no field
+on the other side, and the last row is what that costs.
+
+**`helm uninstall` stops being a teardown**, which inverts what the command has
+meant. It removes the operator, and the driver keeps running because it is the
+operator's and a custom resource is what removes it.
+[`design-api-upgrade.md`](design-api-upgrade.md) §12.5 is where the upgrade says
+so to the person running it.
+
 ---
 
 ## 9. Open Questions
 
-**Q1: Whether the driver should be a singleton like the `ControlPlane`.**
-[`design-controlplane.md`](design-controlplane.md) §3.1 makes a control plane one
-object per namespace named `simplyblock`. This document does not impose the same
-rule, because two drivers with two `driverName` values in one namespace is
-expressible and might even be wanted during a migration between driver names.
-Whether that is a capability or an accident is not settled.
+Q1 and Q4 are settled and their numbers are retired rather than reused, since
+both are cited from review history. §3.4 is where the answer went: a Kubernetes
+cluster holds one `SimplyblockDriver`, so neither two drivers in one namespace nor
+two namespaces each holding one is a topology the derivation has to separate.
 
 **Q2: What removes an installed snapshot controller.** §4.1 has the operator
 install the CRDs and a controller where the cluster has none, without a controller
@@ -476,6 +747,14 @@ cluster left with snapshot CRDs and a controller has working snapshot support an
 no simplyblock, which is harmless and untidy. Removing them needs a count of what
 else in the cluster relies on them, and `status.snapshotSupport` records only what
 this object did. Leaving them is what §4.1 specifies.
+
+An adopted deployment reaches the same place by a different route and leaves more
+behind. The chart installed the CRDs and put a `snapshot-controller` in
+`kube-system`, both annotated `helm.sh/resource-policy: keep`, so after the
+handover Helm no longer tracks them, this operator did not install them, and
+`status.snapshotSupport` reads `Detected` (§4.3). The `Deployment` is then a
+running workload with no owner of any kind, which is a state neither this question
+nor the annotation was written for.
 
 **Q3: Whether `driverName` should be settable.** §3.1 carries it because the
 chart carries it, as the value `driverName` in both `values.yaml` files. In the
@@ -487,9 +766,34 @@ under one name and serves a socket under another.
 
 Carrying it forward means threading it through those four places. Dropping it
 means `csi.simplyblock.io` is the driver's name and the field does not exist,
-which removes the immutability rule of §3.2 along with it. The only deployment
-that needs two names is one running two drivers, which is Q1, so the two questions
-have one answer between them.
+which removes the immutability rule of §3.2 along with it.
+
+§3.4 narrows the question without closing it. A Kubernetes cluster holds one
+driver, so no deployment needs two names and nothing new has a use for the field.
+What still does is adoption: a release that set `driverName` registered under it,
+every `PersistentVolume` it provisioned records it, and §4.3 has to be able to
+express that or the object declares one driver while the cluster attaches volumes
+through another. So the field survives for the installations that already set it,
+and whether it stays settable for the ones that have not is what is left.
+
+**Q5: Whether a pinned sidecar image has to survive adoption.** §4.3 has the
+operator version the sidecars, so a release that pinned `image.csiAttacher` or any
+of the other six loses the pin at the handover. Whether any deployment is holding
+such a pin, and for a reason that still applies, is a fact about the installations
+that exist rather than one this document settles. The answer decides whether the
+spec grows a per-sidecar override or the seven values retire.
+
+**Q6: Which control planes configure the one driver.** §4.1 writes the endpoint
+and credentials of the namespace's `ControlPlane` into the configuration both
+plugins mount, and §3.4 makes that one namespace's configuration for the whole
+Kubernetes cluster. The format already carries more than one, since the node
+`Secret` holds a `clusters` list of `cluster_id`, `cluster_endpoint`, and
+`cluster_secret` triples, which is what the chart's `multiCluster` values render.
+So a driver configured from every `ControlPlane` in the Kubernetes cluster needs
+no format change, and what it needs instead is a decision about whether two
+simplyblock deployments in one Kubernetes cluster are a topology this product
+supports. [`design-controlplane.md`](design-controlplane.md) §12 Q1 asks the same
+thing from the other end, and the two have one answer between them.
 
 ---
 
@@ -560,6 +864,15 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// ControllerNodeSelector and ControllerTolerations place the controller
+	// plugin. The unprefixed pair above is the node plugin's, because that
+	// placement decides which workers can attach a volume, and this pair is
+	// ordinary pod placement for the one workload that provisions them.
+	// +optional
+	ControllerNodeSelector map[string]string `json:"controllerNodeSelector,omitempty"`
+	// +optional
+	ControllerTolerations []corev1.Toleration `json:"controllerTolerations,omitempty"`
+
 	// ControllerResources and NodeResources set requests and limits for the two
 	// plugins. Unset enforces no limits.
 	// +optional
@@ -567,6 +880,12 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	NodeResources corev1.ResourceRequirements `json:"nodeResources,omitempty"`
 
+	// EnableVolumeSnapshots decides whether snapshot support is part of this
+	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
+	// controller where the cluster serves neither. False applies none of them.
+	// +kubebuilder:default=true
+	// +optional
+	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from.
@@ -584,6 +903,22 @@ const (
 	SnapshotSupportOriginInstalled SnapshotSupportOrigin = "Installed"
 )
 
+// SimplyblockDriverOrigin is where the running deployment came from. Every
+// cluster upgraded from a chart install reads Adopted, because the chart had
+// applied the objects before this kind existed.
+// +kubebuilder:validation:Enum=Created;Adopted
+type SimplyblockDriverOrigin string
+
+const (
+	// SimplyblockDriverOriginCreated is a deployment whose objects the operator
+	// applied from nothing.
+	SimplyblockDriverOriginCreated SimplyblockDriverOrigin = "Created"
+	// SimplyblockDriverOriginAdopted is a deployment the operator took over in
+	// place, taking field ownership from Helm and removing the release's
+	// metadata once the handover was verified.
+	SimplyblockDriverOriginAdopted SimplyblockDriverOrigin = "Adopted"
+)
+
 // SimplyblockDriverStatus is the observed state of the CSI driver deployment.
 type SimplyblockDriverStatus struct {
 	// Phase is the operator's own view of the deployment.
@@ -595,6 +930,13 @@ type SimplyblockDriverStatus struct {
 	// what this one applied.
 	// +optional
 	SnapshotSupport SnapshotSupportOrigin `json:"snapshotSupport,omitempty"`
+
+	// Origin is whether the first reconcile created this deployment's objects
+	// or met ones it did not create. It is decided once and never revised,
+	// because what it records is where the running deployment came from rather
+	// than what the controller did most recently.
+	// +optional
+	Origin SimplyblockDriverOrigin `json:"origin,omitempty"`
 
 	// Version is the version the deployed driver reports, published so that a
 	// skew against ControlPlane.status.version is visible on one screen.
