@@ -82,6 +82,15 @@ type Reporter interface {
 	// Plan renders a whole plan.
 	Plan(plan Plan)
 
+	// Block renders lines that belong together and must not be interleaved: the
+	// ownership spine of §17, the plan's tree in §27. A terminal
+	// implementation prints the whole block at once so a redrawing progress
+	// bar cannot land in the middle of it.
+	//
+	// The lines are pre-formatted by whoever built them, since a tree's
+	// alignment is a property of the whole tree rather than of one row.
+	Block(heading string, lines []string)
+
 	// Progress is a line of narration: the counts of a paced rewrite, or the
 	// wait a step is holding on.
 	Progress(format string, args ...any)
@@ -102,6 +111,7 @@ func (DiscardReporter) Rule(Rule)                     {}
 func (DiscardReporter) Work(int)                      {}
 func (DiscardReporter) Item(string)                   {}
 func (DiscardReporter) Outcome(Rule, Outcome, string) {}
+func (DiscardReporter) Block(string, []string)        {}
 func (DiscardReporter) Findings(Findings)             {}
 func (DiscardReporter) Action(Action)                 {}
 func (DiscardReporter) Plan(Plan)                     {}
@@ -224,6 +234,19 @@ func (r *TextReporter) Plan(plan Plan) {
 	if errs := plan.Findings.Errors(); len(errs) > 0 {
 		r.line("")
 		r.line("%s failed: %d violations. No changes were made.", plan.Stage, len(errs))
+	}
+}
+
+// Block prints the heading and then the lines, unindented: the lines carry
+// whatever indentation their own structure needs.
+func (r *TextReporter) Block(heading string, lines []string) {
+	r.line("")
+	if heading != "" {
+		r.line("  %s", heading)
+		r.line("")
+	}
+	for _, line := range lines {
+		r.line("  %s", line)
 	}
 }
 

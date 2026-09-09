@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/spine"
 )
 
 // newPreflightCommand builds `simplyblock-upgrade preflight`.
@@ -44,6 +45,12 @@ func newPreflightCommand(global *globalOptions) *cobra.Command {
 			if err := session.Runner.Discover(ctx); err != nil {
 				return err
 			}
+
+			// The spine is printed before the findings, so the objects a
+			// finding names have already been shown in the structure it is
+			// about (§17).
+			session.Reporter.Block("The ownership spine, and what the migration does to it",
+				spine.Render(spine.Build(session.Runner.Scope)))
 
 			// The plan is reported for the stage the cluster is positioned
 			// for, which is derived from the cluster rather than passed by the

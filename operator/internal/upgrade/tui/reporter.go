@@ -112,6 +112,18 @@ func (r *Reporter) Plan(plan upgrade.Plan) {
 	r.program.Send(printMsg{text: strings.TrimRight(b.String(), "\n")})
 }
 
+func (r *Reporter) Block(heading string, lines []string) {
+	var b strings.Builder
+	if heading != "" {
+		fmt.Fprintf(&b, "  %s\n\n", styleSection.Render(heading))
+	}
+	for _, line := range lines {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	// One message, so the progress bar cannot redraw into the middle of a tree.
+	r.program.Send(printMsg{text: strings.TrimRight(b.String(), "\n"), blankAfter: true})
+}
+
 func (r *Reporter) Progress(format string, args ...any) {
 	r.program.Send(printMsg{text: "  " + fmt.Sprintf(format, args...)})
 }
