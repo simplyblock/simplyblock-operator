@@ -106,6 +106,51 @@ func Moved() []Key {
 	}
 }
 
+// Found is one key of a row that an object carries under an older spelling,
+// together with the spelling the target model uses.
+type Found struct {
+	// OldKey is the key as it appears on the object.
+	OldKey string
+
+	// NewKey is what the rewrite would write beside it.
+	NewKey string
+
+	// Value is what the old key holds, which the rewrite preserves verbatim.
+	Value string
+}
+
+// Carrying reports the keys of this row an object holds under an older
+// spelling, with the spelling each would gain.
+//
+// It answers what the rewrite of §16.3 would do, where [Key.Conflicts] answers
+// what it cannot do. A key already present under both spellings is still
+// reported here: whether the new one is there is the caller's question, and
+// answering it needs the map the caller already has.
+func (k Key) Carrying(held map[string]string) []Found {
+	out := make([]Found, 0, len(k.oldKeysIn(held)))
+	for _, oldKey := range k.oldKeysIn(held) {
+		out = append(out, Found{
+			OldKey: oldKey,
+			NewKey: k.newFor(oldKey),
+			Value:  held[oldKey],
+		})
+	}
+	return out
+}
+
+// newFor is the target-model spelling of a key found on an object.
+//
+// A prefixed row keeps whatever followed its family, and a legacy row whose
+// name differs from the current one takes the row's rather than swapping the
+// prefix: simplybk/qos-rw-mbytes became simplyblock.io/qos-rw-mbps, so the
+// suffix is not carried across.
+func (k Key) newFor(oldKey string) string {
+	if k.Legacy != "" && strings.HasPrefix(oldKey, LegacyPrefix) {
+		return k.New()
+	}
+	return NewPrefix + strings.TrimPrefix(oldKey, OldPrefix)
+}
+
 // Conflict is one key an object carries under two spellings that disagree.
 type Conflict struct {
 	// Key is the inventory row.
@@ -148,13 +193,7 @@ func (k Key) conflictsIn(held map[string]string) []Conflict {
 
 	var out []Conflict
 	for _, oldKey := range k.oldKeysIn(held) {
-		newKey := NewPrefix + strings.TrimPrefix(strings.TrimPrefix(oldKey, OldPrefix), LegacyPrefix)
-		if k.Legacy != "" && strings.HasPrefix(oldKey, LegacyPrefix) {
-			// The legacy spelling may carry a different name from the current
-			// one, so the new key is derived from the row rather than from the
-			// key that was found.
-			newKey = k.New()
-		}
+		newKey := k.newFor(oldKey)
 
 		newValue, carried := held[newKey]
 		if !carried || newValue == held[oldKey] {

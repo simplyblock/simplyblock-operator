@@ -75,7 +75,9 @@ func derivations() []upgrade.Derivation {
 // than from this slice, so a step added in the wrong place still runs in the
 // right one.
 func migrationSteps() []upgrade.Step {
-	return append(steps.Upgrade(), steps.Ownership()...)
+	all := steps.Upgrade()
+	all = append(all, steps.Ownership()...)
+	return append(all, steps.Migrate()...)
 }
 
 // transformations are the object mappings conversion cannot carry (§16).
