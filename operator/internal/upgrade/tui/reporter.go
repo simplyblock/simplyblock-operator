@@ -128,10 +128,16 @@ func (r *Reporter) Progress(format string, args ...any) {
 	r.program.Send(printMsg{text: "  " + fmt.Sprintf(format, args...)})
 }
 
-// Close stops the program and waits for the terminal to be given back.
+// Close drains what is queued, stops the program, and waits for the terminal to
+// be given back.
+//
+// It does not quit directly. bubbletea runs the command a message returns in a
+// goroutine, so a quit sent while prints are outstanding races them, and the
+// last line of a run is the one most worth keeping. The model quits itself once
+// its queue is empty, which is the only point at which nothing is in flight.
 func (r *Reporter) Close() error {
 	r.closeOnce.Do(func() {
-		r.program.Quit()
+		r.program.Send(closeMsg{})
 		<-r.done
 	})
 	return nil
@@ -170,6 +176,14 @@ type (
 		text       string
 		blankAfter bool
 	}
+
+	// closeMsg asks the model to quit once it has printed what it holds.
+	closeMsg struct{}
+
+	// flushedMsg reports that the queued lines reached the terminal, and is
+	// what lets the next flush start. One flush in flight at a time is what
+	// keeps the scrollback in order.
+	flushedMsg struct{}
 )
 
 // model is the live view: what is running, and how far along the stage is.
@@ -196,23 +210,35 @@ type model struct {
 	itemsDone  int
 
 	width int
+
+	// pending holds lines waiting to be printed, flushing keeps one print in
+	// flight, and closing records that the run asked to stop while lines were
+	// still queued.
+	//
+	// One print in flight at a time is what keeps the scrollback in order.
+	// bubbletea runs the command a message returns in a goroutine, so two
+	// Println commands issued from two updates race, and the line a discoverer
+	// finished with can reach the terminal after the summary that follows it.
+	pending  []string
+	flushing bool
+	closing  bool
 }
 
-func newModel() model {
+func newModel() *model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = styleSpinner
 
-	return model{
+	return &model{
 		spinner:  s,
 		progress: progress.New(progress.WithDefaultGradient(), progress.WithWidth(40)),
 		width:    80,
 	}
 }
 
-func (m model) Init() tea.Cmd { return m.spinner.Tick }
+func (m *model) Init() tea.Cmd { return m.spinner.Tick }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -232,27 +258,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stage = msg.stage
 		m.phase, m.section, m.current = "", "", ""
 		m.total, m.completed = 0, 0
-		return m, tea.Batch(
-			tea.Println(styleStage.Render(fmt.Sprintf("── %s ──", msg.stage))),
-			m.progress.SetPercent(0),
-		)
+		return m, tea.Batch(m.enqueue(styleStage.Render(fmt.Sprintf("── %s ──", msg.stage))), m.progress.SetPercent(0))
 
 	case sectionMsg:
 		m.section, m.total, m.completed = msg.label, msg.total, 0
 		m.current, m.item = "", ""
-		return m, tea.Batch(
-			tea.Println(stylePhase.Render(fmt.Sprintf("  %s", msg.label))),
-			m.progress.SetPercent(0),
-		)
+		return m, tea.Batch(m.enqueue(stylePhase.Render(fmt.Sprintf("  %s", msg.label))), m.progress.SetPercent(0))
 
 	case phaseMsg:
 		m.phase, m.section = msg.phase, msg.phase.Describe()
 		m.total, m.completed = msg.steps, 0
 		m.current, m.item = "", ""
-		return m, tea.Batch(
-			tea.Println(stylePhase.Render(fmt.Sprintf("  %s", msg.phase.Describe()))),
-			m.progress.SetPercent(0),
-		)
+		return m, tea.Batch(m.enqueue(stylePhase.Render(fmt.Sprintf("  %s", msg.phase.Describe()))), m.progress.SetPercent(0))
 
 	case ruleMsg:
 		m.current, m.description = msg.id, msg.description
@@ -272,16 +289,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.completed++
 		m.current, m.item = "", ""
 		m.itemsTotal, m.itemsDone = 0, 0
-		return m, tea.Batch(
-			tea.Println(renderOutcome(msg)),
-			m.progress.SetPercent(m.fraction()),
-		)
+		return m, tea.Batch(m.enqueue(renderOutcome(msg)), m.progress.SetPercent(m.fraction()))
 
 	case printMsg:
 		if msg.blankAfter {
-			return m, tea.Println(msg.text + "\n")
+			return m, m.enqueue(msg.text + "\n")
 		}
-		return m, tea.Println(msg.text)
+		return m, m.enqueue(msg.text)
+
+	case flushedMsg:
+		m.flushing = false
+		if cmd := m.flush(); cmd != nil {
+			return m, cmd
+		}
+		if m.closing {
+			return m, tea.Quit
+		}
+		return m, nil
+
+	case closeMsg:
+		m.closing = true
+		if m.flushing || len(m.pending) > 0 {
+			// Quit once the queue drains, so the last line of a run is not the
+			// one a race drops.
+			return m, nil
+		}
+		return m, tea.Quit
 
 	case progress.FrameMsg:
 		updated, cmd := m.progress.Update(msg)
@@ -295,9 +328,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// enqueue adds a line to the scrollback and starts a print when none is in
+// flight. Returning nil is normal: the line goes out with the flush already
+// running.
+func (m *model) enqueue(line string) tea.Cmd {
+	m.pending = append(m.pending, line)
+	return m.flush()
+}
+
+// flush prints everything queued as one Println, which is atomic, and reports
+// back so the next flush can start.
+func (m *model) flush() tea.Cmd {
+	if m.flushing || len(m.pending) == 0 {
+		return nil
+	}
+
+	text := strings.Join(m.pending, "\n")
+	m.pending, m.flushing = nil, true
+	return tea.Sequence(
+		tea.Println(text),
+		func() tea.Msg { return flushedMsg{} },
+	)
+}
+
 // fraction is how far the current stage or phase has got, and is zero for work
 // that was not countable in advance.
-func (m model) fraction() float64 {
+func (m *model) fraction() float64 {
 	if m.total <= 0 {
 		return 0
 	}
@@ -310,8 +366,11 @@ func (m model) fraction() float64 {
 // sentence a user recognizes and a rule identity is a slug this tool made up.
 // The rule and whatever it is walking follow it, dimmed, and they are what
 // changes often enough to tell a slow run from a hung one.
-func (m model) View() string {
-	if m.section == "" && m.current == "" {
+func (m *model) View() string {
+	if m.closing || (m.section == "" && m.current == "") {
+		// A run that has stopped leaves its last frame on screen otherwise, and
+		// a half-drawn progress bar under a finished report reads as a run that
+		// hung.
 		return ""
 	}
 
@@ -327,7 +386,7 @@ func (m model) View() string {
 // detail is what follows the activity: the rule that is running, and the item
 // it is on. On a large cluster this is the only thing that moves for minutes at
 // a time, which is what makes a slow run distinguishable from a hung one.
-func (m model) detail() string {
+func (m *model) detail() string {
 	if m.current == "" {
 		return ""
 	}

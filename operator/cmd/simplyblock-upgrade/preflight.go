@@ -52,17 +52,34 @@ func newPreflightCommand(global *globalOptions) *cobra.Command {
 			session.Reporter.Block("The ownership spine, and what the migration does to it",
 				spine.Render(spine.Build(session.Runner.Scope)))
 
-			// The plan is reported for the stage the cluster is positioned
-			// for, which is derived from the cluster rather than passed by the
-			// user (§22.1, §27).
-			stage := upgrade.StageUpgrade
-			session.Runner.Scope.Stage = stage
+			// The plan is for the stage the cluster is positioned for, which is
+			// read from the cluster rather than passed by the user (§27).
+			position, err := upgrade.Positioned(ctx, session.Runner.Scope)
+			if err != nil {
+				return err
+			}
+			session.Runner.Scope.Stage = position.Stage
+			session.Reporter.Block(
+				fmt.Sprintf("This cluster is positioned for %s", position.Stage),
+				[]string{position.Because})
 
-			plan, err := session.Runner.Plan(ctx, stage)
+			plan, err := session.Runner.Plan(ctx, position.Stage)
 			if err != nil {
 				return err
 			}
 			session.Reporter.Plan(plan)
+
+			// A stage whose steps this build does not carry produces an empty
+			// plan, and an empty plan and a cluster with nothing to do look
+			// identical. Saying which is the difference between a report and a
+			// silence.
+			steps, err := session.Runner.Catalog.StepsFor(position.Stage, session.Runner.Scope.Options)
+			if err == nil && len(steps) == 0 {
+				session.Reporter.Progress(
+					"no %s steps are registered in this build, so the plan above is empty "+
+						"because nothing implements that stage yet, not because there is nothing to do",
+					position.Stage)
+			}
 
 			if plan.Blocked() {
 				return fmt.Errorf("preflight failed: %d violations, and no changes were made",
