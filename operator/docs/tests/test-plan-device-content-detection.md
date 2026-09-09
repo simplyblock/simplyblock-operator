@@ -202,7 +202,7 @@ inverts.
 Live simplyblock cluster, real fabric faults, and an assertion about the volume's
 bytes rather than about a log line.
 
-File: `csi-driver/e2e/blkid_unreadable.go`
+File: none. Every row below lands with the spec that covers it.
 
 | #    | Scenario                                                                                                | Type       | Test |
 |------|---------------------------------------------------------------------------------------------------------|------------|------|
@@ -214,10 +214,20 @@ File: `csi-driver/e2e/blkid_unreadable.go`
 | E-06 | The refusal is visible on the PVC as a `DeviceUnreadable` event                                         | Positive   | —    |
 | E-07 | An LVM-backed volume whose paths are down is not re-`pvcreate`d                                         | Regression | —    |
 
-E-01 is the incident. The existing `SPDKCSI-BLKID-UNREADABLE` spec already
-implements this scenario against the shipped annotation guard, and it is retargeted
-to assert the same outcome through the reading rather than through `blkid`'s exit
-code. Its `It` is currently named for the tool, which is what changes.
+E-01 is the incident, and where its device state lives is why the class is empty.
+A mounted volume keeps its superblock pinned in the block device's page cache, so
+a probe of it answers out of memory however dead the fabric behind it is. The
+reading this design is about exists between the unmount that releases that page
+and the disconnect that removes the device, and that window belongs to the node
+plugin's staging path rather than to a spec driving a cluster from outside it. The
+same device state is held on the nvmet harness instead, with nothing mounted and
+the subsystem withdrawn from its port (§3).
+
+What a live cluster covers is the guard being armed: the ext4 spec of
+`SPDKCSI-FILESYSTEM` asserts that the node plugin recorded the staged filesystem
+on the claim, which is what a blank reading is settled against today. A narrowed
+RBAC or a claim the plugin no longer resolves disarms that guard with no other
+symptom, and only a cluster carries the RBAC.
 
 ---
 
@@ -337,7 +347,7 @@ expectation is met.
 | I-05, I-07…I-09 | Fabric faults, a warm cache, and the direct-read fallback | Need the nvmet harness rather than a loop device, so they land with a suite there                               |
 | I-10            | Asserts the pre-design behavior                           | Inverted by this design, retargeted rather than deleted                                                         |
 | I-12, I-13      | Re-capture, and a real `mkfs.vfat` namespace              | Land with the capture script and with the FAT rows it feeds                                                     |
-| E-01…E-07       | The incident, end to end                                  | `SPDKCSI-BLKID-UNREADABLE` covers E-01's shape against the annotation guard and is retargeted to the reading    |
+| E-01…E-07       | The incident, end to end                                  | No spec. The state lives inside the node plugin's staging path. I-05…I-10 hold it on the nvmet harness (§4)     |
 | M-01            | A storage layer serving zeros                             | No injectable fault produces it, and its Phase 2 expectation is unsettled. This is the design's stated exposure |
 | M-02            | Stray non-zero bytes                                      | Needs a deliberately dirtied device, and its value is in the transition window rather than in the steady state  |
 

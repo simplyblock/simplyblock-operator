@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-09-04  
+**Date:** 2026-09-04 (last updated 2026-09-09)  
 **Related PR:** [#481](https://github.com/simplyblock/simplyblock-operator/pull/481)  
 **Amends:** [`design-node-volume-stack.md`](design-node-volume-stack.md) §5.3 and §5.5  
 **Test Plan:** [`tests/test-plan-device-content-detection.md`](../tests/test-plan-device-content-detection.md)
@@ -603,8 +603,13 @@ Full scenario matrix, coverage status, and hand-off test concepts:
   re-taken, so a fixture and the tool that produced it can be compared on a
   current image.
 - **E2E:** the incident, on a live cluster: a volume with data, a fabric that goes
-  away, a restage, and the filesystem UUID unchanged afterward. This exists
-  already as `SPDKCSI-BLKID-UNREADABLE` and is retargeted rather than rewritten.
+  away, a restage, and the filesystem UUID unchanged afterward. No spec covers it.
+  The device state this design turns on exists between the unmount that releases
+  the filesystem's pinned superblock and the disconnect that removes the device, a
+  window inside the node plugin's own staging path, and a probe run from outside it
+  answers out of the page cache. What a live cluster covers is that the guard is
+  armed, which is the claim annotation the ext4 spec of `SPDKCSI-FILESYSTEM`
+  asserts.
 - **Load:** none. Nothing here is on a hot path, and the read happens once per
   stage.
 
