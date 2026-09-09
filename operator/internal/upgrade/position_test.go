@@ -67,21 +67,30 @@ func converting(versions ...string) []client.Object {
 	return out
 }
 
-func TestPositioned_ACLusterServingOnlyTheOldVersionIsForUpgrade(t *testing.T) {
+func TestPositioned_AClusterServingOnlyTheOldVersionIsForUpgrade(t *testing.T) {
 	position := positionOver(t, converting(VersionOld)...)
 
 	if position.Stage != StageUpgrade {
 		t.Fatalf("stage = %q, want %q", position.Stage, StageUpgrade)
 	}
-	if !strings.Contains(position.Because, "cannot run an operator") {
-		t.Errorf("the reason does not say why: %q", position.Because)
+	// The reason says where the cluster stands, not what is wrong with it.
+	// Serving one version is where every installation starts, and applying
+	// those CRDs is what the upgrade is for, so reporting it as a deficiency
+	// describes the upgrade's own premise as a finding.
+	if !strings.Contains(position.Because, "where an installation stands") {
+		t.Errorf("the reason does not say this is the starting state: %q", position.Because)
+	}
+	for _, wrong := range []string{"cannot", "no converting kind", "not able"} {
+		if strings.Contains(position.Because, wrong) {
+			t.Errorf("the reason reads as a fault rather than a position: %q", position.Because)
+		}
 	}
 	if len(position.Pending) != len(ConvertingKinds()) {
 		t.Errorf("pending = %v, want every converting kind", position.Pending)
 	}
 }
 
-func TestPositioned_ACLusterServingBothIsForMigrate(t *testing.T) {
+func TestPositioned_AClusterServingBothIsForMigrate(t *testing.T) {
 	// §7.4's staging: the upgrade leaves both versions served, and the resource
 	// model is what is left to change.
 	position := positionOver(t, converting(VersionOld, VersionNew)...)
@@ -111,8 +120,12 @@ func TestPositioned_APartiallyAppliedSetIsForUpgradeAndSaysSo(t *testing.T) {
 	if !position.Partial() {
 		t.Fatal("a set applied to one kind and not the rest was not reported as partial")
 	}
-	if !strings.Contains(position.Because, "one kind at each version") {
-		t.Errorf("the reason does not say what is wrong with it: %q", position.Because)
+	// This one is a fault, and says so: a set applied to some kinds and not
+	// others is not a state any installation passes through on purpose.
+	for _, want := range []string{"half-applied", "one kind at each version"} {
+		if !strings.Contains(position.Because, want) {
+			t.Errorf("the reason does not say what is wrong with it: %q", position.Because)
+		}
 	}
 }
 

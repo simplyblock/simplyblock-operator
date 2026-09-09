@@ -62,7 +62,10 @@ type Position struct {
 	// Stage is the command the cluster is positioned for.
 	Stage Stage
 
-	// Because is the sentence a report prints under it.
+	// Because is the sentence a report prints under it. It says where the
+	// cluster stands rather than what is missing from it: serving one version
+	// is the state every installation starts in, and reporting that as a
+	// deficiency describes the upgrade's own premise as a finding.
 	Because string
 
 	// Converted are the kinds already serving the new version, and Pending the
@@ -106,24 +109,33 @@ func Positioned(ctx context.Context, s *Scope) (Position, error) {
 	sort.Strings(position.Converted)
 	sort.Strings(position.Pending)
 
+	total := len(position.Converted) + len(position.Pending)
+
 	switch {
 	case len(position.Pending) == 0:
 		position.Stage = StageMigrate
 		position.Because = fmt.Sprintf(
-			"every one of the %d converting kinds serves %s, so the API upgrade is done and the resource model is not",
-			len(position.Converted), VersionNew)
+			"all %d kinds that gain a %s serve it, so the API upgrade is done and the resource model is what is left to change",
+			total, VersionNew)
+
 	case position.Partial():
-		// Positioned for the upgrade, because that is the command that would
-		// finish applying the set.
+		// A fault rather than a starting point, and the upgrade is the command
+		// that would finish applying the set.
 		position.Stage = StageUpgrade
 		position.Because = fmt.Sprintf(
-			"%d of the %d converting kinds serve %s and %d do not, which leaves the operator reconciling one kind at each version",
-			len(position.Converted), len(position.Converted)+len(position.Pending), VersionNew, len(position.Pending))
+			"%d of the %d kinds that gain a %s serve it and %d do not, which is a half-applied CRD set: "+
+				"it leaves the operator reconciling one kind at each version",
+			len(position.Converted), total, VersionNew, len(position.Pending))
+
 	default:
+		// The state every installation is in before it is upgraded. It is
+		// where the cluster stands, not something wrong with it, and applying
+		// those CRDs is what the upgrade is for.
 		position.Stage = StageUpgrade
 		position.Because = fmt.Sprintf(
-			"no converting kind serves %s yet, so the cluster cannot run an operator that reads it",
-			VersionNew)
+			"the %d kinds that gain a %s serve %s alone, which is where an installation stands "+
+				"until the upgrade applies the new CRDs",
+			total, VersionNew, VersionOld)
 	}
 	return position, nil
 }
