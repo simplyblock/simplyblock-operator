@@ -436,7 +436,7 @@ the far side of the sync that is failing. This is a bootstrap deadlock rather th
 a race: waiting longer never resolves it.
 
 **The symptom is quieter than a crash, which is what makes it worth stating.**
-The cache sync blocks until the process is cancelled rather than giving up, and
+The cache sync blocks until the process is canceled rather than giving up, and
 the health probes are served by the HTTP servers that started before it. The pod
 therefore reports Ready and keeps reporting Ready while reconciling nothing. There
 is no restart to notice and no `CrashLoopBackOff` to find — the operator looks

@@ -12,7 +12,7 @@
 // on the far side of the sync that is failing.
 //
 // The symptom is worse than a crash. WaitForCacheSync blocks until the context is
-// cancelled rather than giving up, and the health probes are served by the HTTP
+// canceled rather than giving up, and the health probes are served by the HTTP
 // servers that started first, so the pod goes Ready and stays Ready while
 // reconciling nothing at all. There is no restart to notice and no CrashLoopBackOff
 // to find: the operator looks healthy and is inert.
@@ -81,14 +81,20 @@ type trustBootstrapper struct {
 	namespace string
 	dnsName   string
 	certDir   string
+	// serviceName and secretName are the conversion webhook's own, not the
+	// operator's. design-api-upgrade.md §6.1 is why they cannot be shared: a
+	// webhook waiting on the operator's Secret waits on the operator having
+	// started, which is the coupling the separate deployment removes.
+	serviceName string
+	secretName  string
 	// tlsProvider selects where the serving certificate comes from. Anything other
 	// than cert-manager is self-signed, matching utils.IsCertManagerTLSProvider.
 	tlsProvider string
 }
 
-// BootstrapConversionTrust provisions the webhook's serving certificate and tells
-// the API server to trust it, before the manager starts. See this file's opening
-// comment for why it cannot be a Runnable.
+// BootstrapConversionTrust provisions the conversion webhook's serving
+// certificate and tells the API server to trust it, before the manager starts.
+// See this file's opening comment for why it cannot be a Runnable.
 func BootstrapConversionTrust(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme,
 	namespace, tlsProvider string,
 ) error {
@@ -101,8 +107,10 @@ func BootstrapConversionTrust(ctx context.Context, cfg *rest.Config, scheme *run
 		client:      c,
 		apiReader:   c,
 		namespace:   namespace,
-		dnsName:     fmt.Sprintf("%s.%s.svc", utils.WebhookServiceName, namespace),
-		certDir:     utils.WebhookCertDir,
+		dnsName:     fmt.Sprintf("%s.%s.svc", utils.ConversionWebhookServiceName, namespace),
+		certDir:     utils.ConversionWebhookCertDir,
+		serviceName: utils.ConversionWebhookServiceName,
+		secretName:  utils.ConversionWebhookServerCertSecret,
 		tlsProvider: tlsProvider,
 	}
 	return b.run(ctx)
@@ -124,7 +132,7 @@ func (b *trustBootstrapper) run(ctx context.Context) error {
 		return err
 	}
 
-	return injectConversionTrust(ctx, b.client, b.apiReader, ca, b.namespace)
+	return injectConversionTrustFor(ctx, b.client, b.apiReader, ca, b.namespace, b.serviceName)
 }
 
 // awaitCertManagerMaterial waits for the Secret cert-manager issues, then writes
@@ -136,7 +144,7 @@ func (b *trustBootstrapper) run(ctx context.Context) error {
 // install under cert-manager therefore restarts once, which is visible and
 // bounded, rather than silently proceeding without trust.
 func (b *trustBootstrapper) awaitCertManagerMaterial(ctx context.Context) ([]byte, error) {
-	cert := utils.BuildServiceServingCertificate(b.namespace, utils.WebhookServiceName, utils.WebhookServerCertSecret)
+	cert := utils.BuildServiceServingCertificate(b.namespace, b.serviceName, b.secretName)
 	if err := b.client.Create(ctx, cert); err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("create webhook Certificate: %w", err)
 	}
@@ -144,7 +152,7 @@ func (b *trustBootstrapper) awaitCertManagerMaterial(ctx context.Context) ([]byt
 	deadline := time.Now().Add(certManagerWaitTimeout)
 	for {
 		var secret corev1.Secret
-		key := types.NamespacedName{Namespace: b.namespace, Name: utils.WebhookServerCertSecret}
+		key := types.NamespacedName{Namespace: b.namespace, Name: b.secretName}
 		err := b.apiReader.Get(ctx, key, &secret)
 		if err == nil {
 			crt := secret.Data[tlsCertFileName]
@@ -167,7 +175,7 @@ func (b *trustBootstrapper) awaitCertManagerMaterial(ctx context.Context) ([]byt
 
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("cert-manager did not issue %s within %s",
-				utils.WebhookServerCertSecret, certManagerWaitTimeout)
+				b.secretName, certManagerWaitTimeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -185,7 +193,7 @@ func (b *trustBootstrapper) awaitCertManagerMaterial(ctx context.Context) ([]byt
 // window in which the API server rejects the webhook it was just told to trust.
 func (b *trustBootstrapper) ensureSelfSignedMaterial(ctx context.Context) ([]byte, error) {
 	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: b.namespace, Name: utils.WebhookServerCertSecret}
+	key := types.NamespacedName{Namespace: b.namespace, Name: b.secretName}
 
 	err := b.apiReader.Get(ctx, key, &secret)
 	switch {
@@ -198,7 +206,7 @@ func (b *trustBootstrapper) ensureSelfSignedMaterial(ctx context.Context) ([]byt
 		}
 	case apierrors.IsNotFound(err):
 		secret = corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: b.namespace, Name: utils.WebhookServerCertSecret},
+			ObjectMeta: metav1.ObjectMeta{Namespace: b.namespace, Name: b.secretName},
 		}
 	default:
 		return nil, fmt.Errorf("get serving cert secret: %w", err)

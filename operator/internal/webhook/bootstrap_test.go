@@ -42,11 +42,13 @@ func newBootstrapper(t *testing.T, objs ...*apiextensionsv1.CustomResourceDefini
 	c := builder.Build()
 
 	return &trustBootstrapper{
-		client:    c,
-		apiReader: c,
-		namespace: bootstrapNamespace,
-		dnsName:   utils.WebhookServiceName + "." + bootstrapNamespace + ".svc",
-		certDir:   t.TempDir(),
+		client:      c,
+		apiReader:   c,
+		namespace:   bootstrapNamespace,
+		dnsName:     utils.ConversionWebhookServiceName + "." + bootstrapNamespace + ".svc",
+		certDir:     t.TempDir(),
+		serviceName: utils.ConversionWebhookServiceName,
+		secretName:  utils.ConversionWebhookServerCertSecret,
 	}
 }
 
@@ -59,7 +61,7 @@ func TestBootstrapMakesTheConversionWebhookTrustedBeforeAnyManagerRuns(t *testin
 	crd := convertedCRD(crdName)
 	crd.Spec.Conversion.Webhook.ClientConfig.Service = &apiextensionsv1.ServiceReference{
 		Namespace: "simplyblock-operator-system",
-		Name:      utils.WebhookServiceName,
+		Name:      utils.ConversionWebhookServiceName,
 	}
 
 	b := newBootstrapper(t, crd)
@@ -120,7 +122,7 @@ func TestBootstrapStoresMaterialTheRotatorCanAdopt(t *testing.T) {
 	}
 
 	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: b.namespace, Name: utils.WebhookServerCertSecret}
+	key := types.NamespacedName{Namespace: b.namespace, Name: b.secretName}
 	if err := b.apiReader.Get(context.Background(), key, &secret); err != nil {
 		t.Fatalf("get serving secret: %v", err)
 	}

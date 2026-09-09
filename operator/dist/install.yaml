@@ -1071,7 +1071,7 @@ spec:
     webhook:
       clientConfig:
         service:
-          name: simplyblock-operator-webhook-service
+          name: simplyblock-operator-conversion-webhook-service
           namespace: simplyblock-operator-system
           path: /convert
       conversionReviewVersions:
@@ -2706,7 +2706,7 @@ spec:
     webhook:
       clientConfig:
         service:
-          name: simplyblock-operator-webhook-service
+          name: simplyblock-operator-conversion-webhook-service
           namespace: simplyblock-operator-system
           path: /convert
       conversionReviewVersions:
@@ -3077,7 +3077,7 @@ spec:
     webhook:
       clientConfig:
         service:
-          name: simplyblock-operator-webhook-service
+          name: simplyblock-operator-conversion-webhook-service
           namespace: simplyblock-operator-system
           path: /convert
       conversionReviewVersions:
@@ -4196,7 +4196,7 @@ spec:
     webhook:
       clientConfig:
         service:
-          name: simplyblock-operator-webhook-service
+          name: simplyblock-operator-conversion-webhook-service
           namespace: simplyblock-operator-system
           path: /convert
       conversionReviewVersions:

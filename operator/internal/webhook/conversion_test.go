@@ -191,7 +191,7 @@ func TestReconcileCertCorrectsTheConversionServiceNamespace(t *testing.T) {
 	crd := convertedCRD(crdName)
 	crd.Spec.Conversion.Webhook.ClientConfig.Service = &apiextensionsv1.ServiceReference{
 		Namespace: "some-other-namespace",
-		Name:      utils.WebhookServiceName,
+		Name:      utils.ConversionWebhookServiceName,
 		Path:      ptr.To("/convert"),
 	}
 
@@ -213,8 +213,8 @@ func TestReconcileCertCorrectsTheConversionServiceNamespace(t *testing.T) {
 	if svc.Namespace != "tenant-a" {
 		t.Errorf("conversion service namespace = %q, want %q", svc.Namespace, "tenant-a")
 	}
-	if svc.Name != utils.WebhookServiceName {
-		t.Errorf("conversion service name = %q, want %q", svc.Name, utils.WebhookServiceName)
+	if svc.Name != utils.ConversionWebhookServiceName {
+		t.Errorf("conversion service name = %q, want %q", svc.Name, utils.ConversionWebhookServiceName)
 	}
 }
 
@@ -248,7 +248,7 @@ func TestConversionServiceReferenceCorrectsACRDThatAppearsLater(t *testing.T) {
 	crd := convertedCRD(crdName)
 	crd.Spec.Conversion.Webhook.ClientConfig.Service = &apiextensionsv1.ServiceReference{
 		Namespace: "some-other-namespace",
-		Name:      utils.WebhookServiceName,
+		Name:      utils.ConversionWebhookServiceName,
 		Path:      ptr.To("/convert"),
 	}
 	time.Sleep(30 * time.Millisecond)

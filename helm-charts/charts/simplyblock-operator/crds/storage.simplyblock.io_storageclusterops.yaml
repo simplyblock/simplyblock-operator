@@ -298,5 +298,5 @@ spec:
       clientConfig:
         service:
           namespace: simplyblock-operator-system
-          name: simplyblock-operator-webhook-service
+          name: simplyblock-operator-conversion-webhook-service
           path: /convert

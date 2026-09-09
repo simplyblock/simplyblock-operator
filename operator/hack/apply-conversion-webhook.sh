@@ -30,7 +30,7 @@ YQ="${2:?usage: apply-conversion-webhook.sh <crd-bases-dir> <yq-binary>}"
 
 LIST="$(dirname "$CRD_DIR")/converted-kinds.txt"
 SERVICE_NAMESPACE="simplyblock-operator-system"
-SERVICE_NAME="simplyblock-operator-webhook-service"
+SERVICE_NAME="simplyblock-operator-conversion-webhook-service"
 
 if [ ! -f "$LIST" ]; then
   echo "missing converted-kinds list: $LIST" >&2

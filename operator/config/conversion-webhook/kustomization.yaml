@@ -1,0 +1,13 @@
+# The conversion webhook's workload, applied by the upgrade tool rather than by
+# the chart or config/default.
+#
+# It is deliberately not part of the operator's own install. The webhook exists
+# for the span of an API migration (design-api-upgrade.md §28), and a Deployment
+# the chart owned would outlive the reason for it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - service.yaml
+  - deployment.yaml

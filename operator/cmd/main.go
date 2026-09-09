@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -36,7 +35,6 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -79,14 +77,10 @@ type serverGroupsGetter interface {
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	// The conversion webhook's CA bundle is injected into the CRDs that declare a
-	// converted kind, so the manager's client has to know that kind.
-	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
-
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
-	// v1alpha2 is the storage version and the shape every controller reads for the
-	// kinds that have one. v1alpha1 stays registered because the conversion webhook
-	// has to decode it.
+	// v1alpha2 is the shape every controller reads for the kinds that have one.
+	// v1alpha1 stays registered because it is still the storage version and still
+	// served (design-property-renames.md §3.8).
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -649,36 +643,10 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Make the conversion webhook usable before the manager starts.
-	//
-	// The manager syncs its caches before it runs any Runnable that is not an HTTP
-	// or webhook server, and syncing a cache over a converted kind makes the API
-	// server call this operator's conversion webhook. A CA injected by a Runnable
-	// would therefore arrive after the list that needs it: the list fails, the
-	// cache never syncs, the manager exits, and the injection never runs. See
-	// internal/webhook/bootstrap.go.
-	if err := internalwebhook.BootstrapConversionTrust(
-		context.Background(), cfg, scheme, operatorNamespace, tlsProvider,
-	); err != nil {
-		setupLog.Error(err, "unable to bootstrap the conversion webhook's trust")
-		os.Exit(1)
-	}
-	setupLog.Info("bootstrapped the conversion webhook's serving certificate and CA bundle")
-
-	// The conversion webhook serves every kind that declares more than one
-	// version, from the one /convert path. It is registered here, synchronously,
-	// rather than with the admission webhooks below: controller-runtime starts
-	// webhook servers before it syncs caches precisely so conversion can answer,
-	// and a registration deferred to a goroutine forfeits that guarantee.
-	if err := internalwebhook.SetupConversionWebhooks(mgr); err != nil {
-		setupLog.Error(err, "unable to register the CRD conversion webhook")
-		os.Exit(1)
-	}
-	setupLog.Info("registered CRD conversion webhook")
-
-	// Keep the certificate rotating. The bootstrap above only guarantees the first
-	// pass; cert-controller's rotator and the cert-manager provisioner own renewal
-	// and re-inject the bundle whenever the material changes.
+	// Provision the admission webhooks' serving certificate at runtime (self-signed
+	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	// Conversion is not served here: it runs as its own Deployment
+	// (design-api-upgrade.md §6.1, cmd/conversion-webhook).
 	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
 	if err != nil {
 		setupLog.Error(err, "unable to set up webhook serving certificate")

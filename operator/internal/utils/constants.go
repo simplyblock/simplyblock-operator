@@ -89,6 +89,22 @@ const (
 	// the config/default/manager_webhook_patch.yaml emptyDir mount lines up.
 	WebhookCertDir = "/tmp/k8s-webhook-server/serving-certs"
 
+	// Conversion-webhook wiring. The conversion webhook runs as its own
+	// Deployment rather than inside the operator
+	// (design-api-upgrade.md §6.1): a CRD whose conversion strategy is Webhook
+	// cannot be read at all while the webhook is unreachable, and the objects an
+	// administrator reads to diagnose a failed operator are simplyblock custom
+	// resources. Sharing the operator's process would make those unreadable
+	// exactly when they are needed.
+	//
+	// Its Service, Secret, and certificate directory are therefore its own. The
+	// operator's rotator pre-creates and owns WebhookServerCertSecret, so a
+	// conversion webhook waiting on that Secret would be waiting on the operator
+	// having started, which is the coupling §6.1 removes.
+	ConversionWebhookServiceName      = "simplyblock-operator-conversion-webhook-service"
+	ConversionWebhookServerCertSecret = "conversion-webhook-server-cert"
+	ConversionWebhookCertDir          = "/tmp/k8s-conversion-webhook-server/serving-certs"
+
 	// Aggregated metrics API wiring. MetricsAPIServiceName carries the Kustomize
 	// namePrefix (simplyblock-operator-) applied in config/default. The
 	// APIService objects are not named here: their names are fixed by Kubernetes
