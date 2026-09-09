@@ -17,9 +17,7 @@ package check
 import (
 	"context"
 	"fmt"
-	"sort"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
@@ -57,23 +55,12 @@ func AnnotationSpellings() upgrade.Check {
 // promise about where it is.
 func conflictsFor(s *upgrade.Scope, key keys.Key) upgrade.Findings {
 	var findings upgrade.Findings
-	for _, gvk := range sortedKinds(s.Graph) {
-		for _, obj := range s.Graph.OfKind(gvk) {
-			for _, conflict := range key.Conflicts(obj.GetLabels(), obj.GetAnnotations()) {
-				findings = append(findings, disagrees(s, obj, conflict))
-			}
+	for _, obj := range s.Graph.Objects() {
+		for _, conflict := range key.Conflicts(obj.GetLabels(), obj.GetAnnotations()) {
+			findings = append(findings, disagrees(s, obj, conflict))
 		}
 	}
 	return findings
-}
-
-// sortedKinds returns a graph's kinds in a stable order, since the graph indexes
-// them in a map and a report that reorders itself between runs reads as a
-// change.
-func sortedKinds(graph *upgrade.Graph) []schema.GroupVersionKind {
-	kinds := graph.Kinds()
-	sort.Slice(kinds, func(i, j int) bool { return kinds[i].String() < kinds[j].String() })
-	return kinds
 }
 
 // disagrees renders one conflict.

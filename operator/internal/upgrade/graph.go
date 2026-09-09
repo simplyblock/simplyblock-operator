@@ -150,6 +150,26 @@ func (g *Graph) Kinds() []schema.GroupVersionKind {
 	return out
 }
 
+// SortedKinds returns the graph's kinds in a stable order. The kinds are
+// indexed in a map, so a walk that took them as they came would reorder itself
+// between runs and a user diffing two reports would read that as a change.
+func (g *Graph) SortedKinds() []schema.GroupVersionKind {
+	kinds := g.Kinds()
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i].String() < kinds[j].String() })
+	return kinds
+}
+
+// Objects returns every object in the graph, kinds in sorted order and objects
+// in discovery order within a kind. It is the walk a per-object step is driven
+// over.
+func (g *Graph) Objects() []client.Object {
+	out := make([]client.Object, 0, g.Len())
+	for _, gvk := range g.SortedKinds() {
+		out = append(out, g.OfKind(gvk)...)
+	}
+	return out
+}
+
 // Get returns the object with this identity.
 func (g *Graph) Get(id ObjectIdentity) (client.Object, bool) {
 	g.mu.RLock()
