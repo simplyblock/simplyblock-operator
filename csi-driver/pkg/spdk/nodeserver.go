@@ -35,6 +35,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/kube"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -152,7 +153,7 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 	}
 
 	for key, val := range node.Labels {
-		if strings.HasPrefix(key, "simplyblock.io/pool.") && val == "allowed" {
+		if strings.HasPrefix(key, kube.LabelPoolPrefix) && val == kube.LabelPoolAllowed {
 			segments[key] = val
 		}
 		if strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {

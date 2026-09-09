@@ -67,7 +67,7 @@ const (
 	paramClusterID          = "cluster_id"
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
-	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
+	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key; see kube.PoolNodeLabelKey
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
@@ -92,11 +92,6 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
-// dhchapAllowedNodeLabelValue must match the literal value the operator's
-// syncNodeLabels writes onto every node in a pool's AllowedNodes
-// (simplyblockstoragepool_controller.go) — see dhchapAllowedNodeSegment.
-const dhchapAllowedNodeLabelValue = "allowed"
-
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
 // to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
 // ungated volume. Matches the exact key from paramDHCHAPNodeSelector rather than
@@ -119,7 +114,7 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 	if key == "" {
 		return "", ""
 	}
-	return key, dhchapAllowedNodeLabelValue
+	return key, kube.LabelPoolAllowed
 }
 
 type controllerServer struct {
