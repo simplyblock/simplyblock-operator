@@ -921,16 +921,15 @@ competing with.
 
 ### 5.2 The storage-plane labels
 
-Three labels on the Kubernetes `Node` object make the workload land, and one of
+Two labels on the Kubernetes `Node` object make the workload land, and one of
 them is load-bearing far outside this document.
 
-| Label                                                   | Value                         | Read by                                   |
-|---------------------------------------------------------|-------------------------------|-------------------------------------------|
-| `io.simplyblock.node-type`                              | The storage-plane value       | The DaemonSet's node selector             |
-| `io.simplyblock.storagenodeset`                         | The node set name             | The DaemonSet's node selector             |
-| `simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>` | The backend storage node UUID | The CSI node plugin and controller plugin |
+| Label                                                   | Value                         | Read by                                                                      |
+|---------------------------------------------------------|-------------------------------|------------------------------------------------------------------------------|
+| `io.simplyblock.storagenodeset`                         | The node set name             | The DaemonSet's node selector, and the numa-plugin and fluent-bit affinities |
+| `simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>` | The backend storage node UUID | The CSI node plugin and controller plugin                                    |
 
-**The third label's key must never change for a worker's lifetime, and its value
+**The second label's key must never change for a worker's lifetime, and its value
 may change freely.** Kubernetes' external-provisioner caches the *set* of topology
 keys in the `CSINode` object when the node plugin registers, refreshes it only
 when that pod restarts, and then hard-errors `CreateVolume` when a live `Node`'s

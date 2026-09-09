@@ -52,8 +52,10 @@ spec:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
+            # Present on every storage-plane worker the operator enrolls; it
+            # replaced io.simplyblock.node-type, which marked the same nodes.
             - matchExpressions:
-              - key: io.simplyblock.node-type
+              - key: io.simplyblock.storagenodeset
                 operator: Exists
             {{- if .Values.controlplane.nodeSelector.create }}
             - matchExpressions:

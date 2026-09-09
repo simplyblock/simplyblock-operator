@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -108,10 +109,15 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 			if err := r.Get(context.Background(), client.ObjectKey{Name: nodeName}, &n); err != nil {
 				t.Fatalf("failed to fetch node %s: %v", nodeName, err)
 			}
-			got := n.Labels["io.simplyblock.node-type"]
-			want := "simplyblock-storage-plane-cluster-a"
+			got := n.Labels[kube.LabelStorageNodeSet]
+			want := sn.Name
 			if got != want {
 				t.Fatalf("node %s label mismatch: got %q want %q", nodeName, got, want)
+			}
+			// io.simplyblock.node-type marked exactly the nodes the per-set label
+			// marks, so it was retired. Without this nothing fails if it returns.
+			if value, ok := n.Labels["io.simplyblock.node-type"]; ok {
+				t.Fatalf("node %s carries the retired node-type label with value %q", nodeName, value)
 			}
 		}
 	})

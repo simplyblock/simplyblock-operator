@@ -459,8 +459,8 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 const storageNodeUUIDLabelPrefix = "simplyblock.io/storage-node-uuid."
 
 // labelWorkerNodes applies the storage-plane node labels — the DaemonSet node
-// selector (io.simplyblock.node-type and io.simplyblock.storagenodeset) plus the
-// per-slot storage-node-uuid labels — to every worker owned by the StorageNodeSet.
+// selector (io.simplyblock.storagenodeset) plus the per-slot storage-node-uuid
+// labels — to every worker owned by the StorageNodeSet.
 // It is a free function (not a method) so both the StorageNodeSet reconciler and
 // the StorageNodeOps migration flow drive the identical labeling; a migration
 // target that is not yet in spec.workerNodes is passed via extraWorkers so its
@@ -518,8 +518,6 @@ func labelWorkerNodes(
 		slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
 	}
 
-	key := kube.LabelNodeType
-	value := kube.NodeTypeStoragePlaneValue(sn.Spec.ClusterName)
 	// Per-StorageNodeSet label: used as the DaemonSet node selector so that
 	// each StorageNodeSet owns its own DaemonSet and per-node ConfigMap,
 	// enabling multiple StorageNodeSets per cluster for node grouping.
@@ -539,10 +537,6 @@ func labelWorkerNodes(
 		}
 
 		changed := false
-		if node.Labels[key] != value {
-			node.Labels[key] = value
-			changed = true
-		}
 		if node.Labels[snsLabelKey] != snsLabelVal {
 			node.Labels[snsLabelKey] = snsLabelVal
 			changed = true
@@ -771,8 +765,8 @@ func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 	// never comes online, and the topology swap never runs: a deadlock. Keying
 	// off the label breaks it — the target's DNS entry appears as soon as it is
 	// labeled. (This mirrored behavior was lost in the StorageNodeSet/StorageNode
-	// split.) Select on the per-set label, not the cluster-wide node-type label,
-	// so a second StorageNodeSet's workers are not pulled into this set's slice.
+	// split.) The label is scoped per set, so a second StorageNodeSet's workers
+	// are not pulled into this set's slice.
 	var nodeList corev1.NodeList
 	if err := r.List(ctx, &nodeList, client.MatchingLabels{
 		kube.LabelStorageNodeSet: snCR.Name,
