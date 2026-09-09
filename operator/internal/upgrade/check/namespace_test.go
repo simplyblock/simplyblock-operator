@@ -39,8 +39,8 @@ func clusterWideScope(t *testing.T, objects ...client.Object) *upgrade.Scope {
 	return scope
 }
 
-func clusterIn(namespace, name string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func setIn(namespace, name string) *simplyblockv1alpha1.StorageNodeSet {
+	return &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 }
@@ -61,24 +61,24 @@ func collapse(t *testing.T, scope *upgrade.Scope) upgrade.Findings {
 	return findings
 }
 
-func TestCollapse_TwoClustersOfOneNameClaimOneStoragePlane(t *testing.T) {
+func TestCollapse_TwoNodeSetsOfOneNameClaimOneStoragePlane(t *testing.T) {
 	// §19.8's second route. Both label the same workers
-	// io.simplyblock.node-type=simplyblock-storage-plane-prod, and neither
-	// object nor operator notices.
-	scope := clusterWideScope(t, clusterIn("simplyblock", "prod"), clusterIn("other-tenant", "prod"))
+	// io.simplyblock.storagenodeset=prod, the Node they land on is
+	// cluster-scoped, and neither object nor operator notices.
+	scope := clusterWideScope(t, setIn("simplyblock", "prod"), setIn("other-tenant", "prod"))
 
 	findings := collapse(t, scope)
 	if len(findings) != 1 {
-		t.Fatalf("two clusters of one name in two namespaces produced %d findings, want 1:\n%v",
+		t.Fatalf("two sets of one name in two namespaces produced %d findings, want 1:\n%v",
 			len(findings), findings)
 	}
 
 	rendered := findings[0].String()
 	for _, want := range []string{
-		"StorageCluster simplyblock/prod",
-		"StorageCluster other-tenant/prod",
+		"StorageNodeSet simplyblock/prod",
+		"StorageNodeSet other-tenant/prod",
 		"one storage plane",
-		"io.simplyblock.node-type",
+		"io.simplyblock.storagenodeset",
 		"this installation",
 		"another installation",
 	} {
@@ -105,17 +105,17 @@ func TestCollapse_TwoVolumeMigrationsBecomeOneClusterScopedObject(t *testing.T) 
 }
 
 func TestCollapse_DifferentNamesInTwoNamespacesAreFine(t *testing.T) {
-	scope := clusterWideScope(t, clusterIn("simplyblock", "prod"), clusterIn("other-tenant", "staging"))
+	scope := clusterWideScope(t, setIn("simplyblock", "prod"), setIn("other-tenant", "staging"))
 
 	if findings := collapse(t, scope); len(findings) != 0 {
-		t.Fatalf("two differently named clusters were reported as colliding:\n%v", findings)
+		t.Fatalf("two differently named sets were reported as colliding:\n%v", findings)
 	}
 }
 
 func TestCollapse_ACollisionBetweenTwoOtherInstallationsIsNotOurs(t *testing.T) {
 	// Real, and somebody else's. Blocking here would fail an upgrade on the
 	// state of a cluster this installation does not own and cannot fix.
-	scope := clusterWideScope(t, clusterIn("tenant-a", "prod"), clusterIn("tenant-b", "prod"))
+	scope := clusterWideScope(t, setIn("tenant-a", "prod"), setIn("tenant-b", "prod"))
 
 	if findings := collapse(t, scope); len(findings) != 0 {
 		t.Fatalf("a collision between two other installations blocked this one:\n%v", findings)
@@ -127,7 +127,7 @@ func TestCollapse_IsInvisibleFromTheInstallationGraph(t *testing.T) {
 	// objects placed in the installation's graph say nothing, because that
 	// graph holds one namespace and the collision needs two.
 	scope := clusterWideScope(t)
-	scope.Adopt(clusterIn("simplyblock", "prod"), clusterIn("other-tenant", "prod"))
+	scope.Adopt(setIn("simplyblock", "prod"), setIn("other-tenant", "prod"))
 
 	if findings := collapse(t, scope); len(findings) != 0 {
 		t.Fatalf("the check read the installation graph, which is not the one that "+
@@ -143,9 +143,9 @@ func TestCollapse_AnEmptyClusterProducesNothing(t *testing.T) {
 
 func TestCollapse_IsDeterministic(t *testing.T) {
 	scope := clusterWideScope(t,
-		clusterIn("other-tenant", "prod"),
-		clusterIn("simplyblock", "prod"),
-		clusterIn("third-tenant", "prod"),
+		setIn("other-tenant", "prod"),
+		setIn("simplyblock", "prod"),
+		setIn("third-tenant", "prod"),
 	)
 
 	first := collapse(t, scope).String()

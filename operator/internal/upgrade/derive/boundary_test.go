@@ -47,7 +47,6 @@ type boundary struct {
 var boundaries = []boundary{
 	// §19.2, against a label's 63 bytes.
 	{rule: IDPoolNodeLabelKey, parts: 3, fixed: len("pool."), longest: 63 - 5 - 2},
-	{rule: IDNodeTypeLabel, parts: 1, fixed: len("simplyblock-storage-plane-"), longest: 63 - 26},
 	{rule: IDStorageClassCluster, parts: 1, fixed: 0, longest: 63},
 	{rule: IDStorageClassPool, parts: 1, fixed: 0, longest: 63},
 	{rule: IDNodeSetLabel, parts: 1, fixed: 0, longest: 63},

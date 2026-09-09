@@ -48,7 +48,7 @@ const (
 	IDCertificates    upgrade.ID = "discover-certificates"
 
 	// Read across every namespace rather than inside the installation.
-	IDClustersEverywhere   upgrade.ID = "discover-storage-clusters-everywhere"
+	IDNodeSetsEverywhere   upgrade.ID = "discover-storage-node-sets-everywhere"
 	IDMigrationsEverywhere upgrade.ID = "discover-volume-migrations-everywhere"
 	IDClaimsEverywhere     upgrade.ID = "discover-persistent-volume-claims"
 )
@@ -263,10 +263,10 @@ func CoreKinds() []upgrade.Discoverer {
 func ClusterWideKinds() []upgrade.Discoverer {
 	return []upgrade.Discoverer{
 		Kind{
-			RuleID: IDClustersEverywhere,
-			Summary: "reads the StorageCluster objects of every namespace, because the node label a " +
-				"cluster claims workers with carries its name and nothing else",
-			List:       &simplyblockv1alpha1.StorageClusterList{},
+			RuleID: IDNodeSetsEverywhere,
+			Summary: "reads the StorageNodeSet objects of every namespace, because the node label a " +
+				"set claims workers with carries its name and nothing else",
+			List:       &simplyblockv1alpha1.StorageNodeSetList{},
 			Namespaced: true,
 			View:       ViewClusterWide,
 		},

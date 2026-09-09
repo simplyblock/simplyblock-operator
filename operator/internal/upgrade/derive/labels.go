@@ -1,9 +1,9 @@
-// §19.2's eight label cases. Every row is live today, and the longest input
-// each admits is the design's measured number rather than a reasoned one.
+// §19.2's seven label cases. Every row is live today, and the longest input each
+// admits is the design's measured number rather than a reasoned one.
 //
-// The tightest limit in the product is here: io.simplyblock.node-type is 63
-// bytes less a 26-character prefix, which leaves 37 characters for a
-// StorageCluster name where the API server allows 253.
+// The tightest row is the pool key, and it is the only one that binds three
+// names at once: 63 bytes less a five-character prefix and two separators leaves
+// the namespace, the cluster, and the pool 56 characters between them.
 
 package derive
 
@@ -18,7 +18,6 @@ import (
 // The identities of the label rows.
 const (
 	IDPoolNodeLabelKey    upgrade.ID = "label-pool-node-key"
-	IDNodeTypeLabel       upgrade.ID = "label-node-type"
 	IDStorageClassCluster upgrade.ID = "label-storage-class-cluster"
 	IDStorageClassPool    upgrade.ID = "label-storage-class-pool"
 	IDNodeSetLabel        upgrade.ID = "label-storage-node-set"
@@ -31,7 +30,6 @@ const (
 func Labels() []upgrade.Derivation {
 	return []upgrade.Derivation{
 		poolNodeLabelKey(),
-		nodeTypeLabel(),
 		storageClassClusterLabel(),
 		storageClassPoolLabel(),
 		nodeSetLabel(),
@@ -70,42 +68,6 @@ func poolNodeLabelKey() Rule {
 				out = append(out, upgrade.Input{
 					Source: s.Ref(pool),
 					Parts:  []string{pool.Namespace, pool.Spec.ClusterName, pool.Name},
-				})
-			}
-			return out, nil
-		},
-	}
-}
-
-// nodeTypeLabel is io.simplyblock.node-type, whose value marks a worker as part
-// of a cluster's storage plane and is the storage-node DaemonSet's node
-// selector (atlas-lib/kube.NodeTypeStoragePlaneValue).
-//
-// This is the row that decides how long a StorageCluster may be named. The
-// prefix is 26 characters, so a cluster name of 37 fits and one of 38 does not,
-// and the API server would have allowed 253.
-//
-// It is also one of §19.8's uniqueness routes, because the value carries the
-// cluster name and nothing else: two StorageCluster objects of the same name in
-// two namespaces claim the same worker nodes. The collision is not visible in
-// one namespace, so the row enumerates from every namespace discovery read.
-func nodeTypeLabel() Rule {
-	return Rule{
-		RuleID:     IDNodeTypeLabel,
-		Summary:    "bounds the storage-plane node label, which is the tightest limit in the product",
-		Where:      "Node label io.simplyblock.node-type",
-		Which:      upgrade.ModelCurrent,
-		Resolution: upgrade.FixBoundInput,
-		Build: atlaskube.Formula{
-			Kind:   atlaskube.LabelValue,
-			Prefix: "simplyblock-storage-plane-",
-		},
-		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
-			out := make([]upgrade.Input, 0, len(clusters(s)))
-			for _, cluster := range clusters(s) {
-				out = append(out, upgrade.Input{
-					Source: s.Ref(cluster),
-					Parts:  []string{cluster.Name},
 				})
 			}
 			return out, nil

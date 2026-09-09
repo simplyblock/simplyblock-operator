@@ -27,7 +27,7 @@ func TestFormula_ShortInputIsUntouched(t *testing.T) {
 }
 
 func TestFormula_LongInputIsTruncatedAndHashed(t *testing.T) {
-	f := Formula{Kind: LabelValue, Prefix: "simplyblock-storage-plane-"}
+	f := Formula{Kind: LabelValue, Prefix: "simplyblock-"}
 
 	got := f.Derive(strings.Repeat("a", 200))
 	if len(got.Value) != MaxLabelValueLength {
@@ -94,11 +94,11 @@ func TestFormula_SanitizesWhatAnObjectNameMayNotCarry(t *testing.T) {
 }
 
 func TestFormula_NaturalReportsWhatTheFormulaWouldHaveProduced(t *testing.T) {
-	f := Formula{Kind: LabelValue, Prefix: "simplyblock-storage-plane-"}
+	f := Formula{Kind: LabelValue, Prefix: "prefix-"}
 	cluster := "production-cluster-eu-central-1-primary"
 
 	got := f.Derive(cluster)
-	if got.Natural != "simplyblock-storage-plane-"+cluster {
+	if got.Natural != "prefix-"+cluster {
 		t.Fatalf("Natural = %q, want the unbounded form so a report can name it", got.Natural)
 	}
 	if got.Limit != MaxLabelValueLength {
@@ -107,15 +107,16 @@ func TestFormula_NaturalReportsWhatTheFormulaWouldHaveProduced(t *testing.T) {
 }
 
 func TestFormula_LongestInputThatFits(t *testing.T) {
-	// design-api-upgrade.md §19.2: the io.simplyblock.node-type value leaves 37
-	// characters for a StorageCluster name.
+	// A prefix spends the limit before the input does, so the budget is the
+	// limit less the prefix and the boundary is exact.
 	f := Formula{Kind: LabelValue, Prefix: "simplyblock-storage-plane-"}
+	budget := MaxLabelValueLength - len("simplyblock-storage-plane-")
 
-	if got := f.Derive(strings.Repeat("c", 37)); !got.Fits() {
-		t.Fatalf("a 37-character cluster name must fit, got %d bytes", len(got.Natural))
+	if got := f.Derive(strings.Repeat("c", budget)); !got.Fits() {
+		t.Fatalf("a %d-character input must fit, got %d bytes", budget, len(got.Natural))
 	}
-	if got := f.Derive(strings.Repeat("c", 38)); got.Fits() {
-		t.Fatal("a 38-character cluster name must not fit")
+	if got := f.Derive(strings.Repeat("c", budget+1)); got.Fits() {
+		t.Fatalf("a %d-character input must not fit", budget+1)
 	}
 }
 

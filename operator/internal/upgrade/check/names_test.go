@@ -100,15 +100,15 @@ func TestFit_ALegalClusterProducesNoFindings(t *testing.T) {
 	}
 }
 
-func TestFit_ClusterNameOverThirtySevenIsAnError(t *testing.T) {
-	// The tightest limit in the product: io.simplyblock.node-type is 63 bytes
-	// less a 26-character prefix.
-	long := "production-cluster-eu-central-1-primary"
-	scope := scopeOver(t, cluster(long))
+func TestFit_ASetNameOverSixtyThreeIsAnError(t *testing.T) {
+	// The set name reaches the worker Nodes as io.simplyblock.storagenodeset,
+	// carrying nothing else, so a label's 63 bytes is the whole budget.
+	long := "production-storage-nodes-eu-central-1-primary-rack-14-socket-01a"
+	scope := scopeOver(t, nodeSet(long, "cluster-a"))
 
 	findings := run(t, IDDerivedNamesFit, scope)
 	if len(findings) != 1 {
-		t.Fatalf("a %d-character cluster name produced %d findings, want 1: an "+
+		t.Fatalf("a %d-character set name produced %d findings, want 1: an "+
 			"overlong value is one violation, not one per way of measuring it:\n%v",
 			len(long), len(findings), findings)
 	}
@@ -117,16 +117,15 @@ func TestFit_ClusterNameOverThirtySevenIsAnError(t *testing.T) {
 	if !finding.Error() {
 		t.Fatalf("severity = %q, want an error: §19.11 fails closed", finding.Severity)
 	}
-	if finding.Rule != derive.IDNodeTypeLabel {
-		t.Fatalf("rule = %q, want the node-type row", finding.Rule)
+	if finding.Rule != derive.IDNodeSetLabel {
+		t.Fatalf("rule = %q, want the node-set row", finding.Rule)
 	}
 
 	rendered := finding.String()
 	for _, want := range []string{
-		"StorageCluster simplyblock/" + long, // the object
-		"io.simplyblock.node-type",           // where the value lands
-		"65 bytes against a limit of 63",     // the measurement
-		"simplyblock-storage-plane-" + long,  // the value itself
+		"StorageNodeSet simplyblock/" + long, // the object
+		"io.simplyblock.storagenodeset",      // where the value lands
+		"64 bytes against a limit of 63",     // the measurement
 		"bound the input",                    // what resolves it
 	} {
 		if !strings.Contains(rendered, want) {
@@ -135,11 +134,11 @@ func TestFit_ClusterNameOverThirtySevenIsAnError(t *testing.T) {
 	}
 }
 
-func TestFit_ThirtySevenCharactersIsAccepted(t *testing.T) {
-	scope := scopeOver(t, cluster(strings.Repeat("c", 37)))
+func TestFit_SixtyThreeCharactersIsAccepted(t *testing.T) {
+	scope := scopeOver(t, nodeSet(strings.Repeat("s", 63), "cluster-a"))
 
 	if findings := run(t, IDDerivedNamesFit, scope); len(findings) != 0 {
-		t.Fatalf("a 37-character cluster name produced %d findings, and the audit "+
+		t.Fatalf("a 63-character set name produced %d findings, and the audit "+
 			"says it is the longest that works:\n%v", len(findings), findings)
 	}
 }
@@ -274,8 +273,8 @@ func TestNames_AnEmptyClusterProducesNothing(t *testing.T) {
 func TestNames_ASkippedRowIsNotWalked(t *testing.T) {
 	// Skipping a naming rule has to skip it inside the check, not only in the
 	// line the rules command prints.
-	scope := scopeOver(t, cluster("production-cluster-eu-central-1-primary"))
-	scope.Options.Skip = []upgrade.ID{derive.IDNodeTypeLabel}
+	scope := scopeOver(t, nodeSet(strings.Repeat("s", 64), "cluster-a"))
+	scope.Options.Skip = []upgrade.ID{derive.IDNodeSetLabel}
 
 	if findings := run(t, IDDerivedNamesFit, scope); len(findings) != 0 {
 		t.Fatalf("a skipped row still reported %d findings:\n%v", len(findings), findings)

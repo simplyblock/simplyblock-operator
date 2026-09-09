@@ -155,15 +155,12 @@ func TestInputs_PoolLabelKeyJoinsOnADot(t *testing.T) {
 	}
 }
 
-func TestInputs_NodeTypeLabelIsTheClusterName(t *testing.T) {
-	cluster := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "simplyblock"},
-	}
-	scope := graphOver(t, cluster)
+func TestInputs_NodeSetLabelIsTheSetName(t *testing.T) {
+	scope := graphOver(t, testNodeSet("set-a", "cluster-a"))
 
-	got := derived(t, IDNodeTypeLabel, scope)
-	if len(got) != 1 || got[0] != "simplyblock-storage-plane-cluster-a" {
-		t.Fatalf("derived %v, want what kube.NodeTypeStoragePlaneValue builds", got)
+	got := derived(t, IDNodeSetLabel, scope)
+	if len(got) != 1 || got[0] != "set-a" {
+		t.Fatalf("derived %v, want the value kube.LabelStorageNodeSet carries", got)
 	}
 }
 

@@ -33,9 +33,16 @@ import (
 // preflight can currently find, plus a second tenant it collides with.
 func brokenCluster() []client.Object {
 	return []client.Object{
-		// Over the 37 characters the node-type label leaves.
 		&simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "production-cluster-eu-central-1-primary", Namespace: "simplyblock"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "simplyblock"},
+		},
+		// Over the 63 bytes the node-set label leaves.
+		&simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "production-storage-nodes-eu-central-1-primary-rack-14-socket-01a",
+				Namespace: "simplyblock",
+			},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
 		},
 		// Two pools whose names concatenate to one StorageClass name.
 		&simplyblockv1alpha1.StoragePool{
@@ -55,10 +62,11 @@ func brokenCluster() []client.Object {
 			ObjectMeta: metav1.ObjectMeta{Name: "set-b", Namespace: "simplyblock"},
 			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
 		},
-		// Another tenant holding a same-named cluster, which is only visible
-		// from the cluster-wide view.
-		&simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "production-cluster-eu-central-1-primary", Namespace: "other-tenant"},
+		// Another tenant holding a same-named set, which claims the same worker
+		// nodes and is only visible from the cluster-wide view.
+		&simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "other-tenant"},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-b"},
 		},
 	}
 }
@@ -106,7 +114,7 @@ func TestCatalog_FindsEveryViolationItCurrentlyCan(t *testing.T) {
 	findings := preflight(t, upgrade.Options{}, brokenCluster()...)
 
 	for _, want := range []upgrade.ID{
-		derive.IDNodeTypeLabel,              // over the tightest limit in the product
+		derive.IDNodeSetLabel,               // over the 63 bytes a label value allows
 		derive.IDStorageClassName,           // §19.8's ambiguous concatenation
 		derive.IDStorageNodeDaemonSetTarget, // §19.8's node-set collapse
 		check.IDNamespaceCollapse,           // §19.8's namespace-free cluster label
@@ -157,9 +165,9 @@ func TestCatalog_TheClusterWideViewReachesOnlyTheCheckThatNeedsIt(t *testing.T) 
 }
 
 func TestCatalog_SkippingARuleSkipsItInsideTheCheck(t *testing.T) {
-	opts := upgrade.Options{Skip: []upgrade.ID{derive.IDNodeTypeLabel}}
+	opts := upgrade.Options{Skip: []upgrade.ID{derive.IDNodeSetLabel}}
 
-	if raised(preflight(t, opts, brokenCluster()...))[derive.IDNodeTypeLabel] {
+	if raised(preflight(t, opts, brokenCluster()...))[derive.IDNodeSetLabel] {
 		t.Fatal("a skipped naming rule still raised a finding, so --skip reaches " +
 			"the rules command's output and not the check that walks it")
 	}

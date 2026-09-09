@@ -1202,22 +1202,25 @@ from the object it is written on.
 
 ### 19.2 The Label Cases
 
-Eight labels are built from a name a user chose. Every row is live today.
+Seven labels are built from a name a user chose. Every row is live today.
 
-| What is built                                                      | Breaks when                                                                    | Longest input that works    | Fix               |
-|--------------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
-| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key                 | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Truncate and hash |
-| `io.simplyblock.node-type` = `simplyblock-storage-plane-<cluster>` | The cluster name exceeds 37 characters, or ends in `-`, `.`, or `_`            | A 37-character cluster name | Bound the input   |
-| `storage.simplyblock.io/cluster` on a `StorageClass`               | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Use a UUID        |
-| `storage.simplyblock.io/pool` on a `StorageClass`                  | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Use a UUID        |
-| `io.simplyblock.storagenodeset`                                    | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
-| `storage.simplyblock.io/worker`                                    | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
-| `simplyblock.io/drain-node`                                        | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
-| `simplyblock.io/storage-node-uuid.<clusterUUID>.<n>`, a key        | The socket index needs nine digits or more, the rest of the key being 55 bytes | An 8-digit socket index     | None needed       |
+| What is built                                               | Breaks when                                                                    | Longest input that works    | Fix               |
+|-------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
+| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Truncate and hash |
+| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Use a UUID        |
+| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Use a UUID        |
+| `io.simplyblock.storagenodeset`                             | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
+| `storage.simplyblock.io/worker`                             | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
+| `simplyblock.io/drain-node`                                 | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
+| `simplyblock.io/storage-node-uuid.<clusterUUID>.<n>`, a key | The socket index needs nine digits or more, the rest of the key being 55 bytes | An 8-digit socket index     | None needed       |
 
-The `node-type` row is the tightest limit in the product: 63 less a
-26-character prefix leaves **37 characters for a `StorageCluster` name**, where
-the API server allows 253.
+The `pool` key is the tightest row, and it is the only one that binds three
+names at once: 63 less a five-character prefix and two separators leaves the
+namespace, the cluster, and the pool **56 characters between them**, where the
+API server allows each of the three 253.
+
+**Nothing bounds a `StorageCluster` name below the 63 bytes a label value
+allows**, and both rows that bind it there are §19.5's use-a-UUID cases.
 
 The `worker` row is the one whose input this repository does not own.
 `storage.simplyblock.io/worker` is written through `sanitiseDNSLabel`
@@ -1246,24 +1249,31 @@ These are the roomier half of the problem, and they are still reachable: a
 `ReplicationSlot` joins two names that Kubernetes each allows to be 253
 characters long.
 
-### 19.4 One Field Closes Most of the List
+### 19.4 Bounding the Cluster Reference
 
 `spec.clusterName` carries no maximum length and no pattern on either
 `StoragePoolSpec` (`storagepool_types.go:115`) or `StorageNodeSetSpec`
-(`storagenodeset_types.go:40`), and it feeds four of the eight labels and three
-of the object names above. **A `+kubebuilder:validation:MaxLength=37` on it
-closes more of this list than any other one-line change**, and 37 is what
-§19.2's tightest row leaves. The marker lands on `v1alpha2`'s
+(`storagenodeset_types.go:40`), and it feeds three of the seven labels and three
+of the object names above. **A `+kubebuilder:validation:MaxLength=63` on it is
+what turns an overlong cluster reference into a rejected create rather than a
+reconcile that retries forever.** The marker lands on `v1alpha2`'s
 `spec.clusterRef`, because §7.2 renames the field and retires `StorageNodeSet`,
 and never on `v1alpha1` (§19.9).
 
-**The 37 characters belong to the cluster's own name, which no `MaxLength` can
-reach.** `metadata.name` is one of the two metadata fields a CRD validation rule
-can see (§19.7), so the name itself is bounded by a type-level rule and the
+**63 is a label's limit and not a budget the marker can guarantee.** Two of the
+rows a cluster name feeds share their 63 bytes with a namespace and a pool name,
+so a cluster reference inside the limit still overflows the `simplyblock.io/pool`
+key when the other two are long. What the marker closes is the rows where the
+cluster name stands alone, which are the `StorageClass` label and the two
+`Secret` names.
+
+**The cluster's own name is bounded by a type-level rule, which no `MaxLength`
+can reach.** `metadata.name` is one of the two metadata fields a CRD validation
+rule can see (§19.7), so the name itself is bounded by the rule and the
 reference by the marker:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 37",message="a StorageCluster name is at most 37 characters, because it is written into a node label behind a 26-character prefix"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into a StorageClass label"
 ```
 
 ### 19.5 The Three Fixes
@@ -1347,9 +1357,9 @@ Four routes take two resources to one derived name:
   in one namespace. The `simplyblock.io/pool.<ns>.<cluster>.<pool>` label key
   has the same defect with dots.
 - **A cluster-scoped derived name drops the namespace.** The
-  `io.simplyblock.node-type` value carries the cluster name and nothing else, so
-  two `StorageCluster` objects of the same name in two namespaces claim the same
-  worker nodes.
+  `io.simplyblock.storagenodeset` value carries the `StorageNodeSet` name and
+  nothing else, and it is written on the `Node` object, so two sets of the same
+  name in two namespaces claim the same worker nodes.
 - **The `StorageNodeSet` retirement re-derives from the cluster what is derived
   from the set today.** The `DaemonSet`, the per-node `ConfigMap`, and the
   `EndpointSlice` are named per set precisely so several sets can coexist in one
@@ -1368,7 +1378,7 @@ preflight exists.
 ### 19.9 The Rules Go on `v1alpha2` Only
 
 Tightening a served version's schema rejects updates to the objects that already
-violate the new rule. Adding `MaxLength=37` to `v1alpha1` would therefore start
+violate the new rule. Adding `MaxLength=63` to `v1alpha1` would therefore start
 failing writes on exactly the clusters that are about to be upgraded, before the
 upgrade had offered them anything. So `v1alpha1` keeps its schema until it is
 retired (§7), `v1alpha2` carries the rules, and the preflight covers the objects
@@ -1423,11 +1433,11 @@ Every violation names the object, the derived value, the limit, and the change
 that resolves it:
 
 ```text
-ERROR  StorageCluster simplyblock/production-cluster-eu-central-1-primary
-       name is 41 characters, the maximum is 37
-       derived: Node label io.simplyblock.node-type
-                = simplyblock-storage-plane-production-cluster-eu-central-1-primary
-                  (67 bytes, a label value stops at 63)
+ERROR  StorageNodeSet simplyblock/production-storage-nodes-eu-central-1-primary-rack-14-socket-01a
+       name is 64 characters, the maximum is 63
+       derived: Node label io.simplyblock.storagenodeset
+                = production-storage-nodes-eu-central-1-primary-rack-14-socket-01a
+                  (64 bytes, a label value stops at 63)
 
 ERROR  StoragePool simplyblock/prod-gold with pool tier, and
        StoragePool simplyblock/prod with pool gold-tier,
@@ -2133,7 +2143,7 @@ prose, its check is here and not repeated in both places.
 **Names (§19)**
 
 - [ ] Every name and label of §19.2 and §19.3 has a bounded derivation.
-- [ ] `metadata.name` on the `v1alpha2` `StorageCluster` is bounded at 37 by an
+- [ ] `metadata.name` on the `v1alpha2` `StorageCluster` is bounded at 63 by an
       `XValidation` rule, and `StoragePoolSpec.clusterRef` by `MaxLength`.
 - [ ] The truncate-and-hash helper is extracted from `nodeprobe.ObjectName` into
       `atlas-lib/kube`, and no call site rolls its own.

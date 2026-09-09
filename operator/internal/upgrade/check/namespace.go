@@ -4,11 +4,11 @@
 // Both are the same shape. An identifier that is unique inside a namespace
 // becomes ambiguous in a space that has no namespaces, and neither the objects
 // nor the operator notice: the API server accepts both, and one of them
-// silently takes what the other needs. A StorageCluster's name reaches the
-// worker Nodes as a label carrying nothing else, so two clusters of one name in
-// two namespaces claim the same machines. A VolumeMigration becomes a
-// cluster-scoped PersistentVolumeOps, so two of one name in two namespaces
-// become one object.
+// silently takes what the other needs. A StorageNodeSet's name reaches the
+// worker Nodes as io.simplyblock.storagenodeset, which carries nothing else and
+// sits on a cluster-scoped object, so two sets of one name in two namespaces
+// claim the same machines. A VolumeMigration becomes a cluster-scoped
+// PersistentVolumeOps, so two of one name in two namespaces become one object.
 //
 // Neither is visible from inside one installation, which is why this is the one
 // check that reads upgrade.Scope.ClusterWide.
@@ -56,10 +56,10 @@ func collapses() []Collapse {
 	return []Collapse{
 		{
 			Kind: schema.GroupVersionKind{
-				Group: "storage.simplyblock.io", Version: "v1alpha1", Kind: "StorageCluster",
+				Group: "storage.simplyblock.io", Version: "v1alpha1", Kind: "StorageNodeSet",
 			},
 			Into:    "one storage plane",
-			Because: "the io.simplyblock.node-type label a cluster claims workers with carries the cluster name and nothing else",
+			Because: "the io.simplyblock.storagenodeset label a set claims workers with carries the set name and nothing else, and a Node is cluster-scoped",
 			Fix:     upgrade.FixBoundInput,
 		},
 		{
