@@ -4,7 +4,7 @@ name: "Repo: Release"
 # the `setup` job creates the GitHub Release for that tag, and the tag is the version
 # fed to the container image builds. Runs:
 #   build atlas -> build csi -> build operator -> release csi -> release operator
-#   -> merge helm charts -> release (publish) helm charts
+#   (+ release control center) -> merge helm charts -> release (publish) helm charts
 # Each step is a reusable workflow invoked with `needs:` for ordering.
 
 on:
@@ -88,6 +88,17 @@ jobs:
     name: Release operator
     needs: [setup, release-csi]
     uses: ./.github/workflows/operator_release.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # 5a. release control center (quay image). Skips itself while the console
+  # sources are not committed, and nothing downstream depends on it — the chart
+  # ships with controlCenter.enabled=false.
+  release-control-center:
+    name: Release control center
+    needs: [setup, build-operator]
+    uses: ./.github/workflows/control_center_release.yaml
     with:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit

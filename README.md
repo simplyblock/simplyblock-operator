@@ -33,6 +33,7 @@ without specialized hardware or vendor lock-in.
 | **CSI Driver** | [`csi-driver/`](csi-driver/README.md) | Container Storage Interface driver that provisions and attaches NVMe/TCP volumes to workloads (dynamic provisioning, snapshots, clones, QoS). |
 | **Atlas Library** | [`atlas-lib/`](atlas-lib/README.md) | Shared Go library holding the node-level storage primitives (NVMe discovery, NVMe-oF fabric management, lvol↔device mapping) that both the operator and CSI driver depend on. |
 | **Helm Charts** | [`helm-charts/`](helm-charts/README.md) | Official Helm charts that deploy the operator, CSI driver, and supporting components onto Kubernetes. |
+| **Control Center** | [`control-center/`](control-center/README.md) | Web console for storage clusters, hosts, nodes, devices, pools, volumes, replication, and disaster recovery. Deployed by the Helm chart with `--set controlCenter.enabled=true`. |
 
 Each component has its own README with focused documentation.
 

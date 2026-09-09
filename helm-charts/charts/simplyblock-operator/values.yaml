@@ -699,6 +699,109 @@ prometheus:
       registry: "quay.io/simplyblock-io"
       image: defaultbackend-amd64
       tag: "1.5"
+# The Control Center — the simplyblock web console (control-center/ in the
+# monorepo). Off by default: it proxies the Kubernetes API with the pod's
+# ServiceAccount token, so enabling it is a deliberate decision about who may
+# reach the Service. See control-center/README.md, "Who can do what".
+controlCenter:
+  enabled: false
+
+  # Naming. The console templates are self-contained and do not borrow the
+  # chart's helpers, so these control its object names. Default object name:
+  # <release>-control-center.
+  nameOverride: ""
+  fullnameOverride: ""
+
+  image:
+    # defaults to quay.io when unset
+    registry: ""
+    repository: simplyblock-io/control-center
+    # inherits .Chart.AppVersion when unset. This chart's appVersion is a
+    # floating tag, so pin a released console tag here for production.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # Stateless — location lives in the browser — so two replicas cost little and
+  # keep the console up through a node loss, which is when it matters most.
+  replicas: 2
+
+  # serviceaccount | passthrough
+  #
+  # serviceaccount: this pod attaches its own token to proxied requests. The
+  #   browser holds no credential. The console's authority is the ClusterRole,
+  #   shared by everyone who can reach it, so put authentication in front.
+  #
+  # passthrough: the browser supplies the bearer token and Kubernetes enforces
+  #   that user's own RBAC. Per-user authority and a real audit trail, at the
+  #   cost of needing an auth proxy that injects the token. If you use this,
+  #   set rbac.create=false — the pod needs no permissions of its own.
+  authMode: serviceaccount
+  tokenRefreshSeconds: 600
+
+  kubernetesApi: https://kubernetes.default.svc
+  # SNI and Host presented to the API server. Must be a name on its
+  # certificate — change this only together with kubernetesApi.
+  kubernetesApiHost: kubernetes.default.svc
+  kubernetesApiCaFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  # Empty defaults resolve to this chart's own services: the operator API on
+  # http://simplyblock-operator:8080 and Prometheus per
+  # prometheus.simplyblock.prometheusURL/prometheusPORT.
+  operatorUrl: ""
+  helmUrl: ""
+  prometheusUrl: ""
+
+  rbac:
+    # Required in serviceaccount mode: the proxied token needs these rules or
+    # every request returns 403 and the console renders empty. Set false only
+    # with authMode: passthrough, where each user's own RBAC applies instead.
+    create: true
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false
+    className: nginx
+    host: ""
+    annotations:
+      # Authentication is not optional in serviceaccount mode. Replace this with
+      # your OIDC/OAuth2 proxy annotations, or keep basic auth as a stop-gap.
+      nginx.ingress.kubernetes.io/auth-type: basic
+      nginx.ingress.kubernetes.io/auth-secret: simplyblock-control-center-auth
+      nginx.ingress.kubernetes.io/auth-realm: simplyblock Control Center
+      nginx.ingress.kubernetes.io/proxy-body-size: 2m
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    tls: []
+
+  networkPolicy:
+    # Caps the console's egress to its three upstreams plus DNS. Off by default
+    # because the API-server CIDRs below are cluster-specific: narrow them to
+    # your API server endpoint (`kubectl get endpoints kubernetes -n default`)
+    # or your service CIDR before enabling.
+    enabled: false
+    apiServerCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+    # Namespaces allowed to reach the console, in addition to the release
+    # namespace itself — add your ingress controller's namespace when the
+    # Ingress is enabled, e.g. [ingress-nginx].
+    ingressFromNamespaces: []
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 48Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+  nodeSelector: {}
+  tolerations: []
+  podAnnotations: {}
+
 tls:
   enabled: false
 
