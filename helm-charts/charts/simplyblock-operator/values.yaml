@@ -790,6 +790,38 @@ controlCenter:
     # Ingress is enabled, e.g. [ingress-nginx].
     ingressFromNamespaces: []
 
+  # Deploys sb-mock (control-center/mock) next to the console and points the
+  # console's proxy at it instead of the real cluster: the Kubernetes API,
+  # operator API and Prometheus are all impersonated, reads come from a
+  # generated dataset, and writes persist without performing any change. For
+  # testing the UI and demo installs only — never enable in production.
+  mock:
+    enabled: false
+    image:
+      # defaults to quay.io when unset
+      registry: ""
+      repository: simplyblock-io/control-center-mock
+      # inherits .Chart.AppVersion when unset
+      tag: ""
+      pullPolicy: IfNotPresent
+    # small-healthy | medium-degraded | large-scale | dr-failover | chaos,
+    # or auto for a seeded random pick
+    dataset: auto
+    # 0 picks a random seed; a fixed value makes the world reproducible
+    seed: 0
+    # simulator tick (Ops phase progression); "0" disables the simulator so
+    # e2e suites can drive it deterministically via POST /mockctl/advance
+    simInterval: 4s
+    # probability a simulated operation ends Failed
+    failRate: 0.1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
   resources:
     requests:
       cpu: 20m

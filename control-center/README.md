@@ -13,7 +13,25 @@ replication and disaster recovery.
 references — lives at the root of this directory. `deploy/` holds the image
 build (`Dockerfile`, nginx configuration, entrypoint, `build/prepare.mjs`) and
 `deploy/k8s/` the plain-manifest equivalent of the chart templates for
-installs that do not use Helm.
+installs that do not use Helm. `mock/` is the console's test backend: one Go
+binary that impersonates all three upstreams with generated, coherent data —
+see [mock/README.md](mock/README.md).
+
+## Testing the UI
+
+The console needs no cluster to be tested. `mock/` fakes the Kubernetes API
+(simplyblock CRDs, Ramen CRDs, core objects), the operator API and Prometheus:
+reads come from seeded test data sets, writes persist and fire watch events
+without doing anything real, and a simulator advances operations through their
+phases so the UI sees live transitions.
+
+```sh
+cd control-center/mock && go run . --serve-ui ..     # http://localhost:8080
+```
+
+In a cluster, `--set controlCenter.mock.enabled=true` deploys the mock next to
+the console and points the console's proxy at it — the console image itself
+runs completely unmodified.
 
 The console is a static document transpiled in the browser, served by nginx,
 with an in-pod reverse proxy in front of the three APIs it is allowed to use.

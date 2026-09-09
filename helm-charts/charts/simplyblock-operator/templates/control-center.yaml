@@ -85,20 +85,24 @@ spec:
                   fieldPath: metadata.namespace
             - name: SB_AUTH_MODE
               value: {{ $cc.authMode | quote }}
+            {{- /* With the mock enabled every upstream is the sb-mock service:
+                   the console runs unmodified against generated data. */}}
+            {{- $mockURL := printf "http://%s-mock:8080" $name }}
             - name: SB_K8S_API
-              value: {{ $cc.kubernetesApi | quote }}
+              value: {{ ternary $mockURL $cc.kubernetesApi $cc.mock.enabled | quote }}
             # SNI and Host for the API server. Must match a name on the
             # apiserver's certificate — see controlCenter.kubernetesApiHost.
+            # (Ignored for a plain-http upstream, i.e. in mock mode.)
             - name: SB_K8S_HOST
               value: {{ $cc.kubernetesApiHost | quote }}
             - name: SB_K8S_CA_FILE
               value: {{ $cc.kubernetesApiCaFile | quote }}
             - name: SB_OPERATOR_URL
-              value: {{ include "sbcc.operatorUrl" . | quote }}
+              value: {{ ternary $mockURL (include "sbcc.operatorUrl" .) $cc.mock.enabled | quote }}
             - name: SB_HELM_URL
-              value: {{ $cc.helmUrl | default (include "sbcc.operatorUrl" .) | quote }}
+              value: {{ ternary $mockURL ($cc.helmUrl | default (include "sbcc.operatorUrl" .)) $cc.mock.enabled | quote }}
             - name: SB_PROMETHEUS_URL
-              value: {{ include "sbcc.prometheusUrl" . | quote }}
+              value: {{ ternary $mockURL (include "sbcc.prometheusUrl" .) $cc.mock.enabled | quote }}
             - name: SB_MOCK
               value: "false"
             - name: SB_LISTEN_PORT
