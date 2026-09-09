@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/kube"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -278,8 +279,8 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 			Parameters: map[string]string{paramDHCHAPNodeSelector: labelKey},
 		}
 		key, val := dhchapAllowedNodeSegment(req)
-		if key != labelKey || val != dhchapAllowedNodeLabelValue {
-			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, dhchapAllowedNodeLabelValue)
+		if key != labelKey || val != kube.LabelPoolAllowed {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, kube.LabelPoolAllowed)
 		}
 	})
 
@@ -293,8 +294,8 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 			},
 		}
 		key, val := dhchapAllowedNodeSegment(req)
-		if key != labelKey || val != dhchapAllowedNodeLabelValue {
-			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, dhchapAllowedNodeLabelValue)
+		if key != labelKey || val != kube.LabelPoolAllowed {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, kube.LabelPoolAllowed)
 		}
 	})
 }

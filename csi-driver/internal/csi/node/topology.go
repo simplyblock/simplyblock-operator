@@ -10,6 +10,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/kube"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -68,7 +69,7 @@ func (ns *Server) buildAccessibleTopology(ctx context.Context) map[string]string
 	}
 
 	for key, val := range node.Labels {
-		if strings.HasPrefix(key, "simplyblock.io/pool.") && val == "allowed" {
+		if strings.HasPrefix(key, kube.LabelPoolPrefix) && val == kube.LabelPoolAllowed {
 			segments[key] = val
 		}
 		if strings.HasPrefix(key, csicommon.TopologyKeyStorageNodeUUIDPrefix) {

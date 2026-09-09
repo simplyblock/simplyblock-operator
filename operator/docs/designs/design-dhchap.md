@@ -53,7 +53,7 @@ spec:
 Reconciling this:
 
 - `syncNodeLabels` patches `worker-1` and `worker-2` with
-  `simplyblock.io/pool.<namespace/>.cluster-a.pool-a: allowed`.
+  `storage.simplyblock.io/pool.<pool UUID>: allowed`.
 - `syncStoragePoolHosts` registers each allowed node's NVMe-oF host NQN
   (`nqn.2014-08.io.<namespace/>:uuid:<Node UID>`) into the pool's
   `allowed_hosts` on the control plane.
@@ -74,13 +74,13 @@ provisioner: csi.simplyblock.io
 parameters:
   cluster_id: 2403cae5-b9df-4e46-a761-4283d81d8535
   pool_name: pool-a
-  dhchap_node_selector: simplyblock.io/pool.simplyblock.cluster-a.pool-a
+  dhchap_node_selector: storage.simplyblock.io/pool.7d3f9c81-4b02-4e5a-9c17-6ab8e5f0d244
 reclaimPolicy: Delete
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 allowedTopologies:
 - matchLabelExpressions:
-  - key: simplyblock.io/pool.simplyblock.cluster-a.pool-a
+  - key: storage.simplyblock.io/pool.7d3f9c81-4b02-4e5a-9c17-6ab8e5f0d244
     values:
     - allowed
 ```

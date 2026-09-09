@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 // var errVolumeInCreation = status.Error(codes.Internal, "volume in creation")
@@ -30,14 +32,9 @@ const (
 
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
-	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key, see poolNodeLabelKey
+	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key, see kube.PoolNodeLabelKey
 
 )
-
-// dhchapAllowedNodeLabelValue must match the literal value the operator's
-// syncNodeLabels writes onto every node in a pool's AllowedNodes
-// (simplyblockstoragepool_controller.go). See dhchapAllowedNodeSegment.
-const dhchapAllowedNodeLabelValue = "allowed"
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
 // to pin PersistentVolume.spec.nodeAffinity to, or an empty key and value for
@@ -62,7 +59,7 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 	if key == "" {
 		return "", ""
 	}
-	return key, dhchapAllowedNodeLabelValue
+	return key, kube.LabelPoolAllowed
 }
 
 func parseStringMap(raw, paramName string) (map[string]string, error) {
