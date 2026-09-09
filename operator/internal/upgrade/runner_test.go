@@ -8,7 +8,6 @@ package upgrade
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -19,54 +18,82 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// recordingStep records which of its methods the runner called.
+// recordingStep records which of its methods the runner called, and over which
+// subjects. It is deliberately about every subject unless told otherwise, so a
+// test that cares about the fan-out says so and the rest do not have to.
 type recordingStep struct {
 	namedRule
 
 	stage Stage
 	phase Phase
 
-	done    bool
-	doneErr error
+	// about narrows what the step is responsible for, so the nil return of
+	// Describe can be exercised.
+	about func(Subject) bool
 
-	applyErr  error
-	verifyErr error
+	// finished reports a subject already in the state the step exists to
+	// produce. Describe declines those, which is what makes a rerun's plan
+	// shrink, and Done claims them, which is what tells them apart from the
+	// subjects the step is not about.
+	finished func(Subject) bool
 
-	applied  int
-	planned  int
-	verified int
+	doneErr     error
+	validateErr error
+	applyErr    error
+	verifyErr   error
+
+	described []string
+	validated []string
+	applied   []string
+	verified  []string
 }
 
 func (s *recordingStep) Stage() Stage { return s.stage }
 func (s *recordingStep) Phase() Phase { return s.phase }
 
-func (s *recordingStep) Plan(context.Context, *Scope) ([]Action, error) {
-	s.planned++
-	return []Action{{Rule: s.id, Verb: VerbUpdate, Object: ObjectRef{Name: "x"}}}, nil
+func (s *recordingStep) Describe(_ context.Context, _ *Scope, subject Subject) (*Action, error) {
+	if !s.responsible(subject) || s.settled(subject) {
+		return nil, nil
+	}
+	s.described = append(s.described, subject.Ref.Name)
+	return &Action{Rule: s.id, Verb: VerbUpdate, Object: subject.Ref}, nil
 }
 
-func (s *recordingStep) Done(context.Context, *Scope) (bool, error) {
-	return s.done, s.doneErr
+func (s *recordingStep) Done(_ context.Context, _ *Scope, subject Subject) (bool, error) {
+	return s.responsible(subject) && s.settled(subject), s.doneErr
 }
 
-func (s *recordingStep) Apply(context.Context, *Scope) error {
-	s.applied++
+func (s *recordingStep) responsible(subject Subject) bool {
+	return s.about == nil || s.about(subject)
+}
+
+func (s *recordingStep) settled(subject Subject) bool {
+	return s.finished != nil && s.finished(subject)
+}
+
+func (s *recordingStep) Validate(_ context.Context, _ *Scope, subject Subject) error {
+	s.validated = append(s.validated, subject.Ref.Name)
+	return s.validateErr
+}
+
+func (s *recordingStep) Apply(_ context.Context, _ *Scope, subject Subject) error {
+	s.applied = append(s.applied, subject.Ref.Name)
 	return s.applyErr
 }
 
-func (s *recordingStep) Verifications() []Verification {
-	return []Verification{VerificationFunc{
-		RuleID:  s.id + "-verified",
-		Summary: "the step's post-condition",
-		Fn: func(context.Context, *Scope) error {
-			s.verified++
-			return s.verifyErr
-		},
-	}}
+func (s *recordingStep) Verify(_ context.Context, _ *Scope, subject Subject) error {
+	s.verified = append(s.verified, subject.Ref.Name)
+	return s.verifyErr
 }
 
+// newStep is a step about the upgrade alone, which is what most of the runner's
+// own tests want: one subject, so the fan-out does not obscure the control flow.
 func newStep(id ID, stage Stage) *recordingStep {
-	return &recordingStep{namedRule: rule(id), stage: stage}
+	return &recordingStep{
+		namedRule: rule(id),
+		stage:     stage,
+		about:     func(subject Subject) bool { return subject.IsUpgrade() },
+	}
 }
 
 // testScope builds a scope over an empty fake cluster.
@@ -89,45 +116,46 @@ func TestRunner_AppliesAStepThatIsNotDone(t *testing.T) {
 	if err := NewRunner(catalog, testScope(t, Options{})).ApplyAll(t.Context(), StageUpgrade); err != nil {
 		t.Fatalf("ApplyAll: %v", err)
 	}
-	if step.applied != 1 {
-		t.Fatalf("Apply called %d times, want 1", step.applied)
+	if len(step.applied) != 1 {
+		t.Fatalf("Apply was called for %v, want the upgrade alone", step.applied)
 	}
-	if step.verified != 1 {
-		t.Fatalf("the post-condition was checked %d times, want 1", step.verified)
+	if len(step.verified) != 1 {
+		t.Fatalf("the post-condition was checked for %v, want the upgrade alone", step.verified)
 	}
 }
 
 func TestRunner_SkipsAStepThatIsAlreadyDone(t *testing.T) {
 	step := newStep("reparent", StageUpgrade)
-	step.done = true
+	step.finished = func(Subject) bool { return true }
 	catalog := NewCatalog()
 	catalog.Steps.MustRegister(step)
 
 	if err := NewRunner(catalog, testScope(t, Options{})).ApplyAll(t.Context(), StageUpgrade); err != nil {
 		t.Fatalf("ApplyAll: %v", err)
 	}
-	if step.applied != 0 {
-		t.Fatalf("Apply was called %d times on a step that reported itself done, "+
+	if len(step.applied) != 0 {
+		t.Fatalf("Apply was called for %v on a step that reported itself done, "+
 			"which repeats a side effect on every rerun", step.applied)
 	}
 }
 
-func TestRunner_VerifiesEvenAStepItSkipped(t *testing.T) {
-	// A rerun that trusts Done and skips the check cannot notice that the state
-	// it is resuming from is not the state it thinks it is.
+func TestRunner_ASkippedStepIsNotVerified(t *testing.T) {
+	// A step that describes nothing has nothing to confirm, and the inspection
+	// that would confirm it is the one Describe already made. A subject whose
+	// state is not what a previous run left behind is described again and put
+	// right, which TestStep_ASubjectWhoseStateRegressedIsDescribedAgain covers.
 	step := newStep("reparent", StageUpgrade)
-	step.done = true
-	step.verifyErr = errors.New("the dependents were never transferred")
+	step.finished = func(Subject) bool { return true }
+	step.verifyErr = errors.New("this must not be reached")
 
 	catalog := NewCatalog()
 	catalog.Steps.MustRegister(step)
 
-	err := NewRunner(catalog, testScope(t, Options{})).ApplyAll(t.Context(), StageUpgrade)
-	if err == nil {
-		t.Fatal("a skipped step whose post-condition does not hold was accepted")
+	if err := NewRunner(catalog, testScope(t, Options{})).ApplyAll(t.Context(), StageUpgrade); err != nil {
+		t.Fatalf("ApplyAll: %v", err)
 	}
-	if !strings.Contains(err.Error(), "was not verified") {
-		t.Fatalf("error = %q, want it to say the step was not verified", err)
+	if len(step.verified) != 0 {
+		t.Fatalf("verified %v on a step that described no change", step.verified)
 	}
 }
 
@@ -140,13 +168,13 @@ func TestRunner_DryRunAppliesNothing(t *testing.T) {
 	if err := NewRunner(catalog, scope).ApplyAll(t.Context(), StageUpgrade); err != nil {
 		t.Fatalf("ApplyAll: %v", err)
 	}
-	if step.applied != 0 {
-		t.Fatalf("Apply was called %d times under a dry run", step.applied)
+	if len(step.applied) != 0 {
+		t.Fatalf("Apply was called for %v under a dry run", step.applied)
 	}
-	if step.planned == 0 {
-		t.Fatal("Plan was never called under a dry run, so the user was shown nothing")
+	if len(step.described) == 0 {
+		t.Fatal("Describe was never called under a dry run, so the user was shown nothing")
 	}
-	if step.verified != 0 {
+	if len(step.verified) != 0 {
 		t.Fatal("a post-condition was checked under a dry run, and it can only fail: " +
 			"nothing was applied for it to hold against")
 	}
@@ -163,7 +191,7 @@ func TestRunner_StopsAtTheFirstFailingStep(t *testing.T) {
 	if err := NewRunner(catalog, testScope(t, Options{})).ApplyAll(t.Context(), StageUpgrade); err == nil {
 		t.Fatal("a failing step did not stop the stage")
 	}
-	if second.applied != 0 {
+	if len(second.applied) != 0 {
 		t.Fatal("a step after the one that failed was applied, which is what §25 refuses")
 	}
 }
@@ -177,8 +205,8 @@ func TestRunner_SkipsAStepTheCommandLineExcluded(t *testing.T) {
 	if err := NewRunner(catalog, scope).ApplyAll(t.Context(), StageUpgrade); err != nil {
 		t.Fatalf("ApplyAll: %v", err)
 	}
-	if step.applied != 0 {
-		t.Fatalf("a skipped step was applied %d times", step.applied)
+	if len(step.applied) != 0 {
+		t.Fatalf("a skipped step was applied for %v", step.applied)
 	}
 }
 

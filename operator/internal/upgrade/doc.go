@@ -18,9 +18,15 @@
 //	                somebody chose, and the inputs this cluster would hand it
 //	Check           a validation over the discovered graph, reporting findings
 //	Discoverer      a walk that puts objects and their edges into the graph
-//	Step            one unit of work: planned, skipped when done, applied, verified
-//	Verification    a post-condition a step is not finished without
+//	Step            one unit of work, asked about one subject at a time:
+//	                described, skipped when done, validated, applied, verified
 //	Transformation  an object-level mapping, for a renamed kind or a rewritten key
+//
+// A step's subject is an object the graph holds, or the upgrade itself. The
+// steps of §9.1 are the second kind, since deploying the conversion webhook and
+// upgrading the operator change the installation rather than anything in it,
+// and giving them a shape of their own would mean two contracts and a plan
+// assembled from two walks that happen to agree.
 //
 // Every one of them is a [Rule], which is to say it has a stable identity and a
 // sentence describing it, so a report can name it and an operator can skip it.

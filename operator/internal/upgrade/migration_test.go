@@ -57,8 +57,8 @@ func TestMigration_WalksEveryPhaseAndRemovesTheRecord(t *testing.T) {
 	if err := migration.Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if transform.applied != 1 || reparent.applied != 1 {
-		t.Fatalf("applied transform %d times and reparent %d, want 1 each",
+	if len(transform.applied) != 1 || len(reparent.applied) != 1 {
+		t.Fatalf("applied transform for %v and reparent for %v, want the upgrade once each",
 			transform.applied, reparent.applied)
 	}
 
@@ -81,7 +81,7 @@ func TestMigration_StopsAtTheFailingPhaseAndKeepsThePositionBeforeIt(t *testing.
 	if err := migration.Run(t.Context()); err == nil {
 		t.Fatal("a failing phase did not stop the migration")
 	}
-	if later.applied != 0 {
+	if len(later.applied) != 0 {
 		t.Fatal("a phase after the one that failed ran, which is what §25 refuses")
 	}
 
@@ -116,14 +116,14 @@ func TestMigration_ResumesWithoutRepeatingWhatIsDone(t *testing.T) {
 	// The step's effect is now present, which is what the second run's Done
 	// reports. Nothing about the record says so: it is a read of the cluster.
 	transform.applyErr = nil
-	transform.done = true
+	transform.finished = func(Subject) bool { return true }
 
 	if err := migration.Run(t.Context()); err != nil {
 		t.Fatalf("the resumed run failed: %v", err)
 	}
-	if transform.applied != 1 {
-		t.Fatalf("Apply was called %d times across two runs, want 1: a resumed run "+
-			"must not repeat a side effect", transform.applied)
+	if len(transform.applied) != 1 {
+		t.Fatalf("Apply was called for %v across two runs, want the upgrade once: a "+
+			"resumed run must not repeat a side effect", transform.applied)
 	}
 }
 

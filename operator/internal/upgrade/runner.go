@@ -139,62 +139,104 @@ func (r *Runner) Plan(ctx context.Context, stage Stage) (Plan, error) {
 		return plan, err
 	}
 	for _, step := range steps {
-		actions, err := step.Plan(ctx, r.Scope)
+		actions, err := r.planStep(ctx, step)
 		if err != nil {
-			return plan, fmt.Errorf("step %q could not be planned: %w", step.ID(), err)
+			return plan, err
 		}
 		plan.Add(actions...)
 	}
 	return plan, nil
 }
 
-// Apply runs one step: skipping it when its effect is already present,
-// performing it otherwise, and verifying it either way.
+// planStep reports what one step would do, which is exactly what it describes.
 //
-// Verification runs on a step that reported itself done as well as on one that
-// was just applied. A rerun that trusts Done and skips the check is a rerun
-// that cannot notice that the state it is resuming from is not the state it
-// thinks, which is the failure §25 refuses to let pass silently.
+// There is no second question here. A step describes nothing for a subject that
+// is already in the state it exists to produce, so a plan taken after a partial
+// run shows what is left rather than what was originally intended.
+func (r *Runner) planStep(ctx context.Context, step Step) ([]Action, error) {
+	var actions []Action
+	for _, subject := range r.Scope.Subjects() {
+		action, err := step.Describe(ctx, r.Scope, subject)
+		if err != nil {
+			return nil, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)
+		}
+		if action != nil {
+			actions = append(actions, *action)
+		}
+	}
+	return actions, nil
+}
+
+// Apply runs one step over every subject: performing the change it describes,
+// and doing nothing where it describes none.
+//
+// A subject the step declines is not validated, applied, or verified. There is
+// nothing to confirm there, and the inspection that would confirm it is the one
+// Describe already made.
+//
+// A failed precondition stops the step there rather than partway through the
+// next subject, because §25 requires that nothing downstream depend on an
+// unverified change.
 func (r *Runner) Apply(ctx context.Context, step Step) error {
 	r.Scope.Report.Rule(step)
 
-	done, err := step.Done(ctx, r.Scope)
-	if err != nil {
-		return fmt.Errorf("step %q could not report whether it had run: %w", step.ID(), err)
+	subjects := r.Scope.Subjects()
+	r.Scope.Report.Work(len(subjects))
+
+	changed, finished := 0, 0
+	for _, subject := range subjects {
+		action, err := step.Describe(ctx, r.Scope, subject)
+		if err != nil {
+			return r.stepFailed(step, fmt.Errorf("describing %s: %w", subject, err))
+		}
+		if action == nil {
+			// Nothing to do. Done tells the two reasons apart, which is what
+			// the outcome line reports and what a coverage check reads.
+			done, err := step.Done(ctx, r.Scope, subject)
+			if err != nil {
+				return r.stepFailed(step, fmt.Errorf("asking whether %s was finished: %w", subject, err))
+			}
+			if done {
+				finished++
+			}
+			continue
+		}
+
+		if r.Scope.Options.DryRun {
+			r.Scope.Report.Action(*action)
+			continue
+		}
+
+		if err := step.Validate(ctx, r.Scope, subject); err != nil {
+			return r.stepFailed(step, fmt.Errorf("%s is not ready for this change: %w", subject, err))
+		}
+		r.Scope.Report.Item(action.String())
+		if err := step.Apply(ctx, r.Scope, subject); err != nil {
+			return r.stepFailed(step, fmt.Errorf("changing %s: %w", subject, err))
+		}
+		if err := step.Verify(ctx, r.Scope, subject); err != nil {
+			return r.stepFailed(step, fmt.Errorf("%s was not verified: %w", subject, err))
+		}
+		changed++
 	}
 
 	switch {
-	case done:
-		r.Scope.Report.Outcome(step, OutcomeSkipped, "already performed")
 	case r.Scope.Options.DryRun:
-		actions, err := step.Plan(ctx, r.Scope)
-		if err != nil {
-			return fmt.Errorf("step %q could not be planned: %w", step.ID(), err)
-		}
-		for _, action := range actions {
-			r.Scope.Report.Action(action)
-		}
-		// A dry run performed nothing, so there is nothing to verify and
-		// asserting the post-conditions would fail on every one of them.
 		r.Scope.Report.Outcome(step, OutcomeSkipped, "dry run")
-		return nil
+	case changed > 0:
+		r.Scope.Report.Outcome(step, OutcomeDone, objectCount(changed)+" changed")
+	case finished > 0:
+		r.Scope.Report.Outcome(step, OutcomeSkipped, "already performed")
 	default:
-		if err := step.Apply(ctx, r.Scope); err != nil {
-			r.Scope.Report.Outcome(step, OutcomeFailed, err.Error())
-			return fmt.Errorf("step %q: %w", step.ID(), err)
-		}
-	}
-
-	for _, verification := range step.Verifications() {
-		if err := verification.Verify(ctx, r.Scope); err != nil {
-			r.Scope.Report.Outcome(step, OutcomeFailed, err.Error())
-			return fmt.Errorf("step %q was not verified by %q: %w", step.ID(), verification.ID(), err)
-		}
-	}
-	if !done {
-		r.Scope.Report.Outcome(step, OutcomeDone, "")
+		r.Scope.Report.Outcome(step, OutcomeSkipped, "nothing to do")
 	}
 	return nil
+}
+
+// stepFailed reports the failure and wraps it with the step that produced it.
+func (r *Runner) stepFailed(step Step, err error) error {
+	r.Scope.Report.Outcome(step, OutcomeFailed, err.Error())
+	return fmt.Errorf("step %q: %w", step.ID(), err)
 }
 
 // ApplyAll runs a stage's steps in dependency order, stopping at the first that
