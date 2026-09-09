@@ -225,3 +225,45 @@ func render(refs []ObjectRef) string {
 	}
 	return b.String()
 }
+
+func TestDeployed_ReadsTheValuesTheReleaseWasInstalledWith(t *testing.T) {
+	// §13.1 translates them into the new chart's spellings before upgrading,
+	// and they sit in the same JSON as the manifest, so reading them needs no
+	// Helm either.
+	secret := secretFor(t, "simplyblock-operator", 1, true)
+
+	payload, err := json.Marshal(map[string]any{
+		"name": "simplyblock-operator", "namespace": "simplyblock", "version": 1,
+		"manifest": manifest,
+		"config": map[string]any{
+			"storagenode":  map[string]any{"skipKubeletConfiguration": true},
+			"multiCluster": map[string]any{"enable": false},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(payload); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+	secret.Data["release"] = []byte(base64.StdEncoding.EncodeToString(buf.Bytes()))
+
+	deployed, found, err := Deployed(t.Context(), clusterWith(t, secret), "simplyblock")
+	if err != nil || !found {
+		t.Fatalf("Deployed: %v, found=%v", err, found)
+	}
+
+	node, ok := deployed.Values["storagenode"].(map[string]any)
+	if !ok {
+		t.Fatalf("values = %v, want the ones the release carries", deployed.Values)
+	}
+	// The key §13.1 renames, which is what makes the translation necessary.
+	if node["skipKubeletConfiguration"] != true {
+		t.Errorf("the deployed value was not read: %v", node)
+	}
+}

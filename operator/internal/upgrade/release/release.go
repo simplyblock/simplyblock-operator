@@ -57,6 +57,15 @@ type Release struct {
 	// Objects are what the release's manifest declares, in the order the
 	// manifest lists them.
 	Objects []ObjectRef
+
+	// Values are the values the release was installed with, which §13.1
+	// translates into the new chart's spellings before upgrading.
+	//
+	// They come out of the same JSON as the manifest, so reading them needs no
+	// Helm either. What §13.1 wants is the values the user supplied rather
+	// than the chart's defaults merged over them, which is what Helm records
+	// here.
+	Values map[string]any
 }
 
 // ObjectRef names one object a release manifest declares.
@@ -114,10 +123,11 @@ func Deployed(ctx context.Context, c client.Client, namespace string) (*Release,
 // stored is the part of Helm's release JSON this reads. The rest of it is the
 // chart, the values, and the hooks, none of which the handover enumerates.
 type stored struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Version   int    `json:"version"`
-	Manifest  string `json:"manifest"`
+	Name      string         `json:"name"`
+	Namespace string         `json:"namespace"`
+	Version   int            `json:"version"`
+	Manifest  string         `json:"manifest"`
+	Config    map[string]any `json:"config"`
 }
 
 // decode unwraps one release Secret.
@@ -151,6 +161,7 @@ func decode(secret *corev1.Secret) (*Release, error) {
 		Namespace: held2.Namespace,
 		Version:   held2.Version,
 		Objects:   objects,
+		Values:    held2.Config,
 	}, nil
 }
 
