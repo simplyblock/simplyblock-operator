@@ -121,14 +121,6 @@ type StorageBackupStatus struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// This version stays the storage version while v1alpha2 is served beside it.
-// Adding a version and moving storage in one release breaks a running cluster:
-// every write would need conversion the moment the CRDs land, before the operator
-// that serves it has rolled out, so the old operator stops being able to update
-// status and a `helm upgrade` fails applying its own custom resources. Flipping
-// storage to v1alpha2 is a later release plus a storage migration
-// (design-property-renames.md §3.8).
-// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"

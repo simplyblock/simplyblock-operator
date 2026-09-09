@@ -466,6 +466,60 @@ and a controller that writes during that window persists the pruned form. A
 startup failure that is loud and self-correcting is a better trade than a
 data-losing window that is neither.
 
+### 3.8 Which version is stored, and who decides
+
+The storage version is the one format etcd holds. A CRD serves several and stores
+exactly one, and the API server converts between what a client asks for and what
+is stored — which is what the conversion webhook is for. Moving storage is
+therefore a decision about persisted bytes rather than about which shape a
+controller reads.
+
+**The manifests this repository ships store `v1alpha2`, because they are the ones
+a fresh install applies.** A cluster installed today writes every object at the
+storage version from the outset, so nothing is ever converted, and the conversion
+webhook is inert and not deployed. The chart's own custom resources are authored
+at `v1alpha2` for the same reason: a chart that wrote `v1alpha1` would be the one
+client forcing conversion on a cluster where nothing serves it.
+
+**An upgrade of an existing cluster does not take that value.** The upgrade tool
+applies these same CRDs with storage held at `v1alpha1`, and this is a positive
+act rather than an omission: a server-side apply overwrites the live storage
+version, so shipping `v1alpha2` and applying it unchanged would move storage
+before anything could convert. Every write would then need a webhook that the
+operator carrying it has not finished rolling out, the running operator would stop
+being able to update status, and the release would be irreversible — objects
+written as `v1alpha2` cannot be read by the previous operator, which does not
+serve conversion.
+
+**Storage moves at the end, with the objects.** Flipping the flag changes only
+what new writes encode; objects untouched since remain in the old representation
+and `.status.storedVersions` keeps listing `v1alpha1`, which is what stops
+`v1alpha1` from being removed. The rewrite that follows lists every object and
+writes it back unchanged, which is what moves it between representations.
+[`design-api-upgrade.md`](design-api-upgrade.md) §24 owns that sequence and this
+document does not repeat it.
+
+| Path          | Storage on arrival | Conversion invoked          | Webhook              |
+|---------------|--------------------|-----------------------------|----------------------|
+| Fresh install | `v1alpha2`         | Never                       | Not deployed         |
+| Upgrade       | `v1alpha1`         | On every read               | Deployed by the tool |
+| After §24     | `v1alpha2`         | Only for `v1alpha1` clients | Removed by §28       |
+
+**The consequence for this document is that the storage version is not a property
+of a release.** Two clusters on the same operator version hold different storage
+versions until the upgrade's rewrite has run, and both converge on `v1alpha2`.
+Anything reasoning about what is in etcd has to ask the CRD rather than the
+version number.
+
+**What this costs while an upgraded cluster sits at `v1alpha1` storage** is that
+`v1alpha2` cannot carry information `v1alpha1` cannot express: a field only the
+hub can state is converted down, dropped, and read back empty. The four kinds here
+are renames and regroupings only, so nothing is lost, and
+`hub_roundtrip_test.go` asserts it in the direction storage actually takes rather
+than assuming it. A genuinely new field needs the annotation stash that
+[`design-api-upgrade.md`](design-api-upgrade.md) §6.2 specifies, and nothing here
+needs it yet.
+
 ---
 
 ## 4. Sequencing

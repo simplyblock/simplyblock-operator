@@ -56,6 +56,18 @@ type ControlPlaneStatus struct {
 	LastChecked *metav1.Time `json:"lastChecked,omitempty"`
 }
 
+// v1alpha2 is the storage version in the manifests this repository ships, which
+// are the ones a fresh install applies. A cluster installed today stores this
+// shape from the first write and never converts anything, so the conversion
+// webhook is inert there and is not deployed.
+//
+// An upgrade of an existing cluster is the other path, and it does not take this
+// value. The upgrade tool applies these same CRDs with storage held at v1alpha1,
+// because a server-side apply overwrites the live storage version and moving it
+// before the conversion webhook is serving breaks every write. It flips to
+// v1alpha2 with the storage rewrite once the migration has run
+// (design-api-upgrade.md §24, design-property-renames.md §3.8).
+// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced

@@ -1,11 +1,29 @@
 # The conversion webhook's workload, applied by the upgrade tool rather than by
 # the chart or config/default.
 #
-# It is deliberately not part of the operator's own install. The webhook exists
-# for the span of an API migration (design-api-upgrade.md §28), and a Deployment
-# the chart owned would outlive the reason for it.
+# It is deliberately not part of the operator's install (design-api-upgrade.md
+# §5). A fresh install stores v1alpha2 from the first write and converts nothing,
+# so the webhook has no work to do there; it exists for the span of an upgrade,
+# and §28 removes it. Keeping it out of the Helm release is also what stops a
+# later `helm upgrade` from adopting or pruning objects the upgrade tool owns.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
+# The namespace is set here rather than left to the applier because a
+# ClusterRoleBinding's ServiceAccount subject carries its own namespace, and
+# Kustomize fills that in from this field. Without it the binding names a subject
+# in no namespace and grants nothing, which the webhook only discovers when it
+# fails to inject its CA. The upgrade tool overrides it when it installs
+# somewhere else.
+namespace: simplyblock-operator-system
+
+# The webhook ships in the operator image under a second entry point (§29.3), so
+# this is the operator's image and the tag is set the same way config/manager
+# sets it.
+images:
+  - name: controller
+    newName: quay.io/simplyblock-io/simplyblock-operator
+    newTag: 0.1.0
 
 resources:
   - rbac.yaml
