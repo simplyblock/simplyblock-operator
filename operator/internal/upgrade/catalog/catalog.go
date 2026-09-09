@@ -21,6 +21,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/check"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/derive"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/discover"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/steps"
 )
 
 // Default builds the catalog the commands run against.
@@ -29,7 +30,7 @@ func Default() *upgrade.Catalog {
 
 	c.Discoverers.MustRegister(discoverers()...)
 	c.Derivations.MustRegister(derivations()...)
-	c.Steps.MustRegister(steps()...)
+	c.Steps.MustRegister(migrationSteps()...)
 	c.Transformations.MustRegister(transformations()...)
 
 	// The checks are registered last, because the ones that walk the naming
@@ -69,11 +70,12 @@ func derivations() []upgrade.Derivation {
 	return append(derive.Labels(), derive.Names()...)
 }
 
-// steps are the work of the upgrade and the migration (§9.1, §20, §21). Their
-// order within a stage comes from what each one requires rather than from this
-// slice, so a step added in the wrong place still runs in the right one.
-func steps() []upgrade.Step {
-	return nil
+// migrationSteps are the work of the upgrade and the migration (§9.1, §20,
+// §21). Their order within a stage comes from what each one requires rather
+// than from this slice, so a step added in the wrong place still runs in the
+// right one.
+func migrationSteps() []upgrade.Step {
+	return steps.Ownership()
 }
 
 // transformations are the object mappings conversion cannot carry (§16).
