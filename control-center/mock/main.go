@@ -12,7 +12,7 @@
 //	console pod:  SB_K8S_API=http://sb-mock:8080  SB_OPERATOR_URL=http://sb-mock:8080
 //	              SB_PROMETHEUS_URL=http://sb-mock:8080
 //	helm:         --set controlCenter.enabled=true --set controlCenter.mock.enabled=true
-//	local dev:    sb-mock --serve-ui ../   (serves the console statics itself,
+//	local dev:    sb-mock --serve-ui ../   (serves the console assets itself,
 //	              no nginx needed; open http://localhost:8080)
 package main
 
