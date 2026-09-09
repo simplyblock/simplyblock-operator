@@ -6,6 +6,7 @@
 package upgrade
 
 import (
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -116,22 +117,23 @@ func TestPlan_SummarizesByVerbAndKind(t *testing.T) {
 
 	plan := Plan{Stage: StageMigrate}
 	plan.Add(
-		Action{Verb: VerbReparent, Object: ObjectRef{GVK: nodeGVK, Name: "node-a"}},
-		Action{Verb: VerbReparent, Object: ObjectRef{GVK: nodeGVK, Name: "node-b"}},
-		Action{Verb: VerbDelete, Object: ObjectRef{GVK: setGVK, Name: "nodeset-a"}},
+		Task{Step: "reparent", Subtasks: []Action{
+			{Verb: VerbReparent, Object: ObjectRef{GVK: nodeGVK, Name: "node-a"}},
+			{Verb: VerbReparent, Object: ObjectRef{GVK: nodeGVK, Name: "node-b"}},
+		}},
+		Task{Step: "retire", Subtasks: []Action{
+			{Verb: VerbDelete, Object: ObjectRef{GVK: setGVK, Name: "nodeset-a"}},
+		}},
 	)
 
-	summary := plan.Summary()
-	want := []string{
+	summary := strings.Join(plan.Summary(), "\n")
+	for _, want := range []string{
 		"1 StorageNodeSet will be deleted.",
 		"2 StorageNodes will be reparented.",
-	}
-	if len(summary) != len(want) {
-		t.Fatalf("summary = %v, want %v", summary, want)
-	}
-	for i, line := range want {
-		if summary[i] != line {
-			t.Fatalf("summary[%d] = %q, want %q", i, summary[i], line)
+		"2 tasks in total.",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("the summary does not carry %q:\n%s", want, summary)
 		}
 	}
 }

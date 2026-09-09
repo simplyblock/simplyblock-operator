@@ -69,7 +69,7 @@ func planFor(t *testing.T, step Step, scope *Scope) []Action {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	return plan.Actions
+	return plan.Actions()
 }
 
 func TestStep_AppliesEverySubjectItDescribes(t *testing.T) {

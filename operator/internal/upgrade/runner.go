@@ -140,11 +140,11 @@ func (r *Runner) Plan(ctx context.Context, stage Stage) (Plan, error) {
 		return plan, err
 	}
 	for _, step := range steps {
-		actions, err := r.planStep(ctx, step)
+		task, err := r.planStep(ctx, step)
 		if err != nil {
 			return plan, err
 		}
-		plan.Add(actions...)
+		plan.Add(task)
 	}
 	return plan, nil
 }
@@ -154,19 +154,24 @@ func (r *Runner) Plan(ctx context.Context, stage Stage) (Plan, error) {
 // There is no second question here. A step describes nothing for a subject that
 // is already in the state it exists to produce, so a plan taken after a partial
 // run shows what is left rather than what was originally intended.
-func (r *Runner) planStep(ctx context.Context, step Step) ([]Action, error) {
-	var actions []Action
+func (r *Runner) planStep(ctx context.Context, step Step) (Task, error) {
+	task := Task{
+		Step:    step.ID(),
+		Summary: step.Description(),
+		Phase:   step.Phase(),
+		Blocked: blockedBy(step),
+	}
+
 	for _, subject := range r.Scope.Subjects() {
 		action, err := step.Describe(ctx, r.Scope, subject)
 		if err != nil {
-			return nil, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)
+			return task, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)
 		}
 		if action != nil {
-			action.Blocked = blockedBy(step)
-			actions = append(actions, *action)
+			task.Subtasks = append(task.Subtasks, *action)
 		}
 	}
-	return actions, nil
+	return task, nil
 }
 
 // Apply runs one step over every subject: performing the change it describes,

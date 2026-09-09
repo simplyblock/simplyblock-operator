@@ -64,35 +64,70 @@ type Action struct {
 	// Object is what it happens to.
 	Object ObjectRef
 
-	// Detail says what changes, in the form the plan prints: an old value, an
-	// arrow, and a new one.
+	// Detail is the change itself, in the form the plan prints: an old value,
+	// an arrow, and a new one.
+	//
+	// It is the data, not a description of the step. A step's own explanation
+	// belongs in its source, where it is read once, rather than in a line
+	// printed on every run of a command whose job is to say what will happen
+	// to which object. A step with nothing concrete to say leaves it empty.
 	Detail string
 
-	// Blocked says why this action cannot be performed yet, and is empty for
-	// one that can. It is set by the runner from the step, so a plan shows the
-	// whole of what an upgrade owes and marks the part this build cannot do.
+	// Blocked marks an action this build describes and cannot perform. It is
+	// set by the runner from the step, so a plan shows the whole of what a
+	// stage owes and marks the part this build cannot do.
+	//
+	// What it holds is not printed. Why a step is unimplemented is a fact
+	// about this build rather than about the cluster, so it belongs in a TODO
+	// beside the step and in the error the stage refuses with, and the plan
+	// says only that the line is one of them.
 	Blocked string
 }
 
-// String renders one line of the plan.
-//
-// A step acting on the upgrade itself names the step rather than the subject,
-// because every one of §9.1's shares that subject and the line would otherwise
-// say Upgrade ten times and identify nothing. It is also the name --skip takes.
+// String renders one subtask.
 func (a Action) String() string {
-	subject := a.Object.String()
-	if a.Object.GVK.Kind == UpgradeKind {
-		subject = string(a.Rule)
-	}
-
-	line := fmt.Sprintf("%-9s %s", a.Verb, subject)
+	line := fmt.Sprintf("%-9s %s", a.Verb, a.Object)
 	if a.Detail != "" {
-		line += "\n            " + a.Detail
-	}
-	if a.Blocked != "" {
-		line += "\n            not yet implemented: " + a.Blocked
+		line += "  " + a.Detail
 	}
 	return line
+}
+
+// Task is one step's work: what the step is, and the subjects it acts on.
+//
+// A plan is a hierarchy because the execution is one. A step acts on many
+// objects, and a flat list of changes loses which step is responsible for each
+// and how many objects one step touches, which is the difference between
+// "annotate the release's survivors" and the ninety-five annotations that is.
+type Task struct {
+	// Step is the step whose work this is, and is what --skip takes.
+	Step ID
+
+	// Summary is the step's own description.
+	Summary string
+
+	// Phase groups the task, for the migration. It is empty for a stage whose
+	// steps are a sequence rather than a graph.
+	Phase Phase
+
+	// Blocked marks a task this build describes and cannot perform.
+	Blocked string
+
+	// Subtasks are the changes, one per subject the step is about.
+	Subtasks []Action
+}
+
+// Collapsed reports a task whose subtasks say nothing the task line does not.
+//
+// A step acting on the upgrade itself has exactly one subject and it carries no
+// information, so printing it under the step repeats the step. A step whose
+// subjects are objects prints them, because which objects and how many is the
+// whole of what a plan is for.
+func (t Task) Collapsed() bool {
+	if len(t.Subtasks) != 1 {
+		return false
+	}
+	return t.Subtasks[0].Object.GVK.Kind == UpgradeKind
 }
 
 // Plan is everything a stage would do, and everything its checks found. Both
@@ -102,8 +137,8 @@ type Plan struct {
 	// Stage is the command the plan describes.
 	Stage Stage
 
-	// Actions are the changes, in the order the steps would perform them.
-	Actions []Action
+	// Tasks are the steps, in the order they would run.
+	Tasks []Task
 
 	// Findings are what the checks reported.
 	Findings Findings
@@ -113,8 +148,56 @@ type Plan struct {
 	Skipped []ID
 }
 
-// Add appends actions.
-func (p *Plan) Add(actions ...Action) { p.Actions = append(p.Actions, actions...) }
+// Add appends a task, dropping one with nothing to do.
+func (p *Plan) Add(tasks ...Task) {
+	for _, task := range tasks {
+		if len(task.Subtasks) == 0 {
+			continue
+		}
+		p.Tasks = append(p.Tasks, task)
+	}
+}
+
+// Actions is every change the plan holds, flattened, which is what the counts
+// are taken over.
+func (p *Plan) Actions() []Action {
+	var out []Action
+	for _, task := range p.Tasks {
+		out = append(out, task.Subtasks...)
+	}
+	return out
+}
+
+// Phases returns the phases the plan's tasks fall into, in the order the
+// migration walks them, and a single empty phase for a stage that has none.
+func (p *Plan) Phases() []Phase {
+	seen := make(map[Phase]bool, len(p.Tasks))
+	for _, task := range p.Tasks {
+		seen[task.Phase] = true
+	}
+
+	var out []Phase
+	if seen[""] {
+		out = append(out, "")
+	}
+	for _, phase := range MigratePhases {
+		if seen[phase] {
+			out = append(out, phase)
+		}
+	}
+	return out
+}
+
+// InPhase returns the tasks of one phase, in plan order.
+func (p *Plan) InPhase(phase Phase) []Task {
+	var out []Task
+	for _, task := range p.Tasks {
+		if task.Phase == phase {
+			out = append(out, task)
+		}
+	}
+	return out
+}
 
 // Record appends findings.
 func (p *Plan) Record(findings ...Finding) { p.Findings = append(p.Findings, findings...) }
@@ -122,13 +205,13 @@ func (p *Plan) Record(findings ...Finding) { p.Findings = append(p.Findings, fin
 // Blocked reports whether the plan's checks refuse the stage.
 func (p *Plan) Blocked() bool { return p.Findings.Blocked() }
 
-// Unimplemented reports the actions this build describes and cannot perform,
+// Unimplemented reports the tasks this build describes and cannot perform,
 // which is what stops a stage before it starts.
-func (p *Plan) Unimplemented() []Action {
-	var out []Action
-	for _, action := range p.Actions {
-		if action.Blocked != "" {
-			out = append(out, action)
+func (p *Plan) Unimplemented() []Task {
+	var out []Task
+	for _, task := range p.Tasks {
+		if task.Blocked != "" {
+			out = append(out, task)
 		}
 	}
 	return out
@@ -142,17 +225,11 @@ func (p *Plan) Summary() []string {
 		kind string
 	}
 	counts := make(map[bucket]int)
-	steps, blocked := 0, 0
-	for _, action := range p.Actions {
-		if action.Blocked != "" {
-			blocked++
-		}
-
+	for _, action := range p.Actions() {
 		kind := action.Object.GVK.Kind
 		if kind == UpgradeKind {
-			// Counting these by kind and verb says nothing: they all act on
-			// one subject, so what a reader wants is how many steps there are.
-			steps++
+			// Counting these by kind and verb says nothing: they all name one
+			// subject, and the task count below is what a reader wants.
 			continue
 		}
 		if kind == "" {
@@ -176,12 +253,10 @@ func (p *Plan) Summary() []string {
 	for _, key := range keys {
 		out = append(out, fmt.Sprintf("%d %s will be %s.", counts[key], plural(key.kind, counts[key]), pastTense(key.verb)))
 	}
-	if steps > 0 {
-		out = append(out, fmt.Sprintf("%d %s act on the upgrade itself.", steps, plural("step", steps)))
-	}
-	if blocked > 0 {
+	out = append(out, fmt.Sprintf("%d %s in total.", len(p.Tasks), plural("task", len(p.Tasks))))
+	if blocked := len(p.Unimplemented()); blocked > 0 {
 		out = append(out, fmt.Sprintf(
-			"%d of these are described and not implemented, so %s cannot be run yet.",
+			"%d of them are described and not implemented, so %s cannot be run yet.",
 			blocked, p.Stage))
 	}
 	return out

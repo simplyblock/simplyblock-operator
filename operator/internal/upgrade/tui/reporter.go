@@ -95,23 +95,47 @@ func (r *Reporter) Action(action upgrade.Action) {
 	r.program.Send(printMsg{text: "  " + action.String()})
 }
 
+// Plan renders the hierarchy as one block, so a redrawing bar cannot land in
+// the middle of it.
 func (r *Reporter) Plan(plan upgrade.Plan) {
-	for _, action := range plan.Actions {
-		r.Action(action)
-	}
-	r.Findings(plan.Findings)
-
 	var b strings.Builder
-	for _, line := range plan.Summary() {
-		fmt.Fprintf(&b, "%s\n", line)
-	}
-	if errs := plan.Findings.Errors(); len(errs) > 0 {
-		fmt.Fprintf(&b, "\n%s\n", styleError.Render(fmt.Sprintf(
-			"%s failed: %d violations. No changes were made.", plan.Stage, len(errs))))
+
+	for _, phase := range plan.Phases() {
+		if phase != "" {
+			fmt.Fprintf(&b, "\n  %s\n", stylePhase.Render(phase.Describe()))
+		}
+		for _, task := range plan.InPhase(phase) {
+			head := "    " + styleRuleName.Render(string(task.Step))
+			if task.Blocked != "" {
+				head += styleDim.Render("  (not implemented)")
+			}
+			fmt.Fprintf(&b, "\n%s\n      %s\n", head, styleDim.Render(task.Summary))
+
+			if task.Collapsed() {
+				continue
+			}
+			for _, action := range task.Subtasks {
+				fmt.Fprintf(&b, "      %s\n", action)
+			}
+		}
 	}
 	r.program.Send(printMsg{text: strings.TrimRight(b.String(), "\n")})
+
+	r.Findings(plan.Findings)
+
+	var summary strings.Builder
+	for _, line := range plan.Summary() {
+		fmt.Fprintf(&summary, "%s\n", line)
+	}
+	if errs := plan.Findings.Errors(); len(errs) > 0 {
+		fmt.Fprintf(&summary, "\n%s\n", styleError.Render(fmt.Sprintf(
+			"%s failed: %d violations. No changes were made.", plan.Stage, len(errs))))
+	}
+	r.program.Send(printMsg{text: strings.TrimRight(summary.String(), "\n")})
 }
 
+// Block sends the lines as one message, so a redrawing bar cannot land in the
+// middle of a tree.
 func (r *Reporter) Block(heading string, lines []string) {
 	var b strings.Builder
 	if heading != "" {
@@ -120,7 +144,6 @@ func (r *Reporter) Block(heading string, lines []string) {
 	for _, line := range lines {
 		fmt.Fprintf(&b, "  %s\n", line)
 	}
-	// One message, so the progress bar cannot redraw into the middle of a tree.
 	r.program.Send(printMsg{text: strings.TrimRight(b.String(), "\n"), blankAfter: true})
 }
 
@@ -451,14 +474,15 @@ func styleFinding(finding upgrade.Finding) string {
 // The palette. Adaptive colors so the report is legible on a light terminal as
 // well as a dark one.
 var (
-	styleStage   = lipgloss.NewStyle().Bold(true)
-	styleSection = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
-	stylePhase   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "241"})
-	styleSpinner = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
-	styleDone    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "42"})
-	styleSkipped = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "241"})
-	styleError   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "160", Dark: "203"})
-	styleWarning = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "130", Dark: "214"})
-	styleInfo    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "247"})
+	styleStage    = lipgloss.NewStyle().Bold(true)
+	styleSection  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
+	stylePhase    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
+	styleRuleName = lipgloss.NewStyle().Bold(true)
+	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "241"})
+	styleSpinner  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
+	styleDone     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "42"})
+	styleSkipped  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "241"})
+	styleError    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "160", Dark: "203"})
+	styleWarning  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "130", Dark: "214"})
+	styleInfo     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "247"})
 )

@@ -56,17 +56,25 @@ func TestBlocked_ThePlanCarriesTheWorkAndMarksIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan.Actions) != 1 {
-		t.Fatalf("planned %d actions, want the described one", len(plan.Actions))
+	if len(plan.Tasks) != 1 {
+		t.Fatalf("planned %d tasks, want the described one", len(plan.Tasks))
 	}
-	if plan.Actions[0].Blocked == "" {
-		t.Error("the action is not marked, so a reader would take it for work this build can do")
+
+	// The mark belongs to the task rather than to each subject: it is a fact
+	// about the step, and repeating it on every object it would touch would
+	// say it ninety-five times for the release handover.
+	if plan.Tasks[0].Blocked == "" {
+		t.Error("the task is not marked, so a reader would take it for work this build can do")
 	}
 	if got := plan.Unimplemented(); len(got) != 1 {
-		t.Errorf("Unimplemented reports %d actions, want 1", len(got))
+		t.Errorf("Unimplemented reports %d tasks, want 1", len(got))
 	}
-	if !strings.Contains(plan.Actions[0].String(), "not yet implemented") {
-		t.Errorf("the rendered line does not say so:\n%s", plan.Actions[0])
+
+	// A step acting on the upgrade has one subject that carries no
+	// information, so the plan prints the task alone.
+	if !plan.Tasks[0].Collapsed() {
+		t.Error("a task whose only subject is the upgrade was not collapsed, so the " +
+			"plan would print the step and then repeat it")
 	}
 }
 
@@ -80,7 +88,7 @@ func TestBlocked_TheSummarySaysTheStageCannotRun(t *testing.T) {
 	}
 
 	summary := strings.Join(plan.Summary(), "\n")
-	for _, want := range []string{"2 steps act on the upgrade", "cannot be run yet"} {
+	for _, want := range []string{"2 tasks in total", "cannot be run yet"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("the summary does not carry %q:\n%s", want, summary)
 		}

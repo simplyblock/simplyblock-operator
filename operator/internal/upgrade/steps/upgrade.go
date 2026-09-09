@@ -53,14 +53,12 @@ func Upgrade() []upgrade.Step {
 			id:      IDDeployWebhook,
 			summary: "deploys the conversion webhook, which runs from the operator's image and not from the operator",
 			verb:    upgrade.VerbCreate,
-			detail:  "the conversion webhook's Deployment, Service, ServiceAccount, and RBAC (§6.1)",
 			blocked: needsConversion,
 		},
 		planned{
 			id:      IDAwaitWebhook,
 			summary: "waits until the conversion webhook is serving and its CA bundle has reached the CRDs",
 			verb:    upgrade.VerbAwait,
-			detail:  "TLS material in its Secret, the Pod ready, the Service with endpoints, and the caBundle on the seven CRDs (§8)",
 			blocked: needsConversion,
 			needs:   []upgrade.ID{IDDeployWebhook},
 		},
@@ -68,7 +66,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDSmokeTestWebhook,
 			summary: "converts a real resource, because Pod readiness does not prove that conversion works",
 			verb:    upgrade.VerbVerify,
-			detail:  "read an existing object through v1alpha2 and back, and check the fields whose conversion is not a copy (§10)",
 			blocked: needsConversion,
 			needs:   []upgrade.ID{IDAwaitWebhook},
 		},
@@ -76,7 +73,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDApplyCRDs,
 			summary: "applies the CRDs, both versions served and v1alpha1 still the storage version",
 			verb:    upgrade.VerbUpdate,
-			detail:  "seven converting CRDs and eleven new ones, embedded in this binary so their version matches the conversion code (§11)",
 			blocked: needsV1Alpha2,
 			needs:   []upgrade.ID{IDSmokeTestWebhook},
 		},
@@ -84,7 +80,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDVerifyCRDVersions,
 			summary: "checks that the API server accepted every CRD, since a partly applied set is the worst outcome",
 			verb:    upgrade.VerbVerify,
-			detail:  "Established and NamesAccepted on each, and the versions and storedVersions each part of the set expects (§11)",
 			blocked: needsV1Alpha2,
 			needs:   []upgrade.ID{IDApplyCRDs},
 		},
@@ -92,7 +87,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDRetestConversion,
 			summary: "converts again now that the CRDs have changed under the webhook",
 			verb:    upgrade.VerbVerify,
-			detail:  "the round trip of §10, against the CRD set that was just applied",
 			blocked: needsConversion,
 			needs:   []upgrade.ID{IDVerifyCRDVersions},
 		},
@@ -100,7 +94,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDHandOverRelease,
 			summary: "annotates what the Helm release is about to stop containing, so the upgrade prunes nothing",
 			verb:    upgrade.VerbAnnotate,
-			detail:  "helm.sh/resource-policy=keep on every survivor of the difference, refusing on anything unclassified (§12)",
 			blocked: needsHelmSDK,
 			needs:   []upgrade.ID{IDVerifyCRDVersions},
 		},
@@ -108,7 +101,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDUpgradeOperator,
 			summary: "upgrades the operator, translating the deployed release's values into the new chart's spellings",
 			verb:    upgrade.VerbUpdate,
-			detail:  "helm upgrade, or an approved InstallPlan where OLM owns the CRDs (§13)",
 			blocked: needsHelmSDK,
 			needs:   []upgrade.ID{IDHandOverRelease},
 		},
@@ -116,7 +108,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDAwaitOperator,
 			summary: "waits for the new operator, and for it to adopt what the release handed over",
 			verb:    upgrade.VerbAwait,
-			detail:  "the Deployment ready, then owner references in place and nothing drifted against the pre-upgrade capture (§12.4)",
 			blocked: needsHelmSDK,
 			needs:   []upgrade.ID{IDUpgradeOperator},
 		},
@@ -124,7 +115,6 @@ func Upgrade() []upgrade.Step {
 			id:      IDSmokeTestOperator,
 			summary: "writes a v1alpha2 resource, because a read proves conversion and only a write proves admission",
 			verb:    upgrade.VerbVerify,
-			detail:  "create, read, and update through v1alpha2, which admission sees converted down to v1alpha1 (§13.3)",
 			blocked: needsV1Alpha2,
 			needs:   []upgrade.ID{IDAwaitOperator},
 		},
@@ -141,7 +131,6 @@ type planned struct {
 	id      upgrade.ID
 	summary string
 	verb    upgrade.Verb
-	detail  string
 	blocked string
 	needs   []upgrade.ID
 }
@@ -159,12 +148,10 @@ func (p planned) Describe(_ context.Context, _ *upgrade.Scope, subject upgrade.S
 	if !subject.IsUpgrade() {
 		return nil, nil
 	}
-	return &upgrade.Action{
-		Rule:   p.id,
-		Verb:   p.verb,
-		Object: subject.Ref,
-		Detail: p.detail,
-	}, nil
+	// No detail. These steps act on the upgrade rather than on an object, so
+	// there is no old value and new value to print, and a sentence describing
+	// the step would be its documentation printed on every run.
+	return &upgrade.Action{Rule: p.id, Verb: p.verb, Object: subject.Ref}, nil
 }
 
 // Done is always false. Whether the work has already happened is a question its

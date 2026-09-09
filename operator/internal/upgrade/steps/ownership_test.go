@@ -232,9 +232,9 @@ func TestOwnership_DescribesNothingForAlreadyReparentedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan.Actions) != 0 {
+	if len(plan.Actions()) != 0 {
 		t.Fatalf("planned %d actions on an already migrated cluster:\n%v",
-			len(plan.Actions), plan.Actions)
+			len(plan.Actions()), plan.Actions())
 	}
 }
 
@@ -256,7 +256,7 @@ func TestOwnership_APartialRunResumesOnWhatIsLeft(t *testing.T) {
 	}
 
 	var reparents []string
-	for _, action := range plan.Actions {
+	for _, action := range plan.Actions() {
 		if action.Verb == upgrade.VerbReparent {
 			reparents = append(reparents, action.Object.Name)
 		}
@@ -277,11 +277,11 @@ func TestOwnership_ThePlanReadsAsTheMigrationWillRun(t *testing.T) {
 	}
 
 	// Two nodes, the DaemonSet, and the ConfigMap move, and the set is retired.
-	if len(plan.Actions) != 5 {
+	if len(plan.Actions()) != 5 {
 		t.Fatalf("planned %d actions, want 4 moves and 1 retirement:\n%v",
-			len(plan.Actions), plan.Actions)
+			len(plan.Actions()), plan.Actions())
 	}
-	if last := plan.Actions[len(plan.Actions)-1]; last.Verb != upgrade.VerbDelete {
+	if last := plan.Actions()[len(plan.Actions())-1]; last.Verb != upgrade.VerbDelete {
 		t.Errorf("the plan ends on %s, and the retirement has to come after the "+
 			"moves it depends on", last.Verb)
 	}
@@ -308,8 +308,8 @@ func TestOwnership_LeavesANodeWhoseSetHasNoClusterAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan.Actions) != 0 {
-		t.Fatalf("planned %v against a set with no cluster", plan.Actions)
+	if len(plan.Actions()) != 0 {
+		t.Fatalf("planned %v against a set with no cluster", plan.Actions())
 	}
 }
 

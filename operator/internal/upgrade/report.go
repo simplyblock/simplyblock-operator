@@ -221,10 +221,25 @@ func (r *TextReporter) Action(action Action) {
 	r.line("  %s", action)
 }
 
+// Plan renders the hierarchy the execution is: the phases, the task each step
+// contributes, and the subjects each task acts on.
+//
+// A task whose only subject is the upgrade itself prints as one line. Its
+// subject carries no information, and repeating it under the step says the step
+// twice.
 func (r *TextReporter) Plan(plan Plan) {
-	for _, action := range plan.Actions {
-		r.Action(action)
+	for _, phase := range plan.Phases() {
+		if phase != "" {
+			r.line("")
+			r.line("  %s", phase.Describe())
+		}
+
+		for _, task := range plan.InPhase(phase) {
+			r.line("")
+			r.task(task)
+		}
 	}
+
 	r.Findings(plan.Findings)
 
 	r.line("")
@@ -234,6 +249,23 @@ func (r *TextReporter) Plan(plan Plan) {
 	if errs := plan.Findings.Errors(); len(errs) > 0 {
 		r.line("")
 		r.line("%s failed: %d violations. No changes were made.", plan.Stage, len(errs))
+	}
+}
+
+// task renders one step and what it would act on.
+func (r *TextReporter) task(task Task) {
+	head := fmt.Sprintf("    %s", task.Step)
+	if task.Blocked != "" {
+		head += "  (not implemented)"
+	}
+	r.line("%s", head)
+	r.line("      %s", task.Summary)
+
+	if task.Collapsed() {
+		return
+	}
+	for _, action := range task.Subtasks {
+		r.line("      %s", action)
 	}
 }
 
