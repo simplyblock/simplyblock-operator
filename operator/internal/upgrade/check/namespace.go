@@ -1,17 +1,17 @@
-// §19.10's fifth check, and the two of §19.8's uniqueness routes that the name
-// checks cannot see.
+// §19.10's fifth check: no kind that becomes cluster-scoped has same-named
+// objects in two namespaces.
 //
-// Both are the same shape. An identifier that is unique inside a namespace
-// becomes ambiguous in a space that has no namespaces, and neither the objects
-// nor the operator notice: the API server accepts both, and one of them
-// silently takes what the other needs. A StorageNodeSet's name reaches the
-// worker Nodes as io.simplyblock.storagenodeset, which carries nothing else and
-// sits on a cluster-scoped object, so two sets of one name in two namespaces
-// claim the same machines. A VolumeMigration becomes a cluster-scoped
-// PersistentVolumeOps, so two of one name in two namespaces become one object.
+// It is about an object's own identity rather than about a name derived from
+// one. A VolumeMigration is namespaced and the PersistentVolumeOps that absorbs
+// it is not (§16.2), so two migrations of one name in two namespaces are one
+// object in the target model, and the migration would copy one over the other.
+// No naming rule models that, because nothing is being derived.
 //
-// Neither is visible from inside one installation, which is why this is the one
-// check that reads upgrade.Scope.ClusterWide.
+// The derived-name half of §19.8, including the node label a StorageNodeSet
+// claims workers with, belongs to derived-names-unique instead. That check
+// knows where each value has to be unique, so it reports a label value
+// colliding across namespaces without reporting every namespaced object name
+// that merely repeats.
 
 package check
 
@@ -50,18 +50,11 @@ type Collapse struct {
 	Fix upgrade.Fix
 }
 
-// collapses are the rows. There are two because the target model has two, and
-// the list is where a third goes rather than in a new check.
+// collapses are the rows. There is one, because §16.2 makes one kind
+// cluster-scoped, and the list is where a second goes rather than in a new
+// check.
 func collapses() []Collapse {
 	return []Collapse{
-		{
-			Kind: schema.GroupVersionKind{
-				Group: "storage.simplyblock.io", Version: "v1alpha1", Kind: "StorageNodeSet",
-			},
-			Into:    "one storage plane",
-			Because: "the io.simplyblock.storagenodeset label a set claims workers with carries the set name and nothing else, and a Node is cluster-scoped",
-			Fix:     upgrade.FixBoundInput,
-		},
 		{
 			Kind: schema.GroupVersionKind{
 				Group: "storage.simplyblock.io", Version: "v1alpha1", Kind: "VolumeMigration",
@@ -95,10 +88,10 @@ func NamespaceCollapse() upgrade.Check {
 
 // check reports the groups of this kind that collapse onto one identity.
 //
-// Only a group touching the installation's own namespace is reported. A
-// collision between two namespaces that are both somebody else's is real, and
-// it is their upgrade's problem rather than this one's: blocking here would
-// make an installation's preflight fail on a cluster it does not own.
+// Every group is reported, wherever its objects are. There is no namespace this
+// migration is not responsible for: the operator's cache is restricted to none
+// and its RBAC is a ClusterRole, so both halves of a same-named pair are
+// reconciled by the operator being upgraded.
 func (c Collapse) check(s *upgrade.Scope) upgrade.Findings {
 	key := c.Key
 	if key == nil {
@@ -106,13 +99,18 @@ func (c Collapse) check(s *upgrade.Scope) upgrade.Findings {
 	}
 
 	byKey := make(map[string][]client.Object)
-	for _, obj := range s.ClusterWide.OfKind(c.Kind) {
+	for _, obj := range s.Graph.OfKind(c.Kind) {
+		if obj.GetNamespace() == "" {
+			// A cluster-scoped object of this kind has no namespace to lose,
+			// so it cannot be half of this collision.
+			continue
+		}
 		byKey[key(obj)] = append(byKey[key(obj)], obj)
 	}
 
 	shared := make([]string, 0, len(byKey))
 	for value, objects := range byKey {
-		if len(objects) > 1 && touchesInstallation(objects, s.Namespace) {
+		if distinctNamespaces(objects) > 1 {
 			shared = append(shared, value)
 		}
 	}
@@ -125,15 +123,16 @@ func (c Collapse) check(s *upgrade.Scope) upgrade.Findings {
 	return findings
 }
 
-// touchesInstallation reports whether any of the colliding objects is the one
-// this run is upgrading.
-func touchesInstallation(objects []client.Object, namespace string) bool {
+// distinctNamespaces counts the namespaces these objects are spread over. Two
+// objects of one name in one namespace is impossible, so anything above one is
+// the collision. Counting namespaces rather than objects is what keeps a kind
+// whose key is not the object's name from reporting a pair that shares one.
+func distinctNamespaces(objects []client.Object) int {
+	seen := make(map[string]bool, len(objects))
 	for _, obj := range objects {
-		if obj.GetNamespace() == namespace {
-			return true
-		}
+		seen[obj.GetNamespace()] = true
 	}
-	return false
+	return len(seen)
 }
 
 // finding renders one collapse.
@@ -145,11 +144,7 @@ func (c Collapse) finding(s *upgrade.Scope, value string, objects []client.Objec
 	notes := make([]string, 0, len(sorted))
 	for _, obj := range sorted {
 		refs = append(refs, s.Ref(obj))
-		if obj.GetNamespace() == s.Namespace {
-			notes = append(notes, "this installation")
-			continue
-		}
-		notes = append(notes, "another installation")
+		notes = append(notes, "in "+obj.GetNamespace())
 	}
 
 	return upgrade.Finding{

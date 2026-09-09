@@ -1128,9 +1128,27 @@ StorageCluster cluster-a
           └── StorageNode node-c
 ```
 
-Discovery is namespace-wide rather than cluster-wide by default, because every
-kind in the group except the cluster-scoped additions is `Namespaced` and a
-cluster may hold several independent installations.
+**Discovery reads the group's kinds from every namespace, because that is where
+the operator reconciles them.** The manager is built with its cache restricted
+to no namespace and its RBAC is a `ClusterRole`, so one operator serves the
+whole cluster and a `StorageCluster` in `default` belongs to an operator running
+in `simplyblock`. `WATCH_NAMESPACE` is set by
+`helm-charts/charts/simplyblock-operator/templates/simplyblock-operator.yaml`
+and read nowhere in the Go, so it bounds nothing. Two independent installations
+in one cluster is therefore not a state this product reaches: the second
+operator would watch the first's objects and fight it.
+
+**The workload a `StorageNodeSet` owns is read only where the group's objects
+are.** Those objects are created in the set's namespace rather than the
+operator's, so they follow the custom resources, and they are kinds a cluster
+holds thousands of. Listing every `ConfigMap` and `Secret` in a large cluster
+costs a great deal and returns almost nothing this migration is about, so
+discovery runs in two passes and the second reads only the namespaces the first
+found the group in.
+
+The operator's own namespace still matters, and it is what `--namespace` names:
+the Helm release, the conversion webhook of §9, the `ControlPlane` the chart
+installs, and the migration record of §22.1.
 
 ---
 

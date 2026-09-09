@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+// APIGroup is the group this migration upgrades. It is here rather than in each
+// caller because [Scope.Occupied] and the discoverers both have to agree on
+// which objects mark a namespace as this installation's.
+const APIGroup = "storage.simplyblock.io"
+
 // ID names one rule uniquely within its registry. It is written in kebab case
 // and is stable across releases, because it appears in reports and is what an
 // operator names when skipping a rule.

@@ -49,7 +49,7 @@ func discoverers() []upgrade.Discoverer {
 	all := discover.SimplyblockKinds()
 	all = append(all, discover.OwnedKinds()...)
 	all = append(all, discover.CoreKinds()...)
-	return append(all, discover.ClusterWideKinds()...)
+	return append(all, discover.ClaimKinds()...)
 }
 
 // checks validate the graph (§18, §19.10).

@@ -191,7 +191,7 @@ func TestInputs_ReplicationSlotJoinsThePolicyAndTheClaim(t *testing.T) {
 	// The claim is in a workload namespace and reaches the row through the
 	// cluster-wide graph, which is where a claim lives.
 	scope := graphOver(t)
-	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+	scope.Adopt(&corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "data", Namespace: "team-a",
 			Annotations: map[string]string{
@@ -210,7 +210,7 @@ func TestInputs_ReplicationSlotHonorsTheOldAnnotationSpelling(t *testing.T) {
 	// §16.3's keys are mid-move, and a claim carrying only the old spelling
 	// still produces a slot.
 	scope := graphOver(t)
-	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+	scope.Adopt(&corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "data", Namespace: "team-a",
 			Annotations: map[string]string{"simplyblock.io/replication-policy": "nightly"},
@@ -224,7 +224,7 @@ func TestInputs_ReplicationSlotHonorsTheOldAnnotationSpelling(t *testing.T) {
 
 func TestInputs_AClaimWithNoPolicyProducesNoSlotName(t *testing.T) {
 	scope := graphOver(t)
-	scope.AdoptClusterWide(&corev1.PersistentVolumeClaim{
+	scope.Adopt(&corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team-a"},
 	})
 

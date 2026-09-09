@@ -30,7 +30,10 @@ import (
 )
 
 // brokenCluster is one installation carrying one of every violation the
-// preflight can currently find, plus a second tenant it collides with.
+// preflight can currently find. Its objects are spread over two namespaces,
+// which is what a real installation looks like: the operator watches the whole
+// cluster, and the custom resources live wherever whoever created them put
+// them.
 func brokenCluster() []client.Object {
 	return []client.Object{
 		&simplyblockv1alpha1.StorageCluster{
@@ -62,11 +65,20 @@ func brokenCluster() []client.Object {
 			ObjectMeta: metav1.ObjectMeta{Name: "set-b", Namespace: "simplyblock"},
 			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
 		},
-		// Another tenant holding a same-named set, which claims the same worker
-		// nodes and is only visible from the cluster-wide view.
+		// A second namespace holding a same-named set. The label a set claims
+		// workers with lands on a Node, which has no namespace, so both sets
+		// claim the same machines.
 		&simplyblockv1alpha1.StorageNodeSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "other-tenant"},
-			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-b"},
+			ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "team-a"},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+		},
+		// Two VolumeMigrations of one name, which §16.2 absorbs into a
+		// cluster-scoped kind that has no namespace to keep them apart.
+		&simplyblockv1alpha1.VolumeMigration{
+			ObjectMeta: metav1.ObjectMeta{Name: "migrate-pv-1", Namespace: "simplyblock"},
+		},
+		&simplyblockv1alpha1.VolumeMigration{
+			ObjectMeta: metav1.ObjectMeta{Name: "migrate-pv-1", Namespace: "team-a"},
 		},
 	}
 }
@@ -117,7 +129,7 @@ func TestCatalog_FindsEveryViolationItCurrentlyCan(t *testing.T) {
 		derive.IDNodeSetLabel,               // over the 63 bytes a label value allows
 		derive.IDStorageClassName,           // §19.8's ambiguous concatenation
 		derive.IDStorageNodeDaemonSetTarget, // §19.8's node-set collapse
-		check.IDNamespaceCollapse,           // §19.8's namespace-free cluster label
+		check.IDNamespaceCollapse,           // a kind that becomes cluster-scoped
 	} {
 		if !raised(findings)[want] {
 			t.Errorf("%s raised nothing on a cluster built to break it:\n%v", want, findings)
@@ -148,18 +160,38 @@ func TestCatalog_AHealthyClusterPassesCleanly(t *testing.T) {
 	}
 }
 
-func TestCatalog_TheClusterWideViewReachesOnlyTheCheckThatNeedsIt(t *testing.T) {
-	// The other tenant's cluster is over the node-type limit too, and it is
-	// not this installation's problem. Only the collapse finding may name it.
+func TestCatalog_FindsObjectsOutsideTheOperatorNamespace(t *testing.T) {
+	// The bug this replaced: discovery narrowed the group's kinds to the
+	// operator's own namespace, so an installation whose StorageCluster lived
+	// in default produced an empty graph and a preflight that passed on
+	// everything.
 	findings := preflight(t, upgrade.Options{}, brokenCluster()...)
 
+	var named bool
 	for _, finding := range findings {
-		if finding.Rule == check.IDNamespaceCollapse {
-			continue
+		if strings.Contains(finding.String(), "team-a/") {
+			named = true
 		}
-		if strings.Contains(finding.String(), "other-tenant") {
-			t.Errorf("%s reported on another installation's object, which this "+
-				"upgrade neither owns nor can fix:\n%s", finding.Rule, finding)
+	}
+	if !named {
+		t.Fatalf("no finding names an object outside the operator namespace, and "+
+			"half the fixture lives there:\n%v", findings)
+	}
+}
+
+func TestCatalog_ANamespacedNameRepeatedInTwoNamespacesIsNotACollision(t *testing.T) {
+	// Two sets of one name derive one ConfigMap name, and the two ConfigMaps
+	// are in different namespaces, so nothing collides. Reporting it would
+	// refuse every installation whose resources are spread over more than one
+	// namespace, which is every real one.
+	for _, finding := range preflight(t, upgrade.Options{}, brokenCluster()...) {
+		switch finding.Rule {
+		case derive.IDPerNodeConfigMap, derive.IDStorageNodeDaemonSet,
+			derive.IDAPIEndpointSlice, derive.IDNodeRemoveOps:
+			if strings.Contains(finding.Summary, "derive one") {
+				t.Errorf("%s reported a collision between two namespaces, and its "+
+					"value only has to be unique within one:\n%s", finding.Rule, finding)
+			}
 		}
 	}
 }

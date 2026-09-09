@@ -7,6 +7,7 @@
 package upgrade
 
 import (
+	"sort"
 	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -113,6 +114,28 @@ func (g *Graph) OfKind(gvk schema.GroupVersionKind) []client.Object {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return append([]client.Object(nil), g.byKind[gvk]...)
+}
+
+// Namespaces returns the namespaces the graph holds an object of this API group
+// in, sorted so two runs derive the same list. A cluster-scoped object
+// contributes nothing, having no namespace.
+func (g *Graph) Namespaces(group string) []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	seen := make(map[string]bool)
+	for id := range g.byID {
+		if id.Group == group && id.Namespace != "" {
+			seen[id.Namespace] = true
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for namespace := range seen {
+		out = append(out, namespace)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Kinds returns every kind the graph holds an object of.

@@ -97,17 +97,22 @@ func derivedNamesFit(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Check {
 // derivedNamesUnique is §19.10's check 2: no two source objects derive the same
 // name.
 //
-// It covers two of §19.8's four routes. The ambiguous concatenations are one,
-// since a separator that is legal inside the names it joins lets cluster a-b
-// with pool c and cluster a with pool b-c reach one value. The StorageNodeSet
-// retirement is the other, and it is the one the migration introduces: the
-// DaemonSet, the per-node ConfigMap, and the EndpointSlice are named per set
-// today precisely so several sets can coexist in one cluster, so two of them
-// collapse the moment the parent becomes the cluster.
+// It covers three of §19.8's four routes: the ambiguous concatenations, the
+// namespace-free value written onto a cluster-scoped object, and the
+// StorageNodeSet retirement re-deriving from the cluster what is derived from
+// the set today. The fourth is a kind becoming cluster-scoped, which is about
+// an object's own identity rather than a derived name, and belongs to
+// namespace-collapse.
 //
-// The remaining two routes cross a namespace boundary and this check does not
-// see them, because discovery is scoped to the installation. They belong to
-// §19.10's fifth check, which reads the whole cluster.
+// **What counts as a collision depends on where the value has to be unique.**
+// Discovery reads every namespace, so two StorageNodeSets of one name in two
+// namespaces derive one ConfigMap name and collide with nothing, because a
+// ConfigMap name is unique per namespace. The same two sets do collide on the
+// node label they claim workers with, which lands on a Node and has no
+// namespace to be kept apart by. So a row's Space decides whether the grouping
+// carries the source's namespace, and a row that got that wrong would either
+// miss every real collision or report one against every namespaced name in the
+// cluster.
 func derivedNamesUnique(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Check {
 	return upgrade.CheckFunc{
 		RuleID:  IDDerivedNamesUnique,
@@ -136,10 +141,18 @@ func derivedNamesUnique(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Chec
 	}
 }
 
-// group is the sources that derived one value.
+// group is the sources that derived one value in one space.
 type group struct {
 	value   string
 	sources []upgrade.Input
+}
+
+// scopedValue is what a collision is keyed on: the derived value, and the
+// namespace it has to be unique within, which is empty for a value whose space
+// is the whole cluster.
+type scopedValue struct {
+	value     string
+	namespace string
 }
 
 // collisions returns the values more than one distinct source derived, sorted
@@ -150,27 +163,30 @@ type group struct {
 // hands one source several inputs, and those are one object's several values
 // rather than a collision between two objects.
 func collisions(row upgrade.Derivation, inputs []upgrade.Input) []group {
-	byValue := make(map[string][]upgrade.Input)
-	seen := make(map[string]map[upgrade.ObjectIdentity]bool)
+	byValue := make(map[scopedValue][]upgrade.Input)
+	seen := make(map[scopedValue]map[upgrade.ObjectIdentity]bool)
 
 	for _, input := range inputs {
-		value := input.Derive(row.Formula()).Natural
+		key := scopedValue{value: input.Derive(row.Formula()).Natural}
+		if row.Space() == upgrade.SpaceNamespace {
+			key.namespace = input.Source.Namespace
+		}
 		id := input.Source.Identity()
 
-		if seen[value] == nil {
-			seen[value] = make(map[upgrade.ObjectIdentity]bool)
+		if seen[key] == nil {
+			seen[key] = make(map[upgrade.ObjectIdentity]bool)
 		}
-		if seen[value][id] {
+		if seen[key][id] {
 			continue
 		}
-		seen[value][id] = true
-		byValue[value] = append(byValue[value], input)
+		seen[key][id] = true
+		byValue[key] = append(byValue[key], input)
 	}
 
 	var out []group
-	for value, sources := range byValue {
+	for key, sources := range byValue {
 		if len(sources) > 1 {
-			out = append(out, group{value: value, sources: sources})
+			out = append(out, group{value: key.value, sources: sources})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].value < out[j].value })
@@ -225,11 +241,12 @@ func collides(row upgrade.Derivation, g group) upgrade.Finding {
 	}
 
 	return upgrade.Finding{
-		Rule:        row.ID(),
-		Severity:    upgrade.SeverityError,
-		Objects:     sources,
-		PerObject:   from,
-		Summary:     fmt.Sprintf("%d objects derive one %s", len(g.sources), row.Written()),
+		Rule:      row.ID(),
+		Severity:  upgrade.SeverityError,
+		Objects:   sources,
+		PerObject: from,
+		Summary: fmt.Sprintf("%d objects derive one %s, which has to be unique in %s",
+			len(g.sources), row.Written(), row.Space()),
 		Detail:      fmt.Sprintf("= %s\n%s", g.value, why(row)),
 		Remediation: string(row.Fix()),
 	}

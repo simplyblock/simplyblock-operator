@@ -36,6 +36,11 @@ type Rule struct {
 	// name rather than from how long it is.
 	Resolution upgrade.Fix
 
+	// Unique says where the derived value has to be unique. It defaults to
+	// [upgrade.SpaceNamespace], which is every namespaced object's name, so a
+	// row whose value lands on a cluster-scoped object has to say so.
+	Unique upgrade.Space
+
 	// Build is the formula.
 	Build atlaskube.Formula
 
@@ -50,6 +55,15 @@ func (r Rule) Written() string            { return r.Where }
 func (r Rule) Model() upgrade.Model       { return r.Which }
 func (r Rule) Formula() atlaskube.Formula { return r.Build }
 func (r Rule) Fix() upgrade.Fix           { return r.Resolution }
+
+// Space defaults to one namespace, which is every namespaced object's name, so
+// a row whose value lands somewhere with no namespace has to say so.
+func (r Rule) Space() upgrade.Space {
+	if r.Unique == "" {
+		return upgrade.SpaceNamespace
+	}
+	return r.Unique
+}
 
 func (r Rule) Inputs(ctx context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 	if r.Enumerate == nil {
@@ -100,10 +114,8 @@ func imports(s *upgrade.Scope) []*simplyblockv1alpha1.BackupImport {
 	return upgrade.Typed[*simplyblockv1alpha1.BackupImport](s.Graph, importGVK)
 }
 
-// claims reads the cluster-wide graph rather than the installation's, because a
-// claim lives in the namespace of the workload that mounts it. Unlike another
-// tenant's StorageCluster, a claim in a workload namespace is this
-// installation's data plane, so its derived names are this upgrade's problem.
+// claims are the PersistentVolumeClaims, which live in the namespace of the
+// workload that mounts them rather than anywhere this installation chose.
 func claims(s *upgrade.Scope) []*corev1.PersistentVolumeClaim {
-	return upgrade.Typed[*corev1.PersistentVolumeClaim](s.ClusterWide, claimGVK)
+	return upgrade.Typed[*corev1.PersistentVolumeClaim](s.Graph, claimGVK)
 }

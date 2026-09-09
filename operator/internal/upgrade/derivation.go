@@ -65,6 +65,27 @@ const (
 	FixNone Fix = "none needed"
 )
 
+// Space is where a derived identifier has to be unique, which decides what
+// counts as two objects colliding.
+//
+// The distinction only matters because discovery reads every namespace. A
+// ConfigMap name is unique per namespace, so two StorageNodeSets of one name in
+// two namespaces derive one string and no collision. A label value written onto
+// a Node, and the name of a cluster-scoped object, have no namespace to be kept
+// apart by, so the same two sets do collide there.
+type Space string
+
+const (
+	// SpaceCluster is an identifier with no namespace in its uniqueness: a
+	// label written onto a Node or another cluster-scoped object, a key on
+	// one, or the name of a cluster-scoped object such as a StorageClass.
+	SpaceCluster Space = "the cluster"
+
+	// SpaceNamespace is an identifier unique within one namespace, which is
+	// every namespaced object's name.
+	SpaceNamespace Space = "one namespace"
+)
+
 // Derivation is one formula, together with every set of inputs the cluster
 // under examination would hand it.
 //
@@ -93,6 +114,11 @@ type Derivation interface {
 
 	// Fix is what a report tells the user to do about a violation of this row.
 	Fix() Fix
+
+	// Space is where the derived identifier has to be unique, which is what
+	// decides whether two objects in two namespaces deriving one string are a
+	// collision or a coincidence.
+	Space() Space
 
 	// Inputs enumerates what this cluster would hand the formula. Each input
 	// names the object the parts came from, so a violation can be reported

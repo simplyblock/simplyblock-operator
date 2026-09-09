@@ -51,18 +51,16 @@ func AnnotationSpellings() upgrade.Check {
 
 // conflictsFor examines every discovered object for one key.
 //
-// Both graphs are walked. The keys sit on core objects as well as on custom
-// resources, and a claim lives wherever its workload does rather than in the
-// installation's namespace, so restricting this to one graph would miss most of
-// what carries them.
+// Every kind is walked rather than a list of the ones expected to carry a key.
+// The keys sit on core objects as well as on custom resources, and the
+// inventory records where each one is normally found without that being a
+// promise about where it is.
 func conflictsFor(s *upgrade.Scope, key keys.Key) upgrade.Findings {
 	var findings upgrade.Findings
-	for _, graph := range []*upgrade.Graph{s.Graph, s.ClusterWide} {
-		for _, gvk := range sortedKinds(graph) {
-			for _, obj := range graph.OfKind(gvk) {
-				for _, conflict := range key.Conflicts(obj.GetLabels(), obj.GetAnnotations()) {
-					findings = append(findings, disagrees(s, obj, conflict))
-				}
+	for _, gvk := range sortedKinds(s.Graph) {
+		for _, obj := range s.Graph.OfKind(gvk) {
+			for _, conflict := range key.Conflicts(obj.GetLabels(), obj.GetAnnotations()) {
+				findings = append(findings, disagrees(s, obj, conflict))
 			}
 		}
 	}

@@ -19,8 +19,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
 )
 
-// clusterWideScope builds a scope whose cluster-wide graph holds these objects,
-// which is the state the escaping discoverers leave behind.
+// clusterWideScope builds a scope whose graph holds these objects, which is the
+// state discovery leaves behind: every namespace, one graph.
 func clusterWideScope(t *testing.T, objects ...client.Object) *upgrade.Scope {
 	t.Helper()
 
@@ -35,14 +35,8 @@ func clusterWideScope(t *testing.T, objects ...client.Object) *upgrade.Scope {
 	c := upgrade.NewReadOnlyClient(fake.NewClientBuilder().WithScheme(scheme).Build())
 	scope := upgrade.NewScope(c, "simplyblock", upgrade.StagePreflight,
 		upgrade.Options{}, logf.Log, upgrade.DiscardReporter{})
-	scope.AdoptClusterWide(objects...)
+	scope.Adopt(objects...)
 	return scope
-}
-
-func setIn(namespace, name string) *simplyblockv1alpha1.StorageNodeSet {
-	return &simplyblockv1alpha1.StorageNodeSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-	}
 }
 
 func migrationIn(namespace, name string) *simplyblockv1alpha1.VolumeMigration {
@@ -61,35 +55,9 @@ func collapse(t *testing.T, scope *upgrade.Scope) upgrade.Findings {
 	return findings
 }
 
-func TestCollapse_TwoNodeSetsOfOneNameClaimOneStoragePlane(t *testing.T) {
-	// §19.8's second route. Both label the same workers
-	// io.simplyblock.storagenodeset=prod, the Node they land on is
-	// cluster-scoped, and neither object nor operator notices.
-	scope := clusterWideScope(t, setIn("simplyblock", "prod"), setIn("other-tenant", "prod"))
-
-	findings := collapse(t, scope)
-	if len(findings) != 1 {
-		t.Fatalf("two sets of one name in two namespaces produced %d findings, want 1:\n%v",
-			len(findings), findings)
-	}
-
-	rendered := findings[0].String()
-	for _, want := range []string{
-		"StorageNodeSet simplyblock/prod",
-		"StorageNodeSet other-tenant/prod",
-		"one storage plane",
-		"io.simplyblock.storagenodeset",
-		"this installation",
-		"another installation",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("the finding does not carry %q:\n%s", want, rendered)
-		}
-	}
-}
-
 func TestCollapse_TwoVolumeMigrationsBecomeOneClusterScopedObject(t *testing.T) {
-	// §19.8's fourth route, and §19.10's fifth check.
+	// §19.8's fourth route, and §19.10's fifth check. Nothing is being derived
+	// here: the objects' own identities merge, which no naming rule models.
 	scope := clusterWideScope(t,
 		migrationIn("simplyblock", "migrate-pv-1"),
 		migrationIn("other-tenant", "migrate-pv-1"),
@@ -99,39 +67,50 @@ func TestCollapse_TwoVolumeMigrationsBecomeOneClusterScopedObject(t *testing.T) 
 	if len(findings) != 1 {
 		t.Fatalf("produced %d findings, want 1:\n%v", len(findings), findings)
 	}
-	if !strings.Contains(findings[0].String(), "PersistentVolumeOps") {
-		t.Errorf("the finding does not say what they become:\n%s", findings[0])
+
+	rendered := findings[0].String()
+	for _, want := range []string{
+		"VolumeMigration other-tenant/migrate-pv-1",
+		"VolumeMigration simplyblock/migrate-pv-1",
+		"PersistentVolumeOps",
+		"in simplyblock",
+		"in other-tenant",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the finding does not carry %q:\n%s", want, rendered)
+		}
 	}
 }
 
 func TestCollapse_DifferentNamesInTwoNamespacesAreFine(t *testing.T) {
-	scope := clusterWideScope(t, setIn("simplyblock", "prod"), setIn("other-tenant", "staging"))
+	scope := clusterWideScope(t, migrationIn("simplyblock", "prod"), migrationIn("other-tenant", "staging"))
 
 	if findings := collapse(t, scope); len(findings) != 0 {
-		t.Fatalf("two differently named sets were reported as colliding:\n%v", findings)
+		t.Fatalf("two differently named migrations were reported as colliding:\n%v", findings)
 	}
 }
 
-func TestCollapse_ACollisionBetweenTwoOtherInstallationsIsNotOurs(t *testing.T) {
-	// Real, and somebody else's. Blocking here would fail an upgrade on the
-	// state of a cluster this installation does not own and cannot fix.
-	scope := clusterWideScope(t, setIn("tenant-a", "prod"), setIn("tenant-b", "prod"))
+func TestCollapse_ACollisionAwayFromTheOperatorNamespaceIsStillOurs(t *testing.T) {
+	// Neither object is in the operator's namespace, and both are reconciled by
+	// the operator being upgraded: its cache is restricted to no namespace and
+	// its RBAC is a ClusterRole. Skipping this pair would let the migration
+	// walk into the collision it exists to refuse.
+	scope := clusterWideScope(t, migrationIn("team-a", "prod"), migrationIn("team-b", "prod"))
 
-	if findings := collapse(t, scope); len(findings) != 0 {
-		t.Fatalf("a collision between two other installations blocked this one:\n%v", findings)
+	if findings := collapse(t, scope); len(findings) != 1 {
+		t.Fatalf("a collision outside the operator namespace produced %d findings, "+
+			"want 1:\n%v", len(findings), findings)
 	}
 }
 
-func TestCollapse_IsInvisibleFromTheInstallationGraph(t *testing.T) {
-	// The check is the one that reads ClusterWide, and it has to: the same
-	// objects placed in the installation's graph say nothing, because that
-	// graph holds one namespace and the collision needs two.
-	scope := clusterWideScope(t)
-	scope.Adopt(setIn("simplyblock", "prod"), setIn("other-tenant", "prod"))
+func TestCollapse_ACollisionNeedsTwoNamespaces(t *testing.T) {
+	// Two objects of one name in one namespace is a state the API server
+	// refuses, so a kind whose key is not the object's name must not report a
+	// pair that shares a namespace as a collapse.
+	scope := clusterWideScope(t, migrationIn("simplyblock", "prod"))
 
 	if findings := collapse(t, scope); len(findings) != 0 {
-		t.Fatalf("the check read the installation graph, which is not the one that "+
-			"can answer its question:\n%v", findings)
+		t.Fatalf("one object was reported as colliding with itself:\n%v", findings)
 	}
 }
 
@@ -143,9 +122,9 @@ func TestCollapse_AnEmptyClusterProducesNothing(t *testing.T) {
 
 func TestCollapse_IsDeterministic(t *testing.T) {
 	scope := clusterWideScope(t,
-		setIn("other-tenant", "prod"),
-		setIn("simplyblock", "prod"),
-		setIn("third-tenant", "prod"),
+		migrationIn("other-tenant", "prod"),
+		migrationIn("simplyblock", "prod"),
+		migrationIn("third-tenant", "prod"),
 	)
 
 	first := collapse(t, scope).String()

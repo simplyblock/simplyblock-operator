@@ -29,14 +29,9 @@ type Kind struct {
 	// tests.
 	List client.ObjectList
 
-	// Namespaced says the kind itself is namespaced. Every kind in the
-	// storage.simplyblock.io group is today.
-	Namespaced bool
-
-	// View decides which of the scope's two graphs the objects go into, and
-	// whether a namespaced kind is narrowed to the installation. It defaults to
-	// [ViewInstallation], which is what all but two kinds want.
-	View View
+	// Where says which namespaces to list in. It defaults to [Everywhere],
+	// which is what the group's own kinds and the cluster-scoped kinds want.
+	Where Reach
 
 	// Labels narrows a cluster-wide list to what this installation owns. It is
 	// how the worker Nodes are found without reading every Node in the cluster.
@@ -46,22 +41,29 @@ type Kind struct {
 	Needs []upgrade.ID
 }
 
-// View is which of the scope's graphs a discoverer fills.
-type View int
+// Reach is which namespaces a discoverer lists in.
+type Reach int
 
 const (
-	// ViewInstallation reads the installation: a namespaced kind is narrowed to
-	// the scope's namespace, and the objects go into the graph every check
-	// reads. It is the default because a cluster may hold several independent
-	// installations, and almost every question is about this one (§17).
-	ViewInstallation View = iota
+	// Everywhere lists across the whole cluster in one call.
+	//
+	// It is the default, and it is right for the group's own kinds because the
+	// operator's cache is restricted to no namespace and its RBAC is a
+	// ClusterRole: a StorageCluster in any namespace is this installation's,
+	// wherever the operator itself runs.
+	Everywhere Reach = iota
 
-	// ViewClusterWide reads a namespaced kind across every namespace, into
-	// [upgrade.Scope.ClusterWide]. Only the kinds whose derived identifiers
-	// escape a namespace need it, and reading one costs a list against every
-	// namespace in the cluster, so a kind is registered for it because a named
-	// check cannot answer its question otherwise.
-	ViewClusterWide
+	// Occupied lists once per namespace the group's own objects were found in,
+	// which is what [upgrade.Scope.Occupied] reports.
+	//
+	// It exists for the workload a StorageNodeSet owns. Those objects are
+	// created in the set's namespace, so they follow the custom resources
+	// rather than the operator, and they are kinds a cluster holds thousands
+	// of. Listing every Secret and ConfigMap in a large cluster costs a great
+	// deal and returns almost nothing this migration is about, so a kind
+	// declared here waits for the pass that found the sets and reads only
+	// where they are.
+	Occupied
 )
 
 func (k Kind) ID() upgrade.ID         { return k.RuleID }
@@ -75,8 +77,8 @@ func (k Kind) describe(s *upgrade.Scope) string {
 	if idx := strings.LastIndex(kind, "."); idx >= 0 {
 		kind = kind[idx+1:]
 	}
-	if k.Namespaced && k.View == ViewInstallation {
-		return kind + " in " + s.Namespace
+	if k.Where == Occupied {
+		return fmt.Sprintf("%s in %d namespace(s)", kind, len(s.Occupied()))
 	}
 	return kind + " across the cluster"
 }
@@ -89,54 +91,63 @@ func (k Kind) describe(s *upgrade.Scope) string {
 // are installed and established is a check of its own (§9.2) rather than an
 // accident of which discoverer ran first.
 func (k Kind) Discover(ctx context.Context, s *upgrade.Scope) error {
-	list, ok := k.List.DeepCopyObject().(client.ObjectList)
-	if !ok {
-		return fmt.Errorf("%s: %T is not a list", k.RuleID, k.List)
-	}
-
-	if k.View == ViewClusterWide && !k.Namespaced {
-		// A cluster-scoped kind has no namespaces to be read across, so the
-		// declaration is a mistake rather than a wider read.
-		return fmt.Errorf("%s asks for a cluster-wide view of a kind that is not namespaced", k.RuleID)
-	}
-
-	var opts []client.ListOption
-	if k.Namespaced && k.View == ViewInstallation {
-		opts = append(opts, client.InNamespace(s.Namespace))
-	}
-	if len(k.Labels) > 0 {
-		opts = append(opts, client.MatchingLabels(k.Labels))
-	}
-
 	// The kind is named before the read rather than after, because a list
 	// against a large cluster is exactly the wait this reports through.
 	s.Report.Item(k.describe(s))
 
-	if err := s.Client.List(ctx, list, opts...); err != nil {
-		if meta.IsNoMatchError(err) {
-			s.Report.Progress("%s: the API server serves no such kind, and nothing was read", k.RuleID)
-			return nil
+	var base []client.ListOption
+	if len(k.Labels) > 0 {
+		base = append(base, client.MatchingLabels(k.Labels))
+	}
+
+	for _, namespace := range k.namespaces(s) {
+		opts := base
+		if namespace != "" {
+			opts = append(opts, client.InNamespace(namespace))
 		}
-		return fmt.Errorf("listing for %s: %w", k.RuleID, err)
-	}
 
-	items, err := meta.ExtractList(list)
-	if err != nil {
-		return fmt.Errorf("reading the list for %s: %w", k.RuleID, err)
-	}
-
-	objects := make([]client.Object, 0, len(items))
-	for _, item := range items {
-		obj, ok := item.(client.Object)
+		// A fresh copy per call: the prototype is declared once in the catalog
+		// and would otherwise carry one namespace's objects into the next.
+		list, ok := k.List.DeepCopyObject().(client.ObjectList)
 		if !ok {
-			return fmt.Errorf("%s returned a %T, which is not a Kubernetes object", k.RuleID, item)
+			return fmt.Errorf("%s: %T is not a list", k.RuleID, k.List)
 		}
-		objects = append(objects, obj)
-	}
-	if k.View == ViewClusterWide {
-		s.AdoptClusterWide(objects...)
-	} else {
+
+		if err := s.Client.List(ctx, list, opts...); err != nil {
+			if meta.IsNoMatchError(err) {
+				s.Report.Progress("%s: the API server serves no such kind, and nothing was read", k.RuleID)
+				return nil
+			}
+			return fmt.Errorf("listing for %s: %w", k.RuleID, err)
+		}
+
+		items, err := meta.ExtractList(list)
+		if err != nil {
+			return fmt.Errorf("reading the list for %s: %w", k.RuleID, err)
+		}
+
+		objects := make([]client.Object, 0, len(items))
+		for _, item := range items {
+			obj, ok := item.(client.Object)
+			if !ok {
+				return fmt.Errorf("%s returned a %T, which is not a Kubernetes object", k.RuleID, item)
+			}
+			objects = append(objects, obj)
+		}
 		s.Adopt(objects...)
 	}
 	return nil
+}
+
+// namespaces is where to read, and the empty string means the whole cluster in
+// one call.
+//
+// An Occupied discoverer on a cluster where the group's own objects were not
+// found reads nothing. That is correct rather than a gap: the workload it would
+// look for belongs to custom resources that are not there.
+func (k Kind) namespaces(s *upgrade.Scope) []string {
+	if k.Where == Occupied {
+		return s.Occupied()
+	}
+	return []string{""}
 }

@@ -24,31 +24,28 @@ type Scope struct {
 	// rather than mutating a cluster the user was told nothing would change on.
 	Client client.Client
 
-	// Namespace is the installation being upgraded. Discovery is namespace-wide
-	// rather than cluster-wide because every kind in the group but the
-	// cluster-scoped additions is namespaced, and a cluster may hold several
-	// independent installations.
+	// Namespace is where the operator runs, which is not where its custom
+	// resources live.
+	//
+	// The manager restricts its cache to no namespace and its RBAC is a
+	// ClusterRole, so one operator reconciles the whole cluster and a
+	// StorageCluster in any namespace is this installation's. WATCH_NAMESPACE
+	// is set by the chart and read nowhere in the Go, so it bounds nothing.
+	//
+	// What this namespace is still for is the operator's own furniture: the
+	// Helm release, the conversion webhook §9 deploys, the ControlPlane the
+	// chart installs, and the migration record of §22.1.
 	Namespace string
 
-	// Graph is what discovery found inside the installation. It is empty until
+	// Graph is what discovery found, across every namespace. It is empty until
 	// a [Discoverer] has run.
+	//
+	// There is one graph and not one per namespace, because there is one
+	// installation. A second operator in a second namespace would watch the
+	// same cluster-wide set of objects as the first and fight it, so two
+	// independent installations in one cluster is not a state this product
+	// reaches.
 	Graph *Graph
-
-	// ClusterWide is the kinds read across every namespace, and it holds only
-	// the kinds that need it.
-	//
-	// Two questions need it, and neither is about one installation. Two of
-	// §19.8's uniqueness routes escape a namespace, since a StorageCluster's
-	// name reaches the workers as a node label carrying nothing else and a kind
-	// that becomes cluster-scoped loses the namespace that kept its objects
-	// apart. And the annotation keys of §16.3 sit on objects that live wherever
-	// a workload does, which is any namespace but this one.
-	//
-	// It is a second graph rather than a wider first one because almost every
-	// check wants the installation and would draw a wrong conclusion from
-	// another tenant's objects. A rule reads this one only when the question it
-	// asks genuinely has no namespace in it.
-	ClusterWide *Graph
 
 	// Stage is the command being run, so a rule registered for more than one
 	// can tell which it is in.
@@ -100,14 +97,13 @@ func NewScope(c client.Client, namespace string, stage Stage, opts Options, log 
 		report = DiscardReporter{}
 	}
 	return &Scope{
-		Client:      c,
-		Namespace:   namespace,
-		Graph:       NewGraph(),
-		ClusterWide: NewGraph(),
-		Stage:       stage,
-		Options:     opts,
-		Log:         log,
-		Report:      report,
+		Client:    c,
+		Namespace: namespace,
+		Graph:     NewGraph(),
+		Stage:     stage,
+		Options:   opts,
+		Log:       log,
+		Report:    report,
 	}
 }
 
@@ -138,20 +134,9 @@ func (s *Scope) Ref(obj client.Object) ObjectRef {
 	return ref
 }
 
-// Adopt records objects in the installation's graph with their kind filled in,
-// which is what a discoverer calls rather than [Graph.Add].
+// Adopt records objects in the graph with their kind filled in, which is what a
+// discoverer calls rather than [Graph.Add].
 func (s *Scope) Adopt(objs ...client.Object) {
-	s.adopt(s.Graph, objs)
-}
-
-// AdoptClusterWide records objects in [Scope.ClusterWide] instead. Only the
-// discoverers of the kinds whose identifiers escape a namespace call it.
-func (s *Scope) AdoptClusterWide(objs ...client.Object) {
-	s.adopt(s.ClusterWide, objs)
-}
-
-// adopt fills in the kind the client cleared and records the objects.
-func (s *Scope) adopt(graph *Graph, objs []client.Object) {
 	for _, obj := range objs {
 		if obj.GetObjectKind().GroupVersionKind().Empty() {
 			if gvk, err := s.GVK(obj); err == nil {
@@ -159,5 +144,21 @@ func (s *Scope) adopt(graph *Graph, objs []client.Object) {
 			}
 		}
 	}
-	graph.Add(objs...)
+	s.Graph.Add(objs...)
+}
+
+// Occupied is the namespaces this installation's custom resources were found
+// in, sorted.
+//
+// It is derived from the graph rather than configured, because where the custom
+// resources live is a fact about the cluster and not a decision anybody made:
+// an operator in one namespace reconciles a StorageCluster in another, and the
+// workload a StorageNodeSet owns is created in the set's namespace rather than
+// the operator's.
+//
+// It is what the second pass of discovery narrows to. Reading the ConfigMaps,
+// Secrets, and Services of every namespace in a large cluster costs a great
+// deal and returns almost nothing this migration is about.
+func (s *Scope) Occupied() []string {
+	return s.Graph.Namespaces(APIGroup)
 }

@@ -47,10 +47,7 @@ const (
 	IDSecrets         upgrade.ID = "discover-secrets"
 	IDCertificates    upgrade.ID = "discover-certificates"
 
-	// Read across every namespace rather than inside the installation.
-	IDNodeSetsEverywhere   upgrade.ID = "discover-storage-node-sets-everywhere"
-	IDMigrationsEverywhere upgrade.ID = "discover-volume-migrations-everywhere"
-	IDClaimsEverywhere     upgrade.ID = "discover-persistent-volume-claims"
+	IDClaimsEverywhere upgrade.ID = "discover-persistent-volume-claims"
 )
 
 // SimplyblockKinds are the custom resources the migration reads.
@@ -63,81 +60,69 @@ const (
 func SimplyblockKinds() []upgrade.Discoverer {
 	return []upgrade.Discoverer{
 		Kind{
-			RuleID:     IDStorageClusters,
-			Summary:    "reads the StorageCluster objects the installation holds",
-			List:       &simplyblockv1alpha1.StorageClusterList{},
-			Namespaced: true,
+			RuleID:  IDStorageClusters,
+			Summary: "reads the StorageCluster objects the installation holds",
+			List:    &simplyblockv1alpha1.StorageClusterList{},
 		},
 		Kind{
-			RuleID:     IDStorageClusterOps,
-			Summary:    "reads the StorageClusterOps objects, so an operation in flight can refuse the migration",
-			List:       &simplyblockv1alpha1.StorageClusterOpsList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageClusters},
+			RuleID:  IDStorageClusterOps,
+			Summary: "reads the StorageClusterOps objects, so an operation in flight can refuse the migration",
+			List:    &simplyblockv1alpha1.StorageClusterOpsList{},
+			Needs:   []upgrade.ID{IDStorageClusters},
 		},
 		Kind{
-			RuleID:     IDStorageNodeSets,
-			Summary:    "reads the StorageNodeSet objects §16.1 retires, and the per-node configuration they are the source of truth for",
-			List:       &simplyblockv1alpha1.StorageNodeSetList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageClusters},
+			RuleID:  IDStorageNodeSets,
+			Summary: "reads the StorageNodeSet objects §16.1 retires, and the per-node configuration they are the source of truth for",
+			List:    &simplyblockv1alpha1.StorageNodeSetList{},
+			Needs:   []upgrade.ID{IDStorageClusters},
 		},
 		Kind{
-			RuleID:     IDStorageNodes,
-			Summary:    "reads the StorageNode objects §20 reparents onto their cluster",
-			List:       &simplyblockv1alpha1.StorageNodeList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDStorageNodes,
+			Summary: "reads the StorageNode objects §20 reparents onto their cluster",
+			List:    &simplyblockv1alpha1.StorageNodeList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
 		},
 		Kind{
-			RuleID:     IDStorageNodeOps,
-			Summary:    "reads the StorageNodeOps objects, so an operation in flight can refuse the migration",
-			List:       &simplyblockv1alpha1.StorageNodeOpsList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodes},
+			RuleID:  IDStorageNodeOps,
+			Summary: "reads the StorageNodeOps objects, so an operation in flight can refuse the migration",
+			List:    &simplyblockv1alpha1.StorageNodeOpsList{},
+			Needs:   []upgrade.ID{IDStorageNodes},
 		},
 		Kind{
-			RuleID:     IDStoragePools,
-			Summary:    "reads the StoragePool objects, whose names derive a StorageClass name and a node label key",
-			List:       &simplyblockv1alpha1.StoragePoolList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageClusters},
+			RuleID:  IDStoragePools,
+			Summary: "reads the StoragePool objects, whose names derive a StorageClass name and a node label key",
+			List:    &simplyblockv1alpha1.StoragePoolList{},
+			Needs:   []upgrade.ID{IDStorageClusters},
 		},
 		Kind{
-			RuleID:     IDControlPlanes,
-			Summary:    "reads the ControlPlane objects that adopt the control-plane workload",
-			List:       &simplyblockv1alpha1.ControlPlaneList{},
-			Namespaced: true,
+			RuleID:  IDControlPlanes,
+			Summary: "reads the ControlPlane objects that adopt the control-plane workload",
+			List:    &simplyblockv1alpha1.ControlPlaneList{},
 		},
 		Kind{
-			RuleID:     IDStorageBackups,
-			Summary:    "reads the StorageBackup objects whose status §7.2 regroups",
-			List:       &simplyblockv1alpha1.StorageBackupList{},
-			Namespaced: true,
+			RuleID:  IDStorageBackups,
+			Summary: "reads the StorageBackup objects whose status §7.2 regroups",
+			List:    &simplyblockv1alpha1.StorageBackupList{},
 		},
 		Kind{
-			RuleID:     IDBackupPolicies,
-			Summary:    "reads the BackupPolicy objects §16.2 copies to StorageBackupPolicy",
-			List:       &simplyblockv1alpha1.BackupPolicyList{},
-			Namespaced: true,
+			RuleID:  IDBackupPolicies,
+			Summary: "reads the BackupPolicy objects §16.2 copies to StorageBackupPolicy",
+			List:    &simplyblockv1alpha1.BackupPolicyList{},
 		},
 		Kind{
-			RuleID:     IDBackupRestores,
-			Summary:    "reads the BackupRestore objects §16.2 absorbs into StorageBackupOps",
-			List:       &simplyblockv1alpha1.BackupRestoreList{},
-			Namespaced: true,
+			RuleID:  IDBackupRestores,
+			Summary: "reads the BackupRestore objects §16.2 absorbs into StorageBackupOps",
+			List:    &simplyblockv1alpha1.BackupRestoreList{},
 		},
 		Kind{
-			RuleID:     IDBackupImports,
-			Summary:    "reads the BackupImport objects §16.2 retires",
-			List:       &simplyblockv1alpha1.BackupImportList{},
-			Namespaced: true,
+			RuleID:  IDBackupImports,
+			Summary: "reads the BackupImport objects §16.2 retires",
+			List:    &simplyblockv1alpha1.BackupImportList{},
 		},
 		Kind{
-			RuleID:     IDVolumeMigrations,
-			Summary:    "reads the VolumeMigration objects §16.2 absorbs into the cluster-scoped PersistentVolumeOps",
-			List:       &simplyblockv1alpha1.VolumeMigrationList{},
-			Namespaced: true,
+			RuleID:  IDVolumeMigrations,
+			Summary: "reads the VolumeMigration objects §16.2 absorbs into the cluster-scoped PersistentVolumeOps",
+			List:    &simplyblockv1alpha1.VolumeMigrationList{},
 		},
 	}
 }
@@ -153,54 +138,54 @@ func SimplyblockKinds() []upgrade.Discoverer {
 func OwnedKinds() []upgrade.Discoverer {
 	return []upgrade.Discoverer{
 		Kind{
-			RuleID:     IDDaemonSets,
-			Summary:    "reads the storage-node DaemonSet a StorageNodeSet owns",
-			List:       &appsv1.DaemonSetList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDDaemonSets,
+			Summary: "reads the storage-node DaemonSet a StorageNodeSet owns",
+			List:    &appsv1.DaemonSetList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
-			RuleID:     IDServices,
-			Summary:    "reads the storage-node API and SPDK proxy Services a StorageNodeSet owns",
-			List:       &corev1.ServiceList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDServices,
+			Summary: "reads the storage-node API and SPDK proxy Services a StorageNodeSet owns",
+			List:    &corev1.ServiceList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
-			RuleID:     IDEndpointSlices,
-			Summary:    "reads the EndpointSlices that publish a set's API pods",
-			List:       &discoveryv1.EndpointSliceList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDEndpointSlices,
+			Summary: "reads the EndpointSlices that publish a set's API pods",
+			List:    &discoveryv1.EndpointSliceList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
-			RuleID:     IDServiceAccounts,
-			Summary:    "reads the ServiceAccount the storage-node DaemonSet runs as",
-			List:       &corev1.ServiceAccountList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDServiceAccounts,
+			Summary: "reads the ServiceAccount the storage-node DaemonSet runs as",
+			List:    &corev1.ServiceAccountList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
-			RuleID:     IDConfigMaps,
-			Summary:    "reads the per-node ConfigMaps a StorageNodeSet owns",
-			List:       &corev1.ConfigMapList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDConfigMaps,
+			Summary: "reads the per-node ConfigMaps a StorageNodeSet owns",
+			List:    &corev1.ConfigMapList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
-			RuleID:     IDSecrets,
-			Summary:    "reads the Secrets in the installation, including the serving certificates' own",
-			List:       &corev1.SecretList{},
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			RuleID:  IDSecrets,
+			Summary: "reads the Secrets in the installation, including the serving certificates' own",
+			List:    &corev1.SecretList{},
+			Needs:   []upgrade.ID{IDStorageNodeSets},
+			Where:   Occupied,
 		},
 		Kind{
 			RuleID: IDCertificates,
 			Summary: "reads the cert-manager Certificates a StorageNodeSet owns, where cert-manager " +
 				"is the TLS provider and the kind is served at all",
-			List:       certificateList(),
-			Namespaced: true,
-			Needs:      []upgrade.ID{IDStorageNodeSets},
+			List:  certificateList(),
+			Needs: []upgrade.ID{IDStorageNodeSets},
+			Where: Occupied,
 		},
 	}
 }
@@ -247,44 +232,20 @@ func CoreKinds() []upgrade.Discoverer {
 	}
 }
 
-// ClusterWideKinds are the kinds read across every namespace rather than inside
-// the installation.
+// ClaimKinds are the PersistentVolumeClaims, which are read separately because
+// they are the one kind this migration reads that belongs to a workload rather
+// than to the installation.
 //
-// Two reasons put a kind here, and both mean the question being asked is not
-// about one installation. The first two rows derive an identifier with no
-// namespace in it, so two namespaces reach one value. The claims are the other
-// reason: they live wherever a workload does, which is any namespace but this
-// one, and §16.3's annotation keys sit on them.
-//
-// The list is deliberately short. Reading a kind this way costs a list against
-// the whole cluster and puts another tenant's objects where a check could
-// mistake them for this installation's, so a kind is here because a named check
-// cannot answer its question otherwise, and for no other reason.
-func ClusterWideKinds() []upgrade.Discoverer {
+// They are read across the whole cluster and not only where the custom
+// resources are. A claim lives in the namespace of the pod that mounts it,
+// which is any namespace at all, and §16.3's annotation keys sit on them.
+func ClaimKinds() []upgrade.Discoverer {
 	return []upgrade.Discoverer{
-		Kind{
-			RuleID: IDNodeSetsEverywhere,
-			Summary: "reads the StorageNodeSet objects of every namespace, because the node label a " +
-				"set claims workers with carries its name and nothing else",
-			List:       &simplyblockv1alpha1.StorageNodeSetList{},
-			Namespaced: true,
-			View:       ViewClusterWide,
-		},
-		Kind{
-			RuleID: IDMigrationsEverywhere,
-			Summary: "reads the VolumeMigration objects of every namespace, because the kind that " +
-				"absorbs them is cluster-scoped",
-			List:       &simplyblockv1alpha1.VolumeMigrationList{},
-			Namespaced: true,
-			View:       ViewClusterWide,
-		},
 		Kind{
 			RuleID: IDClaimsEverywhere,
 			Summary: "reads the PersistentVolumeClaim objects of every namespace, because §16.3's " +
 				"annotation keys sit on them and a claim lives where its workload does",
-			List:       &corev1.PersistentVolumeClaimList{},
-			Namespaced: true,
-			View:       ViewClusterWide,
+			List: &corev1.PersistentVolumeClaimList{},
 		},
 	}
 }

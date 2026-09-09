@@ -52,17 +52,17 @@ func (r *Runner) Discover(ctx context.Context) error {
 		// The count before and after is what a discoverer reports having
 		// found. Asking the graph is cheaper than having every discoverer
 		// return a number it would only be used to print.
-		before := r.Scope.Graph.Len() + r.Scope.ClusterWide.Len()
+		before := r.Scope.Graph.Len()
 		if err := discoverer.Discover(ctx, r.Scope); err != nil {
 			r.Scope.Report.Outcome(discoverer, OutcomeFailed, err.Error())
 			return fmt.Errorf("discovery %q: %w", discoverer.ID(), err)
 		}
-		found := r.Scope.Graph.Len() + r.Scope.ClusterWide.Len() - before
+		found := r.Scope.Graph.Len() - before
 		r.Scope.Report.Outcome(discoverer, OutcomeDone, objectCount(found))
 	}
 
-	r.Scope.Report.Progress("%d objects across %d kinds",
-		r.Scope.Graph.Len(), len(r.Scope.Graph.Kinds()))
+	r.Scope.Report.Progress("%d objects across %d kinds in %d namespace(s)",
+		r.Scope.Graph.Len(), len(r.Scope.Graph.Kinds()), len(r.Scope.Occupied()))
 	return nil
 }
 

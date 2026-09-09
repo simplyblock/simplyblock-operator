@@ -57,6 +57,7 @@ func poolNodeLabelKey() Rule {
 		Where:      "Node label key simplyblock.io/pool.<namespace>.<cluster>.<pool>",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceCluster,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
 			Prefix:    "pool.",
@@ -90,6 +91,7 @@ func storageClassClusterLabel() Rule {
 		Where:      "StorageClass label storage.simplyblock.io/cluster",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixUseUUID,
+		Unique:     upgrade.SpaceCluster,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
@@ -113,6 +115,7 @@ func storageClassPoolLabel() Rule {
 		Where:      "StorageClass label storage.simplyblock.io/pool",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixUseUUID,
+		Unique:     upgrade.SpaceCluster,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
@@ -142,6 +145,7 @@ func nodeSetLabel() Rule {
 		Where:      "Node label io.simplyblock.storagenodeset",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixBoundInput,
+		Unique:     upgrade.SpaceCluster,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(nodeSets(s)))
@@ -173,6 +177,7 @@ func workerLabel() Rule {
 		Where:      "StorageNode label storage.simplyblock.io/worker",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceCluster,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input
@@ -243,6 +248,7 @@ func storageNodeUUIDLabelKey() Rule {
 		Where:      "Node label key simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixNone,
+		Unique:     upgrade.SpaceCluster,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
 			Prefix:    "storage-node-uuid.",

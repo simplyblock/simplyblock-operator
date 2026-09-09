@@ -78,6 +78,7 @@ func storageClassName() Rule {
 		Where:      "StorageClass name",
 		Which:      upgrade.ModelCurrent,
 		Resolution: upgrade.FixTruncateAndHash,
+		Unique:     upgrade.SpaceCluster,
 		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
