@@ -95,6 +95,7 @@ atlas/
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
 ├── kube/                   lvol ↔ PV / PVC / VolumeAttachment mapping
 │   ├── names.go            driver name, param/context/label/annotation/finalizer keys, pool label key
+│   ├── derived.go          Formula: bounded, deterministic derived names and labels
 │   ├── identity.go         VolumeHandle↔PV, VolumeContext, pin annotations
 │   ├── binding.go          Binding: resolved PV+PVC+Node view of an lvol
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation

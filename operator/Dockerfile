@@ -48,6 +48,15 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
 
+# The API upgrade tool ships here too, so it can run either from a workstation
+# against a kubeconfig or as a Job in the cluster, and so that the conversion
+# code it verifies is the code this image carries.
+#
+# CGO is off for the same reason as the probe: it talks to the Kubernetes API
+# over the caller's own credentials and does no crypto of its own.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a -o simplyblock-upgrade ./cmd/simplyblock-upgrade
+
 # Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
 # ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
 FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
@@ -71,6 +80,9 @@ WORKDIR /
 COPY --from=builder /workspace/manager .
 # On PATH, because the probe Job names it by name rather than by path.
 COPY --from=builder /workspace/simplyblock-nodeprobe /usr/local/bin/simplyblock-nodeprobe
+# On PATH, because a user runs it by name inside a debug pod as well as through
+# the Job the upgrade creates.
+COPY --from=builder /workspace/simplyblock-upgrade /usr/local/bin/simplyblock-upgrade
 COPY LICENSE /licenses/LICENSE
 
 # The manager runs unprivileged as this user. The probe pod overrides it: it
