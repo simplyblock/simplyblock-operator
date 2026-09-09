@@ -30,8 +30,25 @@ type Scope struct {
 	// independent installations.
 	Namespace string
 
-	// Graph is what discovery found. It is empty until a [Discoverer] has run.
+	// Graph is what discovery found inside the installation. It is empty until
+	// a [Discoverer] has run.
 	Graph *Graph
+
+	// ClusterWide is the same kinds read across every namespace, and it holds
+	// only the kinds that need it.
+	//
+	// It exists because two of §19.8's uniqueness routes escape a namespace. A
+	// StorageCluster's name reaches the workers as a node label carrying
+	// nothing else, so two clusters of one name in two namespaces claim the
+	// same machines, and a kind that becomes cluster-scoped loses the namespace
+	// that was keeping its objects apart. Neither is visible from inside one
+	// installation.
+	//
+	// It is a second graph rather than a wider first one because almost every
+	// check wants the installation and would draw a wrong conclusion from
+	// another tenant's objects. A rule reads this one only when the question it
+	// asks genuinely has no namespace in it.
+	ClusterWide *Graph
 
 	// Stage is the command being run, so a rule registered for more than one
 	// can tell which it is in.
@@ -83,13 +100,14 @@ func NewScope(c client.Client, namespace string, stage Stage, opts Options, log 
 		report = DiscardReporter{}
 	}
 	return &Scope{
-		Client:    c,
-		Namespace: namespace,
-		Graph:     NewGraph(),
-		Stage:     stage,
-		Options:   opts,
-		Log:       log,
-		Report:    report,
+		Client:      c,
+		Namespace:   namespace,
+		Graph:       NewGraph(),
+		ClusterWide: NewGraph(),
+		Stage:       stage,
+		Options:     opts,
+		Log:         log,
+		Report:      report,
 	}
 }
 
@@ -120,9 +138,20 @@ func (s *Scope) Ref(obj client.Object) ObjectRef {
 	return ref
 }
 
-// Adopt records objects in the graph with their kind filled in, which is what a
-// discoverer calls rather than [Graph.Add].
+// Adopt records objects in the installation's graph with their kind filled in,
+// which is what a discoverer calls rather than [Graph.Add].
 func (s *Scope) Adopt(objs ...client.Object) {
+	s.adopt(s.Graph, objs)
+}
+
+// AdoptClusterWide records objects in [Scope.ClusterWide] instead. Only the
+// discoverers of the kinds whose identifiers escape a namespace call it.
+func (s *Scope) AdoptClusterWide(objs ...client.Object) {
+	s.adopt(s.ClusterWide, objs)
+}
+
+// adopt fills in the kind the client cleared and records the objects.
+func (s *Scope) adopt(graph *Graph, objs []client.Object) {
 	for _, obj := range objs {
 		if obj.GetObjectKind().GroupVersionKind().Empty() {
 			if gvk, err := s.GVK(obj); err == nil {
@@ -130,5 +159,5 @@ func (s *Scope) Adopt(objs ...client.Object) {
 			}
 		}
 	}
-	s.Graph.Add(objs...)
+	graph.Add(objs...)
 }

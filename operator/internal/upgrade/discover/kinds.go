@@ -33,6 +33,10 @@ const (
 	IDStorageClasses    upgrade.ID = "discover-storage-classes"
 	IDNamespaces        upgrade.ID = "discover-namespaces"
 	IDPersistentVolumes upgrade.ID = "discover-persistent-volumes"
+
+	// The two read across every namespace rather than inside the installation.
+	IDClustersEverywhere   upgrade.ID = "discover-storage-clusters-everywhere"
+	IDMigrationsEverywhere upgrade.ID = "discover-volume-migrations-everywhere"
 )
 
 // SimplyblockKinds are the custom resources the migration reads.
@@ -148,6 +152,35 @@ func CoreKinds() []upgrade.Discoverer {
 			RuleID:  IDPersistentVolumes,
 			Summary: "reads the PersistentVolume objects whose volume handles §16.4 normalizes",
 			List:    &corev1.PersistentVolumeList{},
+		},
+	}
+}
+
+// EscapingKinds are the kinds read across every namespace rather than inside the
+// installation, because the identifier each of them derives has no namespace in
+// it and two namespaces therefore reach one value.
+//
+// The list is deliberately short. Reading a kind this way costs a list against
+// the whole cluster and puts another tenant's objects where a check could
+// mistake them for this installation's, so a kind is here because a named check
+// cannot answer its question otherwise, and for no other reason.
+func EscapingKinds() []upgrade.Discoverer {
+	return []upgrade.Discoverer{
+		Kind{
+			RuleID: IDClustersEverywhere,
+			Summary: "reads the StorageCluster objects of every namespace, because the node label a " +
+				"cluster claims workers with carries its name and nothing else",
+			List:       &simplyblockv1alpha1.StorageClusterList{},
+			Namespaced: true,
+			View:       ViewClusterWide,
+		},
+		Kind{
+			RuleID: IDMigrationsEverywhere,
+			Summary: "reads the VolumeMigration objects of every namespace, because the kind that " +
+				"absorbs them is cluster-scoped",
+			List:       &simplyblockv1alpha1.VolumeMigrationList{},
+			Namespaced: true,
+			View:       ViewClusterWide,
 		},
 	}
 }

@@ -46,12 +46,14 @@ func Default() *upgrade.Catalog {
 // of custom resources the migration reads moves with §7.2 and the set of core
 // objects moves with whichever check needs one.
 func discoverers() []upgrade.Discoverer {
-	return append(discover.SimplyblockKinds(), discover.CoreKinds()...)
+	all := discover.SimplyblockKinds()
+	all = append(all, discover.CoreKinds()...)
+	return append(all, discover.EscapingKinds()...)
 }
 
 // checks validate the graph (§18, §19.10).
 func checks(c *upgrade.Catalog) []upgrade.Check {
-	return check.Names(c.Derivations)
+	return append(check.Names(c.Derivations), check.NamespaceCollapse())
 }
 
 // derivations are the naming formulas the name checks walk (§19.2, §19.3). The

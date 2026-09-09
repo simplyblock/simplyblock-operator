@@ -61,7 +61,12 @@ func derivedNamesFit(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Check {
 		Fn: func(ctx context.Context, s *upgrade.Scope) (upgrade.Findings, error) {
 			var findings upgrade.Findings
 
-			for _, row := range applicable(rows, s) {
+			walk := applicable(rows, s)
+			s.Report.Work(len(walk))
+
+			for _, row := range walk {
+				s.Report.Item(string(row.ID()))
+
 				inputs, err := row.Inputs(ctx, s)
 				if err != nil {
 					return nil, fmt.Errorf("the naming rule %q could not read its inputs: %w", row.ID(), err)
@@ -111,7 +116,12 @@ func derivedNamesUnique(rows *upgrade.Registry[upgrade.Derivation]) upgrade.Chec
 		Fn: func(ctx context.Context, s *upgrade.Scope) (upgrade.Findings, error) {
 			var findings upgrade.Findings
 
-			for _, row := range applicable(rows, s) {
+			walk := applicable(rows, s)
+			s.Report.Work(len(walk))
+
+			for _, row := range walk {
+				s.Report.Item(string(row.ID()))
+
 				inputs, err := row.Inputs(ctx, s)
 				if err != nil {
 					return nil, fmt.Errorf("the naming rule %q could not read its inputs: %w", row.ID(), err)
