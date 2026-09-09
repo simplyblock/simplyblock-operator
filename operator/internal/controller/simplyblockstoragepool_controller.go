@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
@@ -400,7 +401,7 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		// CreateVolume turns this into the PV's nodeAffinity (dhchapAllowedNodeSegment, #403).
 		// Deliberately no matching AllowedTopologies term: CSINode topology keys are frozen at
 		// csi-node registration, so a pool label written later fails every PVC (#484).
-		params[dhchapNodeSelectorParam] = poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
+		params[dhchapNodeSelectorParam] = kube.PoolNodeLabelKey(storagePoolCR.Status.UUID)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -435,22 +436,16 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["csi.storage.k8s.io/fstype"] = p.Filesystem
 }
 
-// syncStoragePoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
-// backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
-// no longer in spec. Returns true if any change was made.
-func poolNodeLabelKey(namespace, clusterName, poolName string) string {
-	return fmt.Sprintf("simplyblock.io/pool.%s.%s.%s", namespace, clusterName, poolName)
-}
-
-// syncNodeLabels ensures the label simplyblock.io/pool.<name>=allowed is present on every
-// node in spec.allowedNodes and absent from nodes no longer in the list.
+// syncNodeLabels ensures the pool's allowed-node label is present on every node
+// in spec.allowedNodes and absent from nodes no longer in the list. Reconcile
+// reaches it only once status.UUID is set, which the label key is built from.
 func (r *StoragePoolReconciler) syncNodeLabels(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool) error {
 	log := logf.FromContext(ctx)
-	labelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
+	labelKey := kube.PoolNodeLabelKey(storagePoolCR.Status.UUID)
 
 	// Find all nodes currently carrying this pool's label.
 	nodeList := &corev1.NodeList{}
-	if err := r.List(ctx, nodeList, client.MatchingLabels{labelKey: "allowed"}); err != nil {
+	if err := r.List(ctx, nodeList, client.MatchingLabels{labelKey: kube.LabelPoolAllowed}); err != nil {
 		return fmt.Errorf("failed to list labeled nodes: %w", err)
 	}
 
@@ -488,7 +483,7 @@ func (r *StoragePoolReconciler) syncNodeLabels(ctx context.Context, storagePoolC
 			if node.Labels == nil {
 				node.Labels = make(map[string]string)
 			}
-			node.Labels[labelKey] = "allowed"
+			node.Labels[labelKey] = kube.LabelPoolAllowed
 			if err := r.Patch(ctx, &node, patch); err != nil {
 				return fmt.Errorf("failed to label node %s: %w", nodeName, err)
 			}
@@ -499,6 +494,9 @@ func (r *StoragePoolReconciler) syncNodeLabels(ctx context.Context, storagePoolC
 	return nil
 }
 
+// syncStoragePoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
+// backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
+// no longer in spec. Returns true if any change was made.
 func (r *StoragePoolReconciler) syncStoragePoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,

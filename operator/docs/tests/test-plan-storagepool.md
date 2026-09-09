@@ -73,6 +73,19 @@ File: `operator/internal/controllers/pool/storagepool_controller_unit_test.go`
 | U-22 | `status.storageClassNames` lists every assigned class and nothing else         | Positive | —    |
 | U-23 | A class carrying both QoS spellings: new wins, `QoSParameterConflict` emitted  | Negative | —    |
 
+### The Allowed-Node Label (today's controller)
+
+A DHCHAP-gated pool restricts its volumes to `spec.allowedNodes` through one
+label per pool on each of them, whose key the generated class republishes as
+`dhchap_node_selector`. The key is `kube.PoolNodeLabelKey(status.uuid)`, and its
+length is the whole reason it is derived that way, so the rule is tested in
+`atlas-lib/kube`.
+
+| #    | Scenario                                                                                                     | Type       | Test                        |
+|------|--------------------------------------------------------------------------------------------------------------|------------|-----------------------------|
+| U-54 | The label key is within the 63 bytes a label name may have, whatever a pool and its cluster are named (#505) | Regression | `TestPoolNodeLabelKey`      |
+| U-55 | The generated class's `dhchap_node_selector` is the same key that is written on the node                     | Positive   | `TestPoolStorageClassShape` |
+
 ### Deletion and the Bound-Volume Hold (design §6)
 
 | #    | Scenario                                                                                 | Type     | Test |
@@ -246,7 +259,7 @@ warning of.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 53        | 0       | 53          |
+| Unit        | 55        | 2       | 53          |
 | Integration | 19        | 0       | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |

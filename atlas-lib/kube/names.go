@@ -53,6 +53,11 @@ func NodeTypeStoragePlaneValue(clusterName string) string {
 	return "simplyblock-storage-plane-" + clusterName
 }
 
+// PoolNodeLabelKey is the label key identifying one storage pool.
+func PoolNodeLabelKey(poolUUID string) string {
+	return LabelPoolPrefix + poolUUID
+}
+
 // StorageNodeSetDaemonSetName is the name of the storage-node DaemonSet owned by
 // the named StorageNodeSet. Named per-set so multiple sets can coexist in one
 // cluster without sharing a DaemonSet or per-node ConfigMap.
@@ -102,6 +107,10 @@ const (
 	LabelVolumeHandle = "simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
 	AnnoPool = "simplyblock.io/pool"
+	// LabelPoolPrefix opens the per-pool label the operator puts on every node in
+	// a StoragePool's AllowedNodes
+	LabelPoolPrefix  = "storage.simplyblock.io/pool."
+	LabelPoolAllowed = "allowed"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads

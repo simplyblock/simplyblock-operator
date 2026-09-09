@@ -11,6 +11,7 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/nqn"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -215,10 +216,20 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			// — a broken allowedTopologies term on the generated class — passed
 			// CI for a whole release: the class users actually get was never
 			// exercised by any test.
-			nodeLabelKey := poolNodeLabelKey(nameSpace, clusterName, poolName)
 			scName := operatorStorageClassName(nameSpace, clusterName, poolName)
-			waitForNodeLabel(f.ClientSet, workerNode, nodeLabelKey, dhchapAllowedLabelValue, 3*time.Minute)
 			sc := waitForStorageClass(f.ClientSet, scName, 3*time.Minute)
+
+			// The label key comes from the class the operator generated, not from a
+			// copy of its derivation. That parameter is the contract CreateVolume
+			// reads, so taking the key from it is what proves the two components
+			// agree; a mirrored formula here would only prove this file agrees with
+			// itself.
+			nodeLabelKey := sc.Parameters[dhchapNodeSelectorParam]
+			gomega.Expect(nodeLabelKey).To(gomega.HavePrefix(kube.LabelPoolPrefix),
+				"generated DHCHAP StorageClass %s must carry %s — it is the only thing CreateVolume turns "+
+					"into the PV's nodeAffinity (#403), and with allowedTopologies gone it is the sole "+
+					"allowed-node gate", scName, dhchapNodeSelectorParam)
+			waitForNodeLabel(f.ClientSet, workerNode, nodeLabelKey, dhchapAllowedLabelValue, 3*time.Minute)
 
 			ginkgo.By("verify the generated StorageClass can actually provision and carries the DHCHAP gate")
 			gomega.Expect(sc.AllowedTopologies).To(gomega.BeEmpty(),
@@ -226,11 +237,6 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 					"matches those terms against the CSINode topology keys frozen at csi-node registration, "+
 					"so a pool label written afterwards makes every PVC fail with "+
 					"\"is not in requisite\" (#484)", scName)
-			gomega.Expect(sc.Parameters).To(gomega.HaveKeyWithValue(dhchapNodeSelectorParam, nodeLabelKey),
-				"generated DHCHAP StorageClass %s must carry %s — it is the only thing CreateVolume turns "+
-					"into the PV's nodeAffinity (#403), and with allowedTopologies gone it is the sole "+
-					"allowed-node gate", scName, dhchapNodeSelectorParam)
-
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create PVC")
 			ginkgo.DeferCleanup(func() {
 				framework.ExpectNoError(
@@ -475,13 +481,6 @@ func deleteStoragePool(ns, poolName string) {
 		return strings.TrimSpace(out) == ""
 	}, 5*time.Minute, 10*time.Second).Should(gomega.BeTrue(),
 		"StoragePool %s/%s should be fully reclaimed once its PVC is gone", ns, poolName)
-}
-
-// poolNodeLabelKey mirrors poolNodeLabelKey in the operator's
-// simplyblockstoragepool_controller.go — the label it writes onto every node in
-// a pool's AllowedNodes.
-func poolNodeLabelKey(ns, clusterName, poolName string) string {
-	return fmt.Sprintf("simplyblock.io/pool.%s.%s.%s", ns, clusterName, poolName)
 }
 
 // operatorStorageClassName mirrors simplyblockStorageClassName in the operator.
