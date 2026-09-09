@@ -18,6 +18,7 @@ package catalog
 
 import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/check"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/derive"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/discover"
 )
@@ -27,10 +28,15 @@ func Default() *upgrade.Catalog {
 	c := upgrade.NewCatalog()
 
 	c.Discoverers.MustRegister(discoverers()...)
-	c.Checks.MustRegister(checks()...)
 	c.Derivations.MustRegister(derivations()...)
 	c.Steps.MustRegister(steps()...)
 	c.Transformations.MustRegister(transformations()...)
+
+	// The checks are registered last, because the ones that walk the naming
+	// rules are handed the registry rather than a copy of it. That is what
+	// makes --skip on a naming rule skip it inside the check as well, instead
+	// of skipping only the line the rules command prints.
+	c.Checks.MustRegister(checks(c)...)
 
 	return c
 }
@@ -43,9 +49,9 @@ func discoverers() []upgrade.Discoverer {
 	return append(discover.SimplyblockKinds(), discover.CoreKinds()...)
 }
 
-// checks validate it (§18, §19.10).
-func checks() []upgrade.Check {
-	return nil
+// checks validate the graph (§18, §19.10).
+func checks(c *upgrade.Catalog) []upgrade.Check {
+	return check.Names(c.Derivations)
 }
 
 // derivations are the naming formulas the name checks walk (§19.2, §19.3). The

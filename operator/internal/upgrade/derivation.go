@@ -34,6 +34,37 @@ const (
 	ModelTarget Model = "target"
 )
 
+// Fix is which of §19.5's three resolutions applies to a row. Which one it is
+// follows from who owns the name rather than from how long it is, and the three
+// do not substitute for one another: bounding an input a cloud owns breaks
+// enrollment on a legal node name, and truncating a value the control plane
+// correlates on breaks the correlation.
+type Fix string
+
+const (
+	// FixUseUUID replaces the derived value with an identifier already at
+	// hand. It applies when nothing reads the current value and the label
+	// exists to be selected on rather than read.
+	FixUseUUID Fix = "use a UUID rather than the name"
+
+	// FixBoundInput refuses the long name at creation time. It applies when
+	// the name is this API's to refuse, since a field somebody types has no
+	// business being 200 characters.
+	FixBoundInput Fix = "bound the input with a MaxLength marker on the field"
+
+	// FixTruncateAndHash keeps the value working by shortening it and
+	// appending a digest of the whole input. It applies when the name belongs
+	// to somebody else, such as a worker a cloud named, or when the old value
+	// has to keep working because it already sits inside live PersistentVolume
+	// objects or names an object that cannot be renamed.
+	FixTruncateAndHash Fix = "truncate the derived value and append a digest of the whole input"
+
+	// FixNone marks a row that cannot realistically overflow. It is declared
+	// rather than omitted so the audit is complete, and so a later release
+	// widening the formula is caught rather than assumed safe.
+	FixNone Fix = "none needed"
+)
+
 // Derivation is one formula, together with every set of inputs the cluster
 // under examination would hand it.
 //
@@ -49,13 +80,19 @@ type Derivation interface {
 	// written on: a name copied into a label is held to the label's 63 bytes.
 	Formula() kube.Formula
 
-	// Written says where the derived value ends up, in the form a report
-	// prints: the Node label io.simplyblock.node-type, or a StorageClass name.
+	// Written says where the derived value ends up, as a bare noun phrase with
+	// no leading article, such as Node label io.simplyblock.node-type, or
+	// StorageClass name. A report supplies whatever article its sentence needs,
+	// and one carried here reads wrong in the sentence a collision finding
+	// builds, which is that two objects derive one StorageClass name.
 	Written() string
 
 	// Model says whether the formula is the one running today or the one the
 	// target model introduces.
 	Model() Model
+
+	// Fix is what a report tells the user to do about a violation of this row.
+	Fix() Fix
 
 	// Inputs enumerates what this cluster would hand the formula. Each input
 	// names the object the parts came from, so a violation can be reported

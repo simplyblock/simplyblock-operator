@@ -164,6 +164,13 @@ func (d Derived) Fits() bool { return !d.Truncated }
 // an identifier some other way can be checked against the same helpers.
 func (d Derived) Errors() []string { return d.Kind.validate(d.Value) }
 
+// Validate reports what the API server would refuse about a value used as this
+// kind, using the API server's own helpers rather than a second opinion about
+// them. It is exported for the caller that has to check a value a formula did
+// not produce, which is every value this product already wrote before the
+// formulas were written down.
+func Validate(kind Kind, value string) []string { return kind.validate(value) }
+
 // Derive builds the identifier for these parts.
 //
 // It is deterministic in its inputs, so two processes derive the same value

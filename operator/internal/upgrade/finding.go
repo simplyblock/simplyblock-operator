@@ -42,6 +42,16 @@ type Finding struct {
 	// become one object of a kind that is becoming cluster-scoped.
 	Objects []ObjectRef
 
+	// PerObject is a note rendered beside the object at the same index, for a
+	// finding whose objects each contributed something different. A collision
+	// is the case that needs it, since what a reader wants next after the two
+	// objects is what each of them derived its half from, and repeating the
+	// object names in Detail to say so prints every one of them twice.
+	//
+	// It is either empty or as long as Objects. A shorter one leaves the
+	// remaining objects unannotated rather than misaligned.
+	PerObject []string
+
 	// Summary is the one line a report prints first.
 	Summary string
 
@@ -62,7 +72,11 @@ func (f Finding) Error() bool { return f.Severity == SeverityError }
 func (f Finding) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-7s %s", f.Severity, f.Summary)
-	for _, obj := range f.Objects {
+	for i, obj := range f.Objects {
+		if i < len(f.PerObject) && f.PerObject[i] != "" {
+			fmt.Fprintf(&b, "\n        %s  %s", obj, f.PerObject[i])
+			continue
+		}
 		fmt.Fprintf(&b, "\n        %s", obj)
 	}
 	for _, line := range nonEmptyLines(f.Detail) {
@@ -90,6 +104,16 @@ func (f Findings) Errors() Findings {
 
 // Blocked reports whether anything in the set stops the run.
 func (f Findings) Blocked() bool { return len(f.Errors()) > 0 }
+
+// String renders every finding, one after another. It is what a report prints
+// and what a test compares two runs with.
+func (f Findings) String() string {
+	rendered := make([]string, 0, len(f))
+	for _, finding := range f {
+		rendered = append(rendered, finding.String())
+	}
+	return strings.Join(rendered, "\n")
+}
 
 // Count reports how many findings carry this severity.
 func (f Findings) Count(severity Severity) int {

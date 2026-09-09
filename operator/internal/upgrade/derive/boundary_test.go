@@ -224,3 +224,16 @@ func TestBoundary_TheLimitsAreTheAPIServersOwn(t *testing.T) {
 			atlaskube.MaxObjectNameLength, validation.DNS1123SubdomainMaxLength)
 	}
 }
+
+func TestBoundary_EveryRowDeclaresWhatResolvesIt(t *testing.T) {
+	// A finding with no remediation is a gap in the check rather than in the
+	// cluster, and §19.11 requires that every violation names the change that
+	// resolves it. Which of §19.5's three applies is a property of the row, so
+	// a row added without one is a violation nobody can act on.
+	for id, rule := range declared(t) {
+		if rule.Fix() == "" {
+			t.Errorf("%s declares no fix, so a violation of it would be reported "+
+				"with nothing a user can do about it", id)
+		}
+	}
+}

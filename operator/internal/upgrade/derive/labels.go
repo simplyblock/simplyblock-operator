@@ -54,10 +54,11 @@ func Labels() []upgrade.Derivation {
 // cluster a with pool b-c produce one key in one namespace.
 func poolNodeLabelKey() Rule {
 	return Rule{
-		RuleID:  IDPoolNodeLabelKey,
-		Summary: "bounds the worker label key a pool patches onto the nodes it allows",
-		Where:   "the Node label key simplyblock.io/pool.<namespace>.<cluster>.<pool>",
-		Which:   upgrade.ModelCurrent,
+		RuleID:     IDPoolNodeLabelKey,
+		Summary:    "bounds the worker label key a pool patches onto the nodes it allows",
+		Where:      "Node label key simplyblock.io/pool.<namespace>.<cluster>.<pool>",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
 			Prefix:    "pool.",
@@ -90,10 +91,11 @@ func poolNodeLabelKey() Rule {
 // one namespace, so the row enumerates from every namespace discovery read.
 func nodeTypeLabel() Rule {
 	return Rule{
-		RuleID:  IDNodeTypeLabel,
-		Summary: "bounds the storage-plane node label, which is the tightest limit in the product",
-		Where:   "the Node label io.simplyblock.node-type",
-		Which:   upgrade.ModelCurrent,
+		RuleID:     IDNodeTypeLabel,
+		Summary:    "bounds the storage-plane node label, which is the tightest limit in the product",
+		Where:      "Node label io.simplyblock.node-type",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixBoundInput,
 		Build: atlaskube.Formula{
 			Kind:   atlaskube.LabelValue,
 			Prefix: "simplyblock-storage-plane-",
@@ -121,11 +123,12 @@ func nodeTypeLabel() Rule {
 // selected on.
 func storageClassClusterLabel() Rule {
 	return Rule{
-		RuleID:  IDStorageClassCluster,
-		Summary: "bounds the cluster label a generated StorageClass carries",
-		Where:   "the StorageClass label storage.simplyblock.io/cluster",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.LabelValue},
+		RuleID:     IDStorageClassCluster,
+		Summary:    "bounds the cluster label a generated StorageClass carries",
+		Where:      "StorageClass label storage.simplyblock.io/cluster",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixUseUUID,
+		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
 			for _, pool := range pools(s) {
@@ -143,11 +146,12 @@ func storageClassClusterLabel() Rule {
 // carrying the pool's own name.
 func storageClassPoolLabel() Rule {
 	return Rule{
-		RuleID:  IDStorageClassPool,
-		Summary: "bounds the pool label a generated StorageClass carries",
-		Where:   "the StorageClass label storage.simplyblock.io/pool",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.LabelValue},
+		RuleID:     IDStorageClassPool,
+		Summary:    "bounds the pool label a generated StorageClass carries",
+		Where:      "StorageClass label storage.simplyblock.io/pool",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixUseUUID,
+		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
 			for _, pool := range pools(s) {
@@ -171,11 +175,12 @@ func storageClassPoolLabel() Rule {
 // from, not the one it produces.
 func nodeSetLabel() Rule {
 	return Rule{
-		RuleID:  IDNodeSetLabel,
-		Summary: "bounds the node-set label that lets several sets coexist in one cluster",
-		Where:   "the Node label io.simplyblock.storagenodeset",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.LabelValue},
+		RuleID:     IDNodeSetLabel,
+		Summary:    "bounds the node-set label that lets several sets coexist in one cluster",
+		Where:      "Node label io.simplyblock.storagenodeset",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixBoundInput,
+		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(nodeSets(s)))
 			for _, set := range nodeSets(s) {
@@ -201,11 +206,12 @@ func nodeSetLabel() Rule {
 // legal node name.
 func workerLabel() Rule {
 	return Rule{
-		RuleID:  IDWorkerLabel,
-		Summary: "bounds the worker label, whose input is a node name a cloud chose",
-		Where:   "the StorageNode label storage.simplyblock.io/worker",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.LabelValue},
+		RuleID:     IDWorkerLabel,
+		Summary:    "bounds the worker label, whose input is a node name a cloud chose",
+		Where:      "StorageNode label storage.simplyblock.io/worker",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input
 			for _, node := range nodes(s) {
@@ -239,11 +245,12 @@ func workerLabel() Rule {
 // fix has to produce.
 func drainNodeLabel() Rule {
 	return Rule{
-		RuleID:  IDDrainNodeLabel,
-		Summary: "bounds the drain label the per-node PodDisruptionBudget selects on",
-		Where:   "the Pod label simplyblock.io/drain-node",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.LabelValue},
+		RuleID:     IDDrainNodeLabel,
+		Summary:    "bounds the drain label the per-node PodDisruptionBudget selects on",
+		Where:      "Pod label simplyblock.io/drain-node",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			var out []upgrade.Input
 			for _, node := range nodes(s) {
@@ -269,10 +276,11 @@ func drainNodeLabel() Rule {
 // that a later release widening the prefix is caught rather than assumed safe.
 func storageNodeUUIDLabelKey() Rule {
 	return Rule{
-		RuleID:  IDStorageNodeUUIDKey,
-		Summary: "bounds the per-slot topology key, which the socket index cannot realistically overflow",
-		Where:   "the Node label key simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>",
-		Which:   upgrade.ModelCurrent,
+		RuleID:     IDStorageNodeUUIDKey,
+		Summary:    "bounds the per-slot topology key, which the socket index cannot realistically overflow",
+		Where:      "Node label key simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixNone,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
 			Prefix:    "storage-node-uuid.",

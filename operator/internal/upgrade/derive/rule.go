@@ -29,6 +29,11 @@ type Rule struct {
 	// Which model the formula belongs to.
 	Which upgrade.Model
 
+	// Resolution is what a report tells the user to do about a violation. It
+	// is the Fix column of §19.2 and §19.3, which follows from who owns the
+	// name rather than from how long it is.
+	Resolution upgrade.Fix
+
 	// Build is the formula.
 	Build atlaskube.Formula
 
@@ -42,6 +47,7 @@ func (r Rule) Description() string        { return r.Summary }
 func (r Rule) Written() string            { return r.Where }
 func (r Rule) Model() upgrade.Model       { return r.Which }
 func (r Rule) Formula() atlaskube.Formula { return r.Build }
+func (r Rule) Fix() upgrade.Fix           { return r.Resolution }
 
 func (r Rule) Inputs(ctx context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 	if r.Enumerate == nil {

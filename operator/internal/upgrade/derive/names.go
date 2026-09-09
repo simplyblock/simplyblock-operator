@@ -70,11 +70,12 @@ func Names() []upgrade.Derivation {
 // cluster. That is why the check runs before anything is deployed.
 func storageClassName() Rule {
 	return Rule{
-		RuleID:  IDStorageClassName,
-		Summary: "bounds the StorageClass name a pool generates, and detects two pools deriving one",
-		Where:   "a StorageClass name",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-"},
+		RuleID:     IDStorageClassName,
+		Summary:    "bounds the StorageClass name a pool generates, and detects two pools deriving one",
+		Where:      "StorageClass name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(pools(s)))
 			for _, pool := range pools(s) {
@@ -92,12 +93,13 @@ func storageClassName() Rule {
 // per worker hostname (simplyblockstoragenodeset_pernodeconfig.go).
 func perNodeConfigMapName() Rule {
 	return Rule{
-		RuleID:    IDPerNodeConfigMap,
-		Summary:   "bounds the per-node ConfigMap name a StorageNodeSet owns",
-		Where:     "a ConfigMap name",
-		Which:     upgrade.ModelCurrent,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
-		Enumerate: fromNodeSetNames,
+		RuleID:     IDPerNodeConfigMap,
+		Summary:    "bounds the per-node ConfigMap name a StorageNodeSet owns",
+		Where:      "ConfigMap name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
+		Enumerate:  fromNodeSetNames,
 	}
 }
 
@@ -105,12 +107,13 @@ func perNodeConfigMapName() Rule {
 // (atlas-lib/kube.StorageNodeSetDaemonSetName).
 func storageNodeDaemonSetName() Rule {
 	return Rule{
-		RuleID:    IDStorageNodeDaemonSet,
-		Summary:   "bounds the storage-node DaemonSet name a StorageNodeSet owns",
-		Where:     "a DaemonSet name",
-		Which:     upgrade.ModelCurrent,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
-		Enumerate: fromNodeSetNames,
+		RuleID:     IDStorageNodeDaemonSet,
+		Summary:    "bounds the storage-node DaemonSet name a StorageNodeSet owns",
+		Where:      "DaemonSet name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
+		Enumerate:  fromNodeSetNames,
 	}
 }
 
@@ -119,12 +122,13 @@ func storageNodeDaemonSetName() Rule {
 // (atlas-lib/kube.StorageNodeSetAPIEndpointSliceName).
 func apiEndpointSliceName() Rule {
 	return Rule{
-		RuleID:    IDAPIEndpointSlice,
-		Summary:   "bounds the EndpointSlice name a StorageNodeSet publishes its API pods through",
-		Where:     "an EndpointSlice name",
-		Which:     upgrade.ModelCurrent,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
-		Enumerate: fromNodeSetNames,
+		RuleID:     IDAPIEndpointSlice,
+		Summary:    "bounds the EndpointSlice name a StorageNodeSet publishes its API pods through",
+		Where:      "EndpointSlice name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
+		Enumerate:  fromNodeSetNames,
 	}
 }
 
@@ -133,12 +137,13 @@ func apiEndpointSliceName() Rule {
 // scheme fixes and which is why the preflight exists (§19.8).
 func perNodeConfigMapNameTarget() Rule {
 	return Rule{
-		RuleID:    IDPerNodeConfigMapTarget,
-		Summary:   "detects two StorageNodeSets whose per-node ConfigMaps collapse onto one name under the cluster",
-		Where:     "a ConfigMap name, once the cluster is the parent",
-		Which:     upgrade.ModelTarget,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
-		Enumerate: fromNodeSetClusters,
+		RuleID:     IDPerNodeConfigMapTarget,
+		Summary:    "detects two StorageNodeSets whose per-node ConfigMaps collapse onto one name under the cluster",
+		Where:      "ConfigMap name, once the cluster is the parent",
+		Which:      upgrade.ModelTarget,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-per-node-config"},
+		Enumerate:  fromNodeSetClusters,
 	}
 }
 
@@ -147,24 +152,26 @@ func perNodeConfigMapNameTarget() Rule {
 // DaemonSet name is two storage-node workloads becoming one.
 func storageNodeDaemonSetNameTarget() Rule {
 	return Rule{
-		RuleID:    IDStorageNodeDaemonSetTarget,
-		Summary:   "detects two StorageNodeSets whose DaemonSets collapse onto one name under the cluster",
-		Where:     "a DaemonSet name, once the cluster is the parent",
-		Which:     upgrade.ModelTarget,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
-		Enumerate: fromNodeSetClusters,
+		RuleID:     IDStorageNodeDaemonSetTarget,
+		Summary:    "detects two StorageNodeSets whose DaemonSets collapse onto one name under the cluster",
+		Where:      "DaemonSet name, once the cluster is the parent",
+		Which:      upgrade.ModelTarget,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-storage-node-ds-"},
+		Enumerate:  fromNodeSetClusters,
 	}
 }
 
 // apiEndpointSliceNameTarget is the EndpointSlice under the same reparenting.
 func apiEndpointSliceNameTarget() Rule {
 	return Rule{
-		RuleID:    IDAPIEndpointSliceTarget,
-		Summary:   "detects two StorageNodeSets whose EndpointSlices collapse onto one name under the cluster",
-		Where:     "an EndpointSlice name, once the cluster is the parent",
-		Which:     upgrade.ModelTarget,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
-		Enumerate: fromNodeSetClusters,
+		RuleID:     IDAPIEndpointSliceTarget,
+		Summary:    "detects two StorageNodeSets whose EndpointSlices collapse onto one name under the cluster",
+		Where:      "EndpointSlice name, once the cluster is the parent",
+		Which:      upgrade.ModelTarget,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-storage-node-api-endpoints"},
+		Enumerate:  fromNodeSetClusters,
 	}
 }
 
@@ -172,12 +179,13 @@ func apiEndpointSliceNameTarget() Rule {
 // control-plane credentials (simplyblockstoragecluster_controller.go).
 func clusterSecretName() Rule {
 	return Rule{
-		RuleID:    IDClusterSecret,
-		Summary:   "bounds the Secret name a StorageCluster's credentials are kept under",
-		Where:     "a Secret name",
-		Which:     upgrade.ModelCurrent,
-		Build:     atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-cluster-"},
-		Enumerate: fromClusterNames,
+		RuleID:     IDClusterSecret,
+		Summary:    "bounds the Secret name a StorageCluster's credentials are kept under",
+		Where:      "Secret name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Prefix: "simplyblock-cluster-"},
+		Enumerate:  fromClusterNames,
 	}
 }
 
@@ -186,10 +194,11 @@ func clusterSecretName() Rule {
 // (simplyblockstoragecluster_controller.go, storagenode_controller.go).
 func upgradeSecretName() Rule {
 	return Rule{
-		RuleID:  IDUpgradeSecret,
-		Summary: "bounds the Secret name that marks a StorageCluster as upgrade-adopted",
-		Where:   "a Secret name",
-		Which:   upgrade.ModelCurrent,
+		RuleID:     IDUpgradeSecret,
+		Summary:    "bounds the Secret name that marks a StorageCluster as upgrade-adopted",
+		Where:      "Secret name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
 		Build: atlaskube.Formula{
 			Kind:   atlaskube.ObjectName,
 			Prefix: "simplyblock-",
@@ -203,11 +212,12 @@ func upgradeSecretName() Rule {
 // removal is driven through (storagenode_controller.go).
 func nodeRemoveOpsName() Rule {
 	return Rule{
-		RuleID:  IDNodeRemoveOps,
-		Summary: "bounds the StorageNodeOps name a node's removal is driven through",
-		Where:   "a StorageNodeOps name",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-remove"},
+		RuleID:     IDNodeRemoveOps,
+		Summary:    "bounds the StorageNodeOps name a node's removal is driven through",
+		Where:      "StorageNodeOps name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-remove"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(nodes(s)))
 			for _, node := range nodes(s) {
@@ -222,11 +232,12 @@ func nodeRemoveOpsName() Rule {
 // (backuprestore_controller.go).
 func restoredBackupName() Rule {
 	return Rule{
-		RuleID:  IDRestoredBackup,
-		Summary: "bounds the name a restore gives what it produces",
-		Where:   "a restored resource's name",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-restored"},
+		RuleID:     IDRestoredBackup,
+		Summary:    "bounds the name a restore gives what it produces",
+		Where:      "restored resource name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-restored"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(restores(s)))
 			for _, restore := range restores(s) {
@@ -242,11 +253,12 @@ func restoredBackupName() Rule {
 // migration starts from rather than the one it produces.
 func importedBackupName() Rule {
 	return Rule{
-		RuleID:  IDImportedBackup,
-		Summary: "bounds the name an import gives what it produces",
-		Where:   "an imported resource's name",
-		Which:   upgrade.ModelCurrent,
-		Build:   atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-imported"},
+		RuleID:     IDImportedBackup,
+		Summary:    "bounds the name an import gives what it produces",
+		Where:      "imported resource name",
+		Which:      upgrade.ModelCurrent,
+		Resolution: upgrade.FixTruncateAndHash,
+		Build:      atlaskube.Formula{Kind: atlaskube.ObjectName, Suffix: "-imported"},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 			out := make([]upgrade.Input, 0, len(imports(s)))
 			for _, imported := range imports(s) {
