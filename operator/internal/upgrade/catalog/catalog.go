@@ -8,15 +8,18 @@
 // list somebody can read, and that a test can build a catalog holding one rule
 // without the other forty deciding the outcome.
 //
-// The registries are empty at the moment. The framework, the commands, and the
-// walk are in place, and operator/docs/designs/crd-redesign/design-api-upgrade.md
-// is the inventory of what fills them. The discoverers come from §17, the
-// checks from §18 and §19, the derivations from §19.2 and §19.3, the steps from
-// §9.1 and §20, and the transformations from §16.
+// The registries are filled in as the work lands, and
+// operator/docs/designs/crd-redesign/design-api-upgrade.md is the inventory of
+// what goes in each. The discoverers come from §17, the checks from §18 and
+// §19, the derivations from §19.2 and §19.3, the steps from §9.1 and §20, and
+// the transformations from §16.
 
 package catalog
 
-import "github.com/simplyblock/simplyblock-operator/internal/upgrade"
+import (
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/discover"
+)
 
 // Default builds the catalog the commands run against.
 func Default() *upgrade.Catalog {
@@ -31,9 +34,12 @@ func Default() *upgrade.Catalog {
 	return c
 }
 
-// discoverers build the graph the checks and steps read (§17).
+// discoverers build the graph the checks and steps read (§17). They are grouped
+// by where the objects come from rather than listed one by one, because the set
+// of custom resources the migration reads moves with §7.2 and the set of core
+// objects moves with whichever check needs one.
 func discoverers() []upgrade.Discoverer {
-	return nil
+	return append(discover.SimplyblockKinds(), discover.CoreKinds()...)
 }
 
 // checks validate it (§18, §19.10).
