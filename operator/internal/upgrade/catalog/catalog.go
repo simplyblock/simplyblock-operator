@@ -18,6 +18,7 @@ package catalog
 
 import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/derive"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/discover"
 )
 
@@ -47,9 +48,11 @@ func checks() []upgrade.Check {
 	return nil
 }
 
-// derivations are the naming formulas the name checks walk (§19.2, §19.3).
+// derivations are the naming formulas the name checks walk (§19.2, §19.3). The
+// labels are the tighter half, since a name copied into a label is held to 63
+// bytes rather than 253.
 func derivations() []upgrade.Derivation {
-	return nil
+	return append(derive.Labels(), derive.Names()...)
 }
 
 // steps are the work of the upgrade and the migration (§9.1, §20, §21). Their

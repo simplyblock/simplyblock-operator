@@ -14,6 +14,26 @@ import (
 	"github.com/simplyblock/atlas/kube"
 )
 
+// Model says which resource model a formula belongs to. The distinction is what
+// lets a report tell a violation that is breaking a cluster today apart from
+// one the migration is about to introduce, and the two are not the same news.
+type Model string
+
+const (
+	// ModelCurrent is a formula the operator runs today. A violation of one is
+	// already a reconcile that retries forever, and it is news whether or not
+	// the user upgrades.
+	ModelCurrent Model = "current"
+
+	// ModelTarget is a formula the target model introduces, or an existing one
+	// whose inputs change. §19.8 has the four routes that take two resources to
+	// one derived name, and three of them are this: the DaemonSet, the per-node
+	// ConfigMap, and the EndpointSlice are named per StorageNodeSet today
+	// precisely so several sets can coexist, and the retirement of §16.1 makes
+	// the cluster their parent.
+	ModelTarget Model = "target"
+)
+
 // Derivation is one formula, together with every set of inputs the cluster
 // under examination would hand it.
 //
@@ -32,6 +52,10 @@ type Derivation interface {
 	// Written says where the derived value ends up, in the form a report
 	// prints: the Node label io.simplyblock.node-type, or a StorageClass name.
 	Written() string
+
+	// Model says whether the formula is the one running today or the one the
+	// target model introduces.
+	Model() Model
 
 	// Inputs enumerates what this cluster would hand the formula. Each input
 	// names the object the parts came from, so a violation can be reported
