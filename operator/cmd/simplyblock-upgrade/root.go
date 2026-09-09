@@ -34,6 +34,12 @@ type globalOptions struct {
 	// the decision stays visible in the run's own output.
 	Skip []string
 
+	// AcknowledgeOffline admits a StorageNode that is not online. §18 refuses
+	// on one by default, because a cluster that is already degraded should not
+	// be asked to absorb an upgrade, and an operator who knows a node is down
+	// and intends to proceed is making a call this flag records.
+	AcknowledgeOffline bool
+
 	// Plain forces the line-by-line reporter even at a terminal, which is what
 	// a user redirecting output to a file wants.
 	Plain bool
@@ -49,7 +55,11 @@ func (g globalOptions) options(dryRun bool) upgrade.Options {
 	for _, id := range g.Skip {
 		skip = append(skip, upgrade.ID(id))
 	}
-	return upgrade.Options{DryRun: dryRun, Skip: skip}
+	return upgrade.Options{
+		DryRun:             dryRun,
+		Skip:               skip,
+		AcknowledgeOffline: g.AcknowledgeOffline,
+	}
 }
 
 // newRootCommand builds the command tree.
@@ -78,6 +88,8 @@ func newRootCommand() *cobra.Command {
 	flags.StringVar(&global.Context, "context", "", "the kubeconfig context to use")
 	flags.StringVarP(&global.Namespace, "namespace", "n", defaultNamespace(), "the namespace the installation lives in")
 	flags.StringSliceVar(&global.Skip, "skip", nil, "rule identities not to run; every skipped rule is reported")
+	flags.BoolVar(&global.AcknowledgeOffline, "acknowledge-offline", false,
+		"proceed even though a StorageNode is not online")
 	flags.BoolVar(&global.Plain, "plain", false, "write line-by-line output even at a terminal")
 	flags.BoolVarP(&global.Verbose, "verbose", "v", false, "report every rule as it runs")
 

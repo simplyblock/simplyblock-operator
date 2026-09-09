@@ -8,8 +8,12 @@
 package discover
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
@@ -33,6 +37,15 @@ const (
 	IDStorageClasses    upgrade.ID = "discover-storage-classes"
 	IDNamespaces        upgrade.ID = "discover-namespaces"
 	IDPersistentVolumes upgrade.ID = "discover-persistent-volumes"
+
+	// The workload a StorageNodeSet owns, which §20 reparents onto the cluster.
+	IDDaemonSets      upgrade.ID = "discover-daemon-sets"
+	IDServices        upgrade.ID = "discover-services"
+	IDEndpointSlices  upgrade.ID = "discover-endpoint-slices"
+	IDServiceAccounts upgrade.ID = "discover-service-accounts"
+	IDConfigMaps      upgrade.ID = "discover-config-maps"
+	IDSecrets         upgrade.ID = "discover-secrets"
+	IDCertificates    upgrade.ID = "discover-certificates"
 
 	// Read across every namespace rather than inside the installation.
 	IDClustersEverywhere   upgrade.ID = "discover-storage-clusters-everywhere"
@@ -127,6 +140,83 @@ func SimplyblockKinds() []upgrade.Discoverer {
 			Namespaced: true,
 		},
 	}
+}
+
+// OwnedKinds are the workload objects a StorageNodeSet owns by controller
+// reference, and which §20 has to reparent onto the StorageCluster before the
+// set can be deleted.
+//
+// They are read because Kubernetes garbage collection removes exactly this set
+// when the set goes. A dependent this list misses is one the preflight cannot
+// see, so the migration would delete the set and find out afterward, which is
+// the failure §20's ordering exists to prevent.
+func OwnedKinds() []upgrade.Discoverer {
+	return []upgrade.Discoverer{
+		Kind{
+			RuleID:     IDDaemonSets,
+			Summary:    "reads the storage-node DaemonSet a StorageNodeSet owns",
+			List:       &appsv1.DaemonSetList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID:     IDServices,
+			Summary:    "reads the storage-node API and SPDK proxy Services a StorageNodeSet owns",
+			List:       &corev1.ServiceList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID:     IDEndpointSlices,
+			Summary:    "reads the EndpointSlices that publish a set's API pods",
+			List:       &discoveryv1.EndpointSliceList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID:     IDServiceAccounts,
+			Summary:    "reads the ServiceAccount the storage-node DaemonSet runs as",
+			List:       &corev1.ServiceAccountList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID:     IDConfigMaps,
+			Summary:    "reads the per-node ConfigMaps a StorageNodeSet owns",
+			List:       &corev1.ConfigMapList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID:     IDSecrets,
+			Summary:    "reads the Secrets in the installation, including the serving certificates' own",
+			List:       &corev1.SecretList{},
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+		Kind{
+			RuleID: IDCertificates,
+			Summary: "reads the cert-manager Certificates a StorageNodeSet owns, where cert-manager " +
+				"is the TLS provider and the kind is served at all",
+			List:       certificateList(),
+			Namespaced: true,
+			Needs:      []upgrade.ID{IDStorageNodeSets},
+		},
+	}
+}
+
+// certificateList is the list prototype for cert-manager's Certificate, which
+// this repository has no Go type for: internal/utils builds one as an
+// unstructured object. A cluster whose TLS provider is not cert-manager does
+// not serve the kind at all, which the discoverer reports and skips.
+func certificateList() *unstructured.UnstructuredList {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "cert-manager.io",
+		Version: "v1",
+		Kind:    "CertificateList",
+	})
+	return list
 }
 
 // CoreKinds are the Kubernetes objects the migration reads that belong to no

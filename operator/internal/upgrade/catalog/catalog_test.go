@@ -9,6 +9,7 @@
 package catalog_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -24,6 +25,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/catalog"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/check"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/derive"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/discover"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/spine"
 )
 
 // brokenCluster is one installation carrying one of every violation the
@@ -177,4 +180,40 @@ func TestCatalog_EveryRegistryAccepts(t *testing.T) {
 	if c.Derivations.Len() == 0 {
 		t.Error("no naming rules are registered, and the name checks would walk nothing")
 	}
+}
+
+func TestCatalog_EveryReparentableKindIsAlsoDiscovered(t *testing.T) {
+	// The reparenting check sees the kinds discovery reads. A kind added to
+	// spine.Rules and not to the discoverers is a rule that never fires, and a
+	// kind discovered and not ruled on is reported as unclassified on every
+	// real cluster. Neither shows up as a failing test anywhere else, because
+	// each half is correct on its own.
+	discovered := make(map[string]bool)
+	for _, discoverer := range catalog.Default().Discoverers.All() {
+		kind, ok := discoverer.(discover.Kind)
+		if !ok {
+			continue
+		}
+		discovered[strings.TrimSuffix(listKind(kind), "List")] = true
+	}
+
+	for _, rule := range spine.Rules() {
+		if !discovered[rule.Kind.Kind] {
+			t.Errorf("spine.Rules covers %s and no discoverer reads it, so the rule "+
+				"never fires and an object of that kind is invisible to the preflight",
+				rule.Kind.Kind)
+		}
+	}
+}
+
+// listKind names the kind a discoverer's list prototype holds.
+func listKind(kind discover.Kind) string {
+	if gvk := kind.List.GetObjectKind().GroupVersionKind(); gvk.Kind != "" {
+		return gvk.Kind
+	}
+	name := fmt.Sprintf("%T", kind.List)
+	if idx := strings.LastIndex(name, "."); idx >= 0 {
+		name = name[idx+1:]
+	}
+	return name
 }

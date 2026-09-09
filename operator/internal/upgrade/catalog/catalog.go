@@ -47,16 +47,19 @@ func Default() *upgrade.Catalog {
 // objects moves with whichever check needs one.
 func discoverers() []upgrade.Discoverer {
 	all := discover.SimplyblockKinds()
+	all = append(all, discover.OwnedKinds()...)
 	all = append(all, discover.CoreKinds()...)
 	return append(all, discover.ClusterWideKinds()...)
 }
 
 // checks validate the graph (§18, §19.10).
 func checks(c *upgrade.Catalog) []upgrade.Check {
-	return append(check.Names(c.Derivations),
+	all := append(check.Names(c.Derivations),
 		check.NamespaceCollapse(),
 		check.AnnotationSpellings(),
 	)
+	all = append(all, check.Spine()...)
+	return append(all, check.InFlight()...)
 }
 
 // derivations are the naming formulas the name checks walk (§19.2, §19.3). The
