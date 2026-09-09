@@ -290,3 +290,11 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - simplyblockdrivers
+  verbs:
+  - get
+  - list
+  - watch

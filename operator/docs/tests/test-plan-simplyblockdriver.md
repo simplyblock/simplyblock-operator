@@ -11,8 +11,9 @@ Scenario IDs are permanent and are never reused or renumbered. A `—` in the
 `Test` column means nothing implements the scenario yet, and every such row
 reappears in §6 with its reason.
 
-The kind is new, so every row is a specification rather than a gap against
-shipped behavior. What the chart installs is asserted only where the operator has
+Most of the kind is still a specification rather than a gap against shipped
+behavior. What exists is the API type and the singleton's validating webhook, and
+the rows those cover carry a test name. What the chart installs is asserted only where the operator has
 to take it over, which is §1's adoption group and design §4.3.
 
 | Class       | Prefix | Harness                                                               |
@@ -157,6 +158,26 @@ half that runs when the webhook was not serving. `U-79` is the row that keeps th
 two controllers from disagreeing: both read one list and both must pick the same
 object from it, so a tie broken differently on the two sides is the flap the
 singleton exists to prevent.
+
+### The Singleton at Admission (design §3.4)
+
+File: `operator/internal/webhook/simplyblockdriver_validator_test.go`
+
+These rows are the validator's decisions against a fake client. That the API
+server actually calls it is `I-18` to `I-22`, which need a real one.
+
+| #    | Scenario                                                           | Type     | Test                             |
+|------|--------------------------------------------------------------------|----------|----------------------------------|
+| U-88 | The first driver in an empty cluster is admitted                   | Positive | `TestSimplyblockDriverValidator` |
+| U-89 | A second driver in the same namespace is denied                    | Negative | `TestSimplyblockDriverValidator` |
+| U-90 | A second driver in another namespace is denied                     | Negative | `TestSimplyblockDriverValidator` |
+| U-91 | The denial names the namespace and name that hold the deployment   | Positive | `TestSimplyblockDriverValidator` |
+| U-92 | An update to the only driver is admitted, since the rule is CREATE | Boundary | `TestSimplyblockDriverValidator` |
+| U-93 | A create after the only driver was deleted is admitted             | Boundary | `TestSimplyblockDriverValidator` |
+
+`U-91` is the row that makes the denial actionable. A message saying only that
+a driver exists leaves an administrator to find it, and it may be in a namespace
+they were not looking at.
 
 ### The Phase and Its Counts (design §3.3, §4.2)
 
@@ -355,16 +376,18 @@ row for.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 86        | 0       | 86          |
+| Unit        | 92        | 6       | 86          |
 | Integration | 22        | 0       | 22          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **124**   | **0**   | **124**     |
+| **Total**   | **130**   | **6**   | **124**     |
 
-`I-12` and `U-74` are superseded and are not in the counts. Nothing else is covered, and
-nothing can be: the kind does not exist. Every row is a specification, and the
-plan's value before implementation is that it says what the kind has to do rather
-than what somebody remembers deciding.
+`I-12` and `U-74` are superseded and are not in the counts.
+
+`U-88` to `U-93` are covered, by the validator that ships with the API type. The
+rest cannot be yet, because the reconciler does not exist, and until it does the
+plan's value is that it says what the kind has to do rather than what somebody
+remembers deciding.
 
 ---
 
@@ -375,7 +398,7 @@ than what somebody remembers deciding.
 | U-01 … U-10, U-26 … U-44             | What the controller applies, and the configuration it writes         | The kind does not exist. These are the rows to write first, because they are pure                                     |
 | U-11 … U-19                          | The phase and its counts                                             | The kind does not exist. `U-14` and `U-15` are the pair that keeps a partial failure from being reported as an outage |
 | U-20 … U-25, U-31, U-32, U-45 … U-53 | Version skew                                                         | The kind does not exist, and neither does the document design §5.1 reads                                              |
-| U-54 … U-87                          | Adoption, the singleton, and the sidecar overrides                   | The kind does not exist. Every row is seedable from a fake client, so these follow the apply rows immediately         |
+| U-54 … U-87                          | Adoption, the singleton's controller half, and the sidecar overrides | The kind does not exist. Every row is seedable from a fake client, so these follow the apply rows immediately         |
 | I-01 … I-23                          | Every admission rule, the real-API-server apply, and field ownership | Needs `envtest`, because defaulting and immutability are enforced by the API server and a fake client applies neither |
 | E-01 … E-13                          | All end-to-end scenarios                                             | Needs a live deployment with a real kubelet. The e2e harness under `test/` is not committed yet                       |
 | M-01 … M-03                          | Two versions, adoption by hand, and a release at non-default values  | Need two builds of the driver and a cluster the chart already installed into                                          |

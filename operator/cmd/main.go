@@ -637,6 +637,10 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.ReplicationOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered replicationops validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver",
+			&webhook.Admission{Handler: &internalwebhook.SimplyblockDriverValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered simplyblockdriver validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
 				Client:    mgr.GetClient(),

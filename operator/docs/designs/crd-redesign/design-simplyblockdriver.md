@@ -117,9 +117,12 @@ place, and §5 is what it does with them.
 
 ## 3. SimplyblockDriver: API
 
-Declared in `operator/api/v1alpha1/simplyblockdriver_types.go`, short name `sbd`.
-The type is Appendix A. What follows quotes the field an argument turns on and no
-more.
+Declared in `operator/api/v1alpha2/simplyblockdriver_types.go`, short name `sbd`.
+The kind is born at `v1alpha2` and registers no older version, because nothing
+was ever persisted at one
+([`design-api-upgrade.md`](design-api-upgrade.md) §7.3), so it needs no conversion
+function and appears in no storage rewrite. The type is Appendix A. What follows
+quotes the field an argument turns on and no more.
 
 ### 3.1 Spec
 

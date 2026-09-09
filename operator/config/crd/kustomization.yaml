@@ -22,6 +22,7 @@ resources:
 - bases/storage.simplyblock.io_storagedevices.yaml
 - bases/storage.simplyblock.io_clusterdeploymentconfigs.yaml
 - bases/storage.simplyblock.io_operatorops.yaml
+- bases/storage.simplyblock.io_simplyblockdrivers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []
