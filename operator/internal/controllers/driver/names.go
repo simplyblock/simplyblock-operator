@@ -18,7 +18,13 @@ import (
 // clusterRoleComponents are the five ClusterRole and ClusterRoleBinding pairs
 // the plugins need: one for the node plugin, and one per controller-plugin
 // sidecar that talks to the API server.
-var clusterRoleComponents = []string{"node", "provisioner", "attacher", "resizer", "health-monitor"}
+var clusterRoleComponents = []string{
+	nodeComponent, "provisioner", "attacher", "resizer", "health-monitor",
+}
+
+// nodeComponent is the one component whose role binds the node plugin's account
+// rather than the controller plugin's.
+const nodeComponent = "node"
 
 // objectNames is the whole naming surface of one deployment.
 type objectNames struct {

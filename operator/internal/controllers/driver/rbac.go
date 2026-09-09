@@ -34,7 +34,7 @@ var (
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
 // component in its name.
 var clusterRoleRules = map[string][]rbacv1.PolicyRule{
-	"node": {
+	nodeComponent: {
 		rule(core, []string{"nodes"}, "get", "list", "watch"),
 		rule(core, []string{"pods"}, "get", "list", "watch", "delete"),
 		rule(core, []string{"persistentvolumeclaims"}, "get", "list", "watch", "patch"),
@@ -83,7 +83,7 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 // serviceAccountFor names the account each role is bound to. The node plugin has
 // its own, and the controller plugin's sidecars share one.
 func serviceAccountFor(n objectNames, component string) string {
-	if component == "node" {
+	if component == nodeComponent {
 		return n.nodeServiceAccount
 	}
 	return n.controllerServiceAccount

@@ -59,7 +59,7 @@ func TestBindingsNameTheirOwnAccountAndRole(t *testing.T) {
 			t.Errorf("%s subject namespace = %q, want %q", b.Name, s.Namespace, d.Namespace)
 		}
 		want := n.controllerServiceAccount
-		if component == "node" {
+		if component == nodeComponent {
 			want = n.nodeServiceAccount
 		}
 		if s.Name != want {
@@ -100,8 +100,8 @@ func TestRulesMatchTheChart(t *testing.T) {
 		resource  string
 		verbs     []string
 	}{
-		{"node", "", "pods", []string{"get", "list", "watch", "delete"}},
-		{"node", "", "events", []string{"create", "patch"}},
+		{nodeComponent, "", "pods", []string{"get", "list", "watch", "delete"}},
+		{nodeComponent, "", "events", []string{"create", "patch"}},
 		{"provisioner", "snapshot.storage.k8s.io", "volumesnapshotcontents/status", []string{"get", "update", "patch"}},
 		{"provisioner", "", "persistentvolumes", []string{"get", "list", "watch", "create", "delete", "patch"}},
 		{"attacher", "storage.k8s.io", "volumeattachments/status", []string{"patch"}},
