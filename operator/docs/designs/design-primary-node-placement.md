@@ -272,7 +272,7 @@ node driver, sourced from labels on the k8s `Node` object
 
 - `topology.kubernetes.io/zone` / `.../region` — for multi-cluster
   zone/region-mapped StorageClasses.
-- `storage.simplyblock.io/pool.<pool UUID>: allowed` — one segment per pool a node is
+- `storage.simplyblock.io/storage-pool.<pool UUID>: allowed` — one segment per pool a node is
   allowed to serve, for DHCHAP-restricted pools.
 - **`simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal>: <uuid>`
   — new, added by this feature** (see below).
