@@ -18,10 +18,14 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -894,7 +899,10 @@ func (r *NodeDrainCoordinatorReconciler) ensurePDB(
 			MaxUnavailable: &maxUnavailableVal,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					drainNodeLabelKey: nodeName,
+					// Must be the value labelStoragePod writes, not the raw node
+					// name: they diverge as soon as the name needs shortening, and
+					// a selector that misses every pod protects nothing.
+					drainNodeLabelKey: sanitizeLabelValue(nodeName),
 				},
 			},
 		},
@@ -1530,10 +1538,53 @@ func isClusterRebalancing(
 	return info.Rebalancing, nil
 }
 
-// sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).
+// maxLabelValueLen is Kubernetes' limit on a label value.
+const maxLabelValueLen = 63
+
+// labelValueHashLen is how many hex characters of the digest a shortened value
+// carries. Eight is enough that two node names on one cluster colliding is not
+// a practical concern, and short enough to leave the readable prefix useful.
+const labelValueHashLen = 8
+
+// sanitizeLabelValue derives a legal label value from a Kubernetes Node name.
+//
+// A Node name may be 253 characters and a label value stops at 63, so a long
+// name cannot be used as-is: the API server rejects the object. Truncating
+// alone is not enough either. It can leave a trailing '-' or '.', which a label
+// value may not end on, and it maps every name sharing the same 63-character
+// prefix onto one value — for the drain PDB that means two nodes collapsing
+// onto a single budget, so draining the second retargets the first's
+// protection.
+//
+// A name that is already a legal label value is returned unchanged, so values
+// on existing clusters keep the form they have today. Anything else is cut to
+// leave room for a digest of the whole original name and joined to it, which
+// bounds the result, keeps it readable, and keeps distinct names distinct.
+// Deterministic: the same name yields the same value on every reconcile.
 func sanitizeLabelValue(name string) string {
-	if len(name) > 63 {
-		return name[:63]
+	if len(name) <= maxLabelValueLen && len(utilvalidation.IsValidLabelValue(name)) == 0 {
+		return name
 	}
-	return name
+
+	sum := sha256.Sum256([]byte(name))
+	suffix := hex.EncodeToString(sum[:])[:labelValueHashLen]
+
+	keep := maxLabelValueLen - len(suffix) - 1
+	prefix := name
+	if len(prefix) > keep {
+		prefix = prefix[:keep]
+	}
+	// A label value must start and end alphanumeric, and the cut may have landed
+	// on a separator. Trimming here rather than after joining keeps the digest
+	// intact.
+	prefix = strings.Trim(prefix, "-._")
+	prefix = unsafeForLabelValue.ReplaceAllString(prefix, "-")
+	prefix = strings.Trim(prefix, "-._")
+	if prefix == "" {
+		return suffix
+	}
+	return prefix + "-" + suffix
 }
+
+// unsafeForLabelValue matches every character a label value may not carry.
+var unsafeForLabelValue = regexp.MustCompile(`[^A-Za-z0-9._-]`)

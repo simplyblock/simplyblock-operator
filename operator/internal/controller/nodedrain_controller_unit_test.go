@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1312,4 +1314,63 @@ func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDra
 		Client: cl,
 		Scheme: scheme,
 	}
+}
+
+// Regression: 2026-09-09-drain-pdb-label-unbounded — ensurePDB built the PDB's
+// selector from the raw node name while labelStoragePod labeled the pods it must
+// select through sanitizeLabelValue. A Kubernetes Node name may be 253
+// characters, a label value stops at 63, so for a long name the selector value
+// was illegal and the PDB was rejected outright; sanitizeLabelValue's own
+// truncation could also leave a trailing '-' or '.', which a label value may not
+// end on, and two names sharing a 63-character prefix collapsed onto one PDB, so
+// draining the second node retargeted the first node's protection.
+func TestDrainPDBLabelIsBoundedAndMatchesPod(t *testing.T) {
+	// A realistic long name: a cloud provider's node names reach this length.
+	longNode := "ip-10-0-4-118.eu-central-1.compute.internal." + strings.Repeat("sub.", 5) + "example.com"
+	if len(longNode) <= 63 {
+		t.Fatalf("test premise: node name is only %d characters", len(longNode))
+	}
+
+	t.Run("the PDB selector value is a legal label value", func(t *testing.T) {
+		r := newNodeDrainTestReconciler(t)
+		if err := r.ensurePDB(context.Background(), "default", longNode, 0); err != nil {
+			t.Fatalf("ensurePDB returned error for a %d-character node name: %v", len(longNode), err)
+		}
+
+		var pdbList policyv1.PodDisruptionBudgetList
+		if err := r.List(context.Background(), &pdbList); err != nil {
+			t.Fatalf("list PDBs: %v", err)
+		}
+		if len(pdbList.Items) != 1 {
+			t.Fatalf("expected exactly one PDB, got %d", len(pdbList.Items))
+		}
+		value := pdbList.Items[0].Spec.Selector.MatchLabels[drainNodeLabelKey]
+		if errs := utilvalidation.IsValidLabelValue(value); len(errs) > 0 {
+			t.Fatalf("PDB selector value %q is not a legal label value: %v", value, errs)
+		}
+	})
+
+	t.Run("the PDB selector matches the label the pod is given", func(t *testing.T) {
+		r := newNodeDrainTestReconciler(t)
+		if err := r.ensurePDB(context.Background(), "default", longNode, 0); err != nil {
+			t.Fatalf("ensurePDB returned error: %v", err)
+		}
+
+		var pdbList policyv1.PodDisruptionBudgetList
+		if err := r.List(context.Background(), &pdbList); err != nil {
+			t.Fatalf("list PDBs: %v", err)
+		}
+		selector := pdbList.Items[0].Spec.Selector.MatchLabels[drainNodeLabelKey]
+		onPod := sanitizeLabelValue(longNode)
+		if selector != onPod {
+			t.Fatalf("PDB selects %q but the pod is labeled %q, so the PDB protects nothing", selector, onPod)
+		}
+	})
+
+	t.Run("two node names sharing a 63-character prefix do not collide", func(t *testing.T) {
+		prefix := strings.Repeat("a", 70)
+		if got, other := sanitizeLabelValue(prefix+"-one"), sanitizeLabelValue(prefix+"-two"); got == other {
+			t.Fatalf("distinct node names both derive the label value %q", got)
+		}
+	})
 }
