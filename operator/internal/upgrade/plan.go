@@ -39,6 +39,18 @@ const (
 	// VerbRewrite writes an object back unchanged, which is what moves it
 	// between storage representations.
 	VerbRewrite Verb = "REWRITE"
+
+	// VerbAwait waits for a condition the upgrade cannot proceed without: TLS
+	// material on disk, a Pod ready, a Service with endpoints, a CRD
+	// established. It changes nothing and it is where an upgrade spends most
+	// of its time, so a plan that left it out would not describe the wait a
+	// user is about to sit through.
+	VerbAwait Verb = "AWAIT"
+
+	// VerbVerify confirms something without changing it. §9.1 numbers three of
+	// these separately from the changes they confirm, because each is a
+	// distinct thing that can fail.
+	VerbVerify Verb = "VERIFY"
 )
 
 // Action is one change a step intends to make to one object.
@@ -55,14 +67,32 @@ type Action struct {
 	// Detail says what changes, in the form the plan prints: an old value, an
 	// arrow, and a new one.
 	Detail string
+
+	// Blocked says why this action cannot be performed yet, and is empty for
+	// one that can. It is set by the runner from the step, so a plan shows the
+	// whole of what an upgrade owes and marks the part this build cannot do.
+	Blocked string
 }
 
 // String renders one line of the plan.
+//
+// A step acting on the upgrade itself names the step rather than the subject,
+// because every one of §9.1's shares that subject and the line would otherwise
+// say Upgrade ten times and identify nothing. It is also the name --skip takes.
 func (a Action) String() string {
-	if a.Detail == "" {
-		return fmt.Sprintf("%-9s %s", a.Verb, a.Object)
+	subject := a.Object.String()
+	if a.Object.GVK.Kind == UpgradeKind {
+		subject = string(a.Rule)
 	}
-	return fmt.Sprintf("%-9s %s\n            %s", a.Verb, a.Object, a.Detail)
+
+	line := fmt.Sprintf("%-9s %s", a.Verb, subject)
+	if a.Detail != "" {
+		line += "\n            " + a.Detail
+	}
+	if a.Blocked != "" {
+		line += "\n            not yet implemented: " + a.Blocked
+	}
+	return line
 }
 
 // Plan is everything a stage would do, and everything its checks found. Both
@@ -92,6 +122,18 @@ func (p *Plan) Record(findings ...Finding) { p.Findings = append(p.Findings, fin
 // Blocked reports whether the plan's checks refuse the stage.
 func (p *Plan) Blocked() bool { return p.Findings.Blocked() }
 
+// Unimplemented reports the actions this build describes and cannot perform,
+// which is what stops a stage before it starts.
+func (p *Plan) Unimplemented() []Action {
+	var out []Action
+	for _, action := range p.Actions {
+		if action.Blocked != "" {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
 // Summary renders the counts §27 closes the plan with, one line per verb and
 // kind, sorted so two runs over one cluster print the same report.
 func (p *Plan) Summary() []string {
@@ -100,8 +142,19 @@ func (p *Plan) Summary() []string {
 		kind string
 	}
 	counts := make(map[bucket]int)
+	steps, blocked := 0, 0
 	for _, action := range p.Actions {
+		if action.Blocked != "" {
+			blocked++
+		}
+
 		kind := action.Object.GVK.Kind
+		if kind == UpgradeKind {
+			// Counting these by kind and verb says nothing: they all act on
+			// one subject, so what a reader wants is how many steps there are.
+			steps++
+			continue
+		}
 		if kind == "" {
 			kind = "object"
 		}
@@ -119,9 +172,17 @@ func (p *Plan) Summary() []string {
 		return keys[i].kind < keys[j].kind
 	})
 
-	out := make([]string, 0, len(keys))
+	out := make([]string, 0, len(keys)+2)
 	for _, key := range keys {
 		out = append(out, fmt.Sprintf("%d %s will be %s.", counts[key], plural(key.kind, counts[key]), pastTense(key.verb)))
+	}
+	if steps > 0 {
+		out = append(out, fmt.Sprintf("%d %s act on the upgrade itself.", steps, plural("step", steps)))
+	}
+	if blocked > 0 {
+		out = append(out, fmt.Sprintf(
+			"%d of these are described and not implemented, so %s cannot be run yet.",
+			blocked, p.Stage))
 	}
 	return out
 }
@@ -156,6 +217,10 @@ func pastTense(v Verb) string {
 		return "annotated"
 	case VerbRewrite:
 		return "rewritten"
+	case VerbAwait:
+		return "waited for"
+	case VerbVerify:
+		return "verified"
 	default:
 		return strings.ToLower(string(v))
 	}

@@ -89,6 +89,34 @@ type Step interface {
 	Verify(ctx context.Context, s *Scope, subject Subject) error
 }
 
+// Blocked is implemented by a step that can describe its work and cannot yet
+// perform it, because something it depends on does not exist.
+//
+// It is how the plan stays complete while the migration is being built. A step
+// that was simply absent would leave the plan short of what the upgrade owes,
+// and a user reading it would take silence for nothing to do. A step that
+// described its work and then quietly did nothing would be worse: the run would
+// report success having changed nothing.
+//
+// So a blocked step describes, and the runner refuses the stage before applying
+// anything. Refusing up front rather than at the blocked step is the point,
+// since a stage that performed its first four steps and stopped at the fifth
+// would leave the cluster halfway through an upgrade nothing can finish.
+type Blocked interface {
+	// BlockedBy says what is missing, in one sentence, naming the design
+	// section that would supply it.
+	BlockedBy() string
+}
+
+// blockedBy reports why a step cannot run, and the empty string for one that
+// can.
+func blockedBy(step Step) string {
+	if blocked, ok := step.(Blocked); ok {
+		return blocked.BlockedBy()
+	}
+	return ""
+}
+
 // Coverage is what a step has to say about the subjects of a run, which is what
 // the completeness of a migration is measured against.
 type Coverage struct {

@@ -17,6 +17,7 @@ package upgrade
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Runner executes a stage against a cluster.
@@ -161,6 +162,7 @@ func (r *Runner) planStep(ctx context.Context, step Step) ([]Action, error) {
 			return nil, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)
 		}
 		if action != nil {
+			action.Blocked = blockedBy(step)
 			actions = append(actions, *action)
 		}
 	}
@@ -233,6 +235,24 @@ func (r *Runner) Apply(ctx context.Context, step Step) error {
 	return nil
 }
 
+// refuseIfIncomplete reports the steps this build describes and cannot perform.
+func refuseIfIncomplete(steps []Step) error {
+	var missing []string
+	for _, step := range steps {
+		if reason := blockedBy(step); reason != "" {
+			missing = append(missing, fmt.Sprintf("  %s: %s", step.ID(), reason))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"this build describes %d step(s) it cannot perform, and a stage it cannot "+
+			"complete is one it must not start:\n%s",
+		len(missing), strings.Join(missing, "\n"))
+}
+
 // stepFailed reports the failure and wraps it with the step that produced it.
 func (r *Runner) stepFailed(step Step, err error) error {
 	r.Scope.Report.Outcome(step, OutcomeFailed, err.Error())
@@ -246,6 +266,15 @@ func (r *Runner) ApplyAll(ctx context.Context, stage Stage) error {
 	if err != nil {
 		return err
 	}
+
+	// Before anything is applied. A stage that performed its first four steps
+	// and stopped at the fifth would leave the cluster halfway through an
+	// upgrade nothing can finish, so a stage this build cannot complete is one
+	// it does not start.
+	if err := refuseIfIncomplete(steps); err != nil {
+		return err
+	}
+
 	r.Scope.Report.Section(stage.Describe(), len(steps))
 	for _, step := range steps {
 		if err := r.Apply(ctx, step); err != nil {
