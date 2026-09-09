@@ -43,6 +43,39 @@ func (helmRelease) Description() string {
 	return "reads the objects the deployed Helm release installed, which §12 hands over before the upgrade prunes them"
 }
 
+// address resolves where an object of the release actually lives.
+//
+// A manifest need not say. Helm renders a namespaced object without a namespace
+// and lets it inherit the release's, which is what `helm install -n` means, so
+// a reference built straight from the manifest names a namespaced object with
+// no namespace and the API server refuses to look it up. Which of the two a
+// kind is cannot be read from the manifest either, since a cluster-scoped
+// object legitimately carries no namespace, so the API server is asked.
+//
+// It reports false for a kind the cluster does not serve, which is a chart that
+// installed something whose CRD has since gone.
+func address(s *upgrade.Scope, ref release.ObjectRef, fallback string) (types.NamespacedName, bool, error) {
+	mapping, err := s.Client.RESTMapper().RESTMapping(ref.GVK.GroupKind(), ref.GVK.Version)
+	if meta.IsNoMatchError(err) {
+		return types.NamespacedName{}, false, nil
+	}
+	if err != nil {
+		return types.NamespacedName{}, false, err
+	}
+
+	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
+		// Cluster-scoped, so a namespace the manifest happened to carry names
+		// nothing and the API server refuses it.
+		return types.NamespacedName{Name: ref.Name}, true, nil
+	}
+
+	namespace := ref.Namespace
+	if namespace == "" {
+		namespace = fallback
+	}
+	return types.NamespacedName{Namespace: namespace, Name: ref.Name}, true, nil
+}
+
 // Discover reads the release and adopts every object it still holds.
 //
 // A cluster with no Helm release is not an error. §13.2 has the OLM-installed
@@ -63,14 +96,22 @@ func (h helmRelease) Discover(ctx context.Context, s *upgrade.Scope) error {
 
 	var missing int
 	for _, ref := range deployed.Sorted() {
+		key, addressable, err := address(s, ref, deployed.Namespace)
+		if err != nil {
+			return fmt.Errorf("locating %s from the release: %w", ref, err)
+		}
+		if !addressable {
+			// A kind this cluster no longer serves. There is nothing to hand
+			// over, and nothing to read it as.
+			missing++
+			continue
+		}
+
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(ref.GVK)
-
-		key := types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}
 		if err := s.Client.Get(ctx, key, obj); err != nil {
-			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-				// Deleted out of band, or a kind this cluster no longer
-				// serves. Either way there is nothing to hand over.
+			if apierrors.IsNotFound(err) {
+				// Deleted out of band, so the handover has nothing to annotate.
 				missing++
 				continue
 			}
