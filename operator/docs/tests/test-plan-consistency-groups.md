@@ -1,7 +1,7 @@
 # Test Plan: Consistency Groups
 
 Related design: [`designs/design-consistency-groups.md`](../designs/design-consistency-groups.md)
-Harness: [`operator/internal/controller`](../../internal/controller) and [`test/`](../../../test)
+Harness: [`operator/internal/controllers/replication`](../../internal/controllers/replication) and [`test/`](../../../test)
 
 Scope is the operator, the CSI driver, and the Kubernetes surface this repository builds. The control plane (`sbcli`) and SPDK are dependencies, faked at the boundary: a row asserts this operator's or driver's response to a backend answer, never the backend's own group logic. The backend's group snapshot atomicity and group-wide fail-over resolution are the control plane's to prove, and their coverage lives with the `sbcli` regression suite.
 
@@ -17,7 +17,7 @@ The attach lifecycle as single reconcile calls against a fake client, with the c
 
 ### Policy Attachment Lifecycle (§6)
 
-File: `operator/internal/controller/replicationpolicy_controller_unit_test.go`
+File: `operator/internal/controllers/replication/replicationpolicy_controller_unit_test.go`
 
 | #    | Scenario                                                                                                                               | Type     | Test |
 |------|----------------------------------------------------------------------------------------------------------------------------------------|----------|------|
@@ -66,7 +66,7 @@ The full reconcile loop against a mock backend HTTP server and a real Kubernetes
 
 ### Attachment Conditions and Events (§6, §11)
 
-File: `operator/internal/controller/replicationpolicy_controller_test.go`
+File: `operator/internal/controllers/replication/replicationpolicy_controller_test.go`
 
 | #    | Scenario                                                                                                                                                         | Type     | Test |
 |------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|

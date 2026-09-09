@@ -182,6 +182,8 @@ ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
 
 The field is a name, not a `*Ref`, because it does not resolve to a Kubernetes object. It follows the `sourceClusterID` precedent in this API group in taking a format rule on the type rather than a Kubernetes-object reference. It departs from that precedent in one way: a validating webhook confirms the named group exists in the backend at creation (§7.6), because a policy that names a nonexistent group is almost always a typo, and failing it at `kubectl apply` is cheaper than parking it in a waiting state a user has to notice. The check is point-in-time and additive: group existence is mutable (a group dies with its last member, §5.4), so the reconciler still handles a group that disappears after admission (§6). The field is mutable, and a change is a detach followed by an attach (§6), which the reconciler walks through conditions rather than performing silently.
 
+**Under consideration: `*string` rather than `string`.** The appendix declares the field as a plain `string`, where the empty value means unset. A `*string` would carry the same meaning (an empty string and a nil pointer both read as no group), but it states the field's optionality more obviously at the call site, since a nil check is unambiguous where an empty-string check is a convention. This is a spelling choice, not a behavior change, and it is not yet adopted: the appendix keeps `string` until the decision is taken.
+
 The whole type as it will be written is in [Appendix A](#appendix-a-replicationpolicy_typesgo).
 
 ### 4.2 ReplicationPolicy Status
@@ -296,7 +298,9 @@ The reconciler never blocks. Every wait is a requeue, and every held decision em
 
 ### 7.1 Location
 
-`operator/internal/controller/replicationpolicy_controller.go`, extending the existing `ReplicationPolicyReconciler`. No new controller. The attach lifecycle is folded into the existing reconcile, after the backend policy is ensured and before the slot count is computed. Every status patch sets `status.observedGeneration` to the reconciled `metadata.generation`, using an optimistic-lock patch so a status computed from an older generation does not overwrite a newer one.
+`operator/internal/controllers/replication/replicationpolicy_controller.go`, extending the existing `ReplicationPolicyReconciler`. No new controller. This work relocates the replication controller family into a domain package, `internal/controllers/replication/`, following the layout the newer controllers already use (`internal/controllers/controlplane/`) rather than the flat `internal/controller/` the replication reconcilers live in today. The `ReplicationPair`, `ReplicationPolicy`, `ReplicationSlot`, and `ReplicationOps` reconcilers, and their unit and integration test files, move together into the new package, so the consistency-group work lands in the package it belongs to rather than growing the flat one.
+
+The attach lifecycle is folded into the existing `ReplicationPolicy` reconcile, after the backend policy is ensured and before the slot count is computed. Every status patch sets `status.observedGeneration` to the reconciled `metadata.generation`, using an optimistic-lock patch so a status computed from an older generation does not overwrite a newer one.
 
 ### 7.2 Reconciliation Trigger
 
@@ -332,7 +336,7 @@ The operator reaches the backend through the generic `webapi` client (`Do(ctx, m
 
 | Method   | Endpoint                                                                 | Notes                                                                                                                                                                                         |
 |----------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`                   | Resolve a group by name. Returns the group and its id, or empty when no group of that name exists yet. Idempotent. Called by both the reconciler and the validating webhook (§7.6).            |
+| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`                   | Resolve a group by name. Returns the group and its id, or empty when no group of that name exists yet. Idempotent. Called by both the reconciler and the validating webhook (§7.6).           |
 | `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments`             | Attach a policy to a group. Body `{policy_id}`. Idempotent: attaching an already-attached policy returns success, and attaching a group already attached to a different policy returns `409`. |
 | `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments/{policy_id}` | Detach. Idempotent: detaching a policy that is not attached returns success. Stops replication and deletes the internal replication snapshots on both sides.                                  |
 
