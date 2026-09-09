@@ -49,9 +49,10 @@ running. §4.3 is that handover, and it is the path every upgraded cluster takes
 
 **The driver is a client of the control plane, and takes two things from it.**
 The endpoint and credentials it provisions volumes through reach it in the
-configuration the operator applies (§4.1), resolved from the one control plane in
-the namespace ([`design-controlplane.md`](design-controlplane.md) §3.3). The
-second is a version it must not run ahead of, which is what §5 is for.
+configuration the operator applies (§4.1), resolved from the one `ControlPlane`
+the Kubernetes cluster holds
+([`design-controlplane.md`](design-controlplane.md) §3.3). The second is a version
+it must not run ahead of, which is what §5 is for.
 
 ---
 
@@ -152,6 +153,20 @@ decides which workers can attach a volume, and the prefixed pair is ordinary pod
 placement for the one workload that provisions them. The chart carries both as
 `controller.nodeSelector` and `controller.tolerations`, which makes them state a
 running deployment has and §4.3 has to be able to express.
+
+**`sidecarImages` overrides the six CSI sidecars this deployment runs**, one
+optional field each for `csi-provisioner`, `csi-attacher`, `csi-resizer`,
+`csi-snapshotter`, and `csi-external-health-monitor-controller` on the controller
+plugin, and `node-driver-registrar` on the node plugin. Unset takes the version
+this operator release ships, which is the combination it was tested against, and
+the field exists because a deployment that pinned one through the chart keeps it
+across adoption (§4.3).
+
+**An override is bound by the same registry pattern as `spec.image`.** The node
+plugin is privileged and mounts `/dev`, `/sys`, and the kubelet's plugin
+directory from the host, so a sidecar image is a container running beside it with
+the same access, and the field that names one is worth the same restriction as the
+field that names the driver.
 
 **`enableVolumeSnapshots` decides whether snapshot support is part of this
 deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
@@ -255,13 +270,16 @@ nothing, names the object that holds the deployment in `status.message`, and emi
 name decide a tie, so that both controllers reach the same answer from the same
 list without a lock between them.
 
-**The namespace the object lives in is the one whose control plane configures it**
-(§4.1), while the driver it deploys serves every workload in the Kubernetes
-cluster, because a `StorageClass` is cluster-scoped and a claim in any namespace
-may name one ([`design-crd-model.md`](design-crd-model.md) §5). A second
-simplyblock deployment in another namespace therefore has pools whose classes
-provision through a driver holding no credentials for its control plane, which is
-§9 Q6.
+**One driver and one control plane are the same limit counted twice.** A
+Kubernetes cluster holds one `ControlPlane`
+([`design-controlplane.md`](design-controlplane.md) §3.1), so the object the
+driver is configured from is the one there is, and the namespace it happens to
+live in decides nothing. The driver it deploys serves every workload in the
+Kubernetes cluster either way, because a `StorageClass` is cluster-scoped and a
+claim in any namespace may name one
+([`design-crd-model.md`](design-crd-model.md) §5), so a driver configured from
+somewhere other than that one control plane would be a driver provisioning
+against a backend it holds no credentials for.
 
 ---
 
@@ -325,12 +343,19 @@ administrator reading the object learns whether this deployment brought snapshot
 support to the cluster or found it.
 
 **The node configuration `ConfigMap` is where the control plane reaches the
-driver.** The operator resolves the namespace's `ControlPlane` and writes its
-endpoint and the credentials for it into the configuration both plugins mount, so
-the driver is told where the backend is rather than being configured with it
-separately. A driver whose `ControlPlane` is not `Ready` is applied and waits,
-because a plugin that cannot reach a backend is the same situation as a plugin
-that has not been scheduled yet.
+driver.** The operator resolves the Kubernetes cluster's one `ControlPlane` (§3.4)
+and writes its endpoint and the credentials for it into the configuration both
+plugins mount, so the driver is told where the backend is rather than being
+configured with it separately. A driver whose `ControlPlane` is not `Ready` is
+applied and waits, because a plugin that cannot reach a backend is the same
+situation as a plugin that has not been scheduled yet.
+
+**One control plane is not one backend cluster.** The configuration carries a
+`clusters` list of `cluster_id`, `cluster_endpoint`, and `cluster_secret` triples,
+one entry per `StorageCluster` the control plane fronts, and every entry names the
+same endpoint because there is one control plane to name. So a deployment with
+several backend clusters is expressed by the list growing rather than by a second
+driver or a second control plane.
 
 **It has no `Ops` companion.** A driver is applied rather than operated: its
 version is a field, its rollout is the DaemonSet's and the StatefulSet's, and
@@ -431,7 +456,7 @@ diffs for.
 | `controller.replicas`                                                 | `spec.controllerReplicas`                                                          |
 | `controller.nodeSelector`, `controller.tolerations`                   | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                 |
 | `snapshotclass.create`, `snapshotcontroller.create`                   | `spec.enableVolumeSnapshots` (§3.1)                                                |
-| The seven sidecar image and tag values                                | Nothing, deliberately                                                              |
+| The six sidecar image and tag values                                  | `spec.sidecarImages`, written only where the release pinned one (§3.1)             |
 
 **`driverName` is read rather than defaulted, and it is the row that would cost
 the most.** The field is immutable (§3.2), so a translation that omits it defaults
@@ -440,14 +465,23 @@ the object then declares one driver while the cluster attaches volumes through
 another. Nothing later corrects it, because the correction is an edit admission
 rejects.
 
-**The sidecars are the operator's release rather than the deployment's
-configuration**, which is §3.1's argument for one image, one level out: a
-controller plugin assembled from seven independently pinned tags is a combination
-nothing tested. So the seven values do not translate, and adoption replaces the
-sidecar images with the ones this operator ships. That is a rolling restart of
-both plugins and no data-path interruption, and it is the only difference
-adoption is expected to produce, which is what lets the installer's comparison
-exclude it and nothing else. §9 Q5 is whether a pin ever has to survive.
+**A pinned sidecar survives, and one left at the chart's default does not
+become a pin.** The two are told apart by comparing the running image against the
+default of the chart version the release was rendered from, which the release's
+metadata records. A sidecar at that default translates to nothing and takes the
+version this operator ships, so a deployment that never made a choice is not
+frozen at a tag somebody stopped maintaining. A sidecar somebody moved translates
+to `spec.sidecarImages`, and stays where it was put.
+
+**Adoption therefore expects no difference at all**, which is what §12.3's capture
+and diff is written for: the installer compares the operator's output against the
+running deployment and treats any difference as a failure of the step. A default
+sidecar rolling forward to this release's version is the one exception, and it is
+visible in the spec that produced it rather than hidden in the comparison.
+
+**The snapshot controller's image is not among the six.** It is the cluster's
+rather than this deployment's, and §4.3 does not install it on a cluster that
+already serves the API, which every adopted deployment does.
 
 #### Taking the objects over
 
@@ -711,7 +745,7 @@ reconcile that takes it over in place.
 | Nothing compares driver and control-plane versions  | `VersionSkew` and the two gauges (§6)                       |
 | The RBAC and the snapshot class belong to a release | The `managed-by` label and a finalizer (§4.1, §4.3)         |
 | `helm uninstall` removes the driver                 | It leaves it running, and deleting the object removes it    |
-| Seven chart values pin the seven sidecar images     | The operator's release pins them (§4.3)                     |
+| Seven chart values pin the sidecar images           | The operator's release, or `spec.sidecarImages` (§3.1)      |
 
 **Moving the install out of the chart is not free**, and it is the same cost
 [`design-controlplane.md`](design-controlplane.md) §5.1 names for the control
@@ -722,8 +756,10 @@ reason and with the same unanswered question, which
 
 **What a user loses is a value, and what they lose it to is a field.** Each row
 above moves one setting from `values.yaml` to a spec, and §4.3's translation table
-is where the two are matched up. The seven sidecar rows are the ones with no field
-on the other side, and the last row is what that costs.
+is where the two are matched up. Every value has a field on the other side, and
+the ones that do not translate are the sidecars a release left at the chart's
+default, which move to this operator's versions rather than staying where a chart
+put them.
 
 **`helm uninstall` stops being a teardown**, which inverts what the command has
 meant. It removes the operator, and the driver keeps running because it is the
@@ -735,10 +771,17 @@ so to the person running it.
 
 ## 9. Open Questions
 
-Q1 and Q4 are settled and their numbers are retired rather than reused, since
-both are cited from review history. §3.4 is where the answer went: a Kubernetes
-cluster holds one `SimplyblockDriver`, so neither two drivers in one namespace nor
-two namespaces each holding one is a topology the derivation has to separate.
+Q1, Q4, Q5, and Q6 are settled, and their numbers are retired rather than reused
+because all four are cited from review history.
+
+§3.4 answered Q1 and Q4 together: a Kubernetes cluster holds one
+`SimplyblockDriver`, so neither two drivers in one namespace nor two namespaces
+each holding one is a topology the derivation has to separate. §3.4's closing
+paragraph answered Q6 with the matching limit on the other kind, one `ControlPlane`
+per Kubernetes cluster, which leaves the driver one object to be configured from
+and §4.1's `clusters` list to carry the backends under it. §3.1 answered Q5 with
+`spec.sidecarImages`: a pin a release made survives adoption, and a sidecar left
+at a chart default does not become one.
 
 **Q2: What removes an installed snapshot controller.** §4.1 has the operator
 install the CRDs and a controller where the cluster has none, without a controller
@@ -776,24 +819,6 @@ express that or the object declares one driver while the cluster attaches volume
 through another. So the field survives for the installations that already set it,
 and whether it stays settable for the ones that have not is what is left.
 
-**Q5: Whether a pinned sidecar image has to survive adoption.** §4.3 has the
-operator version the sidecars, so a release that pinned `image.csiAttacher` or any
-of the other six loses the pin at the handover. Whether any deployment is holding
-such a pin, and for a reason that still applies, is a fact about the installations
-that exist rather than one this document settles. The answer decides whether the
-spec grows a per-sidecar override or the seven values retire.
-
-**Q6: Which control planes configure the one driver.** §4.1 writes the endpoint
-and credentials of the namespace's `ControlPlane` into the configuration both
-plugins mount, and §3.4 makes that one namespace's configuration for the whole
-Kubernetes cluster. The format already carries more than one, since the node
-`Secret` holds a `clusters` list of `cluster_id`, `cluster_endpoint`, and
-`cluster_secret` triples, which is what the chart's `multiCluster` values render.
-So a driver configured from every `ControlPlane` in the Kubernetes cluster needs
-no format change, and what it needs instead is a decision about whether two
-simplyblock deployments in one Kubernetes cluster are a topology this product
-supports. [`design-controlplane.md`](design-controlplane.md) §12 Q1 asks the same
-thing from the other end, and the two have one answer between them.
 
 ---
 
@@ -823,6 +848,49 @@ const (
 	// running, which is when provisioning stops.
 	SimplyblockDriverPhaseUnavailable SimplyblockDriverPhase = "Unavailable"
 )
+
+// SidecarImages overrides the CSI sidecar images this deployment runs. An unset
+// field takes the version this operator release ships, which is the combination
+// it was tested against, and the fields exist so that a pin a Helm release made
+// survives the adoption of that release's deployment.
+//
+// Every field carries the registry pattern Image carries. The node plugin is
+// privileged and mounts /dev, /sys, and the kubelet's plugin directory from the
+// host, so a sidecar beside it runs with the same access.
+type SidecarImages struct {
+	// Provisioner is csi-provisioner, on the controller plugin.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Provisioner string `json:"provisioner,omitempty"`
+
+	// Attacher is csi-attacher, on the controller plugin.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Attacher string `json:"attacher,omitempty"`
+
+	// Resizer is csi-resizer, on the controller plugin.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Resizer string `json:"resizer,omitempty"`
+
+	// Snapshotter is csi-snapshotter, on the controller plugin. It is this
+	// driver's sidecar and not the cluster's snapshot-controller, whose image
+	// is not overridable here because that component belongs to the cluster.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Snapshotter string `json:"snapshotter,omitempty"`
+
+	// HealthMonitor is csi-external-health-monitor-controller, on the
+	// controller plugin.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	HealthMonitor string `json:"healthMonitor,omitempty"`
+
+	// NodeDriverRegistrar is node-driver-registrar, on the node plugin.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
+}
 
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
@@ -879,6 +947,11 @@ type SimplyblockDriverSpec struct {
 	ControllerResources corev1.ResourceRequirements `json:"controllerResources,omitempty"`
 	// +optional
 	NodeResources corev1.ResourceRequirements `json:"nodeResources,omitempty"`
+
+	// SidecarImages overrides the six CSI sidecars, one field each. Unset takes
+	// the version this operator release ships.
+	// +optional
+	SidecarImages SidecarImages `json:"sidecarImages,omitempty"`
 
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
 	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
