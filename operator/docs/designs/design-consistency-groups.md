@@ -97,6 +97,7 @@ The one operator-side attempt so far, a boolean `enableConsistencyGroup` on `Rep
 - Members are colocated on one storage node and logical volume store, which the frozen group snapshot requires, and a volume that cannot be colocated fails creation loudly, because a member off the group's store cannot be part of the frozen snapshot.
 - Membership is one-way: a volume's membership window is fixed at creation and closes permanently on removal, so generation math never reasons about gaps in one volume's history.
 - A `ReplicationPolicy` attaches to a group through one optional field, and the attach and detach lifecycle is observable through events and conditions on the policy CR.
+- A policy naming a group that does not exist is rejected at creation by a validating webhook, so a typo fails at `kubectl apply` rather than parking the policy in a waiting state, while a backend that is unreachable at admission fails open rather than blocking policy creation.
 - Every backend call the operator retries is idempotent, and every blocked or waiting reconcile state emits an event.
 
 ### Non-Goals
@@ -154,7 +155,7 @@ The one operator-side attempt so far, a boolean `enableConsistencyGroup` on `Rep
 
 **The label is the only membership source of truth.** The CSI provisioner reads it and passes it to the backend, which decides the group. The operator never writes the label and never decides membership. This keeps the two channels from disagreeing: one object (the PVC) declares membership, and one object (the `ReplicationPolicy`) declares replication.
 
-**The operator waits rather than admits.** A group exists only in the backend, so a `ReplicationPolicy` naming a group cannot have that reference resolved by a validating webhook at creation. The reconciler holds the policy in a waiting state until the backend reports the group exists, which happens when the first labeled volume is provisioned. §6 is the state machine.
+**A validating webhook checks the group at admission, and the reconciler owns the rest.** A group exists only in the backend, so the webhook (§7.6) resolves the named group through the backend API and rejects a policy that names one that does not exist, failing a typo at `kubectl apply`. The check is point-in-time: a group deleted after admission is the reconciler's concern, which holds the policy in `WaitingForGroup` until a member re-creates the group. §6 is the state machine.
 
 **Phase 2 is a second, independent driver of the same backend group.** The CSI GroupController translates a `VolumeGroupSnapshot` into a backend group snapshot call. It never creates or mutates the group, because membership and placement were fixed at provisioning. It looks the group up, verifies the resolved member set, and takes one generation.
 
@@ -172,14 +173,14 @@ No new CRD. One optional field is added to `ReplicationPolicySpec`, and the reco
 // rather than each on its own schedule. The group is named by the
 // storage.simplyblock.io/consistency-group label on its member PVCs and is
 // created by the first labeled volume, so this reference names a backend
-// object, not a Kubernetes kind: it is validated by format here and resolved
-// by the reconciler, which waits until the group exists (§6).
-// A group is replicated by at most one policy.
+// object, not a Kubernetes kind: it is validated by format here, and a
+// validating webhook rejects the policy at creation when no group of this
+// name exists (§7.6). A group is replicated by at most one policy.
 // +optional
 ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
 ```
 
-The field is a name, not a `*Ref`, because it does not resolve to a Kubernetes object. It follows the `sourceClusterID` precedent in this API group: a reference to a backend object is format-validated on the type and its existence is the reconciler's concern, not admission's. The field is mutable, and a change is a detach followed by an attach (§6), which the reconciler walks through conditions rather than performing silently.
+The field is a name, not a `*Ref`, because it does not resolve to a Kubernetes object. It follows the `sourceClusterID` precedent in this API group in taking a format rule on the type rather than a Kubernetes-object reference. It departs from that precedent in one way: a validating webhook confirms the named group exists in the backend at creation (§7.6), because a policy that names a nonexistent group is almost always a typo, and failing it at `kubectl apply` is cheaper than parking it in a waiting state a user has to notice. The check is point-in-time and additive: group existence is mutable (a group dies with its last member, §5.4), so the reconciler still handles a group that disappears after admission (§6). The field is mutable, and a change is a detach followed by an attach (§6), which the reconciler walks through conditions rather than performing silently.
 
 The whole type as it will be written is in [Appendix A](#appendix-a-replicationpolicy_typesgo).
 
@@ -251,6 +252,8 @@ Re-establishing a member is done by creating a new volume that carries the label
 
 A `ReplicationPolicy` with `spec.consistencyGroupName` set drives an attach lifecycle. The state is derived on each reconcile from the policy spec, the backend group's existence, and the backend attachment state. It is not a persisted phase field, because it is reconstructable from those three facts on any reconcile or restart.
 
+The group exists at creation, because the webhook (§7.6) rejects a policy naming a group that does not. `WaitingForGroup` is therefore not a creation-time state: it is reached only when a group is deleted under a live policy (its last member removed, §5.4), after which the reconciler holds the policy there until a member re-creates the group.
+
 ```
   spec.consistencyGroupName set
     │
@@ -277,13 +280,13 @@ A `ReplicationPolicy` with `spec.consistencyGroupName` set drives an attach life
   Detaching         ← DELETE the attachment; emit GroupDetached
 ```
 
-| Condition                                                               | Sub-phase                | Result                                                                                                                                                                                           |
-|-------------------------------------------------------------------------|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Group never created (label never applied to any volume)                 | WaitingForGroup          | Requeue indefinitely with `GroupAttachPending` every reconcile, `status.ready = false`. No error, because the group may appear later.                                                            |
-| Backend unreachable during attach                                       | Attaching                | Requeue with backoff, `GroupAttached = False` reason `BackendError`. No spec change, so the next reconcile retries the same attach.                                                              |
-| Backend group deleted while attached (last member removed)              | Attached                 | Backend auto-detaches. The reconciler observes no attachment and no group, sets `GroupAttached = False` reason `GroupGone`, and re-enters WaitingForGroup rather than erroring.                  |
-| Operator restart mid-attach                                             | any                      | State is re-derived from spec plus backend state, so the attach resumes or is confirmed idempotently (§8).                                                                                       |
-| `spec.consistencyGroupName` changed on a policy with active replication | Detaching then Attaching | Detach stops replication and deletes the internal replication snapshots on both sides, then the new group re-replicates in full. Surfaced by `GroupDetached` then `GroupAttached`, never silent. |
+| Condition                                                               | Sub-phase                | Result                                                                                                                                                                                                                                                       |
+|-------------------------------------------------------------------------|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Group deleted under a live policy (last member removed), not re-created | WaitingForGroup          | Requeue indefinitely with `GroupAttachPending` every reconcile, `status.ready = false`. No error, because a member may re-create the group. A group that never existed is rejected at admission (§7.6), so this state is only ever reached after a deletion. |
+| Backend unreachable during attach                                       | Attaching                | Requeue with backoff, `GroupAttached = False` reason `BackendError`. No spec change, so the next reconcile retries the same attach.                                                                                                                          |
+| Backend group deleted while attached (last member removed)              | Attached                 | Backend auto-detaches. The reconciler observes no attachment and no group, sets `GroupAttached = False` reason `GroupGone`, and re-enters WaitingForGroup rather than erroring.                                                                              |
+| Operator restart mid-attach                                             | any                      | State is re-derived from spec plus backend state, so the attach resumes or is confirmed idempotently (§8).                                                                                                                                                   |
+| `spec.consistencyGroupName` changed on a policy with active replication | Detaching then Attaching | Detach stops replication and deletes the internal replication snapshots on both sides, then the new group re-replicates in full. Surfaced by `GroupDetached` then `GroupAttached`, never silent.                                                             |
 
 The reconciler never blocks. Every wait is a requeue, and every held decision emits an event on the policy CR (§11).
 
@@ -309,7 +312,15 @@ The `PVCAnnotationWatcher` that creates a `ReplicationSlot` per annotated PVC is
 
 ### 7.5 RBAC
 
-No new RBAC. The reconciler already holds `replicationpolicies`, `replicationpolicies/status`, and `replicationpolicies/finalizers`, and the attach calls go to the backend over HTTP, not to the Kubernetes API. The recorder needed for events (§11) uses the manager's existing event client.
+No new RBAC. The reconciler already holds `replicationpolicies`, `replicationpolicies/status`, and `replicationpolicies/finalizers`, and the attach calls go to the backend over HTTP, not to the Kubernetes API. The recorder needed for events (§11) uses the manager's existing event client. The webhook (§7.6) needs a `ValidatingWebhookConfiguration` and the manager's existing serving certificate, not a new Kubernetes role, because it too reaches the backend over HTTP rather than the Kubernetes API.
+
+### 7.6 Validating Webhook
+
+A validating webhook on `ReplicationPolicy` create and update rejects the object when `spec.consistencyGroupName` is set and no group of that name exists in the backend. It calls the same group-resolve endpoint the reconciler uses (`GET /api/v2/clusters/{id}/consistency-groups?name={name}`, §8.1) and admits the object only when the group resolves.
+
+- **The webhook fails open.** Its `failurePolicy` is `Ignore`, so a backend that is unreachable at admission admits the policy rather than blocking every `ReplicationPolicy` apply on a backend blip. A name that slips through during an outage lands in the reconciler, which surfaces it as `WaitingForGroup` (§6, §10). The webhook makes the common typo cheap to catch, and it never becomes a cluster-wide outage amplifier.
+- **It checks existence, not readiness.** Existence at admission is what the webhook decides, and it is decided once, because an admission decision is never revisited. Whether the group is later deleted is the reconciler's concern, which is why the webhook does not replace the `GroupGone` path (§6).
+- **It imposes an ordering on a group's first use.** Because a group is born from its first labeled volume, a `ReplicationPolicy` naming a brand-new group is rejected until at least one labeled PVC has been provisioned. This matches the group-first model: the group is created first, and a policy attaches to it.
 
 ---
 
@@ -321,7 +332,7 @@ The operator reaches the backend through the generic `webapi` client (`Do(ctx, m
 
 | Method   | Endpoint                                                                 | Notes                                                                                                                                                                                         |
 |----------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`                   | Resolve a group by name. Returns the group and its id, or empty when no group of that name exists yet. Idempotent.                                                                            |
+| `GET`    | `/api/v2/clusters/{id}/consistency-groups?name={name}`                   | Resolve a group by name. Returns the group and its id, or empty when no group of that name exists yet. Idempotent. Called by both the reconciler and the validating webhook (§7.6).            |
 | `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments`             | Attach a policy to a group. Body `{policy_id}`. Idempotent: attaching an already-attached policy returns success, and attaching a group already attached to a different policy returns `409`. |
 | `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/attachments/{policy_id}` | Detach. Idempotent: detaching a policy that is not attached returns success. Stops replication and deletes the internal replication snapshots on both sides.                                  |
 
@@ -360,14 +371,16 @@ The key sits in the `storage.simplyblock.io/` family with the shipped `storage.s
 
 ## 10. Failure Modes and Fallback
 
-| Failure                                                        | Detection                                       | Behavior                                                                                                                                                                                  |
-|----------------------------------------------------------------|-------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A labeled volume cannot be placed on the group's pinned node   | Backend rejects the volume create               | The `CreateVolume` fails, the PVC stays Pending with the backend error surfaced through the provisioner. The volume does not join the group unpinned.                                     |
-| A policy names a group that no volume ever creates             | Reconciler resolves no group                    | `WaitingForGroup` indefinitely, `GroupAttachPending` on every reconcile, `status.ready = false`. Correct behavior that looks like a hang, which is why it emits an event each time (§11). |
-| Two policies name one group                                    | Backend `409` on the second attach              | `GroupAttached = False` reason `GroupAlreadyAttached`. Not retried, because it is a user error to resolve, not a transient fault.                                                         |
-| Backend unreachable during attach or detach                    | HTTP error from `webapi`                        | Requeue with backoff. The attach and detach calls are idempotent (§8), so a retry after a partial success converges.                                                                      |
-| Group deleted while a policy is attached                       | Reconciler observes no group                    | Backend auto-detaches on last-member deletion. The reconciler re-enters `WaitingForGroup` rather than erroring, so re-provisioning a member re-attaches the same policy.                  |
-| Phase 2: `VolumeGroupSnapshot` deleted after its group is gone | GroupController resolves no group or generation | Delete returns success. A missing handle is not an error, matching CSI snapshot-delete semantics.                                                                                         |
+| Failure                                                        | Detection                                       | Behavior                                                                                                                                                                     |
+|----------------------------------------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A labeled volume cannot be placed on the group's pinned node   | Backend rejects the volume create               | The `CreateVolume` fails, the PVC stays Pending with the backend error surfaced through the provisioner. The volume does not join the group unpinned.                        |
+| A policy names a group that does not exist, at creation        | Validating webhook resolves no group            | The create or update is rejected (§7.6), so a typo fails at `kubectl apply`. The reconciler never sees the object.                                                           |
+| The backend is unreachable when the webhook runs               | Webhook's backend call errors                   | The webhook fails open (`failurePolicy: Ignore`), the policy is admitted, and a bad name surfaces later as `WaitingForGroup`. A backend blip never blocks policy creation.   |
+| A group is deleted under a live policy, then never re-created  | Reconciler resolves no group                    | `WaitingForGroup`, `GroupAttachPending` on every reconcile, `status.ready = false`. Correct behavior that looks like a hang, which is why it emits an event each time (§11). |
+| Two policies name one group                                    | Backend `409` on the second attach              | `GroupAttached = False` reason `GroupAlreadyAttached`. Not retried, because it is a user error to resolve, not a transient fault.                                            |
+| Backend unreachable during attach or detach                    | HTTP error from `webapi`                        | Requeue with backoff. The attach and detach calls are idempotent (§8), so a retry after a partial success converges.                                                         |
+| Group deleted while a policy is attached                       | Reconciler observes no group                    | Backend auto-detaches on last-member deletion. The reconciler re-enters `WaitingForGroup` rather than erroring, so re-provisioning a member re-attaches the same policy.     |
+| Phase 2: `VolumeGroupSnapshot` deleted after its group is gone | GroupController resolves no group or generation | Delete returns success. A missing handle is not an error, matching CSI snapshot-delete semantics.                                                                            |
 
 Every path degrades to a defined state: a failed create leaves a Pending PVC, a missing group leaves a waiting policy, and a conflict leaves a visibly refused attachment. None leaves a group half-formed or a policy silently unreplicated.
 

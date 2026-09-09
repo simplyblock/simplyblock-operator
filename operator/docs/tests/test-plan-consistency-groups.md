@@ -46,6 +46,18 @@ File: `csi-driver/internal/csi/controller/controller_unit_test.go`
 | U-16 | PVC has no label: `consistency_group` is absent, create is unchanged                          | Negative | —    |
 | U-17 | Label present but empty value: rejected as an invalid group name, create fails cleanly        | Boundary | —    |
 
+### Validating Webhook (§7.6)
+
+File: `operator/internal/webhook/replicationpolicy_webhook_unit_test.go`
+
+| #    | Scenario                                                                                | Type     | Test |
+|------|-----------------------------------------------------------------------------------------|----------|------|
+| U-18 | `spec.consistencyGroupName` unset: admitted without a backend call                      | Negative | —    |
+| U-19 | Named group exists in the backend: admitted                                             | Positive | —    |
+| U-20 | Named group does not exist: create and update rejected with a clear message             | Negative | —    |
+| U-21 | Backend unreachable at admission: fails open, admitted (`failurePolicy: Ignore`)        | Boundary | —    |
+| U-22 | Update that leaves `consistencyGroupName` unchanged: not re-checked against the backend | Boundary | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -56,13 +68,14 @@ The full reconcile loop against a mock backend HTTP server and a real Kubernetes
 
 File: `operator/internal/controller/replicationpolicy_controller_test.go`
 
-| #    | Scenario                                                                                                                                               | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01 | Create a policy naming a not-yet-existent group, then satisfy the group: the CR walks WaitingForGroup to Attached, and `GroupAttached` lands on the CR | Positive | —    |
-| I-02 | Mutate `consistencyGroupName` on an attached policy: the CR walks Detaching then Attaching, and both events land                                       | Positive | —    |
-| I-03 | `GroupAttachPending` is emitted on every reconcile while waiting, not only on entry                                                                    | Boundary | —    |
-| I-04 | Two policies naming one group: the second reports `GroupAlreadyAttached` and does not flap                                                             | Negative | —    |
-| I-05 | Backend 5xx during attach: requeued, no condition regression, recovers when the backend returns                                                        | Negative | —    |
+| #    | Scenario                                                                                                                                                         | Type     | Test |
+|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-01 | Create a policy whose named group exists: attaches, `status.ready` true, and `GroupAttached` lands on the CR                                                     | Positive | —    |
+| I-02 | Mutate `consistencyGroupName` on an attached policy: the CR walks Detaching then Attaching, and both events land                                                 | Positive | —    |
+| I-03 | Group deleted under a live policy, then re-created by a member: the CR walks Attached to WaitingForGroup to Attached, `GroupAttachPending` emitted while waiting | Boundary | —    |
+| I-04 | Two policies naming one group: the second reports `GroupAlreadyAttached` and does not flap                                                                       | Negative | —    |
+| I-05 | Backend 5xx during attach: requeued, no condition regression, recovers when the backend returns                                                                  | Negative | —    |
+| I-06 | Webhook (registered in envtest) rejects a policy naming a nonexistent group at create, and admits one whose group exists                                         | Negative | —    |
 
 ---
 
@@ -145,7 +158,7 @@ Testable only once P0-5 enables the `CSIVolumeGroupSnapshot` feature gate and th
 | Group size           | 1 member, 3+ members                                    | E-01, E-04               | very large groups (subsystem slot exhaustion)         |
 | Namespace scope      | namespaced StorageClass (subsystem sharing), standalone | U-15, E-01               | subsystem slot exhaustion mid-group                   |
 | Membership change    | join at create, one-way removal, death with last member | E-01, E-03, E-08         | re-establish via a labeled clone                      |
-| Attachment lifecycle | wait, attach, detach, change, conflict, restart         | U-02 … U-14, I-01 … I-05 | —                                                     |
+| Attachment lifecycle | wait, attach, detach, change, conflict, restart         | U-02 … U-22, I-01 … I-05 | —                                                     |
 | Cluster count        | single cluster, cross-cluster fail-over and fail-back   | E-06, E-07               | more than two clusters                                |
 | Backend faults       | 409 conflict, 5xx, unreachable, 404 on delete           | U-05, U-10, U-14, I-05   | partial multi-member snapshot failure (backend-owned) |
 
@@ -155,8 +168,8 @@ Testable only once P0-5 enables the `CSIVolumeGroupSnapshot` feature gate and th
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 17        | 0       | U-01 … U-17 |
-| Integration | 5         | 0       | I-01 … I-05 |
+| Unit        | 22        | 0       | U-01 … U-22 |
+| Integration | 6         | 0       | I-01 … I-06 |
 | E2E         | 8         | 0       | E-01 … E-08 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
@@ -166,11 +179,11 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 
 ## 8. What Is Not Yet Covered
 
-| #                 | Gap                                                                                           | Reason                                                                                                        |
-|-------------------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| U-01 … U-17       | The attach lifecycle and the provisioner label handling                                       | Phase 1 not implemented, so the `spec.consistencyGroupName` field and the provisioner change do not exist yet |
-| I-01 … I-05       | Attachment conditions and events under `envtest`                                              | Depends on the reconciler writing conditions and events, which this design adds                               |
-| E-01 … E-08       | Membership, placement, cross-volume consistency, fail-over, and group death on a live cluster | Depends on the backend group-first REST surface (P0-1, P0-2), which is not shipped                            |
-| E-P2-01 … E-P2-05 | The `VolumeGroupSnapshot` path                                                                | Phase 2: the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-5) are not enabled         |
-| M-02              | Concurrent-first-volume convergence                                                           | The convergence is the backend ensure-group contract, so testing it end-to-end waits on P0-2                  |
-| —                 | Asymmetric node sizes, subsystem slot exhaustion mid-group, more than two clusters            | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                   |
+| #                 | Gap                                                                                           | Reason                                                                                                                      |
+|-------------------|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| U-01 … U-22       | The attach lifecycle, the provisioner label handling, and the validating webhook              | Phase 1 not implemented, so the `spec.consistencyGroupName` field, the provisioner change, and the webhook do not exist yet |
+| I-01 … I-06       | Attachment conditions and events, and the webhook, under `envtest`                            | Depends on the reconciler writing conditions and events, which this design adds                                             |
+| E-01 … E-08       | Membership, placement, cross-volume consistency, fail-over, and group death on a live cluster | Depends on the backend group-first REST surface (P0-1, P0-2), which is not shipped                                          |
+| E-P2-01 … E-P2-05 | The `VolumeGroupSnapshot` path                                                                | Phase 2: the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-5) are not enabled                       |
+| M-02              | Concurrent-first-volume convergence                                                           | The convergence is the backend ensure-group contract, so testing it end-to-end waits on P0-2                                |
+| —                 | Asymmetric node sizes, subsystem slot exhaustion mid-group, more than two clusters            | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                                 |
