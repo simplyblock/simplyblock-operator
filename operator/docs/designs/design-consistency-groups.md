@@ -182,7 +182,7 @@ backend, atomically inside volume create:
 
 ### 4.2 Placement is two-tier
 
-The frozen group snapshot operates on one logical volume store, so every member must live on one store on one node.
+The frozen group snapshot operates on one logical volume store, so every member must live on one lvstore on one node.
 
 - **Node and logical volume store colocation is mandatory.** The first member pins the group. A later labeled volume is placed on the pinned node, and if it cannot be placed there the volume create fails. It does not join the group unpinned, and it does not land on another node, because the frozen group snapshot operates on one store and cannot reach a member placed off it.
 - **NVMe subsystem colocation is best effort.** A member shares the group's subsystem when the StorageClass is namespaced (`max_namespace_per_subsys` greater than one) and the subsystem has a free namespace slot. When it does not, the member is placed on the pinned node in its own subsystem. Subsystem sharing is an efficiency, not a correctness requirement.
@@ -258,7 +258,7 @@ On the Kubernetes side, one generation is one `VolumeGroupSnapshot`, and `groupS
 
 ### 7.1 Restore is per member
 
-The CSI specification has no group-restore verb. A `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member (§5.3), and each is an ordinary `dataSource` for a new PVC. Cloning a group is therefore N per-member clones, one for each member snapshot of one generation. This matches the reference implementation (Ceph-CSI restores a group's members individually), and it is the only path the Kubernetes API offers.
+The CSI specification has no group-restore verb. A `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member (§5.3), and each is an ordinary `dataSource` for a new PVC. Cloning a group is therefore N per-member clones, one for each member snapshot of one generation. Restoring a group's members individually is what the CSI specification defines, and it is the only path the Kubernetes API offers.
 
 The restored set is crash-consistent without any group machinery, because the source generation was one frozen cut. The clones do not need to be a group to be mutually consistent. They need to be a group only if the user intends to keep snapshotting them together going forward.
 
@@ -348,7 +348,7 @@ A `db-group` has three members on one store. A `VolumeGroupSnapshot` selects the
 
 ### 11.2 Clone the group from generation 4
 
-The user creates three PVCs, each `dataSource` a member `VolumeSnapshot` of generation 4. The three clones are mutually crash-consistent because generation 4 was one frozen cut. If the PVCs are labeled `db-group-restored`, they form a new group pinned wherever the first clone lands; if unlabeled, they are three consistent but independent volumes. There is no single group-restore call in Kubernetes, matching Ceph-CSI. The headless `sbctl consistency-group clone db-group 4 --into db-group-restored` is the one-call alternative (Open Question 3).
+The user creates three PVCs, each `dataSource` a member `VolumeSnapshot` of generation 4. The three clones are mutually crash-consistent because generation 4 was one frozen cut. If the PVCs are labeled `db-group-restored`, they form a new group pinned wherever the first clone lands; if unlabeled, they are three consistent but independent volumes. There is no single group-restore call in Kubernetes, per the CSI specification. The headless `sbctl consistency-group clone db-group 4 --into db-group-restored` is the one-call alternative (Open Question 3).
 
 ### 11.3 A member leaves after generation 4
 
@@ -360,7 +360,7 @@ This is the forbidden path (§8.2), included to show what the design prevents. I
 
 ### 11.5 Partial failure during a group snapshot
 
-`bdev_lvol_snapshot_group` fails on the third member. The backend unfreezes, rolls back the two snapshots already taken, and does not advance `group_seq`. No partial generation exists, and the `VolumeGroupSnapshot` reports not-ready with the error. This all-or-nothing contract matches the CSI group-snapshot requirement and Ceph-CSI's behavior, and the existing `create_group_snapshot` already implements the rollback.
+`bdev_lvol_snapshot_group` fails on the third member. The backend unfreezes, rolls back the two snapshots already taken, and does not advance `group_seq`. No partial generation exists, and the `VolumeGroupSnapshot` reports not-ready with the error. This all-or-nothing contract is what the CSI group-snapshot requirement demands, and the existing `create_group_snapshot` already implements the rollback.
 
 ### 11.6 Selector drift
 
