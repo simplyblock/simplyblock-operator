@@ -73,18 +73,15 @@ func TestPositioned_AClusterServingOnlyTheOldVersionIsForUpgrade(t *testing.T) {
 	if position.Stage != StageUpgrade {
 		t.Fatalf("stage = %q, want %q", position.Stage, StageUpgrade)
 	}
-	// The reason says where the cluster stands, not what is wrong with it.
-	// Serving one version is where every installation starts, and applying
-	// those CRDs is what the upgrade is for, so reporting it as a deficiency
-	// describes the upgrade's own premise as a finding.
-	if !strings.Contains(position.Because, "where an installation stands") {
-		t.Errorf("the reason does not say this is the starting state: %q", position.Because)
-	}
-	for _, wrong := range []string{"cannot", "no converting kind", "not able"} {
-		if strings.Contains(position.Because, wrong) {
-			t.Errorf("the reason reads as a fault rather than a position: %q", position.Because)
-		}
-	}
+	// The reason names both versions and how many kinds move between them, so
+	// a user knows the size of what is ahead.
+	saysAll(t, position.Because, "7", VersionOld, VersionNew)
+
+	// And it does not read as a fault. Serving one version is where every
+	// installation starts, and applying those CRDs is what the upgrade is for,
+	// so reporting it as an inability describes the upgrade's own premise as a
+	// finding.
+	saysNone(t, position.Because, "cannot", "unable", "not able", "fail")
 	if len(position.Pending) != len(ConvertingKinds()) {
 		t.Errorf("pending = %v, want every converting kind", position.Pending)
 	}
@@ -100,6 +97,35 @@ func TestPositioned_AClusterServingBothIsForMigrate(t *testing.T) {
 	}
 	if len(position.Pending) != 0 {
 		t.Errorf("pending = %v, want none", position.Pending)
+	}
+	saysAll(t, position.Because, "7", VersionNew)
+	saysNone(t, position.Because, "cannot", "unable", "not able", "fail")
+}
+
+// saysAll asserts what a reason has to carry. It checks the facts rather than
+// the sentence, because the sentence is user-facing prose and a test that
+// pinned it would block every improvement to it.
+func saysAll(t *testing.T, reason string, want ...string) {
+	t.Helper()
+
+	for _, fragment := range want {
+		if !strings.Contains(reason, fragment) {
+			t.Errorf("the reason does not carry %q: %q", fragment, reason)
+		}
+	}
+}
+
+// saysNone asserts what a reason must not read as. Serving one version is a
+// position rather than an inability, and a report that calls it one tells a
+// user their healthy cluster is broken.
+func saysNone(t *testing.T, reason string, unwanted ...string) {
+	t.Helper()
+
+	for _, fragment := range unwanted {
+		if strings.Contains(strings.ToLower(reason), fragment) {
+			t.Errorf("the reason reads as a fault rather than a position, carrying %q: %q",
+				fragment, reason)
+		}
 	}
 }
 
@@ -120,13 +146,11 @@ func TestPositioned_APartiallyAppliedSetIsForUpgradeAndSaysSo(t *testing.T) {
 	if !position.Partial() {
 		t.Fatal("a set applied to one kind and not the rest was not reported as partial")
 	}
-	// This one is a fault, and says so: a set applied to some kinds and not
-	// others is not a state any installation passes through on purpose.
-	for _, want := range []string{"half-applied", "one kind at each version"} {
-		if !strings.Contains(position.Because, want) {
-			t.Errorf("the reason does not say what is wrong with it: %q", position.Because)
-		}
-	}
+	// This one is a fault, and names itself as one: a set applied to some kinds
+	// and not others is not a state any installation passes through on
+	// purpose. Both counts are there, since which half is which is the thing a
+	// user needs.
+	saysAll(t, position.Because, "artial", "1", "7", "6", VersionNew)
 }
 
 func TestPositioned_AnAbsentCRDCountsAsNotYetUpgraded(t *testing.T) {

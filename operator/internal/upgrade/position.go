@@ -115,7 +115,7 @@ func Positioned(ctx context.Context, s *Scope) (Position, error) {
 	case len(position.Pending) == 0:
 		position.Stage = StageMigrate
 		position.Because = fmt.Sprintf(
-			"all %d kinds that gain a %s serve it, so the API upgrade is done and the resource model is what is left to change",
+			"Upgrade finished: %d kinds have been upgraded to %s.",
 			total, VersionNew)
 
 	case position.Partial():
@@ -123,8 +123,7 @@ func Positioned(ctx context.Context, s *Scope) (Position, error) {
 		// that would finish applying the set.
 		position.Stage = StageUpgrade
 		position.Because = fmt.Sprintf(
-			"%d of the %d kinds that gain a %s serve it and %d do not, which is a half-applied CRD set: "+
-				"it leaves the operator reconciling one kind at each version",
+			"Partial upgrade: %d of %d kinds are already upgraded to %s with %d kinds outstanding.",
 			len(position.Converted), total, VersionNew, len(position.Pending))
 
 	default:
@@ -133,9 +132,8 @@ func Positioned(ctx context.Context, s *Scope) (Position, error) {
 		// those CRDs is what the upgrade is for.
 		position.Stage = StageUpgrade
 		position.Because = fmt.Sprintf(
-			"the %d kinds that gain a %s serve %s alone, which is where an installation stands "+
-				"until the upgrade applies the new CRDs",
-			total, VersionNew, VersionOld)
+			"Upgrade: %d kinds will be upgraded from %s to %s. New CRDs will be applied to the cluster.",
+			total, VersionOld, VersionNew)
 	}
 	return position, nil
 }
