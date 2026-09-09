@@ -57,8 +57,20 @@ func New(out io.Writer) *Reporter {
 	return r
 }
 
-func (r *Reporter) Stage(stage upgrade.Stage, steps int) {
-	r.program.Send(stageMsg{stage: stage, steps: steps})
+func (r *Reporter) Stage(stage upgrade.Stage) {
+	r.program.Send(stageMsg{stage: stage})
+}
+
+func (r *Reporter) Section(label string, total int) {
+	r.program.Send(sectionMsg{label: label, total: total})
+}
+
+func (r *Reporter) Work(total int) {
+	r.program.Send(workMsg{total: total})
+}
+
+func (r *Reporter) Item(label string) {
+	r.program.Send(itemMsg{label: label})
 }
 
 func (r *Reporter) Phase(phase upgrade.Phase, steps int) {
@@ -118,11 +130,20 @@ func (r *Reporter) Close() error {
 type (
 	stageMsg struct {
 		stage upgrade.Stage
-		steps int
+	}
+	sectionMsg struct {
+		label string
+		total int
 	}
 	phaseMsg struct {
 		phase upgrade.Phase
 		steps int
+	}
+	workMsg struct {
+		total int
+	}
+	itemMsg struct {
+		label string
 	}
 	ruleMsg struct {
 		id          upgrade.ID
@@ -144,14 +165,23 @@ type model struct {
 	spinner  spinner.Model
 	progress progress.Model
 
-	stage upgrade.Stage
-	phase upgrade.Phase
+	stage   upgrade.Stage
+	phase   upgrade.Phase
+	section string
 
+	// total and completed size and fill the section's bar.
 	total     int
 	completed int
 
 	current     upgrade.ID
 	description string
+
+	// item, itemsTotal, and itemsDone are the rule's own walk. They are shown
+	// beside the spinner rather than as a second bar, because a run that
+	// nests two bars is one where neither is legible.
+	item       string
+	itemsTotal int
+	itemsDone  int
 
 	width int
 }
@@ -187,28 +217,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case stageMsg:
-		m.stage, m.total, m.completed = msg.stage, msg.steps, 0
-		m.phase, m.current = "", ""
+		m.stage = msg.stage
+		m.phase, m.section, m.current = "", "", ""
+		m.total, m.completed = 0, 0
 		return m, tea.Batch(
 			tea.Println(styleStage.Render(fmt.Sprintf("── %s ──", msg.stage))),
 			m.progress.SetPercent(0),
 		)
 
-	case phaseMsg:
-		m.phase, m.total, m.completed = msg.phase, msg.steps, 0
-		m.current = ""
+	case sectionMsg:
+		m.section, m.total, m.completed = msg.label, msg.total, 0
+		m.current, m.item = "", ""
 		return m, tea.Batch(
-			tea.Println(stylePhase.Render(fmt.Sprintf("  %s", msg.phase))),
+			tea.Println(stylePhase.Render(fmt.Sprintf("  %s", msg.label))),
+			m.progress.SetPercent(0),
+		)
+
+	case phaseMsg:
+		m.phase, m.section = msg.phase, msg.phase.Describe()
+		m.total, m.completed = msg.steps, 0
+		m.current, m.item = "", ""
+		return m, tea.Batch(
+			tea.Println(stylePhase.Render(fmt.Sprintf("  %s", msg.phase.Describe()))),
 			m.progress.SetPercent(0),
 		)
 
 	case ruleMsg:
 		m.current, m.description = msg.id, msg.description
+		m.item, m.itemsTotal, m.itemsDone = "", 0, 0
+		return m, nil
+
+	case workMsg:
+		m.itemsTotal, m.itemsDone = msg.total, 0
+		return m, nil
+
+	case itemMsg:
+		m.item = msg.label
+		m.itemsDone++
 		return m, nil
 
 	case outcomeMsg:
 		m.completed++
-		m.current = ""
+		m.current, m.item = "", ""
+		m.itemsTotal, m.itemsDone = 0, 0
 		return m, tea.Batch(
 			tea.Println(renderOutcome(msg)),
 			m.progress.SetPercent(m.fraction()),
@@ -241,20 +292,42 @@ func (m model) fraction() float64 {
 	return float64(m.completed) / float64(m.total)
 }
 
+// View is the live part: one line naming the activity, and one bar under it.
+//
+// The activity is the section rather than the rule, because a section is a
+// sentence a user recognizes and a rule identity is a slug this tool made up.
+// The rule and whatever it is walking follow it, dimmed, and they are what
+// changes often enough to tell a slow run from a hung one.
 func (m model) View() string {
-	if m.total <= 0 && m.current == "" {
+	if m.section == "" && m.current == "" {
 		return ""
 	}
 
 	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s%s\n",
+		m.spinner.View(), styleSection.Render(m.section+"…"), styleDim.Render(m.detail()))
 	if m.total > 0 {
-		fmt.Fprintf(&b, "%s %d/%d\n", m.progress.View(), m.completed, m.total)
-	}
-	if m.current != "" {
-		fmt.Fprintf(&b, "%s %s %s\n",
-			m.spinner.View(), styleRule.Render(string(m.current)), styleDim.Render(m.description))
+		fmt.Fprintf(&b, "  %s %d/%d\n", m.progress.View(), m.completed, m.total)
 	}
 	return b.String()
+}
+
+// detail is what follows the activity: the rule that is running, and the item
+// it is on. On a large cluster this is the only thing that moves for minutes at
+// a time, which is what makes a slow run distinguishable from a hung one.
+func (m model) detail() string {
+	if m.current == "" {
+		return ""
+	}
+
+	switch {
+	case m.item != "" && m.itemsTotal > 0:
+		return fmt.Sprintf("  %s  %d/%d %s", m.current, m.itemsDone, m.itemsTotal, m.item)
+	case m.item != "":
+		return fmt.Sprintf("  %s  %s", m.current, m.item)
+	default:
+		return fmt.Sprintf("  %s", m.current)
+	}
 }
 
 // renderOutcome is the line an outcome leaves in the scrollback.
@@ -308,8 +381,8 @@ func styleFinding(finding upgrade.Finding) string {
 // well as a dark one.
 var (
 	styleStage   = lipgloss.NewStyle().Bold(true)
+	styleSection = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
 	stylePhase   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
-	styleRule    = lipgloss.NewStyle().Bold(true)
 	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "241"})
 	styleSpinner = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
 	styleDone    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "42"})

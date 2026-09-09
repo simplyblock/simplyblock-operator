@@ -111,5 +111,34 @@ func MigrateGraph(hooks map[Phase]PhaseEnter) statemachine.Config[Phase] {
 	return statemachine.Config[Phase]{Initial: PhasePending, States: states}
 }
 
+// Describe is the sentence a progress view narrates while the phase runs, in
+// the same voice as [Stage.Describe].
+func (p Phase) Describe() string {
+	switch p {
+	case PhasePending:
+		return "Starting"
+	case PhaseValidating:
+		return "Verifying the resource graph"
+	case PhaseTransforming:
+		return "Copying the renamed and absorbed kinds"
+	case PhaseOwnership:
+		return "Reparenting what the retired owners hold"
+	case PhaseHandles:
+		return "Normalizing volume handles"
+	case PhaseDeleting:
+		return "Removing what has been replaced"
+	case PhaseRewriting:
+		return "Rewriting objects into the new storage version"
+	case PhaseVerifying:
+		return "Verifying the migration"
+	case PhaseCompleted:
+		return "Completed"
+	case PhaseFailed:
+		return "Failed"
+	default:
+		return string(p)
+	}
+}
+
 // Terminal reports whether a phase ends the walk.
 func (p Phase) Terminal() bool { return p == PhaseCompleted || p == PhaseFailed }

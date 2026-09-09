@@ -8,6 +8,7 @@ package discover
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,14 +29,14 @@ type Kind struct {
 	// tests.
 	List client.ObjectList
 
-	// Namespaced lists within the installation's namespace. Every kind in the
-	// storage.simplyblock.io group is namespaced today, and discovery is
-	// namespace-wide rather than cluster-wide because a cluster may hold
-	// several independent installations (§17).
-	//
-	// A cluster-scoped kind, and a core kind an installation only partly owns,
-	// lists across the cluster and narrows with Labels instead.
+	// Namespaced says the kind itself is namespaced. Every kind in the
+	// storage.simplyblock.io group is today.
 	Namespaced bool
+
+	// View decides which of the scope's two graphs the objects go into, and
+	// whether a namespaced kind is narrowed to the installation. It defaults to
+	// [ViewInstallation], which is what all but two kinds want.
+	View View
 
 	// Labels narrows a cluster-wide list to what this installation owns. It is
 	// how the worker Nodes are found without reading every Node in the cluster.
@@ -45,9 +46,40 @@ type Kind struct {
 	Needs []upgrade.ID
 }
 
+// View is which of the scope's graphs a discoverer fills.
+type View int
+
+const (
+	// ViewInstallation reads the installation: a namespaced kind is narrowed to
+	// the scope's namespace, and the objects go into the graph every check
+	// reads. It is the default because a cluster may hold several independent
+	// installations, and almost every question is about this one (§17).
+	ViewInstallation View = iota
+
+	// ViewClusterWide reads a namespaced kind across every namespace, into
+	// [upgrade.Scope.ClusterWide]. Only the kinds whose derived identifiers
+	// escape a namespace need it, and reading one costs a list against every
+	// namespace in the cluster, so a kind is registered for it because a named
+	// check cannot answer its question otherwise.
+	ViewClusterWide
+)
+
 func (k Kind) ID() upgrade.ID         { return k.RuleID }
 func (k Kind) Description() string    { return k.Summary }
 func (k Kind) Requires() []upgrade.ID { return k.Needs }
+
+// describe says what is about to be read, in the form a report prints while it
+// waits: the kind, and the namespace it is narrowed to.
+func (k Kind) describe(s *upgrade.Scope) string {
+	kind := strings.TrimSuffix(fmt.Sprintf("%T", k.List), "List")
+	if idx := strings.LastIndex(kind, "."); idx >= 0 {
+		kind = kind[idx+1:]
+	}
+	if k.Namespaced && k.View == ViewInstallation {
+		return kind + " in " + s.Namespace
+	}
+	return kind + " across the cluster"
+}
 
 // Discover lists the kind and adopts what it found into the graph.
 //
@@ -62,13 +94,23 @@ func (k Kind) Discover(ctx context.Context, s *upgrade.Scope) error {
 		return fmt.Errorf("%s: %T is not a list", k.RuleID, k.List)
 	}
 
+	if k.View == ViewClusterWide && !k.Namespaced {
+		// A cluster-scoped kind has no namespaces to be read across, so the
+		// declaration is a mistake rather than a wider read.
+		return fmt.Errorf("%s asks for a cluster-wide view of a kind that is not namespaced", k.RuleID)
+	}
+
 	var opts []client.ListOption
-	if k.Namespaced {
+	if k.Namespaced && k.View == ViewInstallation {
 		opts = append(opts, client.InNamespace(s.Namespace))
 	}
 	if len(k.Labels) > 0 {
 		opts = append(opts, client.MatchingLabels(k.Labels))
 	}
+
+	// The kind is named before the read rather than after, because a list
+	// against a large cluster is exactly the wait this reports through.
+	s.Report.Item(k.describe(s))
 
 	if err := s.Client.List(ctx, list, opts...); err != nil {
 		if meta.IsNoMatchError(err) {
@@ -91,6 +133,10 @@ func (k Kind) Discover(ctx context.Context, s *upgrade.Scope) error {
 		}
 		objects = append(objects, obj)
 	}
-	s.Adopt(objects...)
+	if k.View == ViewClusterWide {
+		s.AdoptClusterWide(objects...)
+	} else {
+		s.Adopt(objects...)
+	}
 	return nil
 }

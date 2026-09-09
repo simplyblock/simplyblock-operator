@@ -14,6 +14,7 @@ package upgrade
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -41,18 +42,31 @@ const (
 // in parallel, and a terminal implementation renders from a goroutine of its
 // own.
 type Reporter interface {
-	// Stage announces the command that started and how many steps it holds, so
-	// a reporter can size a progress bar rather than guess at one. A steps
-	// count of zero means the stage's work is not countable in advance, which
-	// is what the preflight is.
-	Stage(stage Stage, steps int)
+	// Stage announces the command that started.
+	Stage(stage Stage)
+
+	// Section announces a counted group of rules about to run: the discoverers
+	// of a stage, its checks, its steps. The total is what a reporter sizes a
+	// progress bar from, and it is known before the group starts because a
+	// catalog is a list.
+	Section(label string, total int)
 
 	// Phase announces a migrate state being entered, and how many steps are
-	// registered in it (§23).
+	// registered in it (§23). It is a section whose label is a phase.
 	Phase(phase Phase, steps int)
 
 	// Rule announces that a rule is about to run.
 	Rule(rule Rule)
+
+	// Work announces how many units the running rule will process, for one
+	// whose own walk is long enough to watch. A rule that does not call it is
+	// reported as running rather than as being partway through.
+	Work(total int)
+
+	// Item reports one of those units done, naming what it was. On a large
+	// cluster this is the only output for minutes at a time, so the label says
+	// what is being read or checked rather than merely that something is.
+	Item(label string)
 
 	// Outcome announces how it finished. The detail says why, for a rule that
 	// was skipped or refused, and is empty otherwise.
@@ -81,9 +95,12 @@ type Reporter interface {
 // when none was supplied, so a rule never has to guard against a nil reporter.
 type DiscardReporter struct{}
 
-func (DiscardReporter) Stage(Stage, int)              {}
+func (DiscardReporter) Stage(Stage)                   {}
+func (DiscardReporter) Section(string, int)           {}
 func (DiscardReporter) Phase(Phase, int)              {}
 func (DiscardReporter) Rule(Rule)                     {}
+func (DiscardReporter) Work(int)                      {}
+func (DiscardReporter) Item(string)                   {}
 func (DiscardReporter) Outcome(Rule, Outcome, string) {}
 func (DiscardReporter) Findings(Findings)             {}
 func (DiscardReporter) Action(Action)                 {}
@@ -98,29 +115,44 @@ type TextReporter struct {
 	// Out is where the report goes.
 	Out io.Writer
 
-	// Verbose prints every rule as it starts, rather than only the ones with
-	// something to say. It is what a user turns on when a run is taking longer
-	// than they expected.
+	// Verbose prints every rule as it starts and every item it walks, rather
+	// than only the ones with something to say. It is what a user turns on when
+	// a run is taking longer than they expected.
 	Verbose bool
 
 	mu sync.Mutex
+
+	// done and total track the current section, so each line can carry its
+	// position. A log cannot redraw a bar, and a reader scrolling one wants to
+	// know how far in they are.
+	done  int
+	total int
 }
 
 // NewTextReporter builds a reporter over a writer.
 func NewTextReporter(out io.Writer) *TextReporter { return &TextReporter{Out: out} }
 
-func (r *TextReporter) Stage(stage Stage, steps int) {
+func (r *TextReporter) Stage(stage Stage) {
 	r.line("")
-	if steps > 0 {
-		r.line("── %s, %d steps ──────────────────────────────", stage, steps)
-		return
-	}
 	r.line("── %s ────────────────────────────────────────", stage)
+}
+
+// Section prints the group and its size. A log is read after the fact, so what
+// it needs is the count the group turned out to hold rather than a bar.
+func (r *TextReporter) Section(label string, total int) {
+	r.line("")
+	r.line("  %s (%d)", label, total)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.done, r.total = 0, total
 }
 
 func (r *TextReporter) Phase(phase Phase, steps int) {
 	r.line("")
-	r.line("  %s (%d steps)", phase, steps)
+	r.line("  %s (%d)", phase.Describe(), steps)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.done, r.total = 0, steps
 }
 
 func (r *TextReporter) Rule(rule Rule) {
@@ -129,15 +161,43 @@ func (r *TextReporter) Rule(rule Rule) {
 	}
 }
 
+// Work is not printed. A count of the units a rule is about to walk is what
+// sizes a bar, and a log line saying a number is about to be counted to says
+// nothing a reader can act on.
+func (r *TextReporter) Work(int) {}
+
+// Item prints only when asked for. It fires once per object on a large cluster,
+// and a log with a line per object is one nobody reads.
+func (r *TextReporter) Item(label string) {
+	if r.Verbose {
+		r.line("    · %s", label)
+	}
+}
+
 func (r *TextReporter) Outcome(rule Rule, outcome Outcome, detail string) {
+	position := r.advance()
+
 	switch {
 	case outcome == OutcomeDone && !r.Verbose:
 		return
 	case detail == "":
-		r.line("  %s %s", mark(outcome), rule.ID())
+		r.line("  %s %s %s", position, mark(outcome), rule.ID())
 	default:
-		r.line("  %s %s: %s", mark(outcome), rule.ID(), detail)
+		r.line("  %s %s %s: %s", position, mark(outcome), rule.ID(), detail)
 	}
+}
+
+// advance counts one rule done and renders its position in the section, which
+// is what a log has in place of a bar.
+func (r *TextReporter) advance() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.done++
+	if r.total <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("[%*d/%d]", len(strconv.Itoa(r.total)), r.done, r.total)
 }
 
 func (r *TextReporter) Findings(findings Findings) {

@@ -44,17 +44,40 @@ func (r *Runner) Discover(ctx context.Context) error {
 		return err
 	}
 
+	r.Scope.Report.Section("Collecting simplyblock Kubernetes resources", len(discoverers))
+
 	for _, discoverer := range discoverers {
 		r.Scope.Report.Rule(discoverer)
+
+		// The count before and after is what a discoverer reports having
+		// found. Asking the graph is cheaper than having every discoverer
+		// return a number it would only be used to print.
+		before := r.Scope.Graph.Len() + r.Scope.ClusterWide.Len()
 		if err := discoverer.Discover(ctx, r.Scope); err != nil {
 			r.Scope.Report.Outcome(discoverer, OutcomeFailed, err.Error())
 			return fmt.Errorf("discovery %q: %w", discoverer.ID(), err)
 		}
-		r.Scope.Report.Outcome(discoverer, OutcomeDone, "")
+		found := r.Scope.Graph.Len() + r.Scope.ClusterWide.Len() - before
+		r.Scope.Report.Outcome(discoverer, OutcomeDone, objectCount(found))
 	}
-	r.Scope.Report.Progress("discovered %d objects across %d kinds",
+
+	r.Scope.Report.Progress("%d objects across %d kinds",
 		r.Scope.Graph.Len(), len(r.Scope.Graph.Kinds()))
 	return nil
+}
+
+// objectCount is how a discoverer's result reads in a report. A kind with no
+// objects says so rather than saying nothing, because on a cluster where a
+// check found nothing the next question is always whether anything was read.
+func objectCount(n int) string {
+	switch n {
+	case 0:
+		return "no objects"
+	case 1:
+		return "1 object"
+	default:
+		return fmt.Sprintf("%d objects", n)
+	}
 }
 
 // Check runs the stage's checks and returns everything they found. It reports
@@ -62,8 +85,11 @@ func (r *Runner) Discover(ctx context.Context) error {
 // outcome from a finding: a check that could not read the cluster has proven
 // nothing about it, and the run stops whatever the severities say.
 func (r *Runner) Check(ctx context.Context, stage Stage) (Findings, error) {
+	checks := r.Catalog.ChecksFor(stage, r.Scope.Options)
+	r.Scope.Report.Section("Verifying resources", len(checks))
+
 	var findings Findings
-	for _, check := range r.Catalog.ChecksFor(stage, r.Scope.Options) {
+	for _, check := range checks {
 		r.Scope.Report.Rule(check)
 
 		found, err := check.Check(ctx, r.Scope)
@@ -178,7 +204,7 @@ func (r *Runner) ApplyAll(ctx context.Context, stage Stage) error {
 	if err != nil {
 		return err
 	}
-	r.Scope.Report.Stage(stage, len(steps))
+	r.Scope.Report.Section(stage.Describe(), len(steps))
 	for _, step := range steps {
 		if err := r.Apply(ctx, step); err != nil {
 			return err

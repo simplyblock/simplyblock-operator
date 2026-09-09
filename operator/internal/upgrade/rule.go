@@ -47,6 +47,22 @@ const (
 // Stages is every stage, in the order they are run in.
 var Stages = []Stage{StagePreflight, StageUpgrade, StageMigrate}
 
+// Describe is the sentence a progress view narrates while the stage runs. It is
+// written as an activity rather than as a noun, because what a user watching a
+// long run wants to know is what the process is doing to their cluster.
+func (s Stage) Describe() string {
+	switch s {
+	case StagePreflight:
+		return "Checking whether this cluster can be upgraded"
+	case StageUpgrade:
+		return "Preparing the cluster for the new operator"
+	case StageMigrate:
+		return "Migrating the resource model"
+	default:
+		return string(s)
+	}
+}
+
 // Registry holds one set of rules, keyed by identity and kept in the order they
 // were registered. Order matters for the units that have one, and a registry is
 // deliberately not sorted by ID: a step catalog is a sequence somebody wrote
