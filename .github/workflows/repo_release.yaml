@@ -87,9 +87,10 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
-  # The OLM bundle. `make bundle` resolves the digests of the operator images
-  # from Quay and fails if they are absent, so this genuinely waits on the
-  # operator build.
+  # The OLM bundle. release-operator retags build-operator's DockerHub images
+  # to Quay, then `make bundle` resolves their digests from there and fails if
+  # they are absent, so this genuinely waits on the operator build landing on
+  # DockerHub first.
   release-operator:
     name: Release operator
     needs: [setup, build-operator]
