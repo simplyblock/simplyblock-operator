@@ -49,7 +49,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      # Quay is the registry OLM bundles resolve images from, so it only needs a
+      # tag on an actual release. This job is invoked via workflow_call only from
+      # repo_release.yaml's v* tag trigger, never from a plain branch push.
       - name: Log in to Quay.io
+        if: github.event_name == 'workflow_call'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: quay.io
@@ -78,17 +82,30 @@ jobs:
           # labeled 26.3.0 instead of the constant this step used to pass.
           echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay)
+      # Quay only belongs in the tag list on a release, per the Quay login step
+      # above. build-push-action rejects an empty tag line, so the Quay tag is
+      # assembled here rather than inlined as a conditional expression in `tags:`.
+      - name: Compute image tags
+        id: image_tags
+        run: |
+          {
+            echo 'tags<<EOF'
+            echo "${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}"
+            echo "${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            if [ "${{ github.event_name }}" = "workflow_call" ]; then
+              echo "${{ matrix.quay_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR, + Quay on release)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}
-            ${{ matrix.quay_image_name }}:${{ steps.image_tag.outputs.tag }}
+          tags: ${{ steps.image_tags.outputs.tags }}
           build-args: |
             VERSION=${{ steps.image_tag.outputs.label_version }}
             RELEASE=1
