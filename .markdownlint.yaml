@@ -1,0 +1,25 @@
+# markdownlint rules for the Markdown this gate still reads: the READMEs, the
+# architecture notes, and csi-driver/docs. The design documents and test plans
+# under operator/docs are excluded in .mega-linter.yml and answer to the house
+# style gate instead.
+#
+# The defaults produced 663 findings, and 470 of them were one rule objecting to
+# the pipe alignment of a single Helm values table.
+---
+default: true
+
+# 370 findings, 370 of them in csi-driver/charts/README.md. MD060 defaults to
+# the "aligned" style, which asks that every pipe in a table line up in the
+# source. It fires once per pipe, so one wide values table accounts for the
+# lot. The rendered output is identical either way.
+MD060: false
+
+# 69 findings. A tab inside a fenced code block is part of the sample, because
+# shell and Makefile snippets need them, and reindenting it changes what the
+# reader is being shown. Tabs in prose are still flagged.
+MD010:
+  code_blocks: false
+
+# Long lines are how a table or a URL is written, and prose wrapping is not
+# enforced anywhere else in this repository either.
+MD013: false

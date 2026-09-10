@@ -10,3 +10,8 @@ local.mk
 
 # An sbcli checkout for the OpenAPI export, where CI puts it.
 /.sbcli/
+
+# MegaLinter's run output, written into the workspace by both the CI job and a
+# local `docker run oxsecurity/megalinter` invocation.
+megalinter-reports/
+mega-linter.log

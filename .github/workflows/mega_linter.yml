@@ -1,0 +1,91 @@
+# Runs MegaLinter, the aggregate lint gate covering every language in this
+# repository at once. What it enables and what it ignores lives in
+# .mega-linter.yml at the root, not here. This file only says when it runs and
+# what it is allowed to do with what it finds.
+#
+# It reports and does not write. The MegaLinter template ships with a bot that
+# commits reformats back to the branch, and that bot is deliberately absent
+# here, so a finding is fixed by whoever owns the code.
+# More info at https://megalinter.io
+---
+name: MegaLinter
+
+# A full-codebase run takes tens of minutes, so it is spent on the two places a
+# result is acted on: the merge target, and the pull request proposing a merge
+# into it.
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  megalinter:
+    name: MegaLinter
+    runs-on: ubuntu-latest
+
+    # Read the code, and say what is wrong with it in the checks tab. Nothing
+    # here commits, comments, or opens a pull request, so nothing here needs
+    # write access.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+          # VALIDATE_ALL_CODEBASE is true below, so the history a diff would
+          # need is not fetched.
+          fetch-depth: 1
+
+      - name: MegaLinter
+
+        # You can override MegaLinter flavor used to have faster performances
+        # More info at https://megalinter.io/latest/flavors/
+        uses: oxsecurity/megalinter@v9
+
+        id: ml
+
+        # All available variables are described in documentation
+        # https://megalinter.io/latest/config-file/
+        env:
+          # Both triggers resolve to the same question. Is main clean, and
+          # would this pull request keep it clean? A partial answer to that is
+          # worth less than the minutes it saves.
+          VALIDATE_ALL_CODEBASE: true
+
+          # Disable LLM Advisor for bot PRs (dependabot, renovate, etc.)
+          LLM_ADVISOR_ENABLED: >-
+            ${{
+              github.event_name != 'pull_request' ||
+              (github.event.pull_request.user.login != 'dependabot[bot]' &&
+               github.event.pull_request.user.login != 'renovate[bot]' &&
+               github.event.pull_request.user.login != 'github-actions[bot]' &&
+               !startsWith(github.event.pull_request.user.login, 'dependabot') &&
+               !startsWith(github.event.pull_request.user.login, 'renovate'))
+            }}
+
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The reports carry the detail the log summary elides: which file, which
+      # rule, and the SARIF a viewer can read.
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: MegaLinter reports
+          include-hidden-files: "true"
+          path: |
+            megalinter-reports
+            mega-linter.log
