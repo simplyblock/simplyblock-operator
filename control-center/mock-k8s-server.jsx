@@ -366,7 +366,7 @@ function operatorMock(path, method, body, params) {
   // access control: roles, bindings, and who-am-I. Its own handler because it
   // enforces authority (403) rather than just serving a collection.
   if (path.startsWith("/proposed/access") && window.SB_ACCESS_ROUTE) {
-    const r = window.SB_ACCESS_ROUTE(method, path, body);
+    const r = window.SB_ACCESS_ROUTE(method, path + (params.toString() ? "?" + params.toString() : ""), body);
     if (r) return r;
   }
   const m = path.match(/^\/proposed\/([\w-]+)(?:\/([\w-]+))?(?:\/([\w-]+))?$/);

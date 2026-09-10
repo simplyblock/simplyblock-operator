@@ -3,7 +3,7 @@
 //
 //   1. strips the fixture backend (everything between MOCK:START / MOCK:END),
 //      so no mock data ships to a cluster
-//   2. repoints the React, Babel and webfont tags at vendored copies, so the
+//   2. repoints the React and webfont tags at vendored copies, so the
 //      pod needs no network egress, and swaps the development React builds for
 //      the production ones
 //   3. copies only the files the page actually references
@@ -28,7 +28,11 @@ if (!keepMocks) {
   const before = html.length;
   html = html.replace(/<!-- MOCK:START[\s\S]*?<!-- MOCK:END -->\n?/g, "");
   if (html.length === before) throw new Error("MOCK:START / MOCK:END markers not found in index.html");
-  if (/mock-[a-z-]+\.jsx/.test(html)) throw new Error("a mock script survived the strip: " + html.match(/mock-[a-z-]+\.jsx/g));
+  if (/mock-[a-z-]+\.jsx|dist\/mock\.js/.test(html)) throw new Error("a mock script survived the strip: " + html.match(/mock-[a-z-]+\.jsx|dist\/mock\.js/g));
+  // The JSX is precompiled into dist/app.js (build.md). A page that still
+  // transpiles in the browser needs unsafe-eval, which the CSP no longer grants.
+  if (/text\/babel|babel\.min\.js/.test(html)) throw new Error("index.html still transpiles in the browser — run the dist build (build.md) first");
+  if (!/dist\/app\.js/.test(html)) throw new Error("index.html does not load dist/app.js");
   console.log(`stripped the fixture backend (${before - html.length} bytes)`);
 }
 
@@ -37,9 +41,7 @@ const VENDOR = [
   [/<script src="https:\/\/unpkg\.com\/react@[^"]+"[^>]*><\/script>/,
     '<script src="vendor/react.production.min.js"></script>'],
   [/<script src="https:\/\/unpkg\.com\/react-dom@[^"]+"[^>]*><\/script>/,
-    '<script src="vendor/react-dom.production.min.js"></script>'],
-  [/<script src="https:\/\/unpkg\.com\/@babel\/standalone@[^"]+"[^>]*><\/script>/,
-    '<script src="vendor/babel.min.js"></script>']
+    '<script src="vendor/react-dom.production.min.js"></script>']
 ];
 for (const [re, rep] of VENDOR) {
   if (!re.test(html)) throw new Error("could not find the CDN tag for " + rep);

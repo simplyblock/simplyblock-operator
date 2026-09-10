@@ -1394,12 +1394,15 @@ const newBackupPolicyDialog = cluster => ({
 // is update. Items override with op: "create" | "failover" | "restore" | …;
 // restore is the three-part check from RBAC-DESIGN.md §11.
 const actionOp = it => it.op || (it.removes ? "delete" : "update");
-const permitted = (obj, items) => items.filter(it => {
+// §5.5: a denied action is DISABLED with the missing permission as its tooltip.
+// Enforcement is the API server rejecting the real call; this is display only.
+const permitted = (obj, items) => items.map(it => {
+  if (it.disabled) return it;
   const entity = it.entity || KIND_ENTITY[obj.kind] || "storagecluster";
-  // a disabled item is still a change the caller could not make — §3 says
-  // such controls are absent, not greyed, so it needs the same right
-  if (it.op === "restore") return window.access.canRestore(obj, it.targetPool || null);
-  return window.access.can(actionOp(it), entity, obj);
+  const ok = it.op === "restore" ? window.access.canRestore(obj, it.targetPool || null) : window.access.can(actionOp(it), entity, obj);
+  if (ok) return it;
+  const why = it.op === "restore" ? "Needs get on backups in the source pool and create on volumes in the target pool" : window.access.why(actionOp(it), entity, obj);
+  return Object.assign({}, it, {disabled: true, hint: why, denied: true});
 });
 
 function ActionBtn({obj, big}) {

@@ -470,6 +470,21 @@ tr.on td{background:color-mix(in srgb,var(--info) 8%,transparent)}
 .rbit{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:5px;border:1px solid var(--line2);background:var(--panel);color:#fff;padding:0;cursor:default}
 button.rbit{cursor:pointer}button.rbit:hover{border-color:var(--accent)}.rbit.on{background:var(--accent);border-color:var(--accent)}
 .rolelist{display:flex;flex-direction:column;gap:8px}
+.rules td{vertical-align:top;font-size:11.5px}.rules .labels{gap:3px}
+.grantlayout{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:900px){.grantlayout{grid-template-columns:1fr}}
+.scopetree{display:flex;flex-direction:column;padding:4px 0}
+.stnode{display:flex;align-items:center;gap:7px;width:100%;background:none;border:0;padding:6px 10px;color:var(--text);font:inherit;font-size:12px;cursor:pointer;border-radius:6px;text-align:left}
+.stnode:hover{background:var(--panel2)}.stnode.on{background:var(--accent-soft);color:var(--accent)}.stnode.muted .stl{color:var(--dim)}
+.stnode .stl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stnode .stns{font-size:10px;color:var(--dim2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stshared{font-size:10.5px;color:var(--dim2);padding:2px 10px 6px}.stgroup{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);padding:10px 10px 4px}
+.grants td{vertical-align:top;white-space:normal}.grants td .lab{white-space:normal;height:auto;align-items:flex-start;line-height:1.35;padding:3px 6px}.grants td .mono{overflow-wrap:anywhere}
+.grantlayout>div:last-child{min-width:0}.grantwrap{overflow-x:auto;max-width:100%}.grants tr.expired td{opacity:.55}.lab.ext{border-style:dashed;color:var(--ro)}
+.fl.chk{flex-direction:row;align-items:center;gap:8px;font-size:12px;margin:4px 0 10px}
+.inv{display:grid;grid-template-columns:22px 18px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 14px;border-top:1px solid var(--line);font-size:12.5px}.inv:first-child{border-top:0}
+.inv .sub{font-size:11.5px;color:var(--dim);margin-top:2px;text-wrap:pretty}
+.invdot{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;color:#fff}.invdot.ok{background:var(--ok)}.invdot.bad{background:var(--bad)}.invdot.na{background:var(--dim2)}
+.ferr.ok{background:transparent;border-color:var(--ok)}
 .rolehead{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:12px 14px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
 .rolehead .sub{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rolehead b{font-weight:500}
 .card.role.open .rolehead{border-bottom:1px solid var(--line)}
@@ -484,48 +499,24 @@ button.rbit{cursor:pointer}button.rbit:hover{border-color:var(--accent)}.rbit.on
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div id="boot" style="position:fixed;inset:0;display:grid;place-items:center;font:13px system-ui,sans-serif;color:#6b7280">Loading the console…</div></div>
+<script>
+window.addEventListener("error", function (e) { window.__bootErr = e.message; });
+setTimeout(function () {
+  var b = document.getElementById("boot"); if (!b || !b.isConnected) return;
+  b.innerHTML = '<div style="max-width:420px;text-align:center;line-height:1.5"><b style="color:#111827">The console did not start</b><br>' +
+    (window.__bootErr ? '<code style="font-size:11px">' + String(window.__bootErr).replace(/</g, "&lt;") + '</code><br>' : 'No script error was reported; the saved view state may be stale.<br>') +
+    '<button onclick="[\'sb.path\',\'sb.viewas\'].forEach(function(k){localStorage.removeItem(k)});location.reload()" style="margin-top:10px;padding:6px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer">Reset view and reload</button></div>';
+}, 8000);
+</script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="config.js"></script>
 <!-- MOCK:START — the fixture backend. deploy/build/prepare.mjs strips this
      whole block for a production image, so no fixtures ship to a cluster. -->
-<script type="text/babel" src="mock-backend.jsx"></script>
-<script type="text/babel" src="mock-api.jsx"></script>
-<script type="text/babel" src="k8s-client.jsx"></script>
-<script type="text/babel" src="mock-k8s.jsx"></script>
-<script type="text/babel" src="mock-k8s-server.jsx"></script>
-<script type="text/babel" src="mock-extras.jsx"></script>
-<script type="text/babel" src="mock-repl.jsx"></script>
-<script type="text/babel" src="mock-dr.jsx"></script>
-<script type="text/babel" src="mock-deploy.jsx"></script>
-<script type="text/babel" src="mock-migrate.jsx"></script>
-<script type="text/babel" src="mock-rbac.jsx"></script>
+<script src="dist/mock.js"></script>
 <!-- MOCK:END -->
-<script type="text/babel" src="api.jsx"></script>
-<script type="text/babel" src="agent.jsx"></script>
-<script type="text/babel" src="ui.jsx"></script>
-<script type="text/babel" src="rbac.jsx"></script>
-<script type="text/babel" src="actions.jsx"></script>
-<script type="text/babel" src="panels.jsx"></script>
-<script type="text/babel" src="rbac-admin.jsx"></script>
-<script type="text/babel" src="tiles.jsx"></script>
-<script type="text/babel" src="tiles-data.jsx"></script>
-<script type="text/babel" src="details.jsx"></script>
-<script type="text/babel" src="dr.jsx"></script>
-<script type="text/babel" src="dr-plan.jsx"></script>
-<script type="text/babel" src="repl.jsx"></script>
-<script type="text/babel" src="cgroups.jsx"></script>
-<script type="text/babel" src="migrations.jsx"></script>
-<script type="text/babel" src="k8s.jsx"></script>
-<script type="text/babel" src="deploy.jsx"></script>
-<script type="text/babel" src="deploy-doc.jsx"></script>
-<script type="text/babel" src="storage-types.jsx"></script>
-<script type="text/babel" src="recipe.jsx"></script>
-<script type="text/babel" src="migrate.jsx"></script>
-<script type="text/babel" src="appdr.jsx"></script>
-<script type="text/babel" src="details-data.jsx"></script>
-<script type="text/babel" src="app.jsx"></script>
+<script src="dist/app.js"></script>
+<!-- Sources live in the *.jsx files; dist/*.js is their precompiled form (see build.md). -->
 </body>
 </html>

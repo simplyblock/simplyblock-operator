@@ -875,8 +875,8 @@ const normOperation = o => {
   };
 };
 
-const normRole = r => ({kind: "role", id: r.uuid, uuid: r.uuid, name: r.name, builtin: !!r.builtin,
-  description: r.description || "", rights: r.rights || [], createdBy: r.createdBy || null, createdAt: r.created_at});
+const normRole = r => ({kind: "role", id: r.uuid || r.name, name: r.name, boundAt: r.boundAt || "", description: r.description || "",
+  parts: r.parts || [], rules: r.rules || (r.parts || []).flatMap(p => p.rules)});
 
 // ---- endpoints -------------------------------------------------------------
 const api = {
@@ -1084,16 +1084,19 @@ const api = {
   appUnprotect: id => send("DELETE", `/protected-apps/${id}`),
   drClusterFence: id => send("POST", `/dr-clusters/${id}/fence`),
   drClusterUnfence: id => send("POST", `/dr-clusters/${id}/unfence`),
-  // access control — RBAC-DESIGN.md. Roles and bindings are proposed CRDs;
-  // /access/self is the operator's "what may I do" read.
+  // access control — RBAC-DESIGN.md. Kubernetes RBAC is the store; the operator
+  // serves the aggregated view: one SelfSubjectRulesReview per namespace (/self),
+  // the permitted scope tree (/scopes), AccessGrants, and SubjectAccessReview.
   accessSelf: () => req("/access/self").then(r => r[0]),
+  accessScopes: () => req("/access/scopes").then(r => r[0]),
   accessRoles: () => req("/access-roles").then(r => r.map(normRole)),
-  accessRoleCreate: b => send("POST", "/access-roles", b),
-  accessRoleUpdate: (id, b) => send("PUT", `/access-roles/${id}`, b),
-  accessRoleDelete: id => send("DELETE", `/access-roles/${id}`),
-  accessBindings: () => req("/access-bindings"),
-  accessBindingCreate: b => send("POST", "/access-bindings", b),
-  accessBindingDelete: id => send("DELETE", `/access-bindings/${id}`),
+  accessGrants: () => req("/access-grants"),
+  accessGrantCreate: b => send("POST", "/access-grants", b),
+  accessGrantDelete: id => send("DELETE", `/access-grants/${id}`),
+  accessSubjects: () => req("/access/subjects"),
+  accessEffective: subject => req("/access/effective?subject=" + encodeURIComponent(subject)).then(r => r[0]),
+  accessReview: b => send("POST", "/access/review", b),
+  accessInvariants: () => req("/access/invariants"),
   k8sClusters: () => req("/kubernetes-clusters").then(r => r.map(normK8s)),
   k8sCluster: id => req(`/kubernetes-clusters/${id}`).then(r => normK8s(r[0])),
   k8sStorageClasses: id => req(`/kubernetes-clusters/${id}/storage-classes`).then(r => r.map(normSc)),

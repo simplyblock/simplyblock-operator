@@ -261,6 +261,17 @@ function ErrorState({error, onRetry, kind, onUp, upLabel}) {
       </div>
     );
   }
+  if (error.status === 403) {
+    return (
+      <div className="empty">
+        <Icon n="shield" s={24} c="var(--warn)" />
+        <b style={{color: "var(--text)"}}>Forbidden</b>
+        <span style={{maxWidth: 480}}>{error.message}</span>
+        <span style={{maxWidth: 480, color: "var(--dim2)"}}>This is a 403 from the API server, not an empty collection — the objects may well exist. Ask the scope's admin for a grant.</span>
+        {onUp && <button className="chip" style={{marginTop: 8}} onClick={onUp}>Back to {upLabel}</button>}
+      </div>
+    );
+  }
   if (error.status === 404) {
     return (
       <div className="empty">
@@ -372,8 +383,9 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
   const key = seg.t + "|" + (parent ? parent.id : "") + "|" + rev;
   const {data, loading, error, reload} = useResource(key, () => cfg.load(parent || {}), 6000);
   const acc = useAccess();
-  // §3: what the caller cannot read is absent, not greyed
-  const items = useMemo(() => (data || []).filter(o => acc.canRead(o)), [data, acc.state.user, acc.state.bindings]);
+  // §5.1/§5.2: whole scopes the caller cannot see are hidden (scope discovery);
+  // inside a visible scope the API server's list is shown as returned.
+  const items = useMemo(() => (data || []).filter(o => acc.canRead(o)), [data, acc.state.user, acc.state.rules]);
   const keys = SORT_KEYS[cfg.kind] || ["name"];
   const activeSort = keys.includes(sort) ? sort : keys[0];
   const filtered = useMemo(() => {
@@ -390,6 +402,17 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
   const parentObj = parent && parent.id ? (REG[parent.id] || {kind: parent.t, id: parent.id}) : null;
   const createKind = seg.t === "clusters" ? "k8sc" : seg.t === "deployconfigs" ? "deployconfig" : cfg.kind;
   const mayCreate = seg.t === "clusters" ? acc.canAnywhere("create", "k8scluster") : acc.canCreateIn(createKind, parentObj);
+  const createWhy = mayCreate ? "" : seg.t === "clusters" ? "Needs create on nodepoolallocations at cluster scope" : acc.whyCreateIn(createKind, parentObj);
+  // §5.5: a denied create is disabled with the reason, not hidden
+  const gateCreate = el => !el ? null : mayCreate ? el : React.cloneElement(el, {disabled: true, title: createWhy, onClick: undefined});
+  // §5.1: a scope the caller may not read is a 403, not an empty list
+  const layerProbe = parentObj && parentObj.kind ? Object.assign({kind: cfg.kind}, parentObj.kind === "cluster" ? {clusterId: parentObj.id} : parentObj.kind === "pool" ? {poolId: parentObj.id, clusterId: parentObj.clusterId}
+    : parentObj.kind === "k8sc" ? {k8sClusterId: parentObj.id} : parentObj.kind === "protectedapp" ? {appId: parentObj.id, clusterId: parentObj.sourceClusterId} : {clusterId: parentObj.clusterId}) : null;
+  const layerEntity = KIND_ENTITY[cfg.kind] || "storagecluster";
+  // …unless scope discovery shows a child of this layer the caller may see (a pool in its own sb-sp-* namespace)
+  const childVisible = parentObj && acc.state.scopes && ((cfg.kind === "pool" && acc.state.scopes.pools.some(p => p.clusterId === parentObj.id && p.visible))
+    || (cfg.kind === "protectedapp" && acc.state.scopes.apps.some(a => a.clusterId === parentObj.id && a.visible)) || (cfg.kind === "cluster" && acc.state.scopes.clusters.some(x => x.k8sIds.includes(parentObj.id) && x.visible)));
+  const forbidden = layerProbe && acc.state.ready && !acc.state.incomplete && !childVisible && acc.nsOf(layerEntity, layerProbe).length > 0 && !acc.can("read", layerEntity, layerProbe);
   const bad = items.filter(o => healthOf(o) >= 3).length;
   const scope = parent && parent.id && parent.t !== "cluster" ? {t: parent.t, label: segLabel(parent)} : null;
   const prepScope = parent && parent.t === "cluster" ? parent.id : null;
@@ -410,11 +433,12 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
   };
 
   if (error) return <div className="scroll"><ErrorState error={error} onRetry={reload} kind={parent ? parent.t : cfg.kind} onUp={up} upLabel={upLabel} /></div>;
+  if (forbidden) return <div className="scroll"><ErrorState error={{status: 403, message: `You may not list ${kindPlural(cfg.kind)} in this ${KIND_LABEL[parentObj.kind] || "scope"}. ${acc.why("read", layerEntity, layerProbe)}.`}} onRetry={() => acc.load()} kind={parent.t} onUp={up} upLabel={upLabel} /></div>;
   return (
     <>
       <Toolbar {...{items, q, setQ, filters, setFilters, density, setDensity}} kind={cfg.kind} scope={scope}
         sort={activeSort} setSort={setSort} count={filtered.length} onRefresh={reload}
-        extra={!mayCreate ? null : seg.t === "clusters" ? <button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button>
+        extra={gateCreate(seg.t === "clusters" ? <button className="btn primary" onClick={() => window.__ui.dialog(deployFromDialog(nav), {kind: "cluster", id: "new"})}><Icon n="plus" s={12} />Deploy cluster</button>
           : seg.t === "deployconfigs" && parent && parent.t === "k8sc" ? <button className="btn primary" onClick={() => nav.deployWizard(parent.id)}><Icon n="plus" s={12} />Deploy a cluster</button>
           : seg.t === "pools" && parent && parent.t === "cluster" ? <button className="btn primary" onClick={() => window.__ui.dialog(newPoolDialog(REG[parent.id] || {id: parent.id, name: "this cluster"}), {kind: "pool", id: "new"})}><Icon n="plus" s={12} />New pool</button>
           : seg.t === "plans" ? <button className="btn primary" onClick={() => api.sites().then(ss => window.__ui.dialog(newPlanDialog(ss), {kind: "plan", id: "new"}))}><Icon n="plus" s={12} />New plan</button>
@@ -460,7 +484,7 @@ function OverviewView({seg, parent, nav, prefs, rev, up, upLabel}) {
               <button className="chip" onClick={() => setSel(sel.length === candidates.length ? [] : candidates.map(c => c.id))}>
                 {sel.length === candidates.length ? "Clear" : `Select all ${candidates.length}`}</button>
               <button className="btn primary" disabled={!sel.length} onClick={prepare}><Icon n="plus" s={12} />Prepare {sel.length || ""} node{sel.length === 1 ? "" : "s"}</button>
-            </> : null} />
+            </> : null)} />
       <div className="scroll">
         {!loading && candidates.length > 0 && (
           <div className="banner" style={{color: "var(--accent)", background: "var(--accent-soft)", borderColor: "var(--accent-line)"}}>

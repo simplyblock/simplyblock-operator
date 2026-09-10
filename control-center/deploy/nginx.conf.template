@@ -18,7 +18,7 @@ server {
   index index.html;
 
   # Same-origin only: no framing, no sniffing, and no external origin — React
-  # and Babel are vendored. Declared in a snippet and re-included in every
+  # is vendored and the JSX precompiled. Declared in a snippet and re-included in every
   # location that sets its own add_header, because nginx drops inherited
   # headers the moment a level declares one of its own.
   include /etc/nginx/snippets/security-headers.conf;
@@ -41,9 +41,9 @@ server {
     expires -1;
   }
 
-  # The document is transpiled in the browser, so the .jsx sources are assets.
-  # They are immutable per image tag, but index.html must not be cached or a
-  # rolling update would leave a stale shell loading new sources.
+  # dist/*.js is the precompiled console, immutable per image tag; index.html
+  # must not be cached or a rolling update would leave a stale shell loading
+  # new sources.
   location = /index.html {
     include /etc/nginx/snippets/security-headers.conf;
     add_header Cache-Control "no-store, must-revalidate" always;

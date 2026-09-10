@@ -7,18 +7,17 @@
 #
 # Build args:
 #   KEEP_MOCKS=1   keep the fixture backend in the image (demo build only)
-#   REACT_VERSION, BABEL_VERSION            exact versions
+#   REACT_VERSION                           exact version
 #   INTER_VERSION, IBM_PLEX_MONO_VERSION    typeface versions — read the note
 #                                           on the vendor stage before pinning
 #
-# The runtime image needs no network egress: React, Babel, both typefaces and
+# The runtime image needs no network egress: React, both typefaces and
 # the brand mark are all vendored at build time, so an air-gapped cluster
 # serves every byte from the pod.
 
 # ---- stage 1: vendor the browser dependencies ------------------------------
 FROM docker.io/library/node:22-alpine AS vendor
 ARG REACT_VERSION=18.3.1
-ARG BABEL_VERSION=7.29.0
 # One arg per package. @fontsource/inter and @fontsource/ibm-plex-mono are
 # separate packages on separate release trains, so a single shared exact
 # version is not safe to assume — npm hard-fails if either has not published
@@ -32,8 +31,7 @@ WORKDIR /vendor
 # Production builds of React — the page pins the development builds for the
 # design preview, and prepare.mjs rewrites the tags to point here.
 RUN curl -fsSLO "https://unpkg.com/react@${REACT_VERSION}/umd/react.production.min.js" \
- && curl -fsSLO "https://unpkg.com/react-dom@${REACT_VERSION}/umd/react-dom.production.min.js" \
- && curl -fsSL  "https://unpkg.com/@babel/standalone@${BABEL_VERSION}/babel.min.js" -o babel.min.js
+ && curl -fsSLO "https://unpkg.com/react-dom@${REACT_VERSION}/umd/react-dom.production.min.js"
 
 # Typefaces. The design is a geometric sans plus a mono, and the mono carries
 # every UUID and CRD field name in the console — so these are load-bearing, not
@@ -67,14 +65,18 @@ RUN { \
 RUN curl -fsSL "https://simplyblock.io/assets/images/Logo-white.svg" -o logo-white.svg \
  && test -s logo-white.svg
 
-# ---- stage 2: prepare the document -----------------------------------------
+# ---- stage 2: compile the JSX and prepare the document ----------------------
+# The .jsx files are the source; dist/app.js is rebuilt here so the image never
+# depends on a stale checked-in bundle. Same file order as build.md.
 FROM docker.io/library/node:22-alpine AS prepare
 ARG KEEP_MOCKS=0
+ARG BABEL_VERSION=7.29.0
 WORKDIR /src
 COPY . .
-# prepare.mjs parses --flag=value (its arg reader treats a space-separated
-# value as a separate token), so pass --out with an "=".
-RUN node deploy/build/prepare.mjs --keep-mocks="${KEEP_MOCKS}" --out=/out
+RUN npm install --no-save --no-audit --no-fund "@babel/core@${BABEL_VERSION}" "@babel/cli@${BABEL_VERSION}" "@babel/preset-react@${BABEL_VERSION}" \
+ && node deploy/build/bundle.mjs \
+ && rm -rf node_modules \
+ && node deploy/build/prepare.mjs --keep-mocks="${KEEP_MOCKS}" --out=/out
 
 # ---- stage 3: runtime -------------------------------------------------------
 FROM docker.io/library/nginx:1.27-alpine

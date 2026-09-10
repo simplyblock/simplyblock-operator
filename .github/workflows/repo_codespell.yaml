@@ -29,7 +29,7 @@ jobs:
           #    CRD/RBAC design docs are re-exported from Claude Design, so typos
           #    there (asend, acount, ...) are fixed upstream, not here. The
           #    hand-maintained files (mock/, README, INTEGRATION.md) stay checked.
-          skip: ./.git,.git,./.github/workflows/repo_codespell.yaml,*.png,*.jpg,*.svg,*.sum,*.tgz,./vendor,go.sum,*zz_generated.openapi.go,./helm-charts/charts/simplyblock-operator/ramen,*.jsx,./control-center/index.html,./control-center/config.js,./control-center/CRD-MAIN.md,./control-center/CRD-CROSSCHECK.md,./control-center/RBAC-DESIGN.md
+          skip: ./.git,.git,./.github/workflows/repo_codespell.yaml,*.png,*.jpg,*.svg,*.sum,*.tgz,./vendor,go.sum,*zz_generated.openapi.go,./helm-charts/charts/simplyblock-operator/ramen,*.jsx,./control-center/dist,./control-center/index.html,./control-center/config.js,./control-center/CRD-MAIN.md,./control-center/CRD-CROSSCHECK.md,./control-center/RBAC-DESIGN.md
           # AfterAll: Ginkgo suite node (codespell lowercases it to "afterall")
           # notin: the Kubernetes label-selector set operator (control-center/mock)
           ignore_words_list: "browseable,ro,NotIn,afterall,notin"

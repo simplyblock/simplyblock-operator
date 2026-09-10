@@ -23,8 +23,8 @@ Four things happen at build time (`deploy/build/prepare.mjs`):
 
 1. **The fixture backend is stripped.** Everything between `MOCK:START` and
    `MOCK:END` in `index.html` is removed and the build fails if any
-   `mock-*.jsx` reference survives. No fixture data ships to a cluster.
-2. **React, Babel and both typefaces are vendored** into `/vendor`, and the
+   `mock-*.jsx` or `dist/mock.js` reference survives. No fixture data ships to a cluster.
+2. **React and both typefaces are vendored** into `/vendor`, and the
    development React builds the design preview pins are swapped for the
    production ones. Inter and IBM Plex Mono come from fontsource and are served
    from the pod, replacing the Google Fonts link — the mono carries every UUID
@@ -147,8 +147,8 @@ RHACM install. Writes are deliberately narrow:
 - two writable mounts, both `emptyDir` in memory: `/tmp/nginx` for the generated
   config, the proxied token and nginx's temp files, and `/etc/nginx/conf.d`
   because the image renders its server block from a template at startup
-- CSP with no external origin — nothing is fetched off-cluster. `unsafe-eval` is
-  required because Babel transpiles in the browser; see the caveat below. The
+- CSP with no external origin and no `unsafe-eval` — nothing is fetched
+  off-cluster, and the JSX is precompiled in the image (`deploy/build/bundle.mjs`). The
   headers live in an included snippet and are repeated in every location that
   sets its own `Cache-Control`, because nginx discards inherited `add_header`
   directives as soon as a level declares one of its own — `always` does not
@@ -172,13 +172,12 @@ it. The console keeps no server-side state — its location lives in the browser
 
 ## Caveats
 
-**Babel in the browser.** The document is transpiled on load, which costs about
-a second on first paint and forces `unsafe-eval` in the CSP. For a shipped
-product this should become a real build step — bundle the `.jsx` at image build
-time and drop both the Babel vendor file and `unsafe-eval`. The change is
-confined to `prepare.mjs` and the CSP header; no application code moves.
+**`dist/` is a build artefact.** The `.jsx` files are the source; `dist/app.js`
+and `dist/mock.js` are their precompiled form. The image rebuilds them
+(`deploy/build/bundle.mjs`) so a stale checked-in bundle can never ship; for the
+design preview, rebuild after editing any `.jsx` (`build.md`).
 
-**`index.html` is `no-store`.** The `.jsx` sources cache for an hour, but the
+**`index.html` is `no-store`.** `dist/*.js` caches for an hour, but the
 shell must not, or a rolling update would leave a stale document loading new
 sources.
 
