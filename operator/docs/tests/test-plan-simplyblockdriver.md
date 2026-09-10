@@ -273,6 +273,7 @@ defaulting rules are admission and cannot be exercised any other way.
 | I-21     | The only object updated, not created: admitted, since the rule is CREATE     | Boundary     | —                  |
 | I-22     | The only object deleted and another created: admitted                        | Boundary     | —                  |
 | I-23     | A `spec.sidecarImages` entry outside the trusted registries: rejected        | Negative     | —                  |
+| I-24     | `spec.image` of the empty string: rejected, since Required admits it         | Negative     | —                  |
 
 `I-12` asserted that two drivers in one namespace were accepted, which design
 §3.4 now rejects. The row keeps its ID struck through, and `I-18` is what replaced
@@ -382,10 +383,10 @@ row for.
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
 | Unit        | 89        | 52      | 37          |
-| Integration | 22        | 0       | 22          |
+| Integration | 23        | 0       | 23          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **127**   | **52**  | **75**      |
+| **Total**   | **128**   | **52**  | **76**      |
 
 `I-12`, `U-74`, and `U-69` to `U-71` are superseded or retired and are not in the
 counts.

@@ -967,7 +967,11 @@ type SidecarImages struct {
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
 type SimplyblockDriverSpec struct {
 	// Image is the CSI driver image, used by both plugins.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// The empty alternative the optional image fields carry is deliberately
+	// absent: this one is Required, and Required on a string is satisfied by
+	// the empty string, so a pattern admitting it would accept an object that
+	// names no image and produce a container that cannot start.
+	// +kubebuilder:validation:Pattern=`^(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?$`
 	// +kubebuilder:validation:Required
 	Image string `json:"image"`
 

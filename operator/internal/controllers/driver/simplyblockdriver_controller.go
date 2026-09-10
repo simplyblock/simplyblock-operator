@@ -101,7 +101,11 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if holder.Namespace != d.Namespace || holder.Name != d.Name {
+	// An empty holder means the list came back without the object this reconcile
+	// just read, which is a stale cache rather than a second driver. Refusing on
+	// it would stall an install behind a message naming nobody, so the object in
+	// hand is taken as the holder and the next pass corrects it if it was wrong.
+	if holder.Name != "" && (holder.Namespace != d.Namespace || holder.Name != d.Name) {
 		message := fmt.Sprintf(
 			"a Kubernetes cluster holds one SimplyblockDriver, and %s/%s holds it",
 			holder.Namespace, holder.Name)

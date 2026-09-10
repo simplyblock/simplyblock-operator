@@ -321,3 +321,31 @@ func TestMissingRegistrationHoldsAtInstalling(t *testing.T) {
 		t.Errorf("phase = %q, want Installing without a registration", h.phase)
 	}
 }
+
+// A stale cache that lists no drivers must not stall the install. Refusing on an
+// empty holder would hold the object at Installing behind a message naming
+// nobody, and the object this reconcile just read is evidence enough that one
+// exists.
+func TestAnEmptyHolderIsNotADuplicate(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+
+	if got := (client.ObjectKey{}); got.Name != "" {
+		t.Fatalf("the zero key is not zero: %v", got)
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	if _, err := r.Reconcile(context.Background(), requestFor(d)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(d), &got); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if contains(got.Status.Message, "holds it") {
+		t.Errorf("the only driver was refused as a duplicate: %q", got.Status.Message)
+	}
+}
