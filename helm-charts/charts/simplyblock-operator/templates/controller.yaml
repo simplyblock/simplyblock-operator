@@ -74,6 +74,9 @@ spec:
         - "--v=5"
         - "--timeout=150s"
         - "--leader-election=false"
+        # VolumeGroupSnapshot support (design §9, P0-4): the sidecar calls the
+        # driver's GroupController CreateVolumeGroupSnapshot for a VolumeGroupSnapshot.
+        - "--feature-gates=CSIVolumeGroupSnapshot=true"
         imagePullPolicy: {{ .Values.image.csiProvisioner.pullPolicy }}
         securityContext:
           privileged: true

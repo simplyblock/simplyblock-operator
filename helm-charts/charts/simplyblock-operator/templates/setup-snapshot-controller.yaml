@@ -41,5 +41,8 @@ spec:
           args:
             - "--v=5"
             - "--leader-election=true"
+            # VolumeGroupSnapshot support (design §9, P0-4): reconcile
+            # VolumeGroupSnapshot / VolumeGroupSnapshotContent objects.
+            - "--feature-gates=CSIVolumeGroupSnapshot=true"
 
 {{- end -}}

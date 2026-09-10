@@ -46,6 +46,18 @@ rules:
 - apiGroups: ["snapshot.storage.k8s.io"]
   resources: ["volumesnapshotcontents/status"]
   verbs: ["get", "update", "patch"]
+# VolumeGroupSnapshot support (design §9, P0-4): the csi-snapshotter sidecar
+# watches VolumeGroupSnapshotContent and drives the GroupController when the
+# CSIVolumeGroupSnapshot feature gate is on.
+- apiGroups: ["groupsnapshot.storage.k8s.io"]
+  resources: ["volumegroupsnapshotclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["groupsnapshot.storage.k8s.io"]
+  resources: ["volumegroupsnapshotcontents"]
+  verbs: ["create", "get", "list", "watch", "update", "delete", "patch"]
+- apiGroups: ["groupsnapshot.storage.k8s.io"]
+  resources: ["volumegroupsnapshotcontents/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["csinodes"]
   verbs: ["get", "list", "watch"]
