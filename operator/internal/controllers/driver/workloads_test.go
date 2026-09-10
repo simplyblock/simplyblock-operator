@@ -35,17 +35,23 @@ func argValue(c *corev1.Container, flag string) (string, bool) {
 	return "", false
 }
 
-// U-06: one image versions both plugins, and never two.
+// U-06: one image versions both plugins, and never two. The image is the
+// resolved one rather than the spec's, so the driver a deployment that stated
+// nothing runs is the same on both sides.
 func TestOneImageReachesBothPlugins(t *testing.T) {
-	d := testDriver("simplyblock")
+	const resolved = "public.ecr.aws/simply-block/spdkcsi:resolved-not-from-the-spec"
 
-	node := containerNamed(nodeDaemonSet(d).Spec.Template.Spec.Containers, "csi-node")
-	controller := containerNamed(controllerStatefulSet(d).Spec.Template.Spec.Containers, "csi-controller")
+	d := testDriver("simplyblock")
+	d.Spec.Image = "quay.io/simplyblock-io/spdkcsi:the-spec-says-something-else"
+
+	node := containerNamed(nodeDaemonSet(d, resolved).Spec.Template.Spec.Containers, "csi-node")
+	controller := containerNamed(
+		controllerStatefulSet(d, resolved).Spec.Template.Spec.Containers, "csi-controller")
 	if node == nil || controller == nil {
 		t.Fatal("a plugin container is missing")
 	}
-	if node.Image != d.Spec.Image || controller.Image != d.Spec.Image {
-		t.Errorf("node = %q, controller = %q, want both %q", node.Image, controller.Image, d.Spec.Image)
+	if node.Image != resolved || controller.Image != resolved {
+		t.Errorf("node = %q, controller = %q, want both %q", node.Image, controller.Image, resolved)
 	}
 }
 
@@ -53,7 +59,7 @@ func TestOneImageReachesBothPlugins(t *testing.T) {
 // driver's own socket rather than to whatever else the cluster runs.
 func TestEverySidecarIsAppliedAndAddressedToThisDriver(t *testing.T) {
 	d := testDriver("simplyblock")
-	sts := controllerStatefulSet(d)
+	sts := controllerStatefulSet(d, testImage)
 
 	want := []string{"csi-provisioner", "csi-snapshotter", "csi-attacher", "csi-resizer", "csi-health-monitor"}
 	for _, name := range want {
@@ -68,7 +74,7 @@ func TestEverySidecarIsAppliedAndAddressedToThisDriver(t *testing.T) {
 		}
 	}
 
-	registrar := containerNamed(nodeDaemonSet(d).Spec.Template.Spec.Containers, "csi-registrar")
+	registrar := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-registrar")
 	if registrar == nil {
 		t.Fatal("csi-registrar is not applied")
 	}
@@ -83,7 +89,7 @@ func TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle(t *testing.T) {
 	d := testDriver("simplyblock")
 	d.Spec.EnableVolumeSnapshots = ptr.To(false)
 
-	if containerNamed(controllerStatefulSet(d).Spec.Template.Spec.Containers, "csi-snapshotter") == nil {
+	if containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-snapshotter") == nil {
 		t.Error("the snapshotter sidecar was dropped, which is the cluster's controller's toggle and not its own")
 	}
 }
@@ -94,7 +100,7 @@ func TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle(t *testing.T) {
 func TestDriverNameReachesTheKubeletPaths(t *testing.T) {
 	d := testDriver("simplyblock")
 	d.Spec.DriverName = altDriverName
-	ds := nodeDaemonSet(d)
+	ds := nodeDaemonSet(d, testImage)
 
 	registrar := containerNamed(ds.Spec.Template.Spec.Containers, "csi-registrar")
 	got, ok := argValue(registrar, "--kubelet-registration-path")
@@ -118,7 +124,7 @@ func TestNoObjectCarriesTheDefaultAlongsideAnOverride(t *testing.T) {
 	d := testDriver("simplyblock")
 	d.Spec.DriverName = altDriverName
 
-	ds := nodeDaemonSet(d)
+	ds := nodeDaemonSet(d, testImage)
 	for _, c := range ds.Spec.Template.Spec.Containers {
 		for _, a := range c.Args {
 			if strings.Contains(a, DefaultDriverName) {
@@ -139,7 +145,7 @@ func TestReplicasReachTheControllerOnly(t *testing.T) {
 	d := testDriver("simplyblock")
 	d.Spec.ControllerReplicas = ptr.To(int32(3))
 
-	sts := controllerStatefulSet(d)
+	sts := controllerStatefulSet(d, testImage)
 	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 3 {
 		t.Errorf("replicas = %v, want 3", sts.Spec.Replicas)
 	}
@@ -155,8 +161,8 @@ func TestPlacementReachesItsOwnPluginOnly(t *testing.T) {
 	d.Spec.ControllerNodeSelector = map[string]string{"role": "control"}
 	d.Spec.ControllerTolerations = []corev1.Toleration{{Key: "control", Operator: corev1.TolerationOpExists}}
 
-	ds := nodeDaemonSet(d).Spec.Template.Spec
-	sts := controllerStatefulSet(d).Spec.Template.Spec
+	ds := nodeDaemonSet(d, testImage).Spec.Template.Spec
+	sts := controllerStatefulSet(d, testImage).Spec.Template.Spec
 
 	if ds.NodeSelector["storage"] != "yes" || len(ds.NodeSelector) != 1 {
 		t.Errorf("node plugin nodeSelector = %v, want only the node pair", ds.NodeSelector)
@@ -181,17 +187,17 @@ func TestResourcesReachTheirOwnPlugin(t *testing.T) {
 	d.Spec.NodeResources = nodeReq
 	d.Spec.ControllerResources = ctrlReq
 
-	node := containerNamed(nodeDaemonSet(d).Spec.Template.Spec.Containers, "csi-node")
+	node := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-node")
 	if got := node.Resources.Limits.Cpu().String(); got != "2" {
 		t.Errorf("node plugin cpu limit = %s, want 2", got)
 	}
-	controller := containerNamed(controllerStatefulSet(d).Spec.Template.Spec.Containers, "csi-controller")
+	controller := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller")
 	if got := controller.Resources.Limits.Cpu().String(); got != "1" {
 		t.Errorf("controller plugin cpu limit = %s, want 1", got)
 	}
 	// The registrar is the node plugin's sidecar and takes no resource block:
 	// the chart gives it none, and inventing one is a restart nobody asked for.
-	registrar := containerNamed(nodeDaemonSet(d).Spec.Template.Spec.Containers, "csi-registrar")
+	registrar := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-registrar")
 	if len(registrar.Resources.Limits) != 0 {
 		t.Errorf("csi-registrar has limits it did not have before: %v", registrar.Resources.Limits)
 	}
@@ -202,7 +208,7 @@ func TestResourcesReachTheirOwnPlugin(t *testing.T) {
 // Losing that is losing every attach in the cluster, so it is asserted rather
 // than assumed.
 func TestNodePluginKeepsThePrivilegeItNeeds(t *testing.T) {
-	ds := nodeDaemonSet(testDriver("simplyblock"))
+	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
 	spec := ds.Spec.Template.Spec
 
 	node := containerNamed(spec.Containers, "csi-node")
@@ -230,8 +236,8 @@ func TestBothPluginsMountThisDeploymentsConfiguration(t *testing.T) {
 	n := names(d)
 
 	for _, volumes := range [][]corev1.Volume{
-		nodeDaemonSet(d).Spec.Template.Spec.Volumes,
-		controllerStatefulSet(d).Spec.Template.Spec.Volumes,
+		nodeDaemonSet(d, testImage).Spec.Template.Spec.Volumes,
+		controllerStatefulSet(d, testImage).Spec.Template.Spec.Volumes,
 	} {
 		for _, v := range volumes {
 			switch v.Name {
@@ -261,7 +267,7 @@ func TestPullPolicyDefaultsAndOverrides(t *testing.T) {
 	if got := pullPolicy(d); got != corev1.PullAlways {
 		t.Errorf("pull policy = %q, want the spec's Always", got)
 	}
-	for _, c := range nodeDaemonSet(d).Spec.Template.Spec.Containers {
+	for _, c := range nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers {
 		if c.ImagePullPolicy != corev1.PullAlways {
 			t.Errorf("%s pull policy = %q, want Always", c.Name, c.ImagePullPolicy)
 		}

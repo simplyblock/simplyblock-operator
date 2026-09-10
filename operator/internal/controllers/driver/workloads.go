@@ -76,7 +76,7 @@ func nodePluginHostDir(driver string) string {
 // belongs with the csi-link design rather than being guessed at from the
 // template it used to be rendered from.
 
-func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver) *appsv1.DaemonSet {
+func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *appsv1.DaemonSet {
 	n := names(d)
 	s := sidecars(d)
 	driver := n.csiDriver
@@ -96,7 +96,7 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver) *appsv1.DaemonSet {
 					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
-						nodePluginContainer(d),
+						nodePluginContainer(d, image),
 					},
 					Volumes: nodeVolumes(n, driver),
 				},
@@ -134,12 +134,12 @@ func nodeRegistrarContainer(
 	}
 }
 
-func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver) corev1.Container {
+func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
 	bidirectional := corev1.MountPropagationBidirectional
 
 	return corev1.Container{
 		Name:            "csi-node",
-		Image:           d.Spec.Image,
+		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		SecurityContext: &corev1.SecurityContext{
 			Privileged:               ptr.To(true),
@@ -206,7 +206,7 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 	}
 }
 
-func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver) *appsv1.StatefulSet {
+func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *appsv1.StatefulSet {
 	n := names(d)
 	s := sidecars(d)
 	labels := map[string]string{"app": "csi-controller"}
@@ -246,7 +246,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver) *appsv1.Sta
 			"--csi-address=" + controllerSocketPath,
 			"--leader-election=false",
 		}),
-		controllerPluginContainer(d),
+		controllerPluginContainer(d, image),
 	}
 	// The snapshotter runs privileged in the chart, and the health monitor
 	// exposes a port. Both are properties of the container rather than of the
@@ -301,10 +301,10 @@ func controllerSidecar(
 	}
 }
 
-func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver) corev1.Container {
+func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string) corev1.Container {
 	return corev1.Container{
 		Name:            "csi-controller",
-		Image:           d.Spec.Image,
+		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
 		Args: []string{
 			verbosity,

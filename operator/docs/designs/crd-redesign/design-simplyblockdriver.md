@@ -144,6 +144,17 @@ DriverName string `json:"driverName,omitempty"`
 plugin from two builds is the skew of §5 inside one deployment, and there is no
 rollout in which it is wanted.
 
+**`image` unset takes the operator's own registry and tag with the CSI driver's
+repository.** The driver ships from the build that ships the operator
+reconciling it, so a deployment that states nothing runs the pairing that
+release was tested as, and an operator upgrade carries its driver forward
+without a second edit. The operator's image reaches it as `SB_OPERATOR_IMAGE`
+on its own deployment rather than by reading its pod, because a pod names the
+tag it was deployed with and a registry may have moved that tag since. A digest
+does not carry, since a digest identifies one image and says nothing about
+another, so a reference pinned by digest alone leaves the field with no default
+and the object has to state one.
+
 **`nodeSelector` empty means every schedulable worker**, which is the usual case:
 a node that cannot attach a volume cannot run a workload that needs one.
 Restricting it is for a cluster where some workers are deliberately not storage
@@ -966,14 +977,13 @@ type SidecarImages struct {
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
 type SimplyblockDriverSpec struct {
-	// Image is the CSI driver image, used by both plugins.
-	// The empty alternative the optional image fields carry is deliberately
-	// absent: this one is Required, and Required on a string is satisfied by
-	// the empty string, so a pattern admitting it would accept an object that
-	// names no image and produce a container that cannot start.
-	// +kubebuilder:validation:Pattern=`^(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?$`
-	// +kubebuilder:validation:Required
-	Image string `json:"image"`
+	// Image is the CSI driver image, used by both plugins. Unset takes the
+	// operator's own registry and tag with the CSI driver's repository, so a
+	// deployment that states nothing runs the driver belonging to the operator
+	// reconciling it, which is the pairing the release was tested as.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent

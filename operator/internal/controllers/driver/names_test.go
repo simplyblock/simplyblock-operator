@@ -39,6 +39,10 @@ var chartNames = map[string]string{
 	"health-monitor binding": "simplyblock-csi-health-monitor-binding",
 }
 
+// testImage is what the builders are handed where the resolution itself is
+// not what a test is about.
+const testImage = "quay.io/simplyblock-io/spdkcsi:v26.2.6"
+
 func testDriver(name string) *simplyblockv1alpha2.SimplyblockDriver {
 	return &simplyblockv1alpha2.SimplyblockDriver{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "simplyblock"},

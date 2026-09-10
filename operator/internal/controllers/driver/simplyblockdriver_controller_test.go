@@ -49,7 +49,7 @@ func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t)}
 
 	counts := map[string]int{}
-	for _, obj := range r.desired(d) {
+	for _, obj := range r.desired(d, testImage) {
 		switch obj.(type) {
 		case *corev1.ServiceAccount:
 			counts["sa"]++
@@ -90,7 +90,7 @@ func TestTheCredentialsSecretIsNotOwnedHere(t *testing.T) {
 	d := testDriver("simplyblock")
 	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t)}
 
-	for _, obj := range r.desired(d) {
+	for _, obj := range r.desired(d, testImage) {
 		if _, isSecret := obj.(*corev1.Secret); isSecret {
 			t.Errorf("the deployment claims Secret %s, which another controller writes", obj.GetName())
 		}
@@ -107,9 +107,9 @@ func TestSnapshotClassFollowsTheToggle(t *testing.T) {
 	off := false
 	disabled.Spec.EnableVolumeSnapshots = &off
 
-	if len(r.desired(enabled))-len(r.desired(disabled)) != 1 {
+	if len(r.desired(enabled, testImage))-len(r.desired(disabled, testImage)) != 1 {
 		t.Errorf("the toggle changed the object set by %d, want exactly the snapshot class",
-			len(r.desired(enabled))-len(r.desired(disabled)))
+			len(r.desired(enabled, testImage))-len(r.desired(disabled, testImage)))
 	}
 }
 
@@ -120,7 +120,7 @@ func TestEveryAppliedObjectIsOwned(t *testing.T) {
 	scheme := reconcilerScheme(t)
 	r := &SimplyblockDriverReconciler{Scheme: scheme}
 
-	for _, obj := range r.desired(d) {
+	for _, obj := range r.desired(d, testImage) {
 		if err := setOwnership(d, obj, scheme); err != nil {
 			t.Fatalf("%T %s: %v", obj, obj.GetName(), err)
 		}

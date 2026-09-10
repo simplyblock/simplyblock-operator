@@ -57,6 +57,7 @@ const (
 	reasonNoMatchingWorkers = "NoMatchingWorkers"
 	reasonDriverAdopted     = "DriverAdopted"
 	reasonAdoptionRefused   = "AdoptionRefused"
+	reasonNoImage           = "NoImage"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -158,6 +159,15 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// always says the same thing.
 	//
 	// The test plan's U-20 to U-25 and U-45 to U-53 are the rows this owes.
+	// An image that cannot be resolved is a deployment nothing can apply, and
+	// it is a configuration rather than a transient failure, so it is reported
+	// on the object rather than retried against the backoff.
+	if _, err := driverImage(&d); err != nil {
+		r.event(&d, corev1.EventTypeWarning, reasonNoImage, err.Error())
+		return ctrl.Result{RequeueAfter: driverResyncInterval},
+			r.setStatus(ctx, &d, simplyblockv1alpha2.SimplyblockDriverPhaseInstalling, err.Error())
+	}
+
 	met, err := r.apply(ctx, &d)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -244,7 +254,9 @@ func (r *SimplyblockDriverReconciler) event(
 // desired is every object this deployment owns, in the order it is applied:
 // the accounts and configuration first, then the RBAC that names the accounts,
 // then the workloads that mount the configuration, and the registration last.
-func (r *SimplyblockDriverReconciler) desired(d *simplyblockv1alpha2.SimplyblockDriver) []client.Object {
+func (r *SimplyblockDriverReconciler) desired(
+	d *simplyblockv1alpha2.SimplyblockDriver, image string,
+) []client.Object {
 	objects := make([]client.Object, 0, 18)
 
 	for _, sa := range serviceAccounts(d) {
@@ -259,7 +271,7 @@ func (r *SimplyblockDriverReconciler) desired(d *simplyblockv1alpha2.Simplyblock
 	for _, crb := range clusterRoleBindings(d) {
 		objects = append(objects, crb)
 	}
-	objects = append(objects, nodeDaemonSet(d), controllerStatefulSet(d), csiDriver(d))
+	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
 	if snapshotsEnabled(d) {
 		objects = append(objects, volumeSnapshotClass(d))
 	}
@@ -281,7 +293,11 @@ func (r *SimplyblockDriverReconciler) desired(d *simplyblockv1alpha2.Simplyblock
 func (r *SimplyblockDriverReconciler) apply(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (metExisting bool, err error) {
-	for _, obj := range r.desired(d) {
+	image, err := driverImage(d)
+	if err != nil {
+		return false, err
+	}
+	for _, obj := range r.desired(d, image) {
 		fromHelm, existed, err := r.inspectExisting(ctx, obj)
 		if err != nil {
 			return false, err
@@ -481,8 +497,11 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 func (r *SimplyblockDriverReconciler) ownedClusterScoped(
 	d *simplyblockv1alpha2.SimplyblockDriver,
 ) []client.Object {
+	// The image does not matter here: the cluster-scoped objects do not carry
+	// one, and a deployment whose image cannot be resolved still has to be
+	// deletable.
 	var out []client.Object
-	for _, obj := range r.desired(d) {
+	for _, obj := range r.desired(d, "") {
 		if obj.GetNamespace() == "" {
 			out = append(out, obj)
 		}
