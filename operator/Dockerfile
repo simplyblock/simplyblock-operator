@@ -56,6 +56,11 @@ ARG VERSION=0.1.0
 ARG RELEASE=1
 
 # Apply all available security patches from the UBI10 repositories.
+#
+# checkov:skip=CKV_DOCKER_5: The check wants an update paired with an install,
+# so that a stale package index cannot be cached ahead of one. Patching the
+# base image is the whole purpose of this layer and it installs nothing, which
+# is what Red Hat certification asks of a UBI-derived image.
 RUN microdnf update -y && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).

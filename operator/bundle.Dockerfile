@@ -1,5 +1,9 @@
 FROM scratch
 
+# checkov:skip=CKV_DOCKER_3: An OLM bundle is metadata, not a runnable image.
+# It has no shell and no user database to add a user to, and nothing ever
+# executes in it: the registry reads the labels and copies the manifests out.
+
 # Core bundle labels.
 LABEL operators.operatorframework.io.bundle.mediatype.v1=registry+v1
 LABEL operators.operatorframework.io.bundle.manifests.v1=manifests/

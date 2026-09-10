@@ -38,6 +38,15 @@ skip-path:
   # types it is rendered from, so it is fixed there and regenerated.
   - operator/config/crd/
   - operator/config/rbac/
+  # The Kustomize overlays, which are strategic-merge patch fragments rather
+  # than whole manifests. MegaLinter's image carries no Kustomize binary, so
+  # checkov reports `Framework will be disabled for this run` and falls back to
+  # reading each file as a complete resource. It then reports every field the
+  # fragment does not repeat: 38 findings across two patches, including a
+  # read-only root filesystem that config/manager/manager.yaml does set. The
+  # base is not skipped, because it is a whole manifest and its findings are
+  # real.
+  - operator/config/default/
   - operator/dist/
   # Outside the three directories checkov is meant to cover (helm-charts,
   # csi-driver, and operator). Scoping by skip-path rather than by repeating

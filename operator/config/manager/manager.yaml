@@ -55,6 +55,11 @@ spec:
         # This ensures that deployments meet the highest security requirements for Kubernetes.
         # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
         runAsNonRoot: true
+        # The image sets USER 65532, and the Helm chart's own Deployment pins the
+        # same id. Naming it here too means the manifest says what it runs as
+        # rather than deferring to whatever the image happens to declare, and it
+        # is high enough not to collide with a host user.
+        runAsUser: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:

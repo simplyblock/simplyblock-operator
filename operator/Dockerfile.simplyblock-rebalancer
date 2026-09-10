@@ -53,12 +53,25 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
     fi
 
-RUN dnf update -y --nogpgcheck && \
+# The oraclelinux-release RPM above sets gpgcheck=1 on the repositories it adds
+# and points them at file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle, which is a file
+# it does not ship: only Red Hat's keys are on disk. Importing Oracle's key is
+# what lets the packages below be verified. Without it dnf can only be told
+# --nogpgcheck, which installs fio and nvme-cli into a certified image without
+# checking who signed them.
+RUN rpm --import https://yum.oracle.com/RPM-GPG-KEY-oracle-ol10
+
+# checkov:skip=CKV2_DOCKER_1: sudo is the point, not an oversight. The container
+# runs as uid 65532 to satisfy the OpenShift SCC and Red Hat certification, and
+# nvme-cli and fio need kernel access it cannot have. The sudoers file written
+# below grants exactly two binaries and nothing else, which is a narrower grant
+# than running the whole container as root would be.
+RUN dnf update -y && \
     dnf install -y --nodocs \
         fio \
         nvme-cli \
         sudo \
-    && dnf remove -y python3-urllib3 python3-requests python3-idna --nogpgcheck \
+    && dnf remove -y python3-urllib3 python3-requests python3-idna \
     && dnf clean all
 
 COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock-rebalancer

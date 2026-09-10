@@ -6476,6 +6476,7 @@ spec:
           name: webhook-certs
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: simplyblock-operator-controller-manager
