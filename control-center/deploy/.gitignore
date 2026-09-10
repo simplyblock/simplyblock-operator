@@ -1,0 +1,5 @@
+# The repo-root .gitignore ignores build/ (build output). This build/ holds the
+# checked-in prepare.mjs build script, not output — re-include it, or the image
+# build fails on a missing module.
+!build/
+!build/prepare.mjs
