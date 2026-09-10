@@ -79,7 +79,7 @@ the documentation for the supported, end-to-end installation flow — it wires u
 
 ## 🔐 Access Control (RBAC)
 
-The operator delegates user authorisation entirely to standard Kubernetes RBAC.
+The operator delegates user authorization entirely to standard Kubernetes RBAC.
 It does not ship per-CR `admin`/`editor`/`viewer` ClusterRoles or any
 identity-bearing fields on its CRs; cluster admins write `Role`s,
 `RoleBinding`s and `ClusterRoleBinding`s using the normal K8s primitives.
@@ -96,11 +96,11 @@ backend, sets `status.status = "InvalidClusterReference"`, and emits a
 This converts "admin of cluster `foo`" into "admin of the namespace where
 StorageCluster `foo` lives" — a problem standard K8s RBAC already solves
 cleanly. The recommended layout is one namespace per logical storage cluster
-(e.g. `cluster-prod`, `cluster-staging`).
+(e.g., `cluster-prod`, `cluster-staging`).
 
 ### Aggregation into the built-in `view`/`edit`/`admin` roles
 
-The operator installs two `ClusterRole`s labelled to aggregate into the
+The operator installs two `ClusterRole`s labeled to aggregate into the
 standard Kubernetes ClusterRoles:
 
 | Operator ClusterRole              | Aggregates into     | Grants on simplyblock CRs            |
@@ -125,7 +125,7 @@ kubectl create rolebinding alice-admin \
 
 ### Per-resource scoping with `resourceNames`
 
-For finer-grained delegation — e.g. admin only of `StorageCluster/prod`, not
+For finer-grained delegation — e.g., admin only of `StorageCluster/prod`, not
 any other `StorageCluster` in the same namespace — write a `Role` with
 `resourceNames`:
 
@@ -164,7 +164,7 @@ subjects:
 > for `list`, `watch`, and `create`. A user with only the Role above can
 > `kubectl get storagecluster prod` (a named GET) but not
 > `kubectl get storagecluster` (a LIST) — they will need a separate, broader
-> binding (e.g. the `view` ClusterRole) if you want them to enumerate. This is
+> binding (e.g., the `view` ClusterRole) if you want them to enumerate. This is
 > a property of K8s RBAC, not the operator.
 
 ### Delegating who can create clusters and grant admin
@@ -177,7 +177,7 @@ common patterns:
   aggregation role makes that work). To stop arbitrary users from creating
   namespaces, restrict `create namespaces` at the cluster scope.
 * **Gate by SA.** Reserve `create storageclusters` for a small set of service
-  accounts (e.g. your platform automation) and have them stand up tenant
+  accounts (e.g., your platform automation) and have them stand up tenant
   namespaces on demand.
 
 To let a "cluster owner" delegate admin to teammates *without* giving them

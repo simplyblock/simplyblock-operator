@@ -7,7 +7,7 @@ version:
 | Component   | Directory      | Role                                                                       |
 |-------------|----------------|----------------------------------------------------------------------------|
 | atlas-lib   | `atlas-lib/`   | Shared library: node-level storage primitives and the control-plane client |
-| operator    | `operator/`    | The kubebuilder operator: CRDs, reconcilers, webhooks                      |
+| operator    | `operator/`    | The Kubebuilder operator: CRDs, reconcilers, webhooks                      |
 | csi-driver  | `csi-driver/`  | The `spdkcsi` CSI driver                                                   |
 | helm-charts | `helm-charts/` | Chart sources; `charts/simplyblock-operator` is the development chart      |
 

@@ -1,6 +1,6 @@
 # Simplyblock CSI Driver
 
-**High-performance NVMe/TCP (NVMe-over-Fabrics) CSI driver for Kubernetes**
+**High-performance NVMe/TCP (NVMe over Fabrics) CSI driver for Kubernetes**
 
 ![](../assets/simplyblock-logo.svg)
 
@@ -34,7 +34,7 @@ features like:
 | Feature                           | Benefit                                                                 |
 |----------------------------------|-------------------------------------------------------------------------|
 | **Dynamic Volume Provisioning**   | Dynamically provision and lifecycle-manage persistent volumes in Kubernetes |
-| **NVMe/TCP Support**              | High throughput, low latency storage over standard Ethernet              |
+| **NVMe/TCP Support**              | High throughput, low-latency storage over standard Ethernet              |
 | **Snapshots & Clones**           | Efficient data protection and instant provisioning                      |
 | **Erasure Coding**                | Fault-tolerant, space-efficient redundancy                             |
 | **Multi-tenancy & QoS**          | Isolated tenants with guaranteed IOPS, bandwidth, and latency           |
