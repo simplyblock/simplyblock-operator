@@ -1994,9 +1994,22 @@ custom resource.
 
 ### 29.4 The Migration Tool
 
-`operator/cmd/simplyblock-upgrade/`, also built into the operator image, so that
-it can run either from a workstation against a kubeconfig or as a Job in the
-cluster.
+`operator/cmd/simplyblock-upgrade/`, built on its own and **not** shipped in the
+operator image. `make -C operator build-upgrade` builds it, for the
+`UPGRADE_GOOS` and `UPGRADE_GOARCH` it is given, and
+`.github/workflows/operator_upgrade_tool.yaml` runs that target for the four
+platforms it is administered from.
+
+The operator image is the wrong carrier for it. The tool is what makes a cluster
+capable of running the new operator, so a copy arriving inside that operator's
+image has to be pulled before the thing it is a prerequisite for, and reaching
+it from a workstation means extracting a binary out of a container. Where it is
+released from instead is undecided, and the workflow publishes nothing: it
+builds the four binaries and keeps them as artifacts, which is what says the
+tool still compiles for the platforms it will be run from.
+
+It reaches a cluster through a kubeconfig, or through the in-cluster
+configuration when it is run as a Job.
 
 ```text
 simplyblock-upgrade preflight    # read-only: the checks and the plan (§27)

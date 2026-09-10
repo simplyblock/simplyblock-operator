@@ -114,6 +114,10 @@ operator-build-installer: ## Generate the operator dist/install.yaml.
 operator-build: ## Build the operator manager binary.
 	$(MAKE) -C $(OPERATOR_DIR) build
 
+.PHONY: operator-build-upgrade
+operator-build-upgrade: ## Build the API upgrade tool, which is not in the operator image.
+	$(MAKE) -C $(OPERATOR_DIR) build-upgrade
+
 operator-test: ## Test operator.
 	$(MAKE) -C $(OPERATOR_DIR) test
 

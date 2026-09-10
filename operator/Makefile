@@ -171,6 +171,32 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
+# The API upgrade tool is built on its own and is not in the operator image. It
+# prepares a cluster to run the new operator, so a copy shipped inside that
+# operator's image would have to be pulled before the thing it is a prerequisite
+# for, and reaching it from a workstation would mean extracting a binary out of
+# a container.
+#
+# The platform is a variable because the tool runs from wherever somebody
+# administers the cluster from, which is a laptop as often as a jump host, and
+# because CI builds all four combinations from one runner. The output name
+# carries the platform so those four can be collected side by side.
+#
+# CGO is off: the tool reaches the Kubernetes API with the caller's own
+# credentials and does no crypto of its own, so it needs neither cgo nor
+# BoringCrypto, and a static binary is what makes it copyable to the host it is
+# run from.
+UPGRADE_GOOS   ?= $(shell go env GOOS)
+UPGRADE_GOARCH ?= $(shell go env GOARCH)
+UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
+
+.PHONY: build-upgrade
+build-upgrade: ## Build simplyblock-upgrade for UPGRADE_GOOS/UPGRADE_GOARCH.
+	mkdir -p $(dir $(UPGRADE_BIN))
+	CGO_ENABLED=0 GOOS=$(UPGRADE_GOOS) GOARCH=$(UPGRADE_GOARCH) \
+		go build -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
+	@echo "built $(UPGRADE_BIN)"
+
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
