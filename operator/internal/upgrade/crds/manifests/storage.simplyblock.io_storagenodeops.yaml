@@ -86,7 +86,7 @@ spec:
                       SystemVolumeFilterRegex is a Go regular expression matched against backend
                       volume names. Matching volumes are treated as system volumes: excluded from
                       drain migration and deleted inline during the Verifying phase.
-                      Defaults to "^sb-fio-baseline-.*".
+                      Defaults to `^sb-fio-baseline-.*`.
                     type: string
                 type: object
               force:

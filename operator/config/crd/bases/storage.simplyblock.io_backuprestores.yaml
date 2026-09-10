@@ -349,7 +349,7 @@ spec:
                 description: PVCNamespace is the namespace of the created PVC.
                 type: string
               restoredLvolID:
-                description: RestoredLvolID is the UUID of the newly-created logical
+                description: RestoredLvolID is the UUID of the newly created logical
                   volume.
                 type: string
               sourceClusterUUID:

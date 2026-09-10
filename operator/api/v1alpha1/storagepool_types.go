@@ -87,7 +87,7 @@ type StorageClassParameters struct {
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric"
-	// Fabric is the transport fabric (e.g., TCP).
+	// Fabric is the transport fabric (e.g., `tcp`).
 	// +kubebuilder:default=tcp
 	Fabric string `json:"fabric,omitempty"`
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.

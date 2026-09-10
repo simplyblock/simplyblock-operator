@@ -83,7 +83,7 @@ spec:
                   rule: self == oldSelf
               nodeRollingRestart:
                 description: |-
-                  NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
+                  NodeRollingRestart configures behavior specific to the node-rolling-restart action.
                   Ignored for all other actions.
                 properties:
                   refreshSNodeAPI:
