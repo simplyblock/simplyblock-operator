@@ -161,7 +161,7 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 | Axis                       | Values covered                                                         | IDs                                                     | Not covered                          |
 |----------------------------|------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
 | Cluster topology           | 1 node, multi-node with a pinned group                                 | E-01, E-02                                              | asymmetric node sizes                |
-| Group size                 | 1 member, 3+ members                                                   | E-01, E-04                                              | very large groups (subsystem slots)  |
+| Group size                 | 1 member, 3+ members, the 20-member cap boundary (sbcli unit)          | E-01, E-04                                              | very large groups (subsystem slots)  |
 | Membership change          | join at create, one-way detach, death with last member                 | E-01, E-03, E-08, E-11                                  | re-establish via a labeled clone     |
 | Selector versus membership | equal, extra handle, missing handle, two groups                        | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
 | Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                      | U-04 … U-10, I-04, I-05                                 | —                                    |
