@@ -10,17 +10,25 @@
 ---
 name: MegaLinter
 
-# A full-codebase run takes tens of minutes, so it is spent on the two places a
-# result is acted on: the merge target, and the pull request proposing a merge
-# into it.
+# Nothing triggers this yet. The gate reports roughly a thousand findings, and
+# every one of them still has to be read before a run on main or on a pull
+# request tells anybody something they should act on. Running it in the meantime
+# would spend tens of minutes per push to print a number nobody is working
+# down, which is how a gate teaches people to ignore it.
+#
+# workflow_dispatch keeps it runnable by hand while that reading happens. What
+# it should become is the two places a result is acted on:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     pull_request:
+#       branches: [main]
+#
+# and DISABLE_ERRORS should come out of .mega-linter.yml at the same time, so
+# that a finding fails the job rather than being noted in it.
 on:
-  push:
-    branches:
-      - main
-
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
