@@ -123,16 +123,23 @@ func TestHandover_AnObjectAlreadyKeptIsFinishedRatherThanUntouched(t *testing.T)
 	}
 }
 
-func TestHandover_TheOtherUpgradeStepsStillCollapse(t *testing.T) {
-	// Only the handover has objects. The rest act on the upgrade itself, and
-	// printing that subject under each would say the step twice.
+func TestHandover_TheStepsWithNoObjectsStillCollapse(t *testing.T) {
+	// The steps that act on the upgrade itself print one line. The handover
+	// acts on the objects a release installed and the two CRD steps on the
+	// CRDs this binary carries, so those name what they act on.
+	perObject := map[upgrade.ID]bool{
+		IDHandOverRelease:   true,
+		IDApplyCRDs:         true,
+		IDVerifyCRDVersions: true,
+	}
+
 	plan := upgradePlan(t, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name: "simplyblock-webappapi", Namespace: "simplyblock", Annotations: helmOwned()}})
 
 	for _, task := range plan.Tasks {
-		if task.Step == IDHandOverRelease {
+		if perObject[task.Step] {
 			if task.Collapsed() {
-				t.Error("the handover collapsed, hiding the objects it acts on")
+				t.Errorf("%s collapsed, hiding the objects it acts on", task.Step)
 			}
 			continue
 		}

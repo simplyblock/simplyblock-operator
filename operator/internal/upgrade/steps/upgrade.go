@@ -1,16 +1,18 @@
-// §9.1's sequence, described in full and performed by none of it yet.
+// §9.1's sequence, described in full and performed in part.
 //
 // The steps are here before their implementations because the plan is what a
 // user reads to decide whether to run the thing, and a plan short of what the
 // upgrade owes is worse than no plan: silence reads as nothing to do. So each
-// step describes its work now, says what is missing, and the runner refuses the
-// stage rather than performing the part that exists and stopping in the middle.
+// step describes its work now, says what is missing where anything is, and the
+// runner refuses the stage rather than performing the part that exists and
+// stopping in the middle.
 //
-// What is missing is mostly one thing. §29.1's v1alpha2 package covers two of
-// the eleven new kinds and none of the seven converting ones, and §29.2's
-// conversion functions do not exist, so there is nothing to convert between and
-// nothing to deploy a conversion webhook for. The release handover is blocked
-// on a different thing, which is Helm's Go SDK not being a dependency.
+// The two CRD steps are in crds.go and are real. What the rest are missing is
+// mostly one thing: §29.1's v1alpha2 package covers two of the eleven new
+// kinds and none of the seven converting ones, and §29.2's conversion
+// functions do not exist, so there is nothing to convert between and nothing
+// to deploy a conversion webhook for. The release handover is blocked on a
+// different thing, which is the new chart not being rendered yet.
 //
 // Step 1 of §9.1 is absent on purpose: validating prerequisites is the Check
 // registry, which already runs for this stage. Step 13 is absent too, being the
@@ -73,20 +75,8 @@ func Upgrade() []upgrade.Step {
 			blocked: needsConversion,
 			needs:   []upgrade.ID{IDAwaitWebhook},
 		},
-		planned{
-			id:      IDApplyCRDs,
-			summary: "applies the CRDs, both versions served and v1alpha1 still the storage version",
-			verb:    upgrade.VerbUpdate,
-			blocked: needsV1Alpha2,
-			needs:   []upgrade.ID{IDSmokeTestWebhook},
-		},
-		planned{
-			id:      IDVerifyCRDVersions,
-			summary: "checks that the API server accepted every CRD, since a partly applied set is the worst outcome",
-			verb:    upgrade.VerbVerify,
-			blocked: needsV1Alpha2,
-			needs:   []upgrade.ID{IDApplyCRDs},
-		},
+		applyCRDs{},
+		verifyCRDVersions{},
 		planned{
 			id:      IDRetestConversion,
 			summary: "converts again now that the CRDs have changed under the webhook",

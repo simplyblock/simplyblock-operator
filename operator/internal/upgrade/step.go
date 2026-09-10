@@ -135,7 +135,12 @@ type Coverage struct {
 // Covered reports what this step has to say about every subject of a run.
 func Covered(ctx context.Context, s *Scope, step Step) (Coverage, error) {
 	var out Coverage
-	for _, subject := range s.Subjects() {
+
+	subjects, err := SubjectsFor(ctx, s, step)
+	if err != nil {
+		return out, err
+	}
+	for _, subject := range subjects {
 		action, err := step.Describe(ctx, s, subject)
 		if err != nil {
 			return out, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)

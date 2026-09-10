@@ -180,7 +180,11 @@ func (r *Runner) planStep(ctx context.Context, step Step) (Task, error) {
 		Blocked: blockedBy(step),
 	}
 
-	for _, subject := range r.Scope.Subjects() {
+	subjects, err := SubjectsFor(ctx, r.Scope, step)
+	if err != nil {
+		return task, err
+	}
+	for _, subject := range subjects {
 		action, err := step.Describe(ctx, r.Scope, subject)
 		if err != nil {
 			return task, fmt.Errorf("step %q could not describe %s: %w", step.ID(), subject, err)
@@ -205,7 +209,10 @@ func (r *Runner) planStep(ctx context.Context, step Step) (Task, error) {
 func (r *Runner) Apply(ctx context.Context, step Step) error {
 	r.Scope.Report.Rule(step)
 
-	subjects := r.Scope.Subjects()
+	subjects, err := SubjectsFor(ctx, r.Scope, step)
+	if err != nil {
+		return r.stepFailed(step, err)
+	}
 	r.Scope.Report.Work(len(subjects))
 
 	changed, finished := 0, 0
