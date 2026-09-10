@@ -509,7 +509,7 @@ func TestReconcileStart_VolumeWithoutNQN_Fails(t *testing.T) {
 //
 // Run for both shapes the control plane returns: a migration of a shared subsystem
 // reports status "running" from the moment it is created, where a single-namespace one
-// starts at "new". Neither is terminal, so both must still be continued.
+// starts at `new`. Neither is terminal, so both must still be continued.
 func TestPerformMigration_AddressesMigrationBySubsystem(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

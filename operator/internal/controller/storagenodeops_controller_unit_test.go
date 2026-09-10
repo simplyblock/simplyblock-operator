@@ -545,7 +545,7 @@ func TestResolveOpsSystemVolumeFilter_InvalidPatternReturnsError(t *testing.T) {
 // EndpointSlice builder and the migrate flow's DNS gate: a slice built by
 // BuildStorageNodeSetEndpointSlice must be found by endpointSliceHasWorker. The
 // two independently encoded the slice name and hostname, and a rename that
-// touched only the builder silently wedged migrations at "waiting for DNS".
+// touched only the builder silently wedged migrations at `waiting for DNS`.
 func TestEndpointSliceHasWorker_MatchesBuilderOutput(t *testing.T) {
 	const ns = "test"
 	const worker = "worker-5.ocp.simplyblock.ai"

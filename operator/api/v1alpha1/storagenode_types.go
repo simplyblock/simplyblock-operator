@@ -39,7 +39,7 @@ type StorageNodeOverrides struct {
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
 	// SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-	// (e.g., "4G", "512M").
+	// (e.g., `4G`, `512M`).
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
@@ -114,7 +114,7 @@ type StorageNodeSpec struct {
 	// +kubebuilder:validation:Required
 	WorkerNode string `json:"workerNode"`
 
-	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g., "0", "1"). Immutable.
+	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g., `0`, `1`). Immutable.
 	// +k8s:immutable
 	// +optional
 	SocketID string `json:"socketId,omitempty"`

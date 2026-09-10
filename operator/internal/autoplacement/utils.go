@@ -79,7 +79,7 @@ type RebalancingConfig struct {
 	BaselineWindow time.Duration
 	// BaselineStep is the range-query step, matching the probe publish cadence.
 	BaselineStep time.Duration
-	// BaselineColdStart is the under-sampled-node policy: "partialWindow" (default) or "defer".
+	// BaselineColdStart is the under-sampled-node policy: `partialWindow` (default) or `defer`.
 	BaselineColdStart string
 	// BaselineMinSamples is the sample count below which a node is treated as under-sampled.
 	BaselineMinSamples int

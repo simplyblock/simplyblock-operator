@@ -356,7 +356,7 @@ func TestFdDrainGate2DomainsWholeDomainPlusOtherIsUnsafe(t *testing.T) {
 func TestFdDrainGate2DomainsOnePerDomainPlusExtraInEitherIsUnsafe(t *testing.T) {
 	// 1 node down in each of domains 1 and 2 already (the safe combo) --
 	// piling a SECOND node onto EITHER domain must now be blocked, even
-	// though that domain is already "active". This is the exact gap the old
+	// though that domain is already `active`. This is the exact gap the old
 	// unconditional-piling logic missed.
 	counts := map[int32]int{1: 1, 2: 1}
 	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); !blocked {

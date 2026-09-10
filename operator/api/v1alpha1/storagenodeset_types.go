@@ -124,7 +124,7 @@ type StorageNodeSetSpec struct {
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK System Memory"
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g., "4G", "512M").
+	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g., `4G`, `512M`).
 	// When omitted the backend default is used.
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
@@ -240,19 +240,19 @@ type StorageNodeSetStatus struct {
 	// TotalNodes is the total number of owned StorageNode CRs.
 	// +optional
 	TotalNodes int `json:"totalNodes,omitempty"`
-	// OnlineNodes is the count of StorageNode CRs with status "online".
+	// OnlineNodes is the count of StorageNode CRs with status `online`.
 	// +optional
 	OnlineNodes int `json:"onlineNodes,omitempty"`
-	// OfflineNodes is the count of StorageNode CRs with status "offline".
+	// OfflineNodes is the count of StorageNode CRs with status `offline`.
 	// +optional
 	OfflineNodes int `json:"offlineNodes,omitempty"`
-	// SuspendedNodes is the count of StorageNode CRs with status "suspended".
+	// SuspendedNodes is the count of StorageNode CRs with status `suspended`.
 	// +optional
 	SuspendedNodes int `json:"suspendedNodes,omitempty"`
-	// CreatingNodes is the count of StorageNode CRs with status "in_creation".
+	// CreatingNodes is the count of StorageNode CRs with status `in_creation`.
 	// +optional
 	CreatingNodes int `json:"creatingNodes,omitempty"`
-	// RemovedNodes is the count of StorageNode CRs with status "removed".
+	// RemovedNodes is the count of StorageNode CRs with status `removed`.
 	// +optional
 	RemovedNodes int `json:"removedNodes,omitempty"`
 

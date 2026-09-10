@@ -102,7 +102,7 @@ type ReplicationOpsStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Subphase describes what the operation is currently doing within the phase
-	// (e.g., "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+	// (e.g., `TriggeringFailover`, `UpdatingSlotStatuses`, `ReleasingLock`).
 	// +optional
 	Subphase string `json:"subphase,omitempty"`
 

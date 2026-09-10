@@ -1095,7 +1095,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 // first early out: a no-op when the cluster doesn't have failure domains
 // enabled at all. Re-fetches the parent StorageNodeSet (and StorageCluster)
 // rather than threading them through runDrain's whole dispatch chain --
-// Validating is the only sub-phase that needs them. Returns ("", nil) when
+// Validating is the only sub-phase that needs them. Returns (`""`, nil) when
 // removal is fine (including when FD data isn't populated yet, same as the
 // backend's own early outs); a non-empty reason means drainValidate must
 // fail rather than advance to Suspending.

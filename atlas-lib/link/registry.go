@@ -12,7 +12,7 @@ import (
 // Registry is the set of peers currently linked to a hub — who is reachable
 // right now, and how to reach them.
 //
-// It is the hub's answer to "call node worker-3", and the place absence is
+// It is the hub's answer to "call node worker-3," and the place absence is
 // expressed: a peer that has not linked, or whose session just dropped, is
 // simply not in it, and lookups fail with [ErrNoSession]. Registration happens
 // through the hub as sessions complete their handshake; callers read.

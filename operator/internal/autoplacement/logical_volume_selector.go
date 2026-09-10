@@ -294,7 +294,7 @@ type managedVolume struct {
 // BuildCSIManagedVolumes returns the simplyblock CSI-managed volumes in the given
 // cluster, derived from the PersistentVolumes. The rebalancer only ever acts on
 // PV/PVC-managed volumes; backend-only volumes (e.g., the per-node benchmark probes
-// "simplyblock-rebalancer-<nodeUUID>", which have no PV) are therefore never
+// `simplyblock-rebalancer-<nodeUUID>`, which have no PV) are therefore never
 // candidates. Pass an empty clusterUUID to include all clusters.
 //
 // The List is filtered server-side (via the cache field index) to PVs whose CSI

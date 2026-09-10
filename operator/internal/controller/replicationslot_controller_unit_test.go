@@ -669,7 +669,7 @@ func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 
 	// The VolumeID is "cluster-id:pool-id:vol-id"; findConsumerNode looks for
-	// a PV whose CSI handle's third segment matches "vol-id".
+	// a PV whose CSI handle's third segment matches `vol-id`.
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv1"},
 		Spec: corev1.PersistentVolumeSpec{

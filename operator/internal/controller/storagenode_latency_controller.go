@@ -220,7 +220,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 		Port: logicalVolumeConnectionPort(node),
 	}
 	// The lvol's NVMe-oF subsystem listens on the node's data NIC, not its management
-	// IP, so targeting node.MgmtIp fails with "connection refused". Resolve the node's
+	// IP, so targeting node.MgmtIp fails with `connection refused`. Resolve the node's
 	// data-network address from the /nics endpoint; fall back to the management address
 	// only when it cannot be resolved.
 	if dataAddr, err := r.nodeDataAddr(ctx, clusterCR.Status.UUID, node.UUID); err != nil {

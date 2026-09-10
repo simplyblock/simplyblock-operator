@@ -31,7 +31,7 @@ type sseEvent struct {
 //
 // It implements the parsing rules relevant to this contract: `field: value`
 // lines (a single leading space after the colon is stripped), multi-line
-// `data` joined with "\n", comment lines (leading ":"), and dispatch on a blank
+// `data` joined with `"\n"`, comment lines (leading `:`), and dispatch on a blank
 // line. `id:` and `retry:` are accepted and ignored — the contract emits no
 // `id:`, and reconnect backoff is handled by the caller. A trailing event not
 // terminated by a blank line is discarded, per the SSE specification.

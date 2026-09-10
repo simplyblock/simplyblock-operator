@@ -422,7 +422,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 	// Retry the connect rather than failing the whole run on the first attempt. The
 	// volume's NVMe-oF target is often not yet accepting connections the instant this
 	// runs (the Job/probe can start before the subsystem listener is ready), so the
-	// first attempt fails fast with "connection refused" / "no such subsystem". Without
+	// first attempt fails fast with `connection refused` / `no such subsystem`. Without
 	// this, a baseline Job errors out and only succeeds after several controller-driven
 	// recreations — the long-standing "jobs need multiple iterations" behavior.
 	var connErr error

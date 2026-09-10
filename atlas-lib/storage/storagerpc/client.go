@@ -128,7 +128,7 @@ func (r *DeviceResolver) ByUUID(ctx context.Context, uuid string) (nvme.Device, 
 	return r.device(resp.GetDevice(), "uuid="+uuid)
 }
 
-// ByDevicePath returns the device for a block node such as "/dev/nvme0n1". It
+// ByDevicePath returns the device for a block node such as `/dev/nvme0n1`. It
 // reports errs.ErrNotFound when nothing matches.
 func (r *DeviceResolver) ByDevicePath(ctx context.Context, devicePath string) (nvme.Device, error) {
 	resp, err := r.client.GetDeviceByDevicePath(ctx, &storagev1.GetDeviceByDevicePathRequest{

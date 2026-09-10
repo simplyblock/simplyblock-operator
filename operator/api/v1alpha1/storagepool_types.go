@@ -98,7 +98,7 @@ type StorageClassParameters struct {
 	// StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
 	// no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
 	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
-	// "0".
+	// `0`.
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
 	// Filesystem is the filesystem used to format logical volumes of this pool.

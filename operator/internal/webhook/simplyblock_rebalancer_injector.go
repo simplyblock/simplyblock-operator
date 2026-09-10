@@ -132,7 +132,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 }
 
 // clusterUUIDFromPodName extracts the cluster UUID prefix from the snode-spdk pod
-// name pattern "snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>".
+// name pattern `snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>`.
 func clusterUUIDFromPodName(
 	podName string,
 ) string {

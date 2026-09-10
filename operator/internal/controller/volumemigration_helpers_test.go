@@ -488,7 +488,7 @@ func TestCollectAndLogJobPodLogs_NoPods(t *testing.T) {
 
 // Regression test for a validation loop that never converged: each Job was deleted the
 // moment it passed while its status entry stayed, so the next pass read NotFound,
-// called the Job "vanished", dropped the entry and rebuilt it — endlessly. Worse, the
+// called the Job `vanished`, dropped the entry and rebuilt it — endlessly. Worse, the
 // shrinking entry list let the gate declare "all validation jobs succeeded" for a
 // subset, cutting over with an unvalidated node.
 //
@@ -534,7 +534,7 @@ func TestPollValidationJobs_PassedNodeIsNotRevalidated(t *testing.T) {
 	}
 
 	// The passed node's Job is now reaped, as its TTL would do. A second pass must
-	// treat that node as done rather than "vanished", and must not create a new Job.
+	// treat that node as done rather than `vanished`, and must not create a new Job.
 	if err := cl.Delete(context.Background(), passed); err != nil {
 		t.Fatalf("delete the passed job: %v", err)
 	}

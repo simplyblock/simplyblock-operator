@@ -112,7 +112,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: 10,
 		},
 		{
-			// Zero would mean "realign when nothing has moved", which is not a
+			// Zero would mean "realign when nothing has moved," which is not a
 			// meaningful request; fall back rather than spin.
 			name: "zero minMoves falls back to default",
 			vms: &simplyblockv1alpha1.VolumeMigrationSettings{

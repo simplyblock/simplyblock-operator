@@ -30,7 +30,7 @@ import (
 
 // Config configures the operator's hub.
 type Config struct {
-	// BindAddress is where peers dial, e.g., ":9500".
+	// BindAddress is where peers dial, e.g., `:9500`.
 	BindAddress string
 
 	// CertFile and KeyFile are the hub's serving certificate. Both are

@@ -12,7 +12,7 @@ import (
 
 // PeerKind is the role a peer links as. It is part of a peer's identity rather
 // than a property of it: what the operator wants is "the peer that can answer
-// for node worker-3", and the kind is what separates that from a controller
+// for node worker-3," and the kind is what separates that from a controller
 // that happens to run on worker-3.
 type PeerKind string
 
@@ -43,7 +43,7 @@ func ControllerPeer(pod string) PeerID {
 	return PeerID{Kind: PeerKindController, Name: pod}
 }
 
-// String renders the id as "kind/name", e.g., "node/worker-3".
+// String renders the id as `kind/name`, e.g., `node/worker-3`.
 func (id PeerID) String() string {
 	return string(id.Kind) + "/" + id.Name
 }
@@ -137,7 +137,7 @@ func (p *Peer) Close() error {
 	return p.session.Close()
 }
 
-// String renders the peer as "kind/name@instance-uid".
+// String renders the peer as `kind/name@instance-uid`.
 func (p *Peer) String() string {
 	return p.ID.String() + "@" + p.InstanceUID
 }

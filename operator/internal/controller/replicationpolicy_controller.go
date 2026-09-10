@@ -251,7 +251,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 	return created.ID, nil
 }
 
-// parseDurationToMinutes converts a Go duration string (e.g., "5m", "1h") to
+// parseDurationToMinutes converts a Go duration string (e.g., `5m`, `1h`) to
 // whole minutes, clamped to a minimum of 1.
 func parseDurationToMinutes(s string) (int, error) {
 	d, err := time.ParseDuration(s)

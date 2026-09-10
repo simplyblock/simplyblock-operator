@@ -861,7 +861,7 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 	// portsWithAnyPod tracks every RPC port that has a matching pod object AT
 	// ALL, ready or not -- computed separately from byPort (ready pods only)
 	// so the delete pass below can tell "pod is genuinely gone" apart from
-	// "pod exists but isn't ready this instant". RPC_PORT is a static env var
+	// "pod exists but isn't ready this instant." RPC_PORT is a static env var
 	// on the pod spec, readable the moment the pod is scheduled, well before
 	// it ever becomes ready, so this is safe to compute from the full list.
 	byPort := map[int32][]utils.SpdkProxyEndpoint{}

@@ -497,7 +497,7 @@ func (r *BackupPolicyReconciler) attachPolicy(
 // detachPolicy calls the backend to detach the policy from a single lvol.
 //
 // The sbcli detach endpoint returns HTTP 400 (not 404) when the attachment
-// does not exist, with the body containing "Attachment not found". We treat
+// does not exist, with the body containing `Attachment not found`. We treat
 // this as success to make the operation idempotent — if the attachment is
 // already gone the desired state is already achieved.
 func (r *BackupPolicyReconciler) detachPolicy(

@@ -57,7 +57,7 @@ func TestStoreReplaceDeltas(t *testing.T) {
 	s.Upsert(scope, item{ID: "b"})
 	s.Upsert(scope, item{ID: "c"})
 
-	// Snapshot drops "b", keeps "a", adds "d".
+	// Snapshot drops `b`, keeps `a`, adds `d`.
 	present, removed := s.Replace(scope, []item{{ID: "a"}, {ID: "c"}, {ID: "d"}})
 
 	sort.Strings(present)

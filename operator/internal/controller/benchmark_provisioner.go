@@ -45,14 +45,14 @@ type BenchmarkProvisioner interface {
 	EnsureVolume(ctx context.Context, namespace, clusterName, poolUUID, volumeName, nodeUUID string) (volumeUUID string, err error)
 
 	// BenchmarkNQN returns the NVMe-oF NQN for the benchmark volume.
-	// Both implementations use the same formula: "{clusterNQN}:lvol:{volumeUUID}".
+	// Both implementations use the same formula: `{clusterNQN}:lvol:{volumeUUID}`.
 	BenchmarkNQN(clusterNQN, volumeUUID string) string
 }
 
 // AutomaticBenchmarkProvisioner is the no-op production implementation.
 // It assumes the storage pool and per-node benchmark volumes are created automatically
 // during cluster setup. The benchmark volume's logical-volume ID equals the storage node
-// UUID, so EnsureVolume returns nodeUUID and EnsurePool returns "".
+// UUID, so EnsureVolume returns nodeUUID and EnsurePool returns `""`.
 type AutomaticBenchmarkProvisioner struct{}
 
 func (*AutomaticBenchmarkProvisioner) EnsurePool(_ context.Context, _, _ string) (string, error) {

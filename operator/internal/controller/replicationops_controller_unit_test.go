@@ -56,7 +56,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 }
 
 // readyPairForOps returns a ReplicationPair named "pair1" that is ready.
-// All policies created by readyPolicyForOps reference this pair via PairRef: "pair1".
+// All policies created by readyPolicyForOps reference this pair via PairRef: `pair1`.
 func readyPairForOps() *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},

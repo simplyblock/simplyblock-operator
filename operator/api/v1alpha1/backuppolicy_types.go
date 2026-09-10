@@ -40,7 +40,7 @@ type BackupPolicySpec struct {
 	// +k8s:immutable
 	MaxVersions int `json:"maxVersions,omitempty"`
 
-	// MaxAge is the maximum age of backups to retain (e.g., "7d", "12h", "30m").
+	// MaxAge is the maximum age of backups to retain (e.g., `7d`, `12h`, `30m`).
 	// Backups older than this are merged. Accepts m, h, d, w suffixes.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`

@@ -601,7 +601,7 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 // Every recorded node is asked, not only the ones that passed. Release is idempotent and
 // declines to touch a path that is serving, so asking a node that already released costs
 // one Job and reports nothing; guessing which nodes still hold paths would mean trusting
-// Succeeded to mean "connected", which it does not — a Job killed mid-run leaves paths
+// Succeeded to mean `connected`, which it does not — a Job killed mid-run leaves paths
 // with no record of them at all.
 //
 // Best effort, and deliberately not waited on: the migration's outcome is already decided

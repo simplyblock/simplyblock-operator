@@ -122,7 +122,7 @@ func TestSelectorRoundTrip(t *testing.T) {
 	}
 }
 
-// The zero selector means "everything", and must not become something narrower
+// The zero selector means "everything," and must not become something narrower
 // by traveling.
 func TestZeroSelectorRoundTrip(t *testing.T) {
 	if got := selectorFromProto(selectorToProto(nvme.DeviceSelector{})); !got.IsZero() {

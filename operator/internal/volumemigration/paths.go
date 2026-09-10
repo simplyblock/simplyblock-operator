@@ -17,7 +17,7 @@ type PathState struct {
 	Address string // "<ip>:<port>"
 	// Present is false when no controller for this address exists at all.
 	Present bool
-	// State is the controller's kernel state: "live", "connecting", "resetting", ...
+	// State is the controller's kernel state: `live`, `connecting`, `resetting`, ...
 	// Only a live controller can carry I/O.
 	State string
 	// ANAStates are the ANA states of this controller's paths to the subsystem's

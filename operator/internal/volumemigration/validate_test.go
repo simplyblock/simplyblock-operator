@@ -8,7 +8,7 @@ import (
 
 // The connect flags themselves are atlas's to render; what stays this package's
 // responsibility is the mapping onto them — in particular that an unset tuning
-// value reaches atlas as unset. A zero must mean "leave the kernel default", not
+// value reaches atlas as unset. A zero must mean "leave the kernel default," not
 // "ask for 0": nvme-cli rejects some zero values outright, and 0 is a meaningful
 // request for the two timeouts (fail I/O immediately), so the difference is not
 // cosmetic.
