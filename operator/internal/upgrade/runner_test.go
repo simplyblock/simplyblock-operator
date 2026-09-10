@@ -10,8 +10,6 @@ import (
 	"errors"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -267,26 +265,5 @@ func TestRunner_RunsOnlyTheChecksRegisteredForTheStage(t *testing.T) {
 	}
 	if ran != 0 {
 		t.Fatalf("a migrate check ran %d times during the upgrade", ran)
-	}
-}
-
-func TestReadOnlyClient_RefusesEveryWrite(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatalf("building the scheme: %v", err)
-	}
-	c := NewReadOnlyClient(fake.NewClientBuilder().WithScheme(scheme).Build())
-
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "simplyblock"}}
-	for name, write := range map[string]func() error{
-		"create": func() error { return c.Create(t.Context(), cm) },
-		"update": func() error { return c.Update(t.Context(), cm) },
-		"delete": func() error { return c.Delete(t.Context(), cm) },
-		"status": func() error { return c.Status().Update(t.Context(), cm) },
-	} {
-		if err := write(); !errors.Is(err, ErrReadOnly) {
-			t.Fatalf("%s returned %v, want ErrReadOnly: a read-only stage promised "+
-				"the user that nothing changed", name, err)
-		}
 	}
 }

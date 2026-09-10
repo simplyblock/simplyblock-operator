@@ -51,8 +51,14 @@ func newClient(global *globalOptions) (client.Client, error) {
 	return c, nil
 }
 
-// restConfig resolves the connection from the flags, the in-cluster
-// configuration, and the default loading rules, in that order.
+// restConfig resolves the connection from the flags, then the default
+// kubeconfig loading rules, and falls back to the in-cluster configuration when
+// those find nothing.
+//
+// The fallback is clientcmd's rather than this function's: a deferred loading
+// client config tries the in-cluster configuration when the merged kubeconfig
+// is empty or is the default, which is what makes the binary work as a Job
+// with no kubeconfig mounted.
 func restConfig(global *globalOptions) (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if global.Kubeconfig != "" {

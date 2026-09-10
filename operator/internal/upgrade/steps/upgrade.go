@@ -12,7 +12,7 @@
 // kinds and none of the seven converting ones, and §29.2's conversion
 // functions do not exist, so there is nothing to convert between and nothing
 // to deploy a conversion webhook for. The release handover is blocked on a
-// different thing, which is the new chart not being rendered yet.
+// different thing, which is that where the new chart comes from is undecided.
 //
 // Step 1 of §9.1 is absent on purpose: validating prerequisites is the Check
 // registry, which already runs for this stage. Step 13 is absent too, being the
@@ -47,9 +47,11 @@ const (
 const (
 	needsConversion  = "the conversion webhook of §29.3 and the conversion functions of §29.2 do not exist"
 	needsV1Alpha2    = "the v1alpha2 types of §29.1 cover two of the eleven new kinds and none of the seven converting ones"
-	needsHelmSDK     = "Helm's Go SDK is not a dependency yet (§29.4), and the release is upgraded through it"
-	needsChartRender = "classifying an object as a survivor needs the new chart rendered, which is Helm's Go SDK (§29.4); " +
-		"reading the deployed release needs nothing, so the objects below are the real ones"
+	needsHelmUpgrade = "the values translation of §13.1 and the upgrade that applies it are not written, " +
+		"though Helm's Go SDK they go through is here (internal/upgrade/helm)"
+	needsChartRender = "classifying an object as a survivor needs the new chart rendered, and where the chart " +
+		"comes from is undecided (§11 argues for embedding it, as the CRDs are); reading the deployed " +
+		"release needs none of that, so the objects below are the real ones"
 )
 
 // Upgrade returns §9.1's sequence.
@@ -89,14 +91,14 @@ func Upgrade() []upgrade.Step {
 			id:      IDUpgradeOperator,
 			summary: "upgrades the operator, translating the deployed release's values into the new chart's spellings",
 			verb:    upgrade.VerbUpdate,
-			blocked: needsHelmSDK,
+			blocked: needsHelmUpgrade,
 			needs:   []upgrade.ID{IDHandOverRelease},
 		},
 		planned{
 			id:      IDAwaitOperator,
 			summary: "waits for the new operator, and for it to adopt what the release handed over",
 			verb:    upgrade.VerbAwait,
-			blocked: needsHelmSDK,
+			blocked: needsHelmUpgrade,
 			needs:   []upgrade.ID{IDUpgradeOperator},
 		},
 		planned{

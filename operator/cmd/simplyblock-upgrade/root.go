@@ -76,9 +76,10 @@ func newRootCommand() *cobra.Command {
 			"and the plan, and changes nothing, so it is safe to run well " +
 			"before the upgrade window.",
 		SilenceUsage: true,
-		// An error a command returns has already been rendered by the
-		// reporter, and cobra printing it again is noise on top of a report
-		// somebody is reading.
+		// Cobra prints the error, and main does not. A failure is the one
+		// thing a run must not swallow, and the reporter narrates progress
+		// rather than the error a command returns, so silencing cobra here
+		// would leave a non-zero exit with nothing said about it.
 		SilenceErrors: false,
 	}
 

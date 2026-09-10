@@ -53,20 +53,34 @@ func (r ReadOnlyClient) DeleteAllOf(context.Context, client.Object, ...client.De
 	return fmt.Errorf("deleteAllOf: %w", ErrReadOnly)
 }
 
+// Status is the writer half only, so there is nothing here to pass through.
 func (r ReadOnlyClient) Status() client.SubResourceWriter {
 	return readOnlySubResource{}
 }
 
-func (r ReadOnlyClient) SubResource(string) client.SubResourceClient {
-	return readOnlySubResource{}
+// SubResource wraps the real subresource client rather than replacing it,
+// because a subresource has a read as well as writes. Reading a status is a
+// read like any other, and refusing it would fail a check that looks at one
+// with a message saying the stage may not write.
+func (r ReadOnlyClient) SubResource(subResource string) client.SubResourceClient {
+	return readOnlySubResource{inner: r.Client.SubResource(subResource)}
 }
 
-// readOnlySubResource refuses the status and scale writes a check has no reason
-// to perform.
-type readOnlySubResource struct{}
+// readOnlySubResource passes the subresource read through and refuses the
+// status and scale writes a check has no reason to perform.
+type readOnlySubResource struct {
+	// inner is nil for the one built by Status, which is a writer and has no
+	// read to delegate.
+	inner client.SubResourceClient
+}
 
-func (readOnlySubResource) Get(context.Context, client.Object, client.Object, ...client.SubResourceGetOption) error {
-	return fmt.Errorf("subresource get: %w", ErrReadOnly)
+func (r readOnlySubResource) Get(
+	ctx context.Context, obj client.Object, subResource client.Object, opts ...client.SubResourceGetOption,
+) error {
+	if r.inner == nil {
+		return fmt.Errorf("subresource get: %w", ErrReadOnly)
+	}
+	return r.inner.Get(ctx, obj, subResource, opts...)
 }
 
 func (readOnlySubResource) Create(context.Context, client.Object, client.Object, ...client.SubResourceCreateOption) error {
