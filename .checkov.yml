@@ -25,6 +25,13 @@ skip-path:
   # Vendored dependency charts: third-party manifests this repository packages
   # but does not write.
   - helm-charts/charts/simplyblock-operator/charts/
+  # The three paths `make helm-sync` writes into the development chart. A
+  # finding here belongs to the operator's Kubebuilder markers and API types,
+  # the same reason operator/config/rbac/ is skipped below, so it is fixed
+  # there and synced rather than edited in the chart.
+  - helm-charts/charts/simplyblock-operator/crds/
+  - helm-charts/charts/simplyblock-operator/templates/roles/
+  - helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml
   # Published release output.
   - csi-driver/charts/
   # Generated. A finding here belongs to the Kubebuilder markers and the API
