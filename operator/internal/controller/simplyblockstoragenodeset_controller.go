@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"reflect"
 
+	"slices"
 	"strconv"
 	"strings"
 
@@ -310,19 +311,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeSetRequests),
 			builder.WithPredicates(
 				predicate.NewPredicateFuncs(isSpdkProxyPod),
-				predicate.Funcs{
-					UpdateFunc: func(e event.UpdateEvent) bool {
-						oldPod, ok := e.ObjectOld.(*corev1.Pod)
-						if !ok {
-							return true
-						}
-						newPod, ok := e.ObjectNew.(*corev1.Pod)
-						if !ok {
-							return true
-						}
-						return oldPod.Status.Phase != newPod.Status.Phase
-					},
-				},
+				predicate.Funcs{UpdateFunc: spdkProxyPodPublishStateChanged},
 			),
 		).
 		Watches(
@@ -340,6 +329,27 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func isSpdkProxyPod(obj client.Object) bool {
 	return obj.GetLabels()["role"] == utils.LabelSpdkProxyRole
+}
+
+// spdkProxyPodPublishStateChanged reports whether a pod update changed
+// anything reconcileSpdkProxyEndpointSlices would publish differently, so that
+// republishing follows the pod instead of waiting for the periodic requeue.
+//
+// The predicate this replaced passed phase transitions only, which misses the
+// update that matters most. A pod reaches Running while a container is still
+// unready, and the later flip of ContainerStatuses[].Ready -- the change that
+// makes isSpdkProxyPodReady true -- leaves the phase alone, so it fired no
+// event at all and the reconcile that would have published the endpoint never
+// ran until something unrelated woke the controller.
+func spdkProxyPodPublishStateChanged(e event.UpdateEvent) bool {
+	oldPod, okOld := e.ObjectOld.(*corev1.Pod)
+	newPod, okNew := e.ObjectNew.(*corev1.Pod)
+	if !okOld || !okNew {
+		return true
+	}
+	return isSpdkProxyPodReady(oldPod) != isSpdkProxyPodReady(newPod) ||
+		oldPod.Status.PodIP != newPod.Status.PodIP ||
+		oldPod.Spec.NodeName != newPod.Spec.NodeName
 }
 
 func isStorageNodeSetTLSSecret(obj client.Object) bool {
@@ -844,9 +854,131 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyService(
 	return r.Update(ctx, svc)
 }
 
+// spdkProxyEndpointKey identifies one published spdk-proxy endpoint: the RPC
+// port whose EndpointSlice carries it, and the worker it points at. Keying on
+// the pair lets a later source override an earlier one for the same worker
+// without duplicating the endpoint.
+type spdkProxyEndpointKey struct {
+	rpcPort  int32
+	nodeName string
+}
+
+// reconcileSpdkProxyEndpointSlices publishes one EndpointSlice per RPC port
+// for the headless spdk-proxy Service, which is what makes each worker's
+// <worker>.simplyblock-spdk-proxy.<namespace>.svc.cluster.local name resolve.
+//
+// The published address is gathered from two sources, in order:
+//
+//  1. The StorageNode CRs. They name the worker and its RPC port for as long
+//     as the worker is a member of this StorageNodeSet, whether or not an
+//     spdk-proxy pod exists right now. The address comes from the Node
+//     object, which is the right answer because the spdk-proxy pod is
+//     host-networked: its PodIP *is* the worker's node IP.
+//  2. A ready spdk-proxy pod, overriding (1) for its own port and worker. The
+//     pod's PodIP stays ground truth should the pod ever stop being
+//     host-networked, and it is the only source for a worker whose
+//     StorageNode CR has not reported an RPC port yet.
+//
+// Source 1 is what keeps the record alive across a storage-node restart. The
+// control plane kills and recreates the spdk-proxy pod on every restart, and a
+// record derived from the pod alone vanished with it, so the worker's name
+// answered NXDOMAIN for as long as it took the replacement pod to become
+// ready. NXDOMAIN is the worst failure mode available here: callers see a
+// fatal name-resolution error rather than the retryable connection error a
+// record pointing at a down proxy would give them, and cluster DNS caches the
+// denial for longer than the proxy is actually absent.
 func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
+) error {
+	// addresses holds the address to publish for one worker on one RPC port.
+	addresses := map[spdkProxyEndpointKey]string{}
+
+	// portsOwned holds every RPC port this StorageNodeSet still owns, whether
+	// or not an address could be resolved for it this pass. The delete pass is
+	// keyed on it, so a worker that is still a member keeps its
+	// last-known-good EndpointSlice even when nothing can be built for it
+	// right now -- neither a pod being replaced nor a Node that cannot be read
+	// may take a live worker's DNS record away.
+	portsOwned := map[int32]bool{}
+
+	if err := r.gatherSpdkProxyEndpointsFromStorageNodes(ctx, snCR, addresses, portsOwned); err != nil {
+		return err
+	}
+	if err := r.gatherSpdkProxyEndpointsFromPods(ctx, snCR, addresses, portsOwned); err != nil {
+		return err
+	}
+	if err := r.applySpdkProxyEndpointSlices(ctx, snCR, addresses); err != nil {
+		return err
+	}
+
+	return r.deleteOrphanedSpdkProxyEndpointSlices(ctx, snCR, portsOwned)
+}
+
+// gatherSpdkProxyEndpointsFromStorageNodes records an endpoint for every worker
+// that is still a member of the set and whose RPC port the control plane has
+// reported, addressed by the worker's own node IP. This is the source that
+// outlives the spdk-proxy pod.
+func (r *StorageNodeSetReconciler) gatherSpdkProxyEndpointsFromStorageNodes(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	addresses map[spdkProxyEndpointKey]string,
+	portsOwned map[int32]bool,
+) error {
+	log := logf.FromContext(ctx)
+
+	var storageNodes simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &storageNodes,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": snCR.Name},
+	); err != nil {
+		return fmt.Errorf("failed to list StorageNodes for spdk-proxy endpoints: %w", err)
+	}
+
+	nodeIPs := map[string]string{}
+	for i := range storageNodes.Items {
+		storageNode := &storageNodes.Items[i]
+		// A CR under deletion means the worker is leaving the set, so its
+		// record is meant to go away with it.
+		if storageNode.DeletionTimestamp != nil {
+			continue
+		}
+		if storageNode.Spec.WorkerNode == "" ||
+			storageNode.Status.Ports == nil ||
+			storageNode.Status.Ports.Rpc == nil {
+			continue
+		}
+		rpcPort := *storageNode.Status.Ports.Rpc
+		portsOwned[rpcPort] = true
+
+		nodeName := storageNode.Spec.WorkerNode
+		ip, resolved := nodeIPs[nodeName]
+		if !resolved {
+			var err error
+			if ip, err = getNodeInternalIP(ctx, r.Client, nodeName); err != nil {
+				log.Error(err, "failed to get internal IP for spdk-proxy endpoint, keeping any existing slice",
+					"worker", nodeName)
+				ip = ""
+			}
+			nodeIPs[nodeName] = ip
+		}
+		if ip == "" {
+			continue
+		}
+		addresses[spdkProxyEndpointKey{rpcPort: rpcPort, nodeName: nodeName}] = ip
+	}
+
+	return nil
+}
+
+// gatherSpdkProxyEndpointsFromPods overrides the node-derived address with a
+// ready pod's own, and claims the port for any pod at all so that a pod still
+// starting up does not look like a worker that has left.
+func (r *StorageNodeSetReconciler) gatherSpdkProxyEndpointsFromPods(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	addresses map[spdkProxyEndpointKey]string,
+	portsOwned map[int32]bool,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -858,14 +990,6 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
 	}
 
-	// portsWithAnyPod tracks every RPC port that has a matching pod object AT
-	// ALL, ready or not -- computed separately from byPort (ready pods only)
-	// so the delete pass below can tell "pod is genuinely gone" apart from
-	// "pod exists but isn't ready this instant". RPC_PORT is a static env var
-	// on the pod spec, readable the moment the pod is scheduled, well before
-	// it ever becomes ready, so this is safe to compute from the full list.
-	byPort := map[int32][]utils.SpdkProxyEndpoint{}
-	portsWithAnyPod := map[int32]bool{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		rpcPort, ok := extractSpdkProxyRpcPort(pod)
@@ -873,14 +997,40 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 			log.Info("skipping spdk-proxy pod: unable to determine RPC_PORT", "pod", pod.Name)
 			continue
 		}
-		portsWithAnyPod[rpcPort] = true
+		// RPC_PORT is a static env var on the pod spec, readable the moment the
+		// pod is scheduled, so a port is owned as soon as a pod claims it even
+		// while that pod is still starting.
+		portsOwned[rpcPort] = true
 		if !isSpdkProxyPodReady(pod) {
 			continue
 		}
-		byPort[rpcPort] = append(byPort[rpcPort], utils.SpdkProxyEndpoint{
-			NodeName: pod.Spec.NodeName,
-			PodIP:    pod.Status.PodIP,
-			RpcPort:  rpcPort,
+		addresses[spdkProxyEndpointKey{rpcPort: rpcPort, nodeName: pod.Spec.NodeName}] = pod.Status.PodIP
+	}
+
+	return nil
+}
+
+// applySpdkProxyEndpointSlices creates or updates one EndpointSlice per RPC
+// port from the gathered addresses.
+func (r *StorageNodeSetReconciler) applySpdkProxyEndpointSlices(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	addresses map[spdkProxyEndpointKey]string,
+) error {
+	byPort := map[int32][]utils.SpdkProxyEndpoint{}
+	for key, address := range addresses {
+		byPort[key.rpcPort] = append(byPort[key.rpcPort], utils.SpdkProxyEndpoint{
+			NodeName: key.nodeName,
+			Address:  address,
+			RpcPort:  key.rpcPort,
+		})
+	}
+	// Map iteration is unordered, and a slice whose endpoints differ only in
+	// order is a write that changes nothing. Sort so repeated reconciles of an
+	// unchanged cluster produce an unchanged object.
+	for rpcPort := range byPort {
+		slices.SortFunc(byPort[rpcPort], func(a, b utils.SpdkProxyEndpoint) int {
+			return strings.Compare(a.NodeName, b.NodeName)
 		})
 	}
 
@@ -910,18 +1060,34 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		}
 	}
 
-	// Delete orphaned slices whose RPC_PORT has no matching pod AT ALL.
-	//
-	// Deliberately checked against portsWithAnyPod, NOT byPort: a pod that's
-	// merely not-ready this instant (isSpdkProxyPodReady can flip false for
-	// a single missed probe tick on either container, well short of what
-	// would restart the container or emit an Unhealthy event) must not have
-	// its DNS entry deleted -- the previous incident's root cause. Only
-	// delete when the pod for that port is genuinely gone (scaled down,
-	// node removed, rescheduled to a different port); a transiently
-	// not-ready pod simply keeps its last-known-good EndpointSlice in place
-	// until the next reconcile finds it ready and refreshes it via the
-	// create/update pass above.
+	return nil
+}
+
+// deleteOrphanedSpdkProxyEndpointSlices removes the slices whose RPC port no
+// longer belongs to any worker in this StorageNodeSet.
+//
+// Deliberately keyed on portsOwned, not on what could be published this pass.
+// Two incidents came from deleting a record a live worker still needed:
+//
+//   - A pod merely not-ready this instant (isSpdkProxyPodReady can flip false
+//     for a single missed probe tick on either container, well short of what
+//     would restart the container or emit an Unhealthy event) lost its DNS
+//     entry.
+//   - A pod being replaced during a storage-node restart lost it for the whole
+//     gap between the old pod's deletion and the new pod's readiness, which
+//     cost six aborted restarts in one test run.
+//
+// Both are the same mistake at different scales: the record's lifetime belongs
+// to the worker, not to whichever pod object currently serves it. A slice is
+// removed only once the port has left the set entirely -- the worker was scaled
+// down or removed, or the control plane moved it to a different port. Anything
+// short of that keeps its last-known-good slice in place until a later
+// reconcile can refresh it.
+func (r *StorageNodeSetReconciler) deleteOrphanedSpdkProxyEndpointSlices(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	portsOwned map[int32]bool,
+) error {
 	var existingSlices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &existingSlices,
 		client.InNamespace(snCR.Namespace),
@@ -936,7 +1102,7 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		}
 		keep := false
 		for _, p := range slice.Ports {
-			if p.Port != nil && portsWithAnyPod[*p.Port] {
+			if p.Port != nil && portsOwned[*p.Port] {
 				keep = true
 				break
 			}

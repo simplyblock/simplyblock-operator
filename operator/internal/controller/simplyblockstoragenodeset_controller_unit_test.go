@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -25,6 +26,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 const (
@@ -2790,4 +2792,265 @@ func TestMaybeActivateClusterProceedsOnceFailureDomainsAreReady(t *testing.T) {
 	if !activateCalled {
 		t.Fatalf("expected the gate to let activation proceed once failure domains are ready")
 	}
+}
+
+// TestReconcileSpdkProxyEndpointSlices_SurvivesSpdkPodReplacement pins the
+// lifetime of a worker's per-pod spdk-proxy DNS record to that worker's
+// membership in the StorageNodeSet, not to the spdk-proxy pod object.
+//
+// Regression: 2026-09-06-spdk-proxy-dns-nxdomain — restarting a storage node
+// kills and recreates its spdk-proxy pod, and the reconciler deleted the pod's
+// EndpointSlice along with it. The per-pod name
+// worker-N.simplyblock-spdk-proxy.<namespace>.svc.cluster.local then answered
+// NXDOMAIN, which the control plane's RPC client raises as a fatal
+// socket.gaierror instead of the retryable connection error it would have seen
+// had the record still pointed at the down proxy. Six storage-node restarts
+// aborted that way in a single resilient-failover run, three of them leaving
+// the node reset to OFFLINE.
+func TestReconcileSpdkProxyEndpointSlices_SurvivesSpdkPodReplacement(t *testing.T) {
+	sn, storageNode, node, pod := spdkProxyReplacementFixture()
+	r := newStorageNodeSetStateTestReconciler(t, sn, storageNode, node, pod)
+	ctx := context.Background()
+
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+	assertSpdkProxyRecordPublished(t, r, "node-a", mgmtIP, 9001)
+
+	// The storage-node restart: the control plane kills the SPDK pod and
+	// recreates it. The worker stays a member of the StorageNodeSet
+	// throughout, so its name must keep resolving.
+	if err := r.Delete(ctx, pod); err != nil {
+		t.Fatalf("delete spdk-proxy pod: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices after pod deletion: %v", err)
+	}
+	assertSpdkProxyRecordPublished(t, r, "node-a", mgmtIP, 9001)
+}
+
+// spdkProxyReplacementFixture builds one worker that is a member of a
+// StorageNodeSet and currently runs a ready spdk-proxy pod on RPC port 9001.
+func spdkProxyReplacementFixture() (
+	*simplyblockv1alpha1.StorageNodeSet,
+	*simplyblockv1alpha1.StorageNode,
+	*corev1.Node,
+	*corev1.Pod,
+) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: "cluster-a",
+			WorkerNodes: []string{"node-a"},
+		},
+	}
+
+	// The worker's membership and its RPC port, both readable without a live
+	// spdk-proxy pod.
+	storageNode := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-node-a", Namespace: "ns"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			StorageNodeSetRef: "sn",
+			WorkerNode:        "node-a",
+		},
+		Status: simplyblockv1alpha1.StorageNodeStatus{
+			UUID:  "node-a-uuid",
+			Ports: &simplyblockv1alpha1.StorageNodePorts{Rpc: ptr.To(int32(9001))},
+		},
+	}
+
+	// The spdk-proxy pod is host-networked, so its PodIP is the worker's own
+	// node address — which is why the Node can supply it once the pod is gone.
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: mgmtIP},
+			},
+		},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "snode-spdk-pod-9001-cid",
+			Namespace: "ns",
+			Labels:    map[string]string{"role": "simplyblock-storage-node"},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "node-a",
+			Containers: []corev1.Container{
+				{
+					Name: "spdk-proxy-container",
+					Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: "9001"}},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: mgmtIP,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "spdk-proxy-container", Ready: true},
+			},
+		},
+	}
+
+	return sn, storageNode, node, pod
+}
+
+// TestReconcileSpdkProxyEndpointSlices_RemovedWorkerLosesRecord is the negative
+// counterpart to SurvivesSpdkPodReplacement: keeping a record alive across a
+// pod replacement must not keep it alive forever. Once the worker is gone from
+// the set — no StorageNode CR and no pod — its slice is deleted, so removing a
+// worker does not leave a name resolving to an address nothing serves.
+func TestReconcileSpdkProxyEndpointSlices_RemovedWorkerLosesRecord(t *testing.T) {
+	sn, storageNode, node, pod := spdkProxyReplacementFixture()
+	r := newStorageNodeSetStateTestReconciler(t, sn, storageNode, node, pod)
+	ctx := context.Background()
+
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+	assertSpdkProxyRecordPublished(t, r, "node-a", mgmtIP, 9001)
+
+	if err := r.Delete(ctx, pod); err != nil {
+		t.Fatalf("delete spdk-proxy pod: %v", err)
+	}
+	if err := r.Delete(ctx, storageNode); err != nil {
+		t.Fatalf("delete StorageNode: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices after worker removal: %v", err)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list spdk-proxy EndpointSlices: %v", err)
+	}
+	if len(slices.Items) != 0 {
+		t.Fatalf("expected no slices once the worker left the set, got %v", sliceNames(slices.Items))
+	}
+}
+
+// TestSpdkProxyPodPublishStateChanged covers which pod updates reach the
+// StorageNodeSet reconciler, so that a pod becoming publishable republishes its
+// DNS record immediately rather than on the next periodic requeue.
+//
+// Regression: 2026-09-06-spdk-proxy-dns-nxdomain — the predicate passed phase
+// transitions only. A replacement spdk-proxy pod reaches Running with a
+// container still unready, and the later readiness flip does not touch the
+// phase, so the update that made the pod publishable was dropped and the
+// endpoint went unpublished until an unrelated event woke the controller.
+func TestSpdkProxyPodPublishStateChanged(t *testing.T) {
+	pod := func(phase corev1.PodPhase, nodeName, podIP string, ready bool) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "snode-spdk-pod-9001-cid", Namespace: "ns"},
+			Spec:       corev1.PodSpec{NodeName: nodeName},
+			Status: corev1.PodStatus{
+				Phase: phase,
+				PodIP: podIP,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "spdk-proxy-container", Ready: ready},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		old, new *corev1.Pod
+		want     bool
+	}{
+		{
+			name: "readiness flips true without a phase change",
+			old:  pod(corev1.PodRunning, "node-a", mgmtIP, false),
+			new:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			want: true,
+		},
+		{
+			name: "readiness flips false without a phase change",
+			old:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			new:  pod(corev1.PodRunning, "node-a", mgmtIP, false),
+			want: true,
+		},
+		{
+			name: "the pod address changes",
+			old:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			new:  pod(corev1.PodRunning, "node-a", "10.0.0.9", true),
+			want: true,
+		},
+		{
+			name: "the pod is scheduled onto a worker",
+			old:  pod(corev1.PodPending, "", "", false),
+			new:  pod(corev1.PodPending, "node-a", "", false),
+			want: true,
+		},
+		{
+			name: "a phase change that makes the pod publishable",
+			old:  pod(corev1.PodPending, "node-a", mgmtIP, true),
+			new:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			want: true,
+		},
+		{
+			name: "nothing the published endpoint depends on changed",
+			old:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			new:  pod(corev1.PodRunning, "node-a", mgmtIP, true),
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := spdkProxyPodPublishStateChanged(event.UpdateEvent{
+				ObjectOld: tc.old,
+				ObjectNew: tc.new,
+			})
+			if got != tc.want {
+				t.Fatalf("expected the update to be enqueued=%v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+// assertSpdkProxyRecordPublished fails unless the spdk-proxy Service publishes
+// an endpoint for hostname on rpcPort carrying address. That endpoint is what
+// makes <hostname>.simplyblock-spdk-proxy.<namespace>.svc.cluster.local
+// resolve, so its presence is the behavior every RPC caller depends on.
+func assertSpdkProxyRecordPublished(
+	t *testing.T,
+	r *StorageNodeSetReconciler,
+	hostname, address string,
+	rpcPort int32,
+) {
+	t.Helper()
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(context.Background(), &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list spdk-proxy EndpointSlices: %v", err)
+	}
+
+	for _, slice := range slices.Items {
+		if len(slice.Ports) != 1 || slice.Ports[0].Port == nil || *slice.Ports[0].Port != rpcPort {
+			continue
+		}
+		for _, ep := range slice.Endpoints {
+			if ep.Hostname == nil || *ep.Hostname != hostname {
+				continue
+			}
+			if len(ep.Addresses) != 1 || ep.Addresses[0] != address {
+				t.Fatalf("endpoint %s on port %d: expected address %q, got %v",
+					hostname, rpcPort, address, ep.Addresses)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("%s.simplyblock-spdk-proxy.ns.svc.cluster.local resolves to nothing: "+
+		"no endpoint for %s on port %d (slices present: %v)",
+		hostname, hostname, rpcPort, sliceNames(slices.Items))
 }
