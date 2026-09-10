@@ -21,6 +21,21 @@ skip-check:
   # A HEALTHCHECK instruction is not how a Kubernetes workload reports health.
   - CKV_DOCKER_2
 
+  # Every one of the 36 resources this reported sits in a namespace called
+  # `default`, because that is what a Helm template renders to when nothing
+  # passes --namespace: the resources come out named
+  # Deployment.default.simplyblock-webappapi and the like. An installation names
+  # its namespace, and the manifests under csi-driver/deploy leave it out on
+  # purpose so a reader can apply them wherever they are working.
+  - CKV_K8S_21
+
+  # The charts take an image repository and a tag as values, which is how a user
+  # points them at their own registry or pins their own build. Requiring a digest
+  # would mean the chart could no longer be configured that way. The tags
+  # themselves are still checked, by CKV_K8S_14, which is not skipped: it found
+  # simplyblock/spdkcsi:latest in two manifests that ought to name a version.
+  - CKV_K8S_43
+
 skip-path:
   # Vendored dependency charts: third-party manifests this repository packages
   # but does not write.
@@ -34,6 +49,12 @@ skip-path:
   - helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml
   # Published release output.
   - csi-driver/charts/
+  # The upstream snapshot controller, copied from kubernetes-csi/external-snapshotter
+  # into both trees with its header comment intact and renamed to
+  # simplyblock-snapshot-controller. It deploys, so it is not a fixture, but its
+  # 37 findings belong to the project that wrote it: changing them here would
+  # fork a vendored manifest and lose the changes at the next copy.
+  - setup-snapshot-controller.yaml
   # Test fixtures. These are pods and claims a test run creates and deletes, on
   # a test cluster, and no installation ever carries them: the nine templates
   # under e2e/templates are applied by the Ginkgo suite, and testpod,
