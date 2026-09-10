@@ -16,7 +16,10 @@
 # serves every byte from the pod.
 
 # ---- stage 1: vendor the browser dependencies ------------------------------
-FROM docker.io/library/node:22-alpine AS vendor
+# Pinned to the build host: this stage only fetches arch-independent assets
+# (JS, woff2, svg), so it must not be emulated per target arch under QEMU — a
+# multi-arch build there hits "illegal instruction" running Node/npm.
+FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS vendor
 ARG REACT_VERSION=18.3.1
 # One arg per package. @fontsource/inter and @fontsource/ibm-plex-mono are
 # separate packages on separate release trains, so a single shared exact
@@ -68,7 +71,10 @@ RUN curl -fsSL "https://simplyblock.io/assets/images/Logo-white.svg" -o logo-whi
 # ---- stage 2: compile the JSX and prepare the document ----------------------
 # The .jsx files are the source; dist/app.js is rebuilt here so the image never
 # depends on a stale checked-in bundle. Same file order as build.md.
-FROM docker.io/library/node:22-alpine AS prepare
+# Pinned to the build host for the same reason as the vendor stage: the Babel
+# compile produces arch-independent JS, so it runs natively rather than under
+# QEMU emulation of the target arch.
+FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS prepare
 ARG KEEP_MOCKS=0
 # @babel/core, @babel/cli and @babel/preset-react are separate packages on
 # separate release trains (like the fontsource packages above): @babel/core
