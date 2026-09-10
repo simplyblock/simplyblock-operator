@@ -34,6 +34,20 @@ skip-path:
   - helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml
   # Published release output.
   - csi-driver/charts/
+  # Test fixtures. These are pods and claims a test run creates and deletes, on
+  # a test cluster, and no installation ever carries them: the nine templates
+  # under e2e/templates are applied by the Ginkgo suite, and testpod,
+  # testclone, testrestore, and the WordPress and MySQL demo are the ones the
+  # install walkthrough has a reader apply by hand to prove the driver works.
+  # deploy.sh names what an installation actually applies, and none of these
+  # appear in it. Two hundred and fifty-seven findings asking a throwaway pod
+  # for a seccomp profile and a liveness probe.
+  #
+  # deploy/kubernetes/controller.yaml and node.yaml are deliberately not here.
+  # deploy.sh does apply those, so they describe workloads that run.
+  - csi-driver/e2e/
+  - csi-driver/deploy/kubernetes/test
+  - csi-driver/deploy/kubernetes/mysql-pvc.yaml
   # Generated. A finding here belongs to the Kubebuilder markers and the API
   # types it is rendered from, so it is fixed there and regenerated.
   - operator/config/crd/
