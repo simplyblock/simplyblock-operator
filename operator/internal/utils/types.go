@@ -47,6 +47,10 @@ type ClusterAddParams struct {
 	// Atomic4k declares 4K write atomicity on devices with a <4K logical block size.
 	// Only meaningful when InlineChecksum is true.
 	Atomic4k bool `json:"atomic_4k,omitempty"`
+	// DeviceMode selects "nvme" (default) or "lblk" device attachment for the whole
+	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
+	// "lblk" against an unpatched backend is rejected.
+	DeviceMode string `json:"device_mode,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -127,4 +131,7 @@ type StorageNodeSetAddParams struct {
 	FailureDomain *int `json:"failure_domain,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
+	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py
+	// --force-format only marks them selectable, this flag does the actual wipe.
+	ForceFormat bool `json:"force_format,omitempty"`
 }

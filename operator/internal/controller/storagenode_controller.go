@@ -144,6 +144,25 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before resolving the parent StorageNodeSet: it may already
+	// be gone (cascading delete), but deletion must finalize either way. The
+	// cluster UUID is only needed to stop the device stream, so it's resolved
+	// best-effort and left empty if the parent or its cluster is gone.
+	if !sn.DeletionTimestamp.IsZero() {
+		deletionClusterUUID := ""
+		var parent simplyblockv1alpha1.StorageNodeSet
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      sn.Spec.StorageNodeSetRef,
+			Namespace: sn.Namespace,
+		}, &parent); err == nil {
+			if uuid, err := utils.ResolveClusterUUID(
+				ctx, r.Client, sn.Namespace, parent.Spec.ClusterName); err == nil {
+				deletionClusterUUID = uuid
+			}
+		}
+		return r.handleDeletion(ctx, &sn, deletionClusterUUID)
+	}
+
 	// Fetch the parent StorageNodeSet for fleet config.
 	var sns simplyblockv1alpha1.StorageNodeSet
 	if err := r.Get(ctx, types.NamespacedName{
@@ -162,11 +181,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		log.Info("cluster UUID not ready yet, requeuing", "cluster", sns.Spec.ClusterName)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	// Handle deletion.
-	if !sn.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, &sn, clusterUUID)
 	}
 
 	// Ensure finalizer.
@@ -492,6 +506,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomainPtr(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
+		ForceFormat:      ptr.BoolFromOrFalse(eff.BlkForceFormat),
 	}
 
 	// Re-read the in-flight count immediately before the POST to narrow the
@@ -939,6 +954,7 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 		ReservedSystemCPU:  sns.Spec.ReservedSystemCPU,
 		UbuntuHost:         sns.Spec.UbuntuHost,
 		Expand:             sns.Spec.Expand,
+		BlkForceFormat:     sns.Spec.BlkForceFormat,
 	}
 	if sn.Spec.Overrides == nil {
 		return eff
@@ -985,6 +1001,9 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	}
 	if o.Expand != nil {
 		eff.Expand = o.Expand
+	}
+	if o.BlkForceFormat != nil {
+		eff.BlkForceFormat = o.BlkForceFormat
 	}
 	return eff
 }

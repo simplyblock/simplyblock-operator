@@ -409,6 +409,18 @@ type StorageClusterSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	EnableAtomic4kWrites *bool `json:"enableAtomic4kWrites,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Mode"
+	// DeviceMode selects how storage devices are attached for every node in this
+	// cluster: "nvme" (default) auto-discovers NVMe PCIe devices, "lblk" wraps
+	// arbitrary Linux block devices in SPDK AIO bdevs instead, selected per node via
+	// the StorageNodeSet/StorageNode block-device fields. Set at cluster-create time
+	// and immutable after. Requires sbcli with lblk support (simplyblock/sbcli#1224).
+	// +kubebuilder:validation:Enum=nvme;lblk
+	// +kubebuilder:default=nvme
+	// +k8s:immutable
+	// +optional
+	DeviceMode string `json:"deviceMode,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.

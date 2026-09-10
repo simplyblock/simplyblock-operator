@@ -33,6 +33,31 @@ func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T
 	}
 }
 
+func TestBuildStorageNodeSetDaemonSet_ConfigGeneratorMountsDevAndSys(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster1"},
+	}
+	ds := BuildStorageNodeSetDaemonSet(sn, false, false, "", "")
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	var hasDev, hasSys bool
+	for _, m := range init.VolumeMounts {
+		if m.Name == "dev-vol" && m.MountPath == "/dev" {
+			hasDev = true
+		}
+		if m.Name == "host-sys" && m.MountPath == "/sys" {
+			hasSys = true
+		}
+	}
+	if !hasDev {
+		t.Errorf("s-node-api-config-generator must mount /dev for lblk eligibility checks")
+	}
+	if !hasSys {
+		t.Errorf("s-node-api-config-generator must mount /sys for block-device inspection")
+	}
+}
+
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
