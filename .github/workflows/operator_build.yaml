@@ -58,15 +58,13 @@ jobs:
 
       - name: Compute image tag
         id: image_tag
-        # Docker tags cannot contain "/," but branch names (e.g., feature/foo) can,
-        # so sanitize before using the ref name as a tag.
+        # Docker tags can't contain "/," but branch names (e.g., feature/foo) can.
         run: |
           version="${{ inputs.version || github.ref_name }}"
           tag="${version//\//-}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          # Both Dockerfiles surface this as the OCI `version` label. It tracks the
-          # release tag with the leading "v" removed, so a released image is
-          # labeled 26.3.0 instead of the constant this step used to pass.
+          # Both Dockerfiles read this as the OCI `version` label, which must not
+          # carry the tag's leading "v."
           echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR)

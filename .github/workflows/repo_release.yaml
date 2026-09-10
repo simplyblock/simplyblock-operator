@@ -1,20 +1,14 @@
 name: "Repo: Release"
 
-# Unified release for the whole monorepo. Fires when a v* tag is pushed. The
-# `setup` job creates the GitHub Release for that tag, and the tag is the version
-# fed to the container image builds. Each step below is a reusable workflow, wired
-# together with `needs:` so that only the real dependencies are serialized:
+# Unified release for the whole monorepo. Fires when a v* tag is pushed. Each
+# job below is a reusable workflow, wired with `needs:` to only the jobs it
+# actually depends on:
 #
 #   setup
 #     ├─ build-atlas ──┬─ build-csi ────────────────────────────┐
 #     │                └─ build-operator ─┬─ release-operator ──┤ (OLM bundle)
 #     │                                   └─ package-operator-chart ─┐
 #     └─ package-csi-chart ──────────────────────────────────────┴─ merge-helm ─┴─ release-helm (FTPS publish)
-#
-# release-operator and package-operator-chart both hang off build-operator and run
-# in parallel with each other, since the bundle and the chart are independent
-# outputs of the same images. release-helm is the only job that publishes
-# anything, which is why it waits on every image the charts it ships reference.
 
 on:
   push:
@@ -60,17 +54,14 @@ jobs:
             gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes --verify-tag
           fi
 
-  # The vet and test gate. Everything else hangs off it, so a broken library
-  # fails the release before it spends a runner on a multi-arch image build.
+  # Vet and test gate. A broken library fails the release before any image build.
   build-atlas:
     name: Build atlas
     needs: setup
     uses: ./.github/workflows/atlas_test.yaml
     secrets: inherit
 
-  # The container images. The two builds are independent: neither image consumes
-  # the other, and atlas-lib reaches both through a `replace` directive pointing
-  # at this same checkout rather than through a registry.
+  # Independent of build-operator: neither image consumes the other.
   build-csi:
     name: Build csi
     needs: [setup, build-atlas]
@@ -87,10 +78,8 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
-  # The OLM bundle. release-operator retags build-operator's DockerHub images
-  # to Quay, then `make bundle` resolves their digests from there and fails if
-  # they are absent, so this genuinely waits on the operator build landing on
-  # DockerHub first.
+  # Retags build-operator's DockerHub images to Quay, then bundles the OLM
+  # manifests against them, so it waits on build-operator.
   release-operator:
     name: Release operator
     needs: [setup, build-operator]
@@ -99,28 +88,19 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
 
-  # The two chart packaging jobs, each producing the artifact the merge below
-  # consumes. Neither publishes anything: release-helm is the only job that does.
   package-csi-chart:
     name: Package CSI chart
     needs: setup
     uses: ./.github/workflows/csi_chart_release.yaml
     secrets: inherit
 
-  # Waits on build-operator: the operator chart's values.yaml pins the image
-  # tags it ships, so it is packaged only once those images actually exist.
-  # It runs in parallel with release-operator, not after it, since the bundle
-  # and the chart are independent outputs of the same build.
+  # Waits on build-operator: the chart's values.yaml pins the image tags it ships.
   package-operator-chart:
     name: Package operator chart
     needs: [setup, build-operator]
     uses: ./.github/workflows/helm_release.yaml
     secrets: inherit
 
-  # Merge the two packaged charts into one repo index. Consumes the two chart
-  # artifacts and nothing else. package-csi-chart is ready almost immediately.
-  # package-operator-chart trails build-operator, so this starts as soon as
-  # that one lands rather than waiting on release-helm's full image set.
   merge-helm:
     name: Merge helm charts
     needs: [package-csi-chart, package-operator-chart]
@@ -130,10 +110,7 @@ jobs:
       base_url: https://install.simplyblock.io/helm
     secrets: inherit
 
-  # 7. release Helm charts (publish the merged repo via FTPS). This is the step
-  # that makes the release public, so it waits on every image the published
-  # charts reference and on the bundle. Packaging and merging may run early, but
-  # a chart is never published against an image that failed to build.
+  # Publishes the release, so it waits on every image the charts reference.
   release-helm:
     name: Release helm charts
     needs: [merge-helm, build-csi, build-operator, release-operator]
