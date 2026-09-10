@@ -77,6 +77,9 @@ func Run(conf *config.Config) {
 	if conf.IsControllerServer {
 		cd.AddControllerServiceCapabilities(controllerCaps)
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
+		// The controller serves the GroupController service (VolumeGroupSnapshot,
+		// design §9); advertise it so the csi-snapshotter routes group snapshots here.
+		cd.EnableGroupController()
 	}
 
 	ids = identity.New(cd)
