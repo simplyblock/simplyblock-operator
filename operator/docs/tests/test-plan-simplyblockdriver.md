@@ -181,19 +181,20 @@ they were not looking at.
 
 ### The Phase and Its Counts (design §3.3, §4.2)
 
-File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_test.go`
+Files: `operator/internal/controllers/driver/phase_test.go` for the derivation,
+and `simplyblockdriver_controller_test.go` for what reaches status.
 
-| #    | Scenario                                                                             | Type     | Test |
-|------|--------------------------------------------------------------------------------------|----------|------|
-| U-11 | `status.nodesReady` and `nodesTotal` reflect the DaemonSet                           | Positive | —    |
-| U-12 | All node plugins ready and the controller serving: `Ready`                           | Positive | —    |
-| U-13 | One node plugin of three not ready: `Degraded`, not `Unavailable`                    | Boundary | —    |
-| U-14 | Zero ready node plugins while the controller serves: `Degraded`                      | Boundary | —    |
-| U-15 | The controller plugin not running: `Unavailable`, whatever the node plugins do       | Negative | —    |
-| U-16 | `status.nodesReady` is 0 and present, never omitted                                  | Boundary | —    |
-| U-17 | A `nodeSelector` that matches no worker: `nodesTotal` is 0, reported not failed      | Boundary | —    |
-| U-18 | `status.controllerReady` false while `nodesReady` equals `nodesTotal`: `Unavailable` | Boundary | —    |
-| U-19 | `status.observedGeneration` matches `metadata.generation` after a reconcile          | Positive | —    |
+| #    | Scenario                                                                             | Type     | Test                         |
+|------|--------------------------------------------------------------------------------------|----------|------------------------------|
+| U-11 | `status.nodesReady` and `nodesTotal` reflect the DaemonSet                           | Positive | `TestCounts`                 |
+| U-12 | All node plugins ready and the controller serving: `Ready`                           | Positive | `TestPhase`                  |
+| U-13 | One node plugin of three not ready: `Degraded`, not `Unavailable`                    | Boundary | `TestPhase`                  |
+| U-14 | Zero ready node plugins while the controller serves: `Degraded`                      | Boundary | `TestPhase`                  |
+| U-15 | The controller plugin not running: `Unavailable`, whatever the node plugins do       | Negative | `TestPhase`                  |
+| U-16 | `status.nodesReady` is 0 and present, never omitted                                  | Boundary | `TestCounts`                 |
+| U-17 | A `nodeSelector` that matches no worker: `nodesTotal` is 0, reported not failed      | Boundary | `TestPhase`                  |
+| U-18 | `status.controllerReady` false while `nodesReady` equals `nodesTotal`: `Unavailable` | Boundary | `TestPhase`                  |
+| U-19 | `status.observedGeneration` matches `metadata.generation` after a reconcile          | Positive | `TestStatusCarriesTheCounts` |
 
 `U-14` and `U-15` are the pair design §4.2 turns on. Every node plugin down
 strands every worker's volumes and still leaves provisioning working, and a
@@ -376,18 +377,18 @@ row for.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 92        | 6       | 86          |
+| Unit        | 92        | 15      | 77          |
 | Integration | 22        | 0       | 22          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **130**   | **6**   | **124**     |
+| **Total**   | **130**   | **15**  | **115**     |
 
 `I-12` and `U-74` are superseded and are not in the counts.
 
-`U-88` to `U-93` are covered, by the validator that ships with the API type. The
-rest cannot be yet, because the reconciler does not exist, and until it does the
-plan's value is that it says what the kind has to do rather than what somebody
-remembers deciding.
+`U-11` to `U-19` and `U-88` to `U-93` are covered: the phase and its counts, and
+the singleton at admission. The rest waits on adoption and on the version
+document, and until then the plan's value is that it says what the kind has to do
+rather than what somebody remembers deciding.
 
 ---
 
@@ -396,7 +397,6 @@ remembers deciding.
 | #                                    | Gap                                                                  | Reason                                                                                                                |
 |--------------------------------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
 | U-01 … U-10, U-26 … U-44             | What the controller applies, and the configuration it writes         | The kind does not exist. These are the rows to write first, because they are pure                                     |
-| U-11 … U-19                          | The phase and its counts                                             | The kind does not exist. `U-14` and `U-15` are the pair that keeps a partial failure from being reported as an outage |
 | U-20 … U-25, U-31, U-32, U-45 … U-53 | Version skew                                                         | The kind does not exist, and neither does the document design §5.1 reads                                              |
 | U-54 … U-87                          | Adoption, the singleton's controller half, and the sidecar overrides | The kind does not exist. Every row is seedable from a fake client, so these follow the apply rows immediately         |
 | I-01 … I-23                          | Every admission rule, the real-API-server apply, and field ownership | Needs `envtest`, because defaulting and immutability are enforced by the API server and a fake client applies neither |

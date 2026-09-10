@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,7 +49,11 @@ const (
 
 // Event reasons.
 const (
-	reasonDuplicateDriver = "DuplicateDriver"
+	reasonDuplicateDriver   = "DuplicateDriver"
+	reasonDriverReady       = "DriverReady"
+	reasonDriverDegraded    = "DriverDegraded"
+	reasonDriverUnavailable = "DriverUnavailable"
+	reasonNoMatchingWorkers = "NoMatchingWorkers"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -105,15 +110,63 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver)
 
-	// The phase is derived from what the two plugins report, which is §4.2 and
-	// is not implemented yet. Until it is, a deployment that was applied says
-	// so rather than claiming a readiness nothing measured.
-	if err := r.setStatus(ctx, &d,
-		simplyblockv1alpha2.SimplyblockDriverPhaseInstalling, "the deployment's objects are applied"); err != nil {
+	h, err := r.observe(ctx, &d)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// The event marks the arrival rather than the state, so a deployment that
+	// stays Degraded says so once instead of on every resync.
+	if h.phase != d.Status.Phase {
+		if eventType, reason, ok := eventFor(h); ok {
+			r.event(&d, eventType, reason, h.message)
+		}
+	}
+
+	if err := r.setHealth(ctx, &d, h); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{RequeueAfter: driverResyncInterval}, nil
+}
+
+// observe reads the two workloads and the registration back, which is what §4.2
+// derives the phase from. A workload that is not there yet is not an error: the
+// apply above created it and the cache has not caught up.
+func (r *SimplyblockDriverReconciler) observe(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (health, error) {
+	n := names(d)
+
+	var node appsv1.DaemonSet
+	nodePtr := &node
+	if err := r.Get(ctx, client.ObjectKey{Namespace: d.Namespace, Name: n.nodeDaemonSet}, &node); err != nil {
+		if !errors.IsNotFound(err) {
+			return health{}, err
+		}
+		nodePtr = nil
+	}
+
+	var controller appsv1.StatefulSet
+	controllerPtr := &controller
+	if err := r.Get(ctx,
+		client.ObjectKey{Namespace: d.Namespace, Name: n.controllerStatefulSet}, &controller); err != nil {
+		if !errors.IsNotFound(err) {
+			return health{}, err
+		}
+		controllerPtr = nil
+	}
+
+	var registration storagev1.CSIDriver
+	registered := true
+	if err := r.Get(ctx, client.ObjectKey{Name: n.csiDriver}, &registration); err != nil {
+		if !errors.IsNotFound(err) {
+			return health{}, err
+		}
+		registered = false
+	}
+
+	return derive(nodePtr, controllerPtr, registered), nil
 }
 
 // event records what the reconcile decided, so that a refusal to act is
@@ -255,17 +308,46 @@ func (r *SimplyblockDriverReconciler) setStatus(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 	phase simplyblockv1alpha2.SimplyblockDriverPhase, message string,
 ) error {
+	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+		status.Phase = phase
+		status.Message = message
+	})
+}
+
+// setHealth writes the phase together with the counts it is explained by, since
+// a phase a reader cannot check against the numbers behind it sends them to
+// kubectl describe to learn which worker is short.
+func (r *SimplyblockDriverReconciler) setHealth(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, h health,
+) error {
+	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+		status.Phase = h.phase
+		status.Message = h.message
+		status.NodesReady = h.nodesReady
+		status.NodesTotal = h.nodesTotal
+		status.ControllerReady = h.controllerReady
+	})
+}
+
+func (r *SimplyblockDriverReconciler) writeStatus(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+	mutate func(*simplyblockv1alpha2.SimplyblockDriverStatus),
+) error {
 	key := client.ObjectKeyFromObject(d)
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var current simplyblockv1alpha2.SimplyblockDriver
 		if err := r.Get(ctx, key, &current); err != nil {
 			return client.IgnoreNotFound(err)
 		}
-		current.Status.Phase = phase
-		current.Status.Message = message
+		mutate(&current.Status)
 		current.Status.ObservedGeneration = current.Generation
-		return r.Status().Update(ctx, &current)
+		if err := r.Status().Update(ctx, &current); err != nil {
+			return err
+		}
+		d.Status = current.Status
+		return nil
 	})
+	return err
 }
 
 func (r *SimplyblockDriverReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -239,3 +239,85 @@ func TestFinalizerRemovesOnlyWhatThisControllerMarked(t *testing.T) {
 		t.Errorf("%s was deleted, and it belongs to another controller: %v", theirs.Name, err)
 	}
 }
+
+// The counts reach status, not only the phase. A phase without them sends a
+// reader to kubectl describe to learn which worker is short.
+func TestStatusCarriesTheCounts(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	node := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
+		Status:     appsv1.DaemonSetStatus{NumberReady: 2, DesiredNumberScheduled: 3},
+	}
+	controller := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: n.controllerStatefulSet, Namespace: d.Namespace},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	registration := &storagev1.CSIDriver{ObjectMeta: metav1.ObjectMeta{Name: n.csiDriver}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(d, node, controller, registration).
+		WithStatusSubresource(d).
+		Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	h, err := r.observe(context.Background(), d)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if err := r.setHealth(context.Background(), d, h); err != nil {
+		t.Fatalf("setHealth: %v", err)
+	}
+
+	var got simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(d), &got); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Status.Phase != simplyblockv1alpha2.SimplyblockDriverPhaseDegraded {
+		t.Errorf("phase = %q, want Degraded", got.Status.Phase)
+	}
+	if got.Status.NodesReady != 2 || got.Status.NodesTotal != 3 {
+		t.Errorf("counts = %d/%d, want 2/3", got.Status.NodesReady, got.Status.NodesTotal)
+	}
+	if !got.Status.ControllerReady {
+		t.Error("controllerReady is false with a ready replica")
+	}
+	if got.Status.ObservedGeneration != got.Generation {
+		t.Errorf("observedGeneration = %d, want %d", got.Status.ObservedGeneration, got.Generation)
+	}
+}
+
+// A registration that is missing holds the deployment at Installing even with
+// both plugins up, because a kubelet that never saw the driver will not ask it
+// for anything.
+func TestMissingRegistrationHoldsAtInstalling(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(d,
+			&appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
+				Status:     appsv1.DaemonSetStatus{NumberReady: 3, DesiredNumberScheduled: 3},
+			},
+			&appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Name: n.controllerStatefulSet, Namespace: d.Namespace},
+				Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+			}).
+		WithStatusSubresource(d).
+		Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	h, err := r.observe(context.Background(), d)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if h.phase != simplyblockv1alpha2.SimplyblockDriverPhaseInstalling {
+		t.Errorf("phase = %q, want Installing without a registration", h.phase)
+	}
+}
