@@ -17,6 +17,7 @@ import (
 // /version); mount it behind http.StripPrefix when proxied under /k8s.
 type K8sAPI struct {
 	store *Store
+	authz *AuthZ
 }
 
 func (a *K8sAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +149,12 @@ func (a *K8sAPI) serveResourceList(w http.ResponseWriter, group, version string)
 func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, version string, rest []string) {
 	if len(rest) == 0 {
 		a.serveResourceList(w, group, version)
+		return
+	}
+	// authorization.k8s.io reviews are create-only virtual resources, not
+	// stored objects — hand them to the AuthZ layer (see rbac.go).
+	if group == authzGroup && a.authz != nil && r.Method == http.MethodPost {
+		a.authz.ServeReview(w, r, rest[0])
 		return
 	}
 

@@ -13,6 +13,8 @@ const (
 	ramenGroup = "ramendr.openshift.io"
 	ocmGroup   = "cluster.open-cluster-management.io"
 	kvGroup    = "kubevirt.io"
+	rbacGroup  = "rbac.authorization.k8s.io"
+	authzGroup = "authorization.k8s.io"
 )
 
 func def(group, version, resource, kind string, namespaced bool) ResourceDef {
@@ -74,6 +76,24 @@ func allResourceDefs() []ResourceDef {
 		def(sbGroup, "v1alpha1", "controlplaneops", "ControlPlaneOps", true),
 		def(sbGroup, "v1alpha1", "persistentvolumeops", "PersistentVolumeOps", true),
 		def(sbGroup, "v1alpha1", "simplyblockdrivers", "SimplyblockDriver", true),
+
+		// ---- multi-cluster / multi-tenant paradigm (design-only; see PARADIGM.md) ----
+		// Hub tenancy + RBAC surface from the multi-cluster RBAC design. None of
+		// these exist on main; they are modelled here so the console's access,
+		// hub/agent and drift views can be exercised.
+		def(sbGroup, "v1alpha1", "managedclusters", "ManagedCluster", false),         // hub registration (cluster-scoped)
+		def(sbGroup, "v1alpha1", "nodepoolallocations", "NodePoolAllocation", false), // privileged-op envelope (cluster-scoped)
+		def(sbGroup, "v1alpha1", "storageclusterclasses", "StorageClusterClass", false),
+		def(sbGroup, "v1alpha1", "accessgrants", "AccessGrant", true), // (subject, role, scope) → RoleBindings
+		def(sbGroup, "v1alpha1", "protectedapplications", "ProtectedApplication", true),
+		def(sbGroup, "v1alpha1", "applicationfailovers", "ApplicationFailover", true),
+
+		// ---- Kubernetes RBAC (the hub is the single policy decision point) ----
+		def(rbacGroup, "v1", "clusterroles", "ClusterRole", false),
+		def(rbacGroup, "v1", "roles", "Role", true),
+		def(rbacGroup, "v1", "rolebindings", "RoleBinding", true),
+		def(rbacGroup, "v1", "clusterrolebindings", "ClusterRoleBinding", false),
+		def("", "v1", "serviceaccounts", "ServiceAccount", true),
 
 		// ---- Ramen ----
 		def(ramenGroup, "v1alpha1", "drpolicies", "DRPolicy", false),

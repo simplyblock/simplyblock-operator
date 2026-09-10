@@ -82,7 +82,95 @@ func (s *Simulator) Tick() {
 		}
 	}
 	s.advanceDRPCs()
+	s.advanceProjection()
+	s.reconcileObservedGeneration()
 	s.refreshTelemetry()
+}
+
+// advanceProjection plays the agent side of the hub/agent split: it refreshes
+// the managed-cluster heartbeat (lastSyncTime) and, on the transport-namespace
+// StorageCluster projection, catches observedGeneration up to the hub's spec
+// generation — so a spec the UI just changed shows "Pending" for one tick and
+// then "Applied".
+func (s *Simulator) advanceProjection() {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if d, ok := s.st.Lookup(sbGroup, "v1alpha1", "managedclusters"); ok {
+		for _, mc := range mustList(s.st, d) {
+			if getStr(mc, "status.agentConnected") == "false" {
+				continue
+			}
+			setPath(mc, "status.lastSyncTime", now)
+			s.st.Update(d, "", mc)
+		}
+	}
+
+	// The projected StorageCluster lives in a sb-mc-* namespace; its status is
+	// agent-authored. Catch observedGeneration up to generation (drift heals).
+	if d, ok := s.st.Lookup(sbGroup, "v1alpha1", "storageclusters"); ok {
+		for _, sc := range mustList(s.st, d) {
+			ns := getStr(sc, "metadata.namespace")
+			if len(ns) < 6 || ns[:6] != "sb-mc-" {
+				continue
+			}
+			gen := genOf(sc)
+			obs := obsGenOf(sc)
+			setPath(sc, "status.lastSyncTime", now)
+			if obs < gen {
+				setPath(sc, "status.observedGeneration", float64(gen))
+				setPath(sc, "status.conditions", []any{
+					map[string]any{"type": "AgentConnected", "status": "True", "reason": "Heartbeat", "message": "agent pulling intent", "lastTransitionTime": now, "observedGeneration": float64(gen)},
+					map[string]any{"type": "Applied", "status": "True", "reason": "Applied", "message": "spec applied on the managed cluster", "lastTransitionTime": now, "observedGeneration": float64(gen)},
+				})
+			}
+			s.st.Update(d, ns, sc)
+		}
+	}
+}
+
+// reconcileObservedGeneration is the agent applying spec: for every simplyblock
+// entity kind whose status lags metadata.generation (because the UI just
+// patched spec), bring observedGeneration up. The one-tick lag is what lets the
+// UI distinguish "applied" from "pending" (design-crd-model.md §7.9).
+func (s *Simulator) reconcileObservedGeneration() {
+	for _, d := range s.st.Defs() {
+		if d.Group != sbGroup || !isEntityKind(d.Resource) {
+			continue
+		}
+		for _, obj := range mustList(s.st, d) {
+			ns := getStr(obj, "metadata.namespace")
+			if len(ns) >= 6 && ns[:6] == "sb-mc-" {
+				continue // transport projection handled in advanceProjection
+			}
+			st, _ := obj["status"].(map[string]any)
+			if st == nil {
+				continue
+			}
+			if obsGenOf(obj) < genOf(obj) {
+				setPath(obj, "status.observedGeneration", float64(genOf(obj)))
+				s.st.Update(d, ns, obj)
+			}
+		}
+	}
+}
+
+func mustList(st *Store, d ResourceDef) []map[string]any {
+	items, _ := st.List(d, "", "", "")
+	return items
+}
+
+func genOf(obj map[string]any) int {
+	if f, ok := getPath(obj, "metadata.generation").(float64); ok {
+		return int(f)
+	}
+	return 1
+}
+
+func obsGenOf(obj map[string]any) int {
+	if f, ok := getPath(obj, "status.observedGeneration").(float64); ok {
+		return int(f)
+	}
+	return 0
 }
 
 func (s *Simulator) advanceOp(d ResourceDef, obj map[string]any, terminalOK string, phases, subPhases []string) {

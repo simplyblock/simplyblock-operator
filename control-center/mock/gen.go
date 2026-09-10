@@ -19,9 +19,16 @@ type genCtx struct {
 	st   *Store
 	rng  *rand.Rand
 	sc   Scenario
-	ns   string // the simplyblock namespace
 	now  time.Time
 	site string
+
+	// The hub namespace layout (tenancy.go). ns is the storage-cluster
+	// namespace (sb-sc-<cluster>) — the RBAC target that most storage objects
+	// live in — so the existing generators need no per-call change.
+	ns     string // sb-sc-<cluster>  (user-facing storage-cluster namespace)
+	sysNs  string // simplyblock-system (control plane)
+	mcNs   string // sb-mc-<managed>   (transport: projected intent + status)
+	mcName string // managed cluster name
 
 	workerNames []string
 	nodeUUIDs   []string
@@ -37,20 +44,26 @@ type pvcRef struct {
 	SizeGi                                  int
 }
 
-func Generate(st *Store, sc Scenario, seed uint64, ns string) {
+func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g := &genCtx{
 		st:  st,
 		rng: rand.New(rand.NewPCG(seed, seed^0xda3e39cb94b95bdb)),
-		sc:  sc, ns: ns, now: time.Now().UTC(),
-		clusterName: "sb-primary",
+		sc:  sc, now: time.Now().UTC(),
+		clusterName: "cluster1",
+		drCluster:   "cluster2",
 	}
 	g.site = dcSites[g.rng.IntN(int(len(dcSites)))]
 	g.clusterUUID = g.uuid()
-	g.drCluster = "sb-dr"
+	g.mcName = fmt.Sprintf("prod-%s-1", g.site)
+	g.sysNs = systemNs
+	g.mcNs = nsManagedCluster(g.mcName)
+	g.ns = nsStorageCluster(g.clusterName)
 
 	g.namespaces()
 	g.k8sNodes()
+	g.tenancyScaffold() // ManagedCluster, NodePoolAllocation, StorageClusterClass
 	g.storageCluster()
+	g.projectStorageCluster() // transport copy in sb-mc-* (hub→agent, drift)
 	g.nodesAndDevices()
 	g.poolsAndClasses()
 	g.volumes()
@@ -66,6 +79,7 @@ func Generate(st *Store, sc Scenario, seed uint64, ns string) {
 	g.platformPods()
 	g.secrets()
 	g.controlPlaneObjects()
+	g.accessControl() // sb:* ClusterRoles, RoleBindings, AccessGrants
 	g.events()
 }
 
@@ -74,7 +88,7 @@ func Generate(st *Store, sc Scenario, seed uint64, ns string) {
 func (g *genCtx) def(group, resource string) ResourceDef {
 	version := "v1alpha1"
 	switch group {
-	case "", ocmGroup, kvGroup, "apps", "storage.k8s.io", "snapshot.storage.k8s.io", "networking.k8s.io":
+	case "", ocmGroup, kvGroup, rbacGroup, "apps", "storage.k8s.io", "snapshot.storage.k8s.io", "networking.k8s.io":
 		version = "v1"
 	}
 	if resource == "clusterdeploymentconfigs" || resource == "operatorops" {
@@ -109,11 +123,58 @@ func (g *genCtx) add(group, resource, ns, name string, spec, status map[string]a
 			obj[k] = v
 		}
 	}
+	// Paradigm stamping: every simplyblock kind carries the drift primitives
+	// the design mandates (design-crd-model.md §7.9) — actor provenance,
+	// managed-by, and status.observedGeneration — so the mock's world matches
+	// the target model even though main sets these on almost nothing.
+	if group == sbGroup {
+		g.stampParadigm(obj, resource)
+	}
 	created, err := g.st.Create(d, ns, obj)
 	if err != nil {
 		panic(fmt.Sprintf("generator conflict for %s/%s %s: %v", group, resource, name, err))
 	}
 	return created
+}
+
+// stampParadigm adds actor annotations, the managed-by label, and
+// status.observedGeneration (= generation 1 at create) to a hub-authored
+// simplyblock object, plus a standard Ready/Synced condition for entity kinds.
+func (g *genCtx) stampParadigm(obj map[string]any, resource string) {
+	meta := obj["metadata"].(map[string]any)
+	stampActor(meta, "admin@simplyblock.io", g.uuid(), "sb-infra-admins,platform-eng", g.past(240))
+	labels, _ := meta["labels"].(map[string]any)
+	if labels == nil {
+		labels = map[string]any{}
+		meta["labels"] = labels
+	}
+	if _, ok := labels[labManagedBy]; !ok {
+		labels[labManagedBy] = "hub"
+	}
+	st, _ := obj["status"].(map[string]any)
+	if st == nil {
+		return
+	}
+	// observedGeneration == generation means "the reported status is current"
+	// (design §7.9: without it a stale status and a disagreeing one look the same).
+	if _, ok := st["observedGeneration"]; !ok {
+		st["observedGeneration"] = float64(1)
+	}
+	// Entity kinds (not *ops, not tasks) get a standardized conditions surface;
+	// ops kinds keep their phase model, replication kinds already carry conditions.
+	if _, has := st["conditions"]; !has && isEntityKind(resource) {
+		st["conditions"] = readyCondition("Ready", "True", "Reconciled", "resource reconciled", g.recent(30), 1)
+	}
+}
+
+func isEntityKind(resource string) bool {
+	switch resource {
+	case "storageclusters", "storagenodes", "storagenodesets", "storagedevices",
+		"storagepools", "controlplanes", "managedclusters", "storageclusterclasses",
+		"nodepoolallocations", "protectedapplications":
+		return true
+	}
+	return false
 }
 
 func (g *genCtx) uuid() string            { return uuidFrom(g.rng) }
@@ -135,12 +196,37 @@ func gib(n int) string { return fmt.Sprintf("%dGi", n) }
 
 // ---- world building -----------------------------------------------------------
 
+// namespaces builds the hub tenancy layout (§2.1) with hierarchy labels
+// (§2.2). Structure is in labels, not names, because namespace names are DNS
+// labels: the scope tree, RoleBinding propagation and admission bindings all
+// select on these labels.
 func (g *genCtx) namespaces() {
-	all := append([]string{g.ns, "default", "kube-system"}, g.sc.AppNamespaces...)
-	for _, n := range all {
-		g.add("", "namespaces", "", n, nil,
+	mk := func(name string, labels map[string]any) {
+		labels["kubernetes.io/metadata.name"] = name
+		g.add("", "namespaces", "", name, nil,
 			map[string]any{"phase": "Active"},
-			map[string]any{"labels": map[string]any{"kubernetes.io/metadata.name": n}})
+			map[string]any{"labels": labels})
+	}
+	// plain namespaces
+	for _, n := range []string{"default", "kube-system"} {
+		mk(n, map[string]any{})
+	}
+	// control plane
+	mk(g.sysNs, map[string]any{labScopeKind: "system"})
+	// managed cluster (transport)
+	mk(g.mcNs, map[string]any{
+		labScopeKind: scopeManagedCluster, labManagedCluster: g.mcName,
+	})
+	// storage cluster (user-facing / RBAC target)
+	mk(g.ns, map[string]any{
+		labScopeKind: scopeStorageCluster, labManagedCluster: g.mcName,
+		labStorageCluster: g.clusterName,
+	})
+	// DR system
+	mk(drSystemNs, map[string]any{labScopeKind: scopeDR})
+	// application namespaces (scope tree leaves)
+	for _, n := range g.sc.AppNamespaces {
+		mk(n, map[string]any{labScopeKind: scopeApplication})
 	}
 }
 
@@ -793,11 +879,11 @@ func (g *genCtx) platformPods() {
 		if i < g.sc.OfflineNodes {
 			phase = "Pending"
 		}
-		g.addPod(g.ns, fmt.Sprintf("simplyblock-storage-node-ds-%s", randSuffixLocal(g.rng)), "storage-node", worker, phase)
+		g.addPod(g.sysNs, fmt.Sprintf("simplyblock-storage-node-ds-%s", randSuffixLocal(g.rng)), "storage-node", worker, phase)
 	}
 	mgmt := fmt.Sprintf("mgmt-%s-1", g.site)
-	for _, cp := range []string{"simplyblock-operator", "simplyblock-webappapi", "simplyblock-prometheus", "simplyblock-control-center"} {
-		g.addPod(g.ns, cp+"-"+randSuffixLocal(g.rng), cp, mgmt, "Running")
+	for _, cp := range []string{"simplyblock-operator", "simplyblock-webappapi", "simplyblock-prometheus", "simplyblock-control-center", "sb-agent"} {
+		g.addPod(g.sysNs, cp+"-"+randSuffixLocal(g.rng), cp, mgmt, "Running")
 	}
 }
 
@@ -808,7 +894,7 @@ func (g *genCtx) platformPods() {
 func (g *genCtx) secrets() {
 	release := map[string]any{
 		"name":      "simplyblock-operator",
-		"namespace": g.ns,
+		"namespace": g.sysNs,
 		"version":   1,
 		"info": map[string]any{
 			"status":         "deployed",
@@ -834,14 +920,14 @@ func (g *genCtx) secrets() {
 	inner := base64.StdEncoding.EncodeToString(gz.Bytes())
 	outer := base64.StdEncoding.EncodeToString([]byte(inner))
 
-	g.add("", "secrets", g.ns, "sh.helm.release.v1.simplyblock-operator.v1", nil, nil, map[string]any{
+	g.add("", "secrets", g.sysNs, "sh.helm.release.v1.simplyblock-operator.v1", nil, nil, map[string]any{
 		"type": "helm.sh/release.v1",
 		"data": map[string]any{"release": outer},
 		"labels": map[string]any{
 			"owner": "helm", "name": "simplyblock-operator", "status": "deployed", "version": "1",
 		},
 	})
-	g.add("", "secrets", g.ns, "backup-s3-credentials", nil, nil, map[string]any{
+	g.add("", "secrets", g.sysNs, "backup-s3-credentials", nil, nil, map[string]any{
 		"type": "Opaque",
 		"data": map[string]any{
 			"access_key": base64.StdEncoding.EncodeToString([]byte("MOCKACCESSKEY")),
@@ -851,7 +937,7 @@ func (g *genCtx) secrets() {
 }
 
 func (g *genCtx) controlPlaneObjects() {
-	g.add(sbGroup, "controlplanes", g.ns, "simplyblock",
+	g.add(sbGroup, "controlplanes", g.sysNs, "simplyblock",
 		map[string]any{"image": "quay.io/simplyblock-io/simplyblock:26.3.0"},
 		map[string]any{"phase": "Ready", "lastChecked": g.recent(2), "message": "control plane healthy"}, nil)
 
@@ -860,7 +946,9 @@ func (g *genCtx) controlPlaneObjects() {
 		"name": "default", "workers": toAny(g.workerNames),
 		"mgmtInterface": "eth0", "dataInterfaces": []any{"eth1"},
 	})
-	g.add(sbGroup, "clusterdeploymentconfigs", g.ns, "sb-primary-config",
+	// The deployment config targets a managed cluster, so it lives in the
+	// transport namespace (Kubernetes > cluster > Discovery & deployment).
+	g.add(sbGroup, "clusterdeploymentconfigs", g.mcNs, "sb-primary-config",
 		map[string]any{
 			"approved":    true,
 			"environment": "Vanilla",
@@ -901,6 +989,203 @@ func (g *genCtx) events() {
 				"count": float64(1 + g.rng.UintN(5)),
 			})
 	}
+}
+
+// tenancyScaffold creates the cluster-scoped hub objects: the ManagedCluster
+// registration (with agent connectivity), the NodePoolAllocation privileged-op
+// envelope (§2.4), and a StorageClusterClass.
+func (g *genCtx) tenancyScaffold() {
+	agentConnected := true
+	drift := g.driftPresent()
+	lastSync := g.recent(2)
+	if !agentConnected {
+		lastSync = g.past(3)
+	}
+	g.add(sbGroup, "managedclusters", "", g.mcName,
+		map[string]any{
+			"kubernetesEndpoint": fmt.Sprintf("https://%s.k8s.example.com:6443", g.mcName),
+			"region":             g.site,
+			"transportNamespace": g.mcNs,
+		},
+		map[string]any{
+			"phase":             "Available",
+			"agentConnected":    agentConnected,
+			"lastSyncTime":      lastSync,
+			"kubernetesVersion": "v1.31.4",
+			"storageClusters":   []any{g.clusterName},
+			// hub-only conditions the managed cluster cannot know about itself
+			"conditions": []any{
+				map[string]any{"type": "AgentConnected", "status": boolStr(agentConnected), "reason": "Heartbeat", "message": "agent client cert valid; pulling intent", "lastTransitionTime": g.past(48), "observedGeneration": float64(1)},
+				map[string]any{"type": "InSync", "status": boolStr(!drift), "reason": ternStr(drift, "DriftDetected", "Synced"), "message": ternStr(drift, "projected status differs from managed cluster", "hub and managed cluster agree"), "lastTransitionTime": lastSync, "observedGeneration": float64(1)},
+			},
+		}, nil)
+
+	g.add(sbGroup, "nodepoolallocations", "", g.clusterName+"-alloc",
+		map[string]any{
+			"managedCluster":          g.mcName,
+			"boundNamespace":          g.ns,
+			"allowedNodeSelector":     map[string]any{"io.simplyblock.node-type": "simplyblock-storage-plane"},
+			"allowedDevicePatterns":   []any{"/dev/disk/by-id/nvme-"},
+			"maxIsolatedCoresPerNode": float64(8),
+			"maxHugepagesGiPerNode":   float64(32),
+		},
+		map[string]any{"phase": "Bound", "boundNamespace": g.ns}, nil)
+
+	g.add(sbGroup, "storageclusterclasses", "", "standard-nvme",
+		map[string]any{
+			"stripe":     map[string]any{"dataChunks": 2, "parityChunks": 1},
+			"fabricType": "tcp",
+		},
+		map[string]any{"phase": "Ready"}, nil)
+}
+
+// projectStorageCluster writes the transport-namespace projection of the
+// StorageCluster (§1.3, §2.1): the same kind, placed in sb-mc-* by the hub
+// controller, whose STATUS is authored by the agent (connectivity, last sync,
+// drift, observedGeneration) — a projection, not a byte copy.
+func (g *genCtx) projectStorageCluster() {
+	drift := g.driftPresent()
+	appliedGen, observedGen := 1, 1
+	if drift {
+		appliedGen = 2 // hub advanced spec; agent has not applied it yet (pending)
+	}
+	obj := map[string]any{
+		"metadata": map[string]any{
+			"name":       g.clusterName,
+			"uid":        g.uuid(),
+			"generation": float64(appliedGen),
+			"labels": map[string]any{
+				labManagedBy:      "hub",
+				labManagedCluster: g.mcName,
+				labStorageCluster: g.clusterName,
+				labScopeKind:      scopeStorageCluster,
+			},
+			"annotations": map[string]any{
+				"simplyblock.io/projection-of": g.ns + "/" + g.clusterName,
+			},
+		},
+		// hub-owned spec projection (allocation ref, DR pairing carried here)
+		"spec": map[string]any{
+			"stripe":                map[string]any{"dataChunks": 2, "parityChunks": 1},
+			"fabricType":            "tcp",
+			"nodePoolAllocationRef": g.clusterName + "-alloc",
+		},
+		// agent-authored status
+		"status": map[string]any{
+			"uuid":               g.clusterUUID,
+			"phase":              "Active",
+			"observedGeneration": float64(observedGen),
+			"lastSyncTime":       g.recent(2),
+			"agentConnected":     true,
+			"conditions": []any{
+				map[string]any{"type": "AgentConnected", "status": "True", "reason": "Heartbeat", "message": "agent pulling intent from " + g.mcNs, "lastTransitionTime": g.past(48), "observedGeneration": float64(observedGen)},
+				map[string]any{"type": "Applied", "status": boolStr(!drift), "reason": ternStr(drift, "Pending", "Applied"), "message": ternStr(drift, fmt.Sprintf("spec generation %d not yet applied (observed %d)", appliedGen, observedGen), "spec applied on the managed cluster"), "lastTransitionTime": g.recent(20), "observedGeneration": float64(observedGen)},
+			},
+		},
+	}
+	stampActor(obj["metadata"].(map[string]any), "hub-controller", g.uuid(), "system", g.past(240))
+	d := g.def(sbGroup, "storageclusters")
+	if _, err := g.st.Create(d, g.mcNs, obj); err != nil {
+		panic(fmt.Sprintf("projection create failed: %v", err))
+	}
+}
+
+// accessControl creates the RBAC vocabulary and a few grants (§2.3, §4.2): the
+// eight aggregated sb:* ClusterRoles (each with a rules-carrying child role),
+// RoleBindings for the grants, and AccessGrant CRs. The hub API server is the
+// single policy decision point, so a grant here and one made with kubectl are
+// the same object.
+func (g *genCtx) accessControl() {
+	for _, r := range sbRoles() {
+		verbs := readVerbs()
+		if r.Write {
+			verbs = adminVerbs()
+		}
+		resources := make([]any, len(r.Resources))
+		for i, res := range r.Resources {
+			resources[i] = res
+		}
+		// aggregated role (rules filled by the controller from labelled children)
+		g.add(rbacGroup, "clusterroles", "", r.Name, nil, nil, map[string]any{
+			"aggregationRule": map[string]any{
+				"clusterRoleSelectors": []any{map[string]any{"matchLabels": map[string]any{r.AggLabel: "true"}}},
+			},
+			"rules": []any{},
+		})
+		// rules-carrying child, labelled to aggregate into the role above
+		g.add(rbacGroup, "clusterroles", "", r.Name+"-rules", nil, nil, map[string]any{
+			"labels": map[string]any{r.AggLabel: "true"},
+			"rules": []any{map[string]any{
+				"apiGroups": []any{sbGroup}, "resources": resources, "verbs": verbs,
+			}},
+		})
+	}
+
+	// Grants: infra-admin cluster-wide, cluster-admin + pool-admin on the
+	// storage cluster, dr-admin on sb-dr-system. Bindings carry the same
+	// managed-by/scope labels the controller writes (§4.2).
+	g.clusterRoleBinding("sb-infra-admins", "sb:infra-admin")
+	g.grant("sb-cluster1-admins", "sb:cluster-admin", g.ns, scopeStorageCluster)
+	g.grant("team-a-pool-admins", "sb:pool-admin", g.ns, scopeStoragePool)
+	if g.sc.WithDR {
+		g.grant("sb-dr-admins", "sb:dr-admin", drSystemNs, scopeDR)
+	}
+
+	// An AccessGrant CR (the thin CR that adds expiry/reason/DR fan-out, §4.3).
+	g.add(sbGroup, "accessgrants", g.ns, "cluster1-admins",
+		map[string]any{
+			"subject": map[string]any{"kind": "Group", "name": "sb-cluster1-admins"},
+			"role":    "sb:cluster-admin",
+			"scope":   map[string]any{"kind": scopeStorageCluster, "storageCluster": g.clusterName},
+			"reason":  "OPS-4821 cluster ownership",
+		},
+		map[string]any{
+			"phase": "Reconciled", "boundNamespaces": []any{g.ns},
+			"conditions": readyCondition("Ready", "True", "BoundingComplete", "RoleBinding created in "+g.ns, g.past(72), 1),
+		}, nil)
+}
+
+func (g *genCtx) grant(group, role, ns, scopeKind string) {
+	g.add(rbacGroup, "rolebindings", ns, fmt.Sprintf("%s-%s", role[3:], group),
+		nil, nil, map[string]any{
+			"labels":  map[string]any{labManagedBy: "control-center", labScopeKind: scopeKind},
+			"roleRef": map[string]any{"apiGroup": rbacGroup, "kind": "ClusterRole", "name": role},
+			"subjects": []any{map[string]any{
+				"kind": "Group", "name": group, "apiGroup": rbacGroup,
+			}},
+		})
+}
+
+func (g *genCtx) clusterRoleBinding(group, role string) {
+	g.add(rbacGroup, "clusterrolebindings", "", fmt.Sprintf("%s-%s", role[3:], group),
+		nil, nil, map[string]any{
+			"labels":  map[string]any{labManagedBy: "control-center", labScopeKind: scopeCluster},
+			"roleRef": map[string]any{"apiGroup": rbacGroup, "kind": "ClusterRole", "name": role},
+			"subjects": []any{map[string]any{
+				"kind": "Group", "name": group, "apiGroup": rbacGroup,
+			}},
+		})
+}
+
+// driftPresent is the mock's stand-in for a managed cluster whose reported
+// status lags the hub spec — surfaced so the UI's "applied vs pending" and
+// drift views have something to render.
+func (g *genCtx) driftPresent() bool {
+	return g.sc.DegradedDevices > 0 || g.sc.OfflineNodes > 0
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "True"
+	}
+	return "False"
+}
+
+func ternStr(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
 }
 
 func toAny[T any](in []T) []any {

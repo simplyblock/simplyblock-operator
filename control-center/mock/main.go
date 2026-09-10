@@ -38,6 +38,7 @@ func main() {
 		failRate    = flag.Float64("fail-rate", 0.1, "probability that a simulated operation fails")
 		serveUI     = flag.String("serve-ui", "", "directory with the console's index.html; serves the UI and mounts the proxied paths (/k8s, /operator, /prometheus) so no nginx is needed")
 		fixtures    = flag.String("operator-fixtures", "", "directory of JSON fixtures for the operator API (see mock/README.md)")
+		viewer      = flag.String("viewer", "global", "authorization stand-in for the impersonated user: global | none | <sb:role>@<namespace>[,...] (see PARADIGM.md)")
 	)
 	flag.Parse()
 
@@ -54,8 +55,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	srv := newServer(sc, *seed, *namespace, *fixtures)
-	log.Printf("dataset=%s seed=%d namespace=%s (%s)", sc.Name, *seed, *namespace, sc.Description)
+	srv := newServer(sc, *seed, *namespace, *fixtures, *viewer)
+	log.Printf("dataset=%s seed=%d systemNamespace=%s viewer=%s (%s)", sc.Name, *seed, *namespace, *viewer, sc.Description)
 
 	if *simInterval > 0 {
 		sim := NewSimulator(srv.store, *namespace, *failRate, *seed)
@@ -85,21 +86,26 @@ type server struct {
 	operator *OperatorAPI
 	sim      *Simulator
 
+	authz     *AuthZ
 	dataset   string
 	seed      uint64
 	namespace string
 	fixtures  string
 }
 
-func newServer(sc Scenario, seed uint64, namespace, fixtures string) *server {
+func newServer(sc Scenario, seed uint64, namespace, fixtures, viewer string) *server {
 	st := NewStore(seed)
 	st.Register(allResourceDefs()...)
 	Generate(st, sc, seed, namespace)
+	authz := &AuthZ{store: st, viewer: parseViewer(viewer)}
+	op := NewOperatorAPI(fixtures)
+	op.authz = authz
 	return &server{
 		store:     st,
-		k8s:       &K8sAPI{store: st},
+		k8s:       &K8sAPI{store: st, authz: authz},
 		prom:      &PromAPI{store: st, seed: seed},
-		operator:  NewOperatorAPI(fixtures),
+		operator:  op,
+		authz:     authz,
 		dataset:   sc.Name,
 		seed:      seed,
 		namespace: namespace,

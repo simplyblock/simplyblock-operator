@@ -23,6 +23,7 @@ import (
 // list is the to-do list for new fixtures.
 type OperatorAPI struct {
 	fixturesDir string
+	authz       *AuthZ
 
 	mu       sync.Mutex
 	unknown  []string
@@ -35,6 +36,18 @@ func NewOperatorAPI(fixturesDir string) *OperatorAPI {
 
 func (o *OperatorAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(filepath.ToSlash(r.URL.Path), "/")
+	// The console's access screen (multi-cluster RBAC design §5) reads the
+	// scope projection and the aggregated self-rules from the operator base.
+	if o.authz != nil {
+		switch rel {
+		case "v1/access/scopes":
+			o.authz.Scopes(w, r)
+			return
+		case "v1/access/self":
+			o.authz.Self(w, r)
+			return
+		}
+	}
 	if o.fixturesDir != "" {
 		candidates := []string{
 			rel + "." + strings.ToLower(r.Method) + ".json",

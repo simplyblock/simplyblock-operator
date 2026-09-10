@@ -16,6 +16,15 @@ reconciler: Ops objects move through `Pending → Running → Succeeded/Failed`,
 `spec.abort` is honored, DRPC failovers progress, replication slots cut over,
 and each transition emits an Event.
 
+> **Hub/agent, multi-tenant, drift-managed paradigm.** The world is shaped to
+> the CRD-redesign + multi-cluster RBAC design (namespaces `sb-sc-*` / `sb-mc-*`
+> / `sb-dr-system`, hierarchy labels, the `sb:*` aggregated roles, `AccessGrant`
+> / `NodePoolAllocation` / `ManagedCluster`, actor-stamp annotations, a hub→
+> transport StorageCluster projection with agent-authored status, and
+> `observedGeneration` applied/pending drift). **Almost none of this is on
+> `main`** — see [PARADIGM.md](PARADIGM.md) for what the mock reproduces
+> faithfully and where it necessarily stands in.
+
 ## Running it
 
 ```sh
@@ -30,11 +39,22 @@ go test ./...
 | `--listen` | `:8080` | listen address |
 | `--dataset` | `auto` | `small-healthy`, `medium-degraded`, `large-scale`, `dr-failover`, `chaos`, or `auto` (seeded random pick) |
 | `--seed` | random | same seed + dataset = byte-identical world |
-| `--namespace` | `simplyblock` | where the simplyblock objects live |
+| `--namespace` | `simplyblock` | the control-plane (system) namespace; storage objects live in `sb-sc-<cluster>`, not here (design name: `simplyblock-system`) |
 | `--sim-interval` | `4s` | simulator tick; `0` disables it (drive ticks via `/mockctl/advance`) |
 | `--fail-rate` | `0.1` | probability a simulated operation ends `Failed` |
+| `--viewer` | `global` | authorization stand-in for the impersonated user: `global`, `none`, or `<sb:role>@<namespace>[,...]` — see PARADIGM.md |
 | `--serve-ui` | — | directory with the console's `index.html`; also mounts `/k8s`, `/operator`, `/prometheus` and generates `/config.js` |
 | `--operator-fixtures` | — | JSON fixtures for the operator API (below) |
+
+### Access / authorization endpoints
+
+The console's access screen and read/write path are answered from the `--viewer`
+identity (a stand-in for impersonation — see PARADIGM.md §"Real identity"):
+
+- `POST /apis/authorization.k8s.io/v1/selfsubjectrulesreviews` — the viewer's rules in a namespace
+- `POST /apis/authorization.k8s.io/v1/subjectaccessreviews` (and `selfsubjectaccessreviews`) — allow/deny
+- `GET /operator/v1/access/scopes` — the scope tree the viewer may see
+- `GET /operator/v1/access/self` — aggregated self-rules per namespace
 
 ### Against the console pod
 
