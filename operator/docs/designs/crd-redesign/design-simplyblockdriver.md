@@ -475,6 +475,15 @@ derives them, so `simplyblock-csi-node-role` identifies one object the way
 
 #### The spec is seeded from what is running
 
+**Upgrade tool:** write the `SimplyblockDriver` for an existing deployment, with
+its spec seeded from the table below rather than left to the defaults. Nothing
+else does: the chart no longer renders the object, so on an upgraded cluster it
+is written by hand or not at all. `driverName` is the row that costs the most,
+because omitting it defaults to `csi.simplyblock.io` on a deployment registered
+under another name, the field is immutable, and the object is then unrepairable
+by an edit. The controller refuses such an object rather than orphaning volumes
+(§4.3, step 2), which contains the damage without removing the need.
+
 **The first reconcile after adoption has to be a no-op**, because these objects
 were rendered from Helm values and are about to be rendered from a spec. A field
 the translation cannot express is not a translation that fails visibly. It is a
@@ -538,6 +547,14 @@ where the name takes effect. A mismatch holds the phase at `Installing` with
 `status.message` naming both values, emits `AdoptionRefused` (§6.1), and changes
 nothing. The counts of §4.2 are still published, because the plugins are running
 and what is blocked is the handover rather than the driver.
+
+**Upgrade tool:** refuse the upgrade for a deployment configured with TLS or
+csi-link, before anything is annotated or applied. This kind has no field for
+either, so the controller refuses the handover when it meets one, and a refusal
+discovered at that point is a cluster whose chart has already stopped rendering
+the driver. Both are off by default, so the check is cheap and the answer is
+usually yes. `tls.enabled` and `csiLink.enabled` in the deployed release's values
+are what to read.
 
 **The endpoint and the credentials are not compared here, because they are not
 this deployment's to write.** They live in the credentials `Secret` the
@@ -786,12 +803,27 @@ reconcile that takes it over in place.
 | `helm uninstall` removes the driver                 | It leaves it running, and deleting the object removes it    |
 | Seven chart values pin the sidecar images           | The operator's release, or `spec.sidecarImages` (§3.1)      |
 
+**Upgrade tool:** apply the `SimplyblockDriver` CRD before the chart upgrade
+that expects it. The chart ships CRDs in `crds/`, which Helm applies on install
+and skips on upgrade, so an existing release upgraded onto a chart that
+references the kind fails while rendering, with an error naming the template
+rather than the missing CRD. §11 installs the CRDs, and this is one of them.
+
 **Moving the install out of the chart is not free**, and it is the same cost
 [`design-controlplane.md`](design-controlplane.md) §5.1 names for the control
 plane: a chart template is a file a user can read, fork, and patch, and a
 controller's apply is none of those. It cannot be a flag day either, for the same
 reason and with the same unanswered question, which
 [`design-controlplane.md`](design-controlplane.md) §12 records as its Q2.
+
+**Upgrade tool:** translate the values this table moves onto the object's spec,
+and note that `controlplane.trustCSIServiceAccounts` is not among them. It stayed
+in the chart, because it configures which accounts the management API trusts
+rather than what the plugins present, and it collapses the former
+`controller.serviceAccountAuth.enabled` and `node.serviceAccountAuth.enabled`
+into one key. A release that set either has to end up with both that value and
+`spec.enableServiceAccountAuth`, since one without the other is a driver whose
+tokens are refused or a control plane trusting accounts nothing presents.
 
 **What a user loses is a value, and what they lose it to is a field.** Each row
 above moves one setting from `values.yaml` to a spec, and §4.3's translation table

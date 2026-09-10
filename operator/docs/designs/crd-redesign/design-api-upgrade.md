@@ -69,6 +69,37 @@ the floor.
 
 ---
 
+## Requirements Marked in the Other Designs
+
+A design that specifies a kind also specifies what moving an existing deployment
+onto that kind costs, and the cost is this document's to pay rather than the
+kind's. Those obligations are marked where they arise, so that they can be swept
+for rather than remembered:
+
+```bash
+grep -rn '\*\*Upgrade tool:\*\*' operator/docs/designs/
+```
+
+**The marker is the words `Upgrade tool`, in bold, followed by a colon, at the
+head of a paragraph.** The paragraph then says what this tool has to do and what
+breaks if it does not. The bold is part of the token rather than decoration: a
+design that merely mentions the upgrade tool in prose is not stating a
+requirement, and a sweep that matched those would return a list nobody trusts.
+This paragraph spells the token out rather than showing it, so that defining the
+convention does not add a hit to the sweep it defines.
+
+**The sweep is the index, and this document holds no copy of it.** A list here
+would be a second place to update and the one that goes stale, since the
+requirement is discovered while the kind is being designed and belongs beside
+the decision that created it.
+
+**A marked paragraph is a requirement, not a suggestion.** Each names a concrete
+failure: an object pruned, a spec defaulted to something immutable and wrong, a
+CRD absent when the chart that needs it renders. Where the tool cannot satisfy
+one, the answer is to stop the upgrade and say so, which is what §25 is for.
+
+---
+
 ## 1. Purpose
 
 This document defines the upgrade and migration architecture for breaking
@@ -722,15 +753,15 @@ The current chart renders 110 objects at default values, and fifteen of them are
 the operator and its RBAC. The other ninety-five are the release's blast
 radius:
 
-| Group               | Objects                                                                                                                                                                                                                                                                                                                                                                                        | Adopted by                                              |
-|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
-| Control plane       | `FoundationDBCluster/simplyblock-fdb-cluster`, the `simplyblock-webappapi`, `admin-control`, `monitoring`, `tasks`, `fdb-controller-manager`, and `fdb-exporter` Deployments, `StatefulSet/simplyblock-minio`, their Services, and the `simplyblock-config`, `prometheus-config`, and `objstore-config` ConfigMaps                                                                             | `ControlPlane`, `design-controlplane.md` §5.1           |
-| CSI driver          | `CSIDriver/csi.simplyblock.io`, `StatefulSet/simplyblock-csi-controller`, `DaemonSet/simplyblock-csi-node`, their two ServiceAccounts and five ClusterRole and ClusterRoleBinding pairs, the `simplyblock-csi-cm` and `simplyblock-csi-nodeservercm` ConfigMaps, the `simplyblock-csi-secret` and `simplyblock-csi-secret-v2` Secrets, and `VolumeSnapshotClass/simplyblock-csi-snapshotclass` | `SimplyblockDriver`, `design-simplyblockdriver.md` §4.3 |
-| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/controlplane_cr.yaml`                                                                                                                                                                                                                                                                                                      | Nothing. It is the adopter (§12.2)                      |
-| Ecosystem subcharts | The Prometheus `StatefulSet`, its two Services and its ConfigMap, `Deployment/simplyblock-reloader`, and the MongoDB and OpenSearch releases where `controlplane.observability.enabled` is set                                                                                                                                                                                                 | Undecided (§32, Q5)                                     |
-| Unattributed        | `StorageClass/local-hostpath`, `DaemonSet/simplyblock-numa-resource-plugin` and its ConfigMap, and `ConfigMap/simplyblock-caching-node-restart-script-cm`                                                                                                                                                                                                                                      | Undecided (§32, Q5)                                     |
-| Already kept        | The three `snapshot.storage.k8s.io` CRDs and `Deployment/simplyblock-snapshot-controller`                                                                                                                                                                                                                                                                                                      | Helm already leaves them (§12.2)                        |
-| The operator        | `Deployment/simplyblock-operator`, its webhook Service and two webhook configurations, its metrics Service and `APIService`, and its RBAC                                                                                                                                                                                                                                                      | The new chart renders these                             |
+| Group               | Objects                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Adopted by                                              |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
+| Control plane       | `FoundationDBCluster/simplyblock-fdb-cluster`, the `simplyblock-webappapi`, `admin-control`, `monitoring`, `tasks`, `fdb-controller-manager`, and `fdb-exporter` Deployments, `StatefulSet/simplyblock-minio`, their Services, and the `simplyblock-config`, `prometheus-config`, and `objstore-config` ConfigMaps                                                                                                                                                                             | `ControlPlane`, `design-controlplane.md` §5.1           |
+| CSI driver          | `CSIDriver/csi.simplyblock.io`, `StatefulSet/simplyblock-csi-controller`, `DaemonSet/simplyblock-csi-node`, their two ServiceAccounts and five ClusterRole and ClusterRoleBinding pairs, the `simplyblock-csi-cm` and `simplyblock-csi-nodeservercm` ConfigMaps, and `VolumeSnapshotClass/simplyblock-csi-snapshotclass`. `simplyblock-csi-secret-v2` is not in the set: the StorageCluster reconciler writes it and the driver only mounts it. `simplyblock-csi-secret` is mounted by nothing | `SimplyblockDriver`, `design-simplyblockdriver.md` §4.3 |
+| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/controlplane_cr.yaml`                                                                                                                                                                                                                                                                                                                                                                                                      | Nothing. It is the adopter (§12.2)                      |
+| Ecosystem subcharts | The Prometheus `StatefulSet`, its two Services and its ConfigMap, `Deployment/simplyblock-reloader`, and the MongoDB and OpenSearch releases where `controlplane.observability.enabled` is set                                                                                                                                                                                                                                                                                                 | Undecided (§32, Q5)                                     |
+| Unattributed        | `StorageClass/local-hostpath`, `DaemonSet/simplyblock-numa-resource-plugin` and its ConfigMap, and `ConfigMap/simplyblock-caching-node-restart-script-cm`                                                                                                                                                                                                                                                                                                                                      | Undecided (§32, Q5)                                     |
+| Already kept        | The three `snapshot.storage.k8s.io` CRDs and `Deployment/simplyblock-snapshot-controller`                                                                                                                                                                                                                                                                                                                                                                                                      | Helm already leaves them (§12.2)                        |
+| The operator        | `Deployment/simplyblock-operator`, its webhook Service and two webhook configurations, its metrics Service and `APIService`, and its RBAC                                                                                                                                                                                                                                                                                                                                                      | The new chart renders these                             |
 
 **The set is per-cluster, so it is computed and never read from a table.** Two
 subcharts are conditional on values, and a cluster with observability enabled
