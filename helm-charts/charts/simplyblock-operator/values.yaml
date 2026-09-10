@@ -28,57 +28,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
-# The CSI driver, deployed by the operator from a SimplyblockDriver rather than
-# rendered by this chart. A Kubernetes cluster holds one of these.
-simplyblockDriver:
-  # Whether the chart writes the SimplyblockDriver at all. False leaves the
-  # cluster with no CSI driver unless one is created by hand.
-  create: true
-
-  # The CSI driver name a StorageClass provisions with. Immutable once set:
-  # every PersistentVolume records it, so changing it orphans them all.
-  driverName: csi.simplyblock.io
-
-  image:
-    repository: quay.io/simplyblock-io/spdkcsi
-    tag: v26.2.6
-    pullPolicy: IfNotPresent
-
-  # Snapshot support for this driver: its VolumeSnapshotClass, and the CRDs and
-  # a controller where the cluster serves neither. Distinct from
-  # snapshotcontroller.create below, which is the cluster-wide component.
-  enableVolumeSnapshots: true
-
-  # Both plugins authenticate to the management API with their pod's
-  # service-account token instead of the static cluster secret. The control
-  # plane must list those accounts in SB_K8S_ADMIN_SERVICE_ACCOUNTS.
-  enableServiceAccountAuth: false
-
-  controller:
-    replicas: 1
-    nodeSelector: {}
-    tolerations: []
-    resources: {}
-
-  node:
-    # Empty means every schedulable worker, which is the usual case: a node
-    # that cannot attach a volume cannot run a workload that needs one.
-    nodeSelector: {}
-    tolerations: []
-    resources: {}
-
-  # Override one CSI sidecar image. Unset takes the version the operator ships,
-  # which is the combination it was tested against, so set one only to hold a
-  # pin the operator's release would otherwise move.
-  #
-  #   provisioner: quay.io/simplyblock-io/csi-provisioner:v5.1.0
-  #   attacher: ...
-  #   resizer: ...
-  #   snapshotter: ...
-  #   healthMonitor: ...
-  #   nodeDriverRegistrar: ...
-  sidecarImages: {}
-
 serviceAccount:
   # Specifies whether a serviceAccount should be created
   create: true
@@ -199,6 +148,13 @@ storagenode:
       
 
 controlplane:
+  # Accept a pod's service-account token from the CSI driver's two accounts
+  # instead of requiring the static cluster secret. This is the control
+  # plane's half of the switch: set it together with
+  # spec.enableServiceAccountAuth on the SimplyblockDriver, which is what
+  # makes the plugins present a token in the first place.
+  trustCSIServiceAccounts: false
+
   observability:
     enabled: false
     secret: "sWbpOgba1bKnCfcPkVQi"
