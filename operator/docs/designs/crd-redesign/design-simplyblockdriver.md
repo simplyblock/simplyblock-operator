@@ -524,15 +524,20 @@ already serves the API, which every adopted deployment does.
 7. Remove the Helm labels and annotations, keeping the resource policy
 ```
 
-**Step 2 is where adoption can refuse**, and two comparisons run there. The first
-is `driverName` against the live registration, for the reason above. The second is
-the control-plane endpoint and credentials the operator resolves against the ones
-the adopted `ConfigMap` and `Secrets` carry, because §4.1 has the operator rewrite
-them and a driver pointed at a backend other than the one its volumes are on fails
-at attach time on every workload at once. A mismatch in either holds the phase at
-`Installing` with `status.message` naming both values, emits `AdoptionRefused`
-(§6.1), and changes nothing. The counts of §4.2 are still published, because the
-plugins are running and what is blocked is the handover rather than the driver.
+**Step 2 is where adoption can refuse, and it has one comparison to make.**
+`driverName` is the only thing the spec cannot change, and the name a deployment
+is actually registered under is read from the running node plugin's kubelet
+registration path rather than from the registration object, because that path is
+where the name takes effect. A mismatch holds the phase at `Installing` with
+`status.message` naming both values, emits `AdoptionRefused` (§6.1), and changes
+nothing. The counts of §4.2 are still published, because the plugins are running
+and what is blocked is the handover rather than the driver.
+
+**The endpoint and the credentials are not compared here, because they are not
+this deployment's to write.** They live in the credentials `Secret` the
+`StorageCluster` reconciler owns, so an adopted driver keeps whatever that
+controller last wrote and this one never has an opportunity to point it
+somewhere else.
 
 **Step 3 is a server-side apply that takes the conflict deliberately.** Helm wrote
 these objects under its own field manager, so an apply that does not claim the

@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,6 +55,8 @@ const (
 	reasonDriverDegraded    = "DriverDegraded"
 	reasonDriverUnavailable = "DriverUnavailable"
 	reasonNoMatchingWorkers = "NoMatchingWorkers"
+	reasonDriverAdopted     = "DriverAdopted"
+	reasonAdoptionRefused   = "AdoptionRefused"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -105,10 +108,33 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, r.setStatus(ctx, &d, simplyblockv1alpha2.SimplyblockDriverPhaseInstalling, message)
 	}
 
-	if err := r.apply(ctx, &d); err != nil {
+	// Adoption refuses on the one thing the spec cannot change. The counts are
+	// still published, because the plugins are running and what is blocked is
+	// the handover rather than the driver.
+	refusal, refused, err := r.adoptionRefusal(ctx, &d)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver)
+	if refused {
+		r.event(&d, corev1.EventTypeWarning, reasonAdoptionRefused, refusal)
+		h, err := r.observe(ctx, &d)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		h.phase = simplyblockv1alpha2.SimplyblockDriverPhaseInstalling
+		h.message = refusal
+		return ctrl.Result{RequeueAfter: driverResyncInterval}, r.setHealth(ctx, &d, h)
+	}
+
+	met, err := r.apply(ctx, &d)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver, "adopted", met)
+
+	if err := r.recordOrigin(ctx, &d, met); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	h, err := r.observe(ctx, &d)
 	if err != nil {
@@ -205,24 +231,116 @@ func (r *SimplyblockDriverReconciler) desired(d *simplyblockv1alpha2.Simplyblock
 	return objects
 }
 
-// apply writes every object of the set, taking field ownership as it goes. The
-// apply is a server-side apply under a stable field manager, which is what lets
-// the same call create an object that is absent and take over one that a Helm
-// release left behind.
-func (r *SimplyblockDriverReconciler) apply(ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver) error {
+// apply writes every object of the set and reports whether any of them was
+// already there. The apply is a server-side apply under a stable field manager,
+// which is what lets the same call create an object that is absent and take the
+// fields of one a Helm release left behind.
+func (r *SimplyblockDriverReconciler) apply(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (metExisting bool, err error) {
 	for _, obj := range r.desired(d) {
+		fromHelm, existed, err := r.inspectExisting(ctx, obj)
+		if err != nil {
+			return false, err
+		}
+		metExisting = metExisting || existed
+
+		// Before anything else takes it over, make the object one Helm will not
+		// prune. Helm reads the annotation off the live object, so writing it in
+		// the same apply is enough.
+		if fromHelm {
+			keepThroughHelm(obj)
+		}
+
 		if err := setOwnership(d, obj, r.Scheme); err != nil {
-			return fmt.Errorf("set ownership on %T %s: %w", obj, obj.GetName(), err)
+			return false, fmt.Errorf("set ownership on %T %s: %w", obj, obj.GetName(), err)
 		}
 		cfg, err := r.applyConfiguration(obj)
 		if err != nil {
-			return fmt.Errorf("encode %T %s for apply: %w", obj, obj.GetName(), err)
+			return false, fmt.Errorf("encode %T %s for apply: %w", obj, obj.GetName(), err)
 		}
 		if err := r.Apply(ctx, cfg, fieldOwner, client.ForceOwnership); err != nil {
-			return fmt.Errorf("apply %T %s: %w", obj, obj.GetName(), err)
+			return false, fmt.Errorf("apply %T %s: %w", obj, obj.GetName(), err)
+		}
+
+		// Only once the apply has landed, so that an object is never left
+		// carrying neither the release's claim nor this controller's.
+		if fromHelm {
+			patch := client.RawPatch(types.MergePatchType, helmMetadataRemovalPatch())
+			if err := r.Patch(ctx, obj, patch); err != nil {
+				return false, fmt.Errorf("remove Helm metadata from %T %s: %w", obj, obj.GetName(), err)
+			}
 		}
 	}
-	return nil
+	return metExisting, nil
+}
+
+// inspectExisting reads back what is already in the cluster under an object's
+// name, without disturbing the object about to be applied.
+func (r *SimplyblockDriverReconciler) inspectExisting(
+	ctx context.Context, obj client.Object,
+) (fromHelm, existed bool, err error) {
+	current, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return false, false, fmt.Errorf("%T is not a client.Object", obj)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
+		if errors.IsNotFound(err) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("read %T %s: %w", obj, obj.GetName(), err)
+	}
+	return carriesHelmMetadata(current), true, nil
+}
+
+// adoptionRefusal compares the driver name a running node plugin registers
+// under against the one the spec declares. The two disagree only where a
+// deployment registered under a name this object cannot be edited to match,
+// since spec.driverName is immutable, and applying over it would leave the
+// object declaring one driver while the cluster attaches volumes through
+// another.
+func (r *SimplyblockDriverReconciler) adoptionRefusal(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (message string, refused bool, err error) {
+	var node appsv1.DaemonSet
+	key := client.ObjectKey{Namespace: d.Namespace, Name: names(d).nodeDaemonSet}
+	if err := r.Get(ctx, key, &node); err != nil {
+		if errors.IsNotFound(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	running, found := runningDriverName(&node)
+	if !found || running == names(d).csiDriver {
+		return "", false, nil
+	}
+	return fmt.Sprintf(
+		"the running node plugin registers the driver as %q and spec.driverName is %q; "+
+			"spec.driverName is immutable, so this deployment cannot be adopted under it, "+
+			"and every PersistentVolume already provisioned records the running name",
+		running, names(d).csiDriver), true, nil
+}
+
+// recordOrigin writes where the deployment came from, once. It is not revised
+// afterward, because what it records is the state the first reconcile found
+// rather than what the controller did most recently.
+func (r *SimplyblockDriverReconciler) recordOrigin(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, metExisting bool,
+) error {
+	if d.Status.Origin != "" {
+		return nil
+	}
+
+	origin := simplyblockv1alpha2.SimplyblockDriverOriginCreated
+	if metExisting {
+		origin = simplyblockv1alpha2.SimplyblockDriverOriginAdopted
+		r.event(d, corev1.EventTypeNormal, reasonDriverAdopted,
+			"took over a deployment that was already running rather than creating one")
+	}
+	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+		status.Origin = origin
+	})
 }
 
 // applyConfiguration turns a built object into the shape a server-side apply
