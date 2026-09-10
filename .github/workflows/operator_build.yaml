@@ -25,12 +25,10 @@ jobs:
             dockerfile: operator/Dockerfile
             image_name: simplyblock/simplyblock-operator
             ecr_image_name: simply-block/simplyblock-operator
-            quay_image_name: quay.io/simplyblock-io/simplyblock-operator
           - name: rebalancer
             dockerfile: operator/Dockerfile.simplyblock-rebalancer
             image_name: simplyblock/simplyblock-rebalancer
             ecr_image_name: simply-block/simplyblock-rebalancer
-            quay_image_name: quay.io/simplyblock-io/simplyblock-rebalancer
 
     steps:
       - name: Checkout repository
@@ -48,17 +46,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-
-      # Quay is the registry OLM bundles resolve images from, so it only needs a
-      # tag on an actual release. This job is invoked via workflow_call only from
-      # repo_release.yaml's v* tag trigger, never from a plain branch push.
-      - name: Log in to Quay.io
-        if: github.event_name == 'workflow_call'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Login to ECR
         id: login-ecr
@@ -82,30 +69,16 @@ jobs:
           # labeled 26.3.0 instead of the constant this step used to pass.
           echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      # Quay only belongs in the tag list on a release, per the Quay login step
-      # above. build-push-action rejects an empty tag line, so the Quay tag is
-      # assembled here rather than inlined as a conditional expression in `tags:`.
-      - name: Compute image tags
-        id: image_tags
-        run: |
-          {
-            echo 'tags<<EOF'
-            echo "${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}"
-            echo "${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}"
-            if [ "${{ github.event_name }}" = "workflow_call" ]; then
-              echo "${{ matrix.quay_image_name }}:${{ steps.image_tag.outputs.tag }}"
-            fi
-            echo EOF
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR, + Quay on release)
+      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.image_tags.outputs.tags }}
+          tags: |
+            ${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}
           build-args: |
             VERSION=${{ steps.image_tag.outputs.label_version }}
             RELEASE=1
