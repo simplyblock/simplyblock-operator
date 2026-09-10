@@ -77,6 +77,18 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(MAKE) crd-embed
+
+# The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and
+# carries them in its binary, so that the CRDs a run installs are the ones the
+# conversion code in the same binary was built against. go:embed cannot reach
+# outside the directory its source file is in, so the generated CRDs are copied
+# next to the package that embeds them. The copy is committed and regenerated
+# here, which is the same arrangement helm-sync uses for the chart's copy.
+.PHONY: crd-embed
+crd-embed: ## Copy the generated CRDs next to the package that embeds them.
+	rm -f internal/upgrade/crds/manifests/*.yaml
+	cp config/crd/bases/*.yaml internal/upgrade/crds/manifests/
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -158,6 +170,27 @@ build: manifests generate fmt vet ## Build manager binary.
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
+
+# The API upgrade tool, built on its own and not in the operator image: it is a
+# prerequisite for running the new operator, so shipping it inside that
+# operator's image would put it behind the pull it precedes.
+#
+# The platform is a variable, and the output name carries it, so that CI can
+# build every combination from one runner and collect the results side by side.
+#
+# CGO is off. The tool reaches the Kubernetes API with the caller's credentials
+# and does no crypto of its own, and a static binary is copyable to the host it
+# is run from.
+UPGRADE_GOOS   ?= $(shell go env GOOS)
+UPGRADE_GOARCH ?= $(shell go env GOARCH)
+UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
+
+.PHONY: build-upgrade
+build-upgrade: ## Build simplyblock-upgrade for UPGRADE_GOOS/UPGRADE_GOARCH.
+	mkdir -p $(dir $(UPGRADE_BIN))
+	CGO_ENABLED=0 GOOS=$(UPGRADE_GOOS) GOARCH=$(UPGRADE_GOARCH) \
+		go build -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
+	@echo "built $(UPGRADE_BIN)"
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
