@@ -2,20 +2,6 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 
-{{- if .Values.externallyManagedConfigmap }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: simplyblock-csi-cm
-data:
-  # uuid: the simplyblock cluster UUID
-  # ip: the management IP of the simplyblock cluster
-  # targetAddr: target service IP
-  config.json: |-
-{{ toJson .Values.csiConfig | indent 4 -}}
-{{- end }}
-
 {{- if .Values.storagenode.create }}
 ---
 apiVersion: v1

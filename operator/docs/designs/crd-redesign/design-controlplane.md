@@ -116,10 +116,10 @@ value needed a home.
 - **Not the CSI driver.** Its deployment, its phases, and the version skew
   against this kind are [`design-simplyblockdriver.md`](design-simplyblockdriver.md). This
   document publishes `status.version` and stops there.
-- **Not multi-control-plane.** One `ControlPlane` per namespace, named
-  `simplyblock`, which is what ships and what §3.1 keeps. Whether that limit
-  should be lifted is §12 Q1, and lifting it changes kinds this document does not
-  own.
+- **Not multi-control-plane.** One `ControlPlane` per Kubernetes cluster, named
+  `simplyblock`, which is what §3.1 keeps. Lifting that limit would change kinds
+  this document does not own, since nothing else in the group carries a reference
+  to a control plane and nothing would know which one it meant.
 - **Not the API group's conventions.** The entity and action split, the enum
   casing, the lock, and the observed generation belong to
   [`design-crd-model.md`](design-crd-model.md) and are cited rather than restated.
@@ -134,14 +134,30 @@ more.
 
 ### 3.1 The singleton
 
-`ControlPlane` is one object per namespace, named `simplyblock`. The controller
-ignores any other name, which is enforcement by convention rather than by the API
-server. §12 Q1 is whether one per namespace is the right limit at all, which is
-the question that enforcement is downstream of.
+`ControlPlane` is one object per Kubernetes cluster, named `simplyblock`. The
+controller ignores any other name, which is enforcement by convention rather than
+by the API server.
 
-A namespace is the unit because a namespace is one simplyblock deployment: its own
-control plane, its own clusters, its own CSI credentials. Two namespaces are two
-deployments that share a Kubernetes cluster and nothing else.
+**The Kubernetes cluster is the unit because the operator is.** One operator
+deployment reconciles the group, and it is itself one per Kubernetes cluster:
+its ClusterRole, its `APIService`, and its two webhook configurations are
+cluster-scoped objects at fixed names, so a second install contends with the first
+over all of them. A control plane per namespace under one operator would give that
+operator several backends to choose between on every reconcile, and nothing in the
+group carries the reference that would let it choose
+([`design-crd-model.md`](design-crd-model.md) §5).
+
+**Several backend clusters do not need several control planes.** A `ControlPlane`
+fronts every `StorageCluster` beneath it, and the CSI driver's configuration
+carries one entry per cluster against the single endpoint
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.1), so a
+deployment grows by adding clusters rather than by adding control planes.
+
+**The `SimplyblockDriver` carries the matching limit** and enforces it at
+admission rather than by convention
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §3.4). The two kinds
+differ in what a second object does: a `ControlPlane` under another name is
+ignored and sits inert, and a second `SimplyblockDriver` is reconciled.
 
 ### 3.2 Spec
 
@@ -877,25 +893,10 @@ checker covers it.
 
 ## 12. Open Questions
 
-**Q1: Whether one control plane per namespace is the right limit.** §3.1 makes a
-namespace one simplyblock deployment, so serving several tenants means several
-namespaces with one control plane in each. Whether that covers what a
-per-customer deployment needs, or whether one namespace has to hold two backends,
-is not settled, and the answer decides everything else about the singleton: a name
-the controller merely ignores is worth tightening into a webhook or a CEL rule
-only once the limit is agreed.
-
-The cost of lifting it does not fall on this kind. Nothing else in the group names
-a control plane, because there is only ever one to name: every controller reads
-`status.endpoint` from the object in its own namespace (§3.3), and
-`ControlPlaneOps` is the only kind carrying a `controlPlaneRef` (§6). A second
-control plane in one namespace puts that reference on every entity that reaches a
-backend, or makes it inherited down the ownership spine
-([`design-crd-model.md`](design-crd-model.md) §5), which is an API-wide change
-rather than one this document could make.
-
-What would settle it is a deployment that a namespace per tenant cannot express,
-and whether one exists is a question for the field rather than for the code.
+Q1 is settled and its number is retired rather than reused, since it is cited
+from review history. §3.1 is where the answer went: a Kubernetes cluster holds one
+`ControlPlane`, which is the limit the operator's own cluster-scoped objects
+already impose on the operator.
 
 **Q2: How the install moves from the chart to the operator.** §5.1 has the
 operator apply what the chart applies today, and both cannot own the same objects
@@ -1190,9 +1191,9 @@ type ControlPlaneStatus struct {
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// ControlPlane is the simplyblock control plane for one namespace: FoundationDB
-// together with the management API, either installed by the operator or already
-// existing. It is a singleton named "simplyblock", and it is the root of the
+// ControlPlane is the simplyblock control plane for one Kubernetes cluster:
+// FoundationDB together with the management API, either installed by the operator
+// or already existing. It is a singleton named "simplyblock", and it is the root of the
 // ownership spine: nothing else in this API group reconciles meaningfully before
 // it reports Available.
 type ControlPlane struct {

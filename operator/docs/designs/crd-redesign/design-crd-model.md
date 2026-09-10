@@ -574,7 +574,7 @@ than for kinds this model settles.
 Strip the diagram down to its solid arrows and a single tree remains.
 
 ```
-ControlPlane                                       (singleton, one per namespace)
+ControlPlane                                       (singleton, one per Kubernetes cluster)
     │
 StorageCluster                                     (one simplyblock backend cluster)
     ├─owns─► StorageNode                           (one per worker node × NUMA socket)
@@ -684,7 +684,7 @@ for this document (§2), leaving the thirteen below, one CRD per row.
 
 | Kind                | Short name today | Category | In the target model                                                             | Note                                                                                                       |
 |---------------------|------------------|----------|---------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
-| `ControlPlane`      | —                | Entity   | Reworked ([`design-controlplane.md`](design-controlplane.md))                   | Singleton, named `simplyblock`, one per namespace                                                          |
+| `ControlPlane`      | —                | Entity   | Reworked ([`design-controlplane.md`](design-controlplane.md))                   | Singleton, named `simplyblock`, one per Kubernetes cluster                                                 |
 | `StorageCluster`    | —                | Entity   | Reworked ([`design-storagecluster.md`](design-storagecluster.md))               | Drawn as `Storage(Edge)Cluster`, because edge deployments differ in topology and scale rather than in kind |
 | `StorageClusterOps` | `scops`          | Action   | Reworked ([`design-storagecluster.md`](design-storagecluster.md))               | Holds `StorageCluster.status.activeOpsRef`                                                                 |
 | `StorageNodeSet`    | —                | Entity   | **Retired** (§9.2)                                                              | The fleet template becomes `ClusterDeploymentConfig.nodeSets[]`                                            |
