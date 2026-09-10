@@ -265,8 +265,12 @@ func (r *StoragePoolReconciler) handleStoragePoolDeletion(ctx context.Context, s
 				log.Error(err, "Failed to delete StorageClass for pool")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
-			storagePoolCR.Spec.AllowedNodes = nil
-			if err := r.syncNodeLabels(ctx, storagePoolCR); err != nil {
+			// syncNodeLabels reads Spec.AllowedNodes, so clearing the labels means
+			// emptying it — on a copy, because this object is written back below
+			// and a DHCHAP pool's spec may not carry an empty allowedNodes (#498).
+			cleared := storagePoolCR.DeepCopy()
+			cleared.Spec.AllowedNodes = nil
+			if err := r.syncNodeLabels(ctx, cleared); err != nil {
 				log.Error(err, "Failed to clear node labels on pool deletion")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
