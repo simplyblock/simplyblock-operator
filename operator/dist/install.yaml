@@ -2358,8 +2358,14 @@ spec:
                 pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               imagePullPolicy:
-                default: IfNotPresent
-                description: ImagePullPolicy controls when that image is pulled.
+                default: Always
+                description: |-
+                  ImagePullPolicy controls when that image is pulled. It defaults to Always
+                  because the default Image is a moving tag: it follows the operator's own,
+                  and a development build's tag is rebuilt in place. IfNotPresent against a
+                  tag that moved leaves the workers that already pulled it running the old
+                  plugin and the workers that had not running the new one, which is the
+                  skew of §5 inside one deployment and invisible from the object.
                 enum:
                 - Always
                 - Never

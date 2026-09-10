@@ -502,15 +502,15 @@ running deployment reconfigured on the reconcile that adopts it, which is the
 property [`design-api-upgrade.md`](design-api-upgrade.md) §12.3 captures and
 diffs for.
 
-| Running state                                                         | Field                                                                              |
-|-----------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| `image.csi`                                                           | `spec.image`                                                                       |
-| `Always`, the chart's pull policy, against this kind's `IfNotPresent` | `spec.imagePullPolicy`, written by the translation rather than left to the default |
-| The name the live `CSIDriver` carries, from `driverName`              | `spec.driverName`, read from the registration rather than defaulted                |
-| `controller.replicas`                                                 | `spec.controllerReplicas`                                                          |
-| `controller.nodeSelector`, `controller.tolerations`                   | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                 |
-| `snapshotclass.create`, `snapshotcontroller.create`                   | `spec.enableVolumeSnapshots` (§3.1)                                                |
-| The six sidecar image and tag values                                  | `spec.sidecarImages`, written only where the release pinned one (§3.1)             |
+| Running state                                            | Field                                                                                           |
+|----------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `image.csi`                                              | `spec.image`                                                                                    |
+| `Always`, the chart's pull policy                        | `spec.imagePullPolicy`, whose default is the same, so only a release that changed it translates |
+| The name the live `CSIDriver` carries, from `driverName` | `spec.driverName`, read from the registration rather than defaulted                             |
+| `controller.replicas`                                    | `spec.controllerReplicas`                                                                       |
+| `controller.nodeSelector`, `controller.tolerations`      | `spec.controllerNodeSelector`, `spec.controllerTolerations` (§3.1)                              |
+| `snapshotclass.create`, `snapshotcontroller.create`      | `spec.enableVolumeSnapshots` (§3.1)                                                             |
+| The six sidecar image and tag values                     | `spec.sidecarImages`, written only where the release pinned one (§3.1)                          |
 
 **`driverName` is read rather than defaulted, and it is the row that would cost
 the most.** The field is immutable (§3.2), so a translation that omits it defaults
@@ -985,9 +985,14 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ImagePullPolicy controls when that image is pulled.
+	// ImagePullPolicy controls when that image is pulled. It defaults to Always
+	// because the default Image is a moving tag: it follows the operator's own,
+	// and a development build's tag is rebuilt in place. IfNotPresent against a
+	// tag that moved leaves the workers that already pulled it running the old
+	// plugin and the workers that had not running the new one, which is the
+	// skew of §5 inside one deployment and invisible from the object.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
-	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:default=Always
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 

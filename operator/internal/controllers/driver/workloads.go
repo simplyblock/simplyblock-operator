@@ -344,5 +344,5 @@ func pullPolicy(d *simplyblockv1alpha2.SimplyblockDriver) corev1.PullPolicy {
 	if d.Spec.ImagePullPolicy != "" {
 		return d.Spec.ImagePullPolicy
 	}
-	return corev1.PullIfNotPresent
+	return corev1.PullAlways
 }

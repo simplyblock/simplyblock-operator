@@ -254,22 +254,22 @@ func TestBothPluginsMountThisDeploymentsConfiguration(t *testing.T) {
 	}
 }
 
-// The pull policy defaults to the CRD's, and an explicit one wins. The chart's
-// value is Always and this kind's default is IfNotPresent, so the translation
-// writes it and this is where the difference shows.
+// The pull policy defaults to Always, because the default image is a moving
+// tag. IfNotPresent against a tag that moved leaves half the workers on the old
+// plugin, which is a skew inside one deployment that nothing reports.
 func TestPullPolicyDefaultsAndOverrides(t *testing.T) {
 	d := testDriver("simplyblock")
-	if got := pullPolicy(d); got != corev1.PullIfNotPresent {
-		t.Errorf("default pull policy = %q, want IfNotPresent", got)
+	if got := pullPolicy(d); got != corev1.PullAlways {
+		t.Errorf("default pull policy = %q, want Always", got)
 	}
 
-	d.Spec.ImagePullPolicy = corev1.PullAlways
-	if got := pullPolicy(d); got != corev1.PullAlways {
-		t.Errorf("pull policy = %q, want the spec's Always", got)
+	d.Spec.ImagePullPolicy = corev1.PullIfNotPresent
+	if got := pullPolicy(d); got != corev1.PullIfNotPresent {
+		t.Errorf("pull policy = %q, want the spec's IfNotPresent", got)
 	}
 	for _, c := range nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers {
-		if c.ImagePullPolicy != corev1.PullAlways {
-			t.Errorf("%s pull policy = %q, want Always", c.Name, c.ImagePullPolicy)
+		if c.ImagePullPolicy != corev1.PullIfNotPresent {
+			t.Errorf("%s pull policy = %q, want the spec's IfNotPresent", c.Name, c.ImagePullPolicy)
 		}
 	}
 }

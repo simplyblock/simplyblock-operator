@@ -97,9 +97,14 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ImagePullPolicy controls when that image is pulled.
+	// ImagePullPolicy controls when that image is pulled. It defaults to Always
+	// because the default Image is a moving tag: it follows the operator's own,
+	// and a development build's tag is rebuilt in place. IfNotPresent against a
+	// tag that moved leaves the workers that already pulled it running the old
+	// plugin and the workers that had not running the new one, which is the
+	// skew of §5 inside one deployment and invisible from the object.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
-	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:default=Always
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
