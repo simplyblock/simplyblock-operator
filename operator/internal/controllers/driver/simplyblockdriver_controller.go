@@ -126,6 +126,26 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: driverResyncInterval}, r.setHealth(ctx, &d, h)
 	}
 
+	// TODO(simplyblockdriver): publish status.version and compare it against the
+	// control plane's, which is design-simplyblockdriver.md §5 and the reason
+	// the kind exists. Two things are missing and neither is in this repository:
+	//
+	//   - GET /_meta/version on the management API, so that
+	//     ControlPlane.status.version has anything to publish. Design
+	//     §5.3 records it, and until it lands half a comparison reports no skew
+	//     where it cannot tell.
+	//   - https://install.simplyblock.io/releases.yaml, which is where a driver
+	//     release declares the control planes it works against (§5.1). The
+	//     comparison is a lookup in that document rather than a rule over
+	//     version numbers, because the components ship on their own cadences.
+	//
+	// What is implementable before either arrives is the fetch, the cache, and
+	// the pattern matching, which is worth nothing on its own: with no
+	// control-plane version to test against, every deployment reports no skew.
+	// So this waits on the endpoint rather than shipping a comparison that
+	// always says the same thing.
+	//
+	// The test plan's U-20 to U-25 and U-45 to U-53 are the rows this owes.
 	met, err := r.apply(ctx, &d)
 	if err != nil {
 		return ctrl.Result{}, err

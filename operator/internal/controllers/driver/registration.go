@@ -61,6 +61,18 @@ func volumeSnapshotClass(d *simplyblockv1alpha2.SimplyblockDriver) *unstructured
 	return obj
 }
 
+// TODO(simplyblockdriver): supply the snapshot CRDs and a controller where the
+// cluster serves neither, which is design-simplyblockdriver.md §4.1. Today, the
+// chart still installs both, into kube-system and annotated
+// helm.sh/resource-policy: keep, so an adopted deployment finds the API served
+// and records Detected. What is missing here is the detection against the
+// discovery client, the apply of the CRDs and the controller where it comes
+// back empty, and status.snapshotSupport reading Installed in that case. They
+// are cluster-scoped and shared, so they carry no owner reference and outlive
+// this object, which is what design §9 Q2 leaves open.
+//
+// The test plan's U-04, U-05, and U-38 to U-41 are the rows this owes.
+
 // snapshotsEnabled reports whether this deployment includes snapshot support.
 // The field defaults to true, so an object written before the default applied
 // reads as enabled rather than as disabled by omission.

@@ -52,6 +52,18 @@ func nodePluginHostDir(driver string) string {
 	return kubeletPluginsDir + "/" + driver
 }
 
+// TODO(simplyblockdriver): decide how csiLink reaches the plugins. The chart
+// gated it on csiLink.enabled and gave each plugin three arguments, a
+// service-account token projected for the operator's audience, and a CA bundle
+// from a ConfigMap. None of that is expressible on the CRD, so a deployment
+// that had it enabled loses it here, and the values that configured it now
+// configure only the Service the operator itself serves.
+//
+// It is off in every deployment measured, which is why the driver could move
+// without it. Turning it on again needs a spec surface first, and that decision
+// belongs with the csi-link design rather than being guessed at from the
+// template it used to be rendered from.
+
 func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver) *appsv1.DaemonSet {
 	n := names(d)
 	s := sidecars(d)
