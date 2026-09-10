@@ -12,6 +12,8 @@ local.mk
 /.sbcli/
 
 # MegaLinter's run output, written into the workspace by both the CI job and a
-# local `docker run oxsecurity/megalinter` invocation.
+# local `docker run oxsecurity/megalinter` invocation. ruff caches there too,
+# and while its cache carries a .gitignore of its own, this does not rely on it.
 megalinter-reports/
 mega-linter.log
+.ruff_cache/

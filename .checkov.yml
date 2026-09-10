@@ -1,0 +1,45 @@
+# checkov policy for this repository, read by MegaLinter's REPOSITORY_CHECKOV.
+#
+# Which directories are scanned is set in .mega-linter.yml, not here. checkov
+# ignores a `directory:` key whenever the command line carries `--directory`,
+# and MegaLinter always passes one. What is left for this file is the paths
+# inside those directories that are nobody's to fix, and the checks to skip.
+#
+# skip-path takes a plain path substring, not a regex. An entry written as
+# `helm-charts/charts/[0-9]+\.[0-9]+\.[0-9]+/` aborts the whole run with
+# `re.PatternError: nothing to repeat`, and because the traceback is raised
+# inside a forked worker it names no file and no pattern. It also turned out to
+# be unnecessary: those version-numbered directories hold one .tgz archive
+# each, and checkov does not read inside an archive.
+#
+# Naming this file at the repository root replaces the configuration MegaLinter
+# ships inside its image, so the two settings that one made are carried forward.
+quiet: true
+
+skip-check:
+  # Carried over from MegaLinter's own configuration, which this file replaces.
+  # A HEALTHCHECK instruction is not how a Kubernetes workload reports health.
+  - CKV_DOCKER_2
+
+skip-path:
+  # Vendored dependency charts: third-party manifests this repository packages
+  # but does not write.
+  - helm-charts/charts/simplyblock-operator/charts/
+  # Published release output.
+  - csi-driver/charts/
+  # Generated. A finding here belongs to the Kubebuilder markers and the API
+  # types it is rendered from, so it is fixed there and regenerated.
+  - operator/config/crd/
+  - operator/config/rbac/
+  - operator/dist/
+  # Outside the three directories checkov is meant to cover (helm-charts,
+  # csi-driver, and operator). Scoping by skip-path rather than by repeating
+  # `--directory` is deliberate: three --directory flags make checkov run its
+  # whole registry once per directory and report each finding up to three times,
+  # which inflated 592 distinct findings to 1364.
+  - atlas-lib/
+  - test/
+  - shared/
+  - .github/
+  - .claude/
+  - megalinter-reports/
