@@ -47,6 +47,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
+
 	"github.com/simplyblock/atlas/link"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -79,6 +81,9 @@ func init() {
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
+	// external-snapshotter VolumeGroupSnapshot: the operator serves a validating
+	// webhook on it (design §9.4) but does not own the CRD.
+	utilruntime.Must(volumegroupsnapshotv1beta1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -651,6 +656,20 @@ func main() {
 				NodeSelector: autoplacement.NewStorageNodeSelector(mgr.GetClient()),
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot",
+			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
+		setupLog.Info("registered volumegroupsnapshot validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumemigration",
+			&webhook.Admission{Handler: &internalwebhook.VolumeMigrationValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
+		setupLog.Info("registered volumemigration validating webhook")
 	}()
 
 	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
