@@ -2000,13 +2000,11 @@ operator image. `make -C operator build-upgrade` builds it, for the
 `.github/workflows/operator_upgrade_tool.yaml` runs that target for the four
 platforms it is administered from.
 
-The operator image is the wrong carrier for it. The tool is what makes a cluster
-capable of running the new operator, so a copy arriving inside that operator's
-image has to be pulled before the thing it is a prerequisite for, and reaching
-it from a workstation means extracting a binary out of a container. Where it is
-released from instead is undecided, and the workflow publishes nothing: it
-builds the four binaries and keeps them as artifacts, which is what says the
-tool still compiles for the platforms it will be run from.
+The operator image is the wrong carrier for it. The tool is a prerequisite for
+running the new operator, so shipping it inside that operator's image puts it
+behind the pull it precedes, and reaching it from a workstation means extracting
+a binary out of a container. Where it is released from instead is Q6. The
+workflow publishes nothing and keeps the binaries as artifacts.
 
 It reaches a cluster through a kubeconfig, or through the in-cluster
 configuration when it is run as a Job.
@@ -2433,3 +2431,4 @@ prose, its check is here and not repeated in both places.
 | Q3  | Does `MaxLength` join the marker set the `api-design` skill owns, and does `check-crds.py` audit a name-bearing field that carries none? No field in the seventeen kinds carries one today, so every one of them is a finding on the audit's first run                                                                                                                                                           | Operator team |
 | Q4  | May the migration rewrite a derived name into the truncate-and-hash form on a user's behalf? It resolves the violation without a data migration, and it changes a string a runbook or a dashboard may select on. §19.5 says the value has to keep working when it is already inside live `PersistentVolume` objects, which is the case that decides this                                                         | Operator team |
 | Q5  | Who owns the objects §12.1 leaves unattributed: the Prometheus and Reloader subcharts, MongoDB and OpenSearch where observability is enabled, `StorageClass/local-hostpath`, the NUMA resource plugin, and the caching-node restart script. Each is either adopted by a custom resource, left to the user to install separately, or annotated and abandoned, and the third produces an orphan nothing reconciles | Operator team |
+| Q6  | Where is `simplyblock-upgrade` released from, now that it is not in the operator image (§29.4)? A GitHub release attaching the four binaries, an image of its own for the in-cluster Job, or both, and the answer decides how a user obtains it before the operator they are upgrading to exists                                                                                                                 | Operator team |

@@ -12,10 +12,10 @@
 // internal/upgrade is the framework the three commands are assembled from.
 //
 // It is built on its own (`make -C operator build-upgrade`) and is not in the
-// operator image. What it does is prepare a cluster to run the new operator, so
-// a copy that arrived inside that operator's image would have to be pulled
-// before the thing it is a prerequisite for. It reaches a cluster through a
-// kubeconfig or, run as a Job, through the in-cluster configuration.
+// operator image: it is a prerequisite for running the new operator, so
+// shipping it inside that operator's image would put it behind the pull it
+// precedes. It reaches a cluster through a kubeconfig, or through the
+// in-cluster configuration when it runs as a Job.
 package main
 
 import (

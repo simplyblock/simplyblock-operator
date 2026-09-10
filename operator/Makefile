@@ -171,21 +171,16 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
-# The API upgrade tool is built on its own and is not in the operator image. It
-# prepares a cluster to run the new operator, so a copy shipped inside that
-# operator's image would have to be pulled before the thing it is a prerequisite
-# for, and reaching it from a workstation would mean extracting a binary out of
-# a container.
+# The API upgrade tool, built on its own and not in the operator image: it is a
+# prerequisite for running the new operator, so shipping it inside that
+# operator's image would put it behind the pull it precedes.
 #
-# The platform is a variable because the tool runs from wherever somebody
-# administers the cluster from, which is a laptop as often as a jump host, and
-# because CI builds all four combinations from one runner. The output name
-# carries the platform so those four can be collected side by side.
+# The platform is a variable, and the output name carries it, so that CI can
+# build every combination from one runner and collect the results side by side.
 #
-# CGO is off: the tool reaches the Kubernetes API with the caller's own
-# credentials and does no crypto of its own, so it needs neither cgo nor
-# BoringCrypto, and a static binary is what makes it copyable to the host it is
-# run from.
+# CGO is off. The tool reaches the Kubernetes API with the caller's credentials
+# and does no crypto of its own, and a static binary is copyable to the host it
+# is run from.
 UPGRADE_GOOS   ?= $(shell go env GOOS)
 UPGRADE_GOARCH ?= $(shell go env GOARCH)
 UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
