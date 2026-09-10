@@ -168,7 +168,7 @@ func TestNextRequeue(t *testing.T) {
 // reconcileDataRealignment — behavior + negative cases.
 // ---------------------------------------------------------------------------
 
-// realignFixture wires a reconciler to a counting HTTP stub and a fake k8s client.
+// realignFixture wires a reconciler to a counting HTTP stub and a fake K8s client.
 type realignFixture struct {
 	r        *VolumeRebalancerReconciler
 	cl       client.Client

@@ -34,7 +34,7 @@ type CapacityStat struct {
 type VolumeInfo struct {
 	UUID string `json:"id"`
 	Name string `json:"name"`
-	// NQN is the volume's NVMe subsystem NQN. Namespaced volumes share it with
+	// nqn is the volume's NVMe subsystem nqn. Namespaced volumes share it with
 	// their siblings, and it is the identity a batch migration is addressed by
 	// (see MigrationRef).
 	NQN                   string       `json:"nqn"`
@@ -59,7 +59,7 @@ type ContinueMigrationParams struct {
 	DeadlineSeconds int `json:"deadline_seconds,omitempty"`
 }
 
-// Migrations are addressed by cluster and NVMe subsystem NQN: the control plane
+// Migrations are addressed by cluster and NVMe subsystem nqn: the control plane
 // migrates a whole subsystem at once, covering both a single-namespace subsystem
 // and a namespaced one, where several volumes share it.
 //
@@ -125,7 +125,7 @@ type MigrationDTO struct {
 // normalize fills in what a single-namespace migration's response leaves out.
 // Such a migration still moves exactly one volume, so reporting 0 members would
 // make "how many volumes did this move" wrong for every non-namespaced volume;
-// and it is addressed under the subsystem the caller asked for, so that NQN is
+// and it is addressed under the subsystem the caller asked for, so that nqn is
 // the subsystem being migrated whether or not the response repeats it.
 func (m *MigrationDTO) normalize(nqn string) {
 	if m.MemberCount <= 0 {
@@ -168,7 +168,7 @@ const (
 )
 
 // MigrationIsTerminal reports whether a migration status is terminal
-// (done, failed, or cancelled) and therefore no longer in flight.
+// (done, failed, or canceled) and therefore no longer in flight.
 func MigrationIsTerminal(status string) bool {
 	switch status {
 	case MigrationStatusDone, MigrationStatusFailed, MigrationStatusCancelled:
@@ -243,7 +243,7 @@ func (c *Client) GetPoolVolumes(
 // single-namespace subsystem that is one volume; for a namespaced one it is the
 // volume and its siblings.
 //
-// The control plane has no volume-by-NQN lookup and its batch-migration DTO reports
+// The control plane has no volume-by-nqn lookup and its batch-migration DTO reports
 // only a member *count*, so membership is derived here by scanning the cluster's
 // pools. Pools are scanned rather than assuming the subsystem's members live in the
 // pool of any one member: a subsystem is scoped to a storage node, not to a pool.
@@ -308,7 +308,7 @@ func (c *Client) GetVolume(
 
 // StorageNodeNIC is one network interface entry returned by the storage-node
 // /nics endpoint. Address is the data-network IP the lvol subsystem listens on
-// (the management IP is reported separately). Field tags match the capitalised,
+// (the management IP is reported separately). Field tags match the capitalized,
 // space-containing keys the control plane emits for this endpoint.
 type StorageNodeNIC struct {
 	ID         string `json:"ID"`
@@ -346,7 +346,7 @@ func (c *Client) GetStorageNodeNICs(
 // validate those paths before calling ContinueMigration.
 //
 // If the API reports that a migration already exists for the subsystem, any
-// existing migrations are cancelled and the request is retried once. The API
+// existing migrations are canceled and the request is retried once. The API
 // signals this as either 409 or 400 with an "...already exists... Cancel it
 // first" detail depending on deployment, so both are handled.
 func (c *Client) CreateMigration(

@@ -72,7 +72,7 @@ func TestNodeSuffix(t *testing.T) {
 // ---- connection conversion ----
 
 // The Job receives these as JSON and passes them to `nvme connect`; a dropped field
-// changes the resulting path's behaviour, so the mapping is asserted whole.
+// changes the resulting path's behavior, so the mapping is asserted whole.
 func TestConnectionsToValidation(t *testing.T) {
 	in := []simplyblockv1alpha1.MigrationConnection{{
 		NQN: "nqn.x", IP: "10.0.0.1", Port: 4420, Transport: "tcp",
@@ -280,7 +280,7 @@ func releaseJobs(t *testing.T, cl client.Client) map[string]batchv1.Job {
 }
 
 // The gap a per-node release cannot close: a node whose own validation passed exits
-// successfully and is never told the migration was cancelled, so the operator has to
+// successfully and is never told the migration was canceled, so the operator has to
 // release for it. Every recorded node is asked, not only the ones that passed.
 func TestReconcileAbort_ReleasesTargetPathsOnEveryNode(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {

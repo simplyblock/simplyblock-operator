@@ -22,7 +22,7 @@ import (
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// NOTE: JSON tags are required. Any new fields you add must have JSON tags for the fields to be serialized.
 
 // JournalManagerSpec defines journal manager tuning parameters.
 type JournalManagerSpec struct {
@@ -104,7 +104,7 @@ type StorageNodeSetSpec struct {
 	// set to this value. Defaults to "worker" when unset.
 	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
-	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
+	// DeviceNames explicitly defines a comma separated list of NVMe namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Ubuntu Host"
 	// UbuntuHost indicates the node host OS is Ubuntu.
@@ -124,7 +124,7 @@ type StorageNodeSetSpec struct {
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK System Memory"
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g., "4G", "512M").
 	// When omitted the backend default is used.
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
@@ -141,7 +141,7 @@ type StorageNodeSetSpec struct {
 	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Container Resources"
 	// ContainerResources sets CPU and memory requests/limits for the main storage-node container.
-	// When omitted no limits are enforced, which preserves the previous behaviour.
+	// When omitted no limits are enforced, which preserves the previous behavior.
 	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Init Container Resources"
 	// InitContainerResources sets CPU and memory requests/limits for the init container.
@@ -165,7 +165,7 @@ type StorageNodeSetSpec struct {
 	// Expand indicates that storage nodes added from this StorageNodeSet are being
 	// added to expand an already-active cluster. When true the backend node-add
 	// endpoint receives expand=true, which triggers the appropriate rebalancing
-	// behaviour for in-place cluster growth.
+	// behavior for in-place cluster growth.
 	// +optional
 	Expand *bool `json:"expand,omitempty"`
 

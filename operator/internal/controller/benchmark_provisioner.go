@@ -67,7 +67,7 @@ func (*AutomaticBenchmarkProvisioner) BenchmarkNQN(clusterNQN, volumeUUID string
 	return fmt.Sprintf("%s:lvol:%s", clusterNQN, volumeUUID)
 }
 
-// WebAPIBenchmarkProvisioner creates benchmark resources via the SimplyBlock REST API.
+// WebAPIBenchmarkProvisioner creates benchmark resources via the simplyblock REST API.
 // Intended for test environments where the storage pool and benchmark volumes are not
 // automatically provisioned during cluster setup.
 //

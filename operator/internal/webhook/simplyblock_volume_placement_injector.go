@@ -45,7 +45,7 @@ type primaryNodeSelector interface {
 // SimplyblockVolumePlacementInjector is a mutating admission webhook that computes the
 // least-loaded eligible storage node for a new PVC's primary volume — using the same
 // latency-deviation signal the auto-rebalancer (Issue #130) uses — and stamps it onto the
-// PVC as the simplyblock.io/host-id annotation, which spdk-csi already reads and forwards
+// PVC as the simplyblock.io/host-id annotation, which spdk-csi already reads and forward
 // as host_id on CreateVolume. failurePolicy=ignore, and every skip/error path below allows
 // the PVC unmodified, so this can never block volume provisioning: sbcli's own
 // weighted-random pick (_get_next_3_nodes) runs as the fallback exactly as it does today.

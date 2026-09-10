@@ -47,7 +47,7 @@ const (
 // that must never reach the storage API.
 const unreachableAPI = "http://127.0.0.1:1"
 
-// newVMReconciler builds a VolumeMigrationReconciler backed by a fake k8s client
+// newVMReconciler builds a VolumeMigrationReconciler backed by a fake K8s client
 // (with VolumeMigration status subresource enabled) and a webapi client pointed
 // at apiURL. Pass unreachableAPI when the API must not be called.
 func newVMReconciler(t *testing.T, apiURL string, objs ...client.Object) (*VolumeMigrationReconciler, client.Client) {
@@ -1262,7 +1262,7 @@ func TestPerformMigration_AlreadyContinued_SkipsContinueAndCancel(t *testing.T) 
 }
 
 // When ContinueMigration itself reports an error but the migration is genuinely
-// still stuck in pre_created (a real start failure), the migration is cancelled
+// still stuck in pre_created (a real start failure), the migration is canceled
 // and marked Failed.
 func TestPerformMigration_ContinueFails_StillPreCreated_CancelsAndFails(t *testing.T) {
 	var cancelCalled bool

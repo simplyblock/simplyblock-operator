@@ -826,7 +826,7 @@ func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
 	}
 }
 
-// ---------- reconcileCutoverPending: job still running → waits without signalling ----------
+// ---------- reconcileCutoverPending: job still running → waits without signaling ----------
 
 func TestSlot_CutoverPending_JobStillRunning_Waits(t *testing.T) {
 	pol := readyReplicationPolicy()
@@ -870,7 +870,7 @@ func TestSlot_CutoverPending_JobStillRunning_Waits(t *testing.T) {
 	}
 }
 
-// ---------- reconcileCutoverPending: previously-failed proceed retried when job completes again ----------
+// ---------- reconcileCutoverPending: previously failed proceed retried when job completes again ----------
 
 func TestSlot_CutoverPending_ProceedRetried_WhenJobTerminates(t *testing.T) {
 	pol := readyReplicationPolicy()
@@ -966,7 +966,7 @@ func TestSlot_ReconcileReplicating_DetectsCutoverDone_SetsDirectionTarget(t *tes
 		switch {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			// is_source=true: this slot is the migration source; cutover_done means
-			// IO has moved to the target cluster (forward migration path).
+			// I/O has moved to the target cluster (forward migration path).
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{
 				State: backendStateCutoverDone, TargetNQN: "nqn.target", IsSource: true,
 			})

@@ -22,7 +22,7 @@ const (
 	VolumeMigrationPhaseCompleted VolumeMigrationPhase = "Completed"
 	// VolumeMigrationPhaseFailed means the migration finished with an error.
 	VolumeMigrationPhaseFailed VolumeMigrationPhase = "Failed"
-	// VolumeMigrationPhaseAborted means the migration was cancelled via spec.abort.
+	// VolumeMigrationPhaseAborted means the migration was canceled via spec.abort.
 	VolumeMigrationPhaseAborted VolumeMigrationPhase = "Aborted"
 )
 

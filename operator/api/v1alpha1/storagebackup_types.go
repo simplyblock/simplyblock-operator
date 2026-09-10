@@ -50,7 +50,7 @@ type StorageBackupSpec struct {
 	// +optional
 	PVCRef *PersistentVolumeClaimRef `json:"pvcRef,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Snapshot Name"
-	// SnapshotName optionally overrides the internally-created snapshot name.
+	// SnapshotName optionally overrides the internally created snapshot name.
 	// +optional
 	SnapshotName string `json:"snapshotName,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster UUID"
@@ -86,12 +86,12 @@ type StorageBackupStatus struct {
 	LvolID string `json:"lvolID,omitempty"`
 	// LvolName is the backend logical volume name.
 	LvolName string `json:"lvolName,omitempty"`
-	// FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+	// FSType is the filesystem type of the source PersistentVolume (e.g., "ext4",
 	// "xfs"), captured at backup time so a restore can preserve it regardless of
 	// which StorageClass the restored PVC ends up using.
 	FSType string `json:"fsType,omitempty"`
 
-	// SnapshotID is the internally-created snapshot UUID used for the backup request.
+	// SnapshotID is the internally created snapshot UUID used for the backup request.
 	SnapshotID string `json:"snapshotID,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Snapshot Name"
 	// SnapshotName is the snapshot name used for the backup request.

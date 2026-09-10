@@ -406,7 +406,7 @@ func TestValidationRun_SkippedNodeIsNotTouched(t *testing.T) {
 }
 
 // Neither cleanup may change the outcome. A reap that fails still lets the validation
-// decide, and a release that fails must not mask why the migration was cancelled.
+// decide, and a release that fails must not mask why the migration was canceled.
 func TestValidationRun_CleanupFailuresDoNotChangeTheOutcome(t *testing.T) {
 	t.Run("a failed reap still validates", func(t *testing.T) {
 		rec := &recorder{present: true, reapErr: errors.New("delete_controller: device busy")}

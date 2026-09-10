@@ -40,7 +40,7 @@ type BackupPolicySpec struct {
 	// +k8s:immutable
 	MaxVersions int `json:"maxVersions,omitempty"`
 
-	// MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
+	// MaxAge is the maximum age of backups to retain (e.g., "7d", "12h", "30m").
 	// Backups older than this are merged. Accepts m, h, d, w suffixes.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
@@ -49,7 +49,7 @@ type BackupPolicySpec struct {
 	MaxAge string `json:"maxAge,omitempty"`
 
 	// Schedule defines the tiered backup schedule as a space-separated list of
-	// interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
+	// interval,keep_count pairs (e.g., "15m,4 60m,11 24h,7").
 	// Intervals must be strictly increasing. Supported units: m, h, d, w.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
@@ -104,8 +104,8 @@ type BackupPolicyStatus struct {
 //
 //	simplyblock.io/backup-policy: <BackupPolicy-name>
 //
-// The deprecated simplybk/backup-policy annotation is still honoured for
-// backwards compatibility; when both are set, simplyblock.io/backup-policy
+// The deprecated simplybk/backup-policy annotation is still honored for
+// backward compatibility; when both are set, simplyblock.io/backup-policy
 // takes precedence.
 //
 // The BackupPolicy must be in the same namespace as the annotated PVC.

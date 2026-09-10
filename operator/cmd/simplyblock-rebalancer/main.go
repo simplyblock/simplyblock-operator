@@ -77,7 +77,7 @@ type fioOutput struct {
 	} `json:"jobs"`
 }
 
-// ── nvme list JSON structures ──────────────────────────────────────────────────
+// ── NVMe list JSON structures ──────────────────────────────────────────────────
 
 type nvmeListOutput struct {
 	Devices []struct {
@@ -280,7 +280,7 @@ func probe(configFile, metricsAddr string, interval time.Duration) {
 	var wg sync.WaitGroup
 	// running maps each active node UUID to the cancel func that stops its probe.
 	// The set is reconciled against the config every loop: new nodes are started and
-	// nodes that have disappeared (e.g. removed, or a cluster reinstall replaced the
+	// nodes that have disappeared (e.g., removed, or a cluster reinstall replaced the
 	// ConfigMap which is keyed by the constant cluster *name*) are stopped — otherwise
 	// a dead node keeps getting probed forever and leaves a stale gauge in Prometheus.
 	running := make(map[string]context.CancelFunc)
@@ -424,7 +424,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 	// runs (the Job/probe can start before the subsystem listener is ready), so the
 	// first attempt fails fast with "connection refused" / "no such subsystem". Without
 	// this, a baseline Job errors out and only succeeds after several controller-driven
-	// recreations — the long-standing "jobs need multiple iterations" behaviour.
+	// recreations — the long-standing "jobs need multiple iterations" behavior.
 	var connErr error
 	connected := false
 	for i := range 30 {
@@ -453,7 +453,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 				log.Printf("found %s (attempt %d)", path, i+1)
 				return path, disconnect, nil
 			}
-			// Device node exists but is not a block device (e.g. a stub left by
+			// Device node exists but is not a block device (e.g., a stub left by
 			// SPDK). Remove it so the host's devtmpfs/udevd can create the
 			// proper block special file in its place.
 			log.Printf("found %s but it is not a block device — removing stub (attempt %d)", path, i+1)

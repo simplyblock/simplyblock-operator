@@ -12,7 +12,7 @@ import (
 )
 
 // Released names one controller that was disconnected, for the Job log and the
-// operator's post-mortem. The address is what an operator recognises a path by; the
+// operator's post-mortem. The address is what an operator recognizes a path by; the
 // controller ID is what the kernel logged it under.
 type Released struct {
 	Controller string // "nvme7"
@@ -100,7 +100,7 @@ func migrationPathVictims(s nvme.Subsystem, conns []Connection) []nvme.Controlle
 	// prevent, so the state is declined rather than acted on.
 	//
 	// What makes this safe to decline is that it costs nothing but a round: a leak is
-	// recognisable precisely because some path is serving while the migration's are not,
+	// recognizable precisely because some path is serving while the migration's are not,
 	// so a real one is still there to release on the next attempt, and the husk it leaves
 	// is ReapDeadControllers' to clear — that pass reads namespace legs rather than ANA
 	// states and is unaffected by the window.
@@ -207,7 +207,7 @@ func releaseMigrationPaths(
 		return nil, err
 	}
 	if s.NQN == "" {
-		// Nothing attached for this NQN: the paths are already gone.
+		// Nothing attached for this nqn: the paths are already gone.
 		return nil, nil
 	}
 	return detach(ctx, d, migrationPathVictims(s, conns),
@@ -305,9 +305,9 @@ func reapDeadControllers(
 // the other thing worth reusing here — and when the controller serves no namespace at
 // all. See reapableKind for why that last test is this caller's and not atlas's.
 //
-// Inspect is asked once per exported namespace as well as once for the bare NQN, because
+// Inspect is asked once per exported namespace as well as once for the bare nqn, because
 // its controller-level check needs to know which namespace is meant and stands down when
-// a selector matches several — which a bare NQN does on exactly the multi-namespace
+// a selector matches several — which a bare nqn does on exactly the multi-namespace
 // subsystems this package migrates. That is the same reason diagnose asks that way.
 func reapableDefects(ctx context.Context, sysRoot string, s nvme.Subsystem) []nvmeof.Defect {
 	subs := snapshot{s}

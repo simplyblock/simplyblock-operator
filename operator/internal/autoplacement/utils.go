@@ -10,7 +10,7 @@ import (
 
 const (
 	// DefaultEvaluationInterval is how often the rebalancer evaluates load when the spec
-	// does not override it. Exported so callers can fall back to it (e.g. for requeue
+	// does not override it. Exported so callers can fall back to it (e.g., for requeue
 	// timing) before a RebalancingConfig has been resolved.
 	DefaultEvaluationInterval = 60 * time.Second
 
@@ -18,7 +18,7 @@ const (
 	defaultImbalanceThresholdPct = 80
 	// defaultMinHotColdDifferencePct is the minimum latency-deviation gap (in
 	// percentage points) a target node must have below the hot source before a
-	// migration is worthwhile — prevents shuffling load between near-equally-loaded
+	// migration is worthwhile — prevents shuffling load between near-equally loaded
 	// nodes.
 	defaultMinHotColdDifferencePct     = 20
 	defaultCoolDownSeconds             = 600
@@ -42,7 +42,7 @@ const (
 	// it must match the cadence at which the probe sidecar publishes latency samples.
 	defaultBaselineStep = 5 * time.Minute
 
-	// migrationBudgetFraction is the fraction of the source node's total volume IO score
+	// migrationBudgetFraction is the fraction of the source node's total volume I/O score
 	// that may be migrated in a single evaluation cycle.
 	migrationBudgetFraction = 0.10
 

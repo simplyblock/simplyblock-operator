@@ -68,7 +68,7 @@ const (
 // The controller implements a requeue-based state machine tracked in
 // StorageNodeSet.status.drainCoordination. The full per-node flow is:
 //
-//  1. Detect   – k8s node cordoned (spec.unschedulable=true); wait for drain slot
+//  1. Detect   – K8s node cordoned (spec.unschedulable=true); wait for drain slot
 //  2. Shutdown – label storage pod, create blocking PDB (maxUnavailable=0),
 //     call simplyblock shutdown API
 //  3. Confirm  – poll until backend node status == nodeStatusOffline
@@ -165,7 +165,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	// more than one domain at once can no longer be assumed safe — see
 	// fdDrainGate's chunksPerDomain calculation. 0 means "unknown" (scheme not
 	// yet reported); fdDrainGate currently clamps that to chunksPerDomain=1 (the
-	// same as a fully-disjoint layout) rather than treating it conservatively.
+	// same as a fully disjoint layout) rather than treating it conservatively.
 	domainsNeededForFullDisjoint := 0
 	// npcs is the failure-domain risk budget fdDrainGate spends against —
 	// see fdDrainGate for the full accounting rule.
@@ -192,7 +192,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	// backend. This protects SPDK/FDB/webappapi pods from being evicted by MCP
 	// before the drain state machine fires, while avoiding blocking the kubelet
 	// reboot that is required when a new node applies its KubeletConfig/MachineConfig
-	// for the first time (i.e. node add flow).
+	// for the first time (i.e., node add flow).
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		// Skip nodes that are already in an active drain — their PDB lifecycle
 		// is managed by the drain state machine (deleted after offline confirmed).
@@ -297,7 +297,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 		return r.processUncordoned(ctx, snCR, workerName, state, apiClient, clusterUUID)
 	}
 
-	// Node is cordoned: initialise state if first observation.
+	// Node is cordoned: initialize state if first observation.
 	if state == nil {
 		// Do not start drain coordination for a node that has never been online.
 		// MCP cordons new nodes for the initial KubeletConfig/MachineConfig reboot
@@ -458,7 +458,7 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 //
 // See activeDrainWorkers/activeDrainDomainCounts.
 //
-// Importantly, the storage pod is labelled and a blocking PDB (maxUnavailable=0)
+// Importantly, the storage pod is labeled and a blocking PDB (maxUnavailable=0)
 // is created BEFORE the slot check, so that MCP/kubectl-drain cannot evict the
 // pod while this node is queued behind another drain in progress.
 func (r *NodeDrainCoordinatorReconciler) handleDetected(
@@ -947,7 +947,7 @@ func (r *NodeDrainCoordinatorReconciler) labelStoragePod(
 				continue
 			}
 			if pod.Labels[drainNodeLabelKey] == sanitizeLabelValue(nodeName) {
-				continue // already labelled
+				continue // already labeled
 			}
 			patch := client.MergeFrom(pod.DeepCopy())
 			if pod.Labels == nil {
@@ -1068,9 +1068,9 @@ func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Co
 	}
 }
 
-// SetupWithManager wires the controller to watch StorageNodeSet CRs, k8s Nodes,
+// SetupWithManager wires the controller to watch StorageNodeSet CRs, K8s Nodes,
 // and the pods that labelStoragePod tracks. Watching pods ensures that when a
-// tracked pod is recreated (e.g. after a crash) the reconcile fires immediately
+// tracked pod is recreated (e.g., after a crash) the reconcile fires immediately
 // to re-apply the drain label, keeping PDB protection continuous.
 func (r *NodeDrainCoordinatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -1127,7 +1127,7 @@ func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeSetRequests(
 	return requests
 }
 
-// nodeToStorageNodeSetRequests maps a k8s Node event to the StorageNodeSet CR(s)
+// nodeToStorageNodeSetRequests maps a K8s Node event to the StorageNodeSet CR(s)
 // that list the node in spec.workerNodes.
 func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeSetRequests(
 	ctx context.Context,
@@ -1441,7 +1441,7 @@ func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string)
 	return uuids
 }
 
-// nextUUIDInList returns the element immediately after current in uuids,
+// nextUUIDInList returns the element immediately after current in UUIDs,
 // or an empty string if current is the last element or not found.
 func nextUUIDInList(uuids []string, current string) string {
 	for i, u := range uuids {

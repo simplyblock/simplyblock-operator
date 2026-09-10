@@ -195,7 +195,7 @@ subjects:
 			// K8s RBAC's `resourceNames` filter applies only to verbs that target a
 			// named object (get/update/patch/delete). For list/watch/create the
 			// filter is ignored, so a resourceNames-only Role cannot grant them.
-			// We assert this behaviour here so we notice if it ever changes.
+			// We assert this behavior here so we notice if it ever changes.
 			expectCanI(rbacFooNS, rbacScopedSA, "list", "storageclusters.storage.simplyblock.io", "", false)
 			expectCanI(rbacFooNS, rbacScopedSA, "watch", "storageclusters.storage.simplyblock.io", "", false)
 		})

@@ -126,7 +126,7 @@ func (v validationRun) run(
 		log.Printf("path %s to %s already present before connecting", addr, nqn)
 	}
 
-	// The freshly-connected target path can lag behind: nvme connect may return before
+	// The freshly connected target path can lag behind: NVMe connect may return before
 	// its controller is live and the ANA log page settles. Retry the connect+verify
 	// cycle a few times before giving up so a transient lag is not mistaken for a
 	// missing path. Already connected paths are a no-op in ensurePaths, so re-running
@@ -191,7 +191,7 @@ func (v validationRun) reap(ctx context.Context, sysRoot, nqn string) {
 
 // release disconnects the migration's target paths, logging what went. Failures are
 // logged and swallowed: the run has already failed and the exit code must report that
-// failure rather than this one, which would only mask why the migration was cancelled.
+// failure rather than this one, which would only mask why the migration was canceled.
 func (v validationRun) release(
 	ctx context.Context,
 	sysRoot, nqn string,
@@ -231,7 +231,7 @@ func validateMigration() {
 // validating anything.
 //
 // It is the mode the operator runs on nodes whose own validation passed. Those never
-// learn that the migration was cancelled — another node's Job failed, or the operator
+// learn that the migration was canceled — another node's Job failed, or the operator
 // gave up waiting — so their Job exited successfully with the target paths connected and
 // nothing on the node will ever release them. Every other failure path releases in the
 // Job that failed; this one exists because a success cannot.
@@ -285,7 +285,7 @@ func validateAttempts() int {
 }
 
 // validateRetryDelay returns the delay between attempts, overridable via
-// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g. "2s"). Invalid values fall back
+// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g., "2s"). Invalid values fall back
 // to the default.
 func validateRetryDelay() time.Duration {
 	if v := os.Getenv("VMIG_VALIDATE_RETRY_DELAY"); v != "" {

@@ -3,7 +3,7 @@
 // The CSI node and controller pods dial the operator and hold the connection;
 // the operator issues its RPCs back down it. Nothing listens on a node, so no
 // per-node ingress or discovery is needed — see the atlas link package for why
-// the connection runs backwards and how gRPC still works over it.
+// the connection runs backward and how gRPC still works over it.
 //
 // Setup adds the hub to the manager and hands back the registry the reconcilers
 // read. A peer that is not currently linked is normal, not exceptional: expect
@@ -30,7 +30,7 @@ import (
 
 // Config configures the operator's hub.
 type Config struct {
-	// BindAddress is where peers dial, e.g. ":9500".
+	// BindAddress is where peers dial, e.g., ":9500".
 	BindAddress string
 
 	// CertFile and KeyFile are the hub's serving certificate. Both are

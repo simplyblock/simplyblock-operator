@@ -1002,7 +1002,7 @@ func effectiveFailureDomainSet(sn *simplyblockv1alpha1.StorageNode, sns *simplyb
 // StorageNode.spec.overrides.failureDomain takes precedence over
 // StorageNodeSet.spec.nodeFailureDomains[worker]. Only meaningful when
 // effectiveFailureDomainSet reports true -- the zero return here also covers
-// "unset", so callers that must distinguish the two (e.g. anything crossing
+// "unset", so callers that must distinguish the two (e.g., anything crossing
 // a JSON boundary, where 0 and absent are different wire values) should use
 // effectiveFailureDomainPtr instead.
 func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) int {
@@ -1019,7 +1019,7 @@ func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplybloc
 // but as *int so "domain 0" and "not configured" stay distinguishable across
 // a JSON boundary (nil is omitted by `omitempty`; Ptr(0) serializes as 0).
 // Use this instead of effectiveFailureDomain wherever the result crosses
-// such a boundary, e.g. StorageNodeSetAddParams.FailureDomain.
+// such a boundary, e.g., StorageNodeSetAddParams.FailureDomain.
 func effectiveFailureDomainPtr(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) *int {
 	if !effectiveFailureDomainSet(sn, sns) {
 		return nil

@@ -43,7 +43,7 @@ func ControllerPeer(pod string) PeerID {
 	return PeerID{Kind: PeerKindController, Name: pod}
 }
 
-// String renders the id as "kind/name", e.g. "node/worker-3".
+// String renders the id as "kind/name", e.g., "node/worker-3".
 func (id PeerID) String() string {
 	return string(id.Kind) + "/" + id.Name
 }

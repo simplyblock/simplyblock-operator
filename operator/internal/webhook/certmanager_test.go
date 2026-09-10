@@ -93,7 +93,7 @@ func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
 		t.Fatalf("validating caBundle = %q, want %q", got, "CA-DATA")
 	}
 
-	// readiness signalled.
+	// readiness signaled.
 	select {
 	case <-p.ready:
 	default:

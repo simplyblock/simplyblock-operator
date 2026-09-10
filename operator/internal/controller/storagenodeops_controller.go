@@ -56,7 +56,7 @@ type StorageNodeOpsReconciler struct {
 	Recorder events.EventRecorder
 	// apiReader is an uncached reader (mgr.GetAPIReader) used for the migrate
 	// DNS gate (endpointSliceHasWorker). A stale informer cache could otherwise
-	// miss the target worker's freshly-published storage-node-api endpoint and
+	// miss the target worker's freshly published storage-node-api endpoint and
 	// wedge the migration in Preparing on "waiting for DNS" indefinitely.
 	apiReader client.Reader
 }
@@ -583,7 +583,7 @@ func (r *StorageNodeOpsReconciler) migrateWaitingAfter(
 
 // endpointSliceHasWorker reports whether the storage-node-api EndpointSlice
 // publishes the given worker's per-pod DNS hostname with at least one address —
-// i.e. whether <worker>.simplyblock-storage-node-api.<ns>.svc resolves.
+// i.e., whether <worker>.simplyblock-storage-node-api.<ns>.svc resolves.
 func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
 	ctx context.Context,
 	namespace, storageNodeSetName, worker string,
@@ -591,7 +591,7 @@ func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
 	log := logf.FromContext(ctx)
 	var eps discoveryv1.EndpointSlice
 	// Uncached read via the APIReader: this is a liveness gate — if it reads a
-	// stale slice and misses the target's freshly-published endpoint, the
+	// stale slice and misses the target's freshly published endpoint, the
 	// migration wedges in Preparing on "waiting for DNS" with no error. Reading
 	// straight from the API server removes any dependence on informer freshness.
 	if err := r.apiReader.Get(ctx, types.NamespacedName{
@@ -1069,7 +1069,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	// just notice and proceed. Restoring failure-domain balance never does
 	// -- it needs a deliberate cluster-wide change (add a host, or remove a
 	// different node instead) that this ops has no way to detect on its
-	// own, so silently polling every 60s would leave a permanently-stuck
+	// own, so silently polling every 60s would leave a permanently stuck
 	// Running ops easy to miss in `kubectl get storagenodeops`. Failing is
 	// safe here specifically because handleDeletion (storagenode_controller.go)
 	// now refuses to remove the StorageNode's finalizer while its remove
@@ -1092,12 +1092,12 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 // fdRemovalBalanceCheck reports whether removing sn would violate the
 // cluster's failure-domain balance rule, mirroring the backend's
 // check_fd_admission_for_remove (simplyblock_core), including its very
-// first early-out: a no-op when the cluster doesn't have failure domains
+// first early out: a no-op when the cluster doesn't have failure domains
 // enabled at all. Re-fetches the parent StorageNodeSet (and StorageCluster)
 // rather than threading them through runDrain's whole dispatch chain --
 // Validating is the only sub-phase that needs them. Returns ("", nil) when
 // removal is fine (including when FD data isn't populated yet, same as the
-// backend's own early-outs); a non-empty reason means drainValidate must
+// backend's own early outs); a non-empty reason means drainValidate must
 // fail rather than advance to Suspending.
 func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	ctx context.Context, sn *simplyblockv1alpha1.StorageNode,

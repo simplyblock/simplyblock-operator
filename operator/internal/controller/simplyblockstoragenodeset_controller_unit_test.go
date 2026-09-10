@@ -1500,7 +1500,7 @@ func newStorageNodeSetStateTestReconciler(
 			Image: "test-image:latest",
 		},
 	}
-	// Simulate kubebuilder defaults that the API server would apply.
+	// Simulate Kubebuilder defaults that the API server would apply.
 	for _, obj := range objects {
 		if sn, ok := obj.(*simplyblockv1alpha1.StorageNodeSet); ok && sn.Spec.MaxParallelNodeAdds == nil {
 			v := int32(1)
@@ -2045,7 +2045,7 @@ func TestReconcileSpdkProxyEndpointSlices_TransientNotReadyKeepsSlice(t *testing
 		t.Fatalf("expected node-a's endpoint to remain, got %#v", slices.Items[0].Endpoints)
 	}
 
-	// Now the pod is genuinely gone -- the slice must be deleted as before.
+	// Now, the pod is genuinely gone -- the slice must be deleted as before.
 	if err := r.Delete(ctx, pod); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}
@@ -2757,7 +2757,7 @@ func TestMaybeActivateClusterWaitsForFailureDomainReadiness(t *testing.T) {
 }
 
 func TestMaybeActivateClusterProceedsOnceFailureDomainsAreReady(t *testing.T) {
-	// 4 online/healthy nodes across 4 distinct, equally-sized failure domains
+	// 4 online/healthy nodes across 4 distinct, equally sized failure domains
 	// for npcs=2 -- satisfies npcs+2 = 4, so the gate must let this through
 	// to the real activation call.
 	cluster, nodeSet := newActivationTestClusterAndNodeSet(

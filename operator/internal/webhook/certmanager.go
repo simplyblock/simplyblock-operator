@@ -32,7 +32,7 @@ const (
 )
 
 // certManagerProvisioner runs when SB_TLS_PROVIDER=cert-manager. It creates a
-// cert-manager Certificate for the webhook Service, then materialises the issued
+// cert-manager Certificate for the webhook Service, then materializes the issued
 // Secret onto disk (utils.WebhookCertDir) and injects the CA bundle into the
 // MutatingWebhookConfiguration — the same responsibilities cert-controller's
 // rotator handles in self-signed mode, but sourced from cert-manager. It keeps

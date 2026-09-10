@@ -117,7 +117,7 @@ func connector(sysRoot string) *nvmeof.CLIConnector {
 //
 // The connect's own success is still not proof that the path is usable: a
 // controller can be live and serve no namespace. VerifyMigrationPaths establishes
-// that, by reading the host's own view afterwards rather than trusting this report.
+// that, by reading the host's own view afterward rather than trusting this report.
 //
 // Connections are grouped by NQN because atlas attaches one subsystem at a time. A
 // migration moves a single subsystem, so in practice there is one group.

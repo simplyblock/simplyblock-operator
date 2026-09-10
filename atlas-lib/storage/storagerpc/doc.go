@@ -26,7 +26,7 @@
 //
 // # What crosses and what does not
 //
-// The nvme types are immutable snapshots of sysfs with no behaviour attached,
+// The nvme types are immutable snapshots of sysfs with no behavior attached,
 // so the wire form is a complete copy rather than a summary. Everything derived
 // from a snapshot is therefore just as true on the far side:
 // [nvme.Device.Accessible], [nvme.IsSibling], [nvme.CoTenants] and the rest are

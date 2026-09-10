@@ -85,7 +85,7 @@ func (r *Registry) Len() int {
 // register installs p and returns the peer it displaced, if any.
 //
 // A peer that links while an entry for it already exists is the normal shape of
-// a restart: the pod came back and dialled in before the hub noticed the old
+// a restart: the pod came back and dialed in before the hub noticed the old
 // TCP connection was half-open. The new session wins — it is the one demonstrably
 // alive — and the caller closes the displaced one.
 func (r *Registry) register(p *Peer) *Peer {

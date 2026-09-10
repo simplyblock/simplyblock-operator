@@ -260,7 +260,7 @@ func TestMatchVolumesToPVs_OnlySystemVolumes(t *testing.T) {
 
 func TestDrainMigrationNameNoCollisionOnLongPVNames(t *testing.T) {
 	// Two PV names that share a 60+ char common prefix must produce distinct CR
-	// names after sanitisation and truncation (collision guard via FNV suffix).
+	// names after sanitization and truncation (collision guard via FNV suffix).
 	longBase := "pvc-" + strings.Repeat("a", 55) // 59 chars — produces a 63-char name when prefixed
 	pv1 := longBase + "1"
 	pv2 := longBase + "2"

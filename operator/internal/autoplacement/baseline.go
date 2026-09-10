@@ -18,7 +18,7 @@ const (
 // robustBaselineNS reduces a set of latency samples (ns) to a single baseline using the
 // Hampel identifier: samples further than k·1.4826·MAD from the window median are rejected
 // as outliers, and the median of the survivors is returned. The Hampel identifier has the
-// highest possible breakdown point (50%) — both its centre (median) and its scale (MAD) are
+// highest possible breakdown point (50%) — both its center (median) and its scale (MAD) are
 // themselves robust, so the extreme journal/EC/HA spikes it is meant to reject cannot inflate
 // the threshold and hide themselves.
 //

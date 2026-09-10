@@ -385,7 +385,7 @@ func TestReconcileActivateProceedsOnceFailureDomainsAreReady(t *testing.T) {
 	cluster.Spec.EnableFailureDomains = ptr.To(true)
 	cluster.Spec.StripeSpec = &simplyblockv1alpha1.StripeSpec{ParityChunks: ptr.To(int32(2))}
 
-	// 4 distinct, equally-sized domains for npcs=2 -- satisfies npcs+2 = 4,
+	// 4 distinct, equally sized domains for npcs=2 -- satisfies npcs+2 = 4,
 	// so the gate must let this through to the real activate attempt.
 	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "set-fd-ready", Namespace: scopsTestNS},

@@ -53,7 +53,7 @@ const (
 	//   simplyblock.io/backup-policy: <BackupPolicy-name>
 	//
 	// deprecatedPvcBackupPolicyAnnotation is the legacy spelling of the same
-	// annotation. It is still honoured for backwards compatibility, but
+	// annotation. It is still honored for backward compatibility, but
 	// pvcBackupPolicyAnnotation wins when both are present.
 	pvcBackupPolicyAnnotation           = "simplyblock.io/backup-policy"
 	deprecatedPvcBackupPolicyAnnotation = "simplybk/backup-policy"
@@ -70,7 +70,7 @@ const (
 )
 
 // schedulePattern matches a space-separated list of interval,keep_count pairs
-// (e.g. "15m,4 60m,11 24h,7"). Supported interval units: m, h, d, w. Pairs are
+// (e.g., "15m,4 60m,11 24h,7"). Supported interval units: m, h, d, w. Pairs are
 // separated by literal spaces only (not the \s class) so a tab/newline can't
 // be smuggled in as a separator.
 var schedulePattern = regexp.MustCompile(`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`)
@@ -289,7 +289,7 @@ func (r *BackupPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // backupPolicyNameFromAnnotations returns the BackupPolicy name referenced by
 // the given PVC annotations, or "" when neither annotation is set. Both the
-// current and the deprecated annotation are honoured; the current spelling
+// current and the deprecated annotation are honored; the current spelling
 // wins when both carry a non-empty value.
 func backupPolicyNameFromAnnotations(annotations map[string]string) string {
 	if name := annotations[pvcBackupPolicyAnnotation]; name != "" {
@@ -343,7 +343,7 @@ func (r *BackupPolicyReconciler) handleDeletion(
 	if clusterUUID != "" && policyID != "" {
 		apiClient := r.apiClient()
 
-		// Detach from every currently-attached lvol.
+		// Detach from every currently attached lvol.
 		for _, a := range policyCR.Status.AttachedLvols {
 			if err := r.detachPolicy(ctx, apiClient, clusterUUID, policyID, a.LvolID); err != nil {
 				log.Error(err, "Failed to detach policy from lvol during deletion",
@@ -589,7 +589,7 @@ func (r *BackupPolicyReconciler) computeDesiredAttachments(
 	return desired, nil
 }
 
-// resolvePVCLvolID extracts the Simplyblock lvol UUID from a PVC.
+// resolvePVCLvolID extracts the simplyblock lvol UUID from a PVC.
 // It reads the PV volume handle and validates that the PVC belongs to the
 // expected cluster. The simplybk/lvol-id annotation may be used in place of
 // the handle, but only when it agrees with the handle — a mismatch is rejected
@@ -661,7 +661,7 @@ func (r *BackupPolicyReconciler) apiClient() *webapi.Client {
 	return webapi.NewClient()
 }
 
-// policyBackendName returns the name used for the policy in the Simplyblock
+// policyBackendName returns the name used for the policy in the simplyblock
 // backend. It is derived from the CR name alone, since the Kubernetes CR is
 // already namespace-scoped and users typically intend the policy name to be
 // human-readable.
@@ -709,9 +709,9 @@ func attachmentKey(a simplyblockv1alpha1.AttachedLvol) string {
 // non-empty human-readable message when a field value is present but does not
 // match the expected format, and an empty string when the spec is valid.
 //
-// The kubebuilder Pattern markers on the CRD provide admission-time enforcement,
+// The Kubebuilder Pattern markers on the CRD provide admission-time enforcement,
 // but this runtime check is the last line of defense against malformed or
-// injected values reaching the backend (e.g. clusters upgraded before the new
+// injected values reaching the backend (e.g., clusters upgraded before the new
 // CRD schema was applied, or direct etcd writes).
 func validateBackupPolicySpec(spec simplyblockv1alpha1.BackupPolicySpec) string {
 	if spec.Schedule != "" && !schedulePattern.MatchString(spec.Schedule) {

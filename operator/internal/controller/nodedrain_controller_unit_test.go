@@ -1040,7 +1040,7 @@ func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
 // controller would silently revert to the pre-reconcile state.
 //
 // Setup: one worker already in DrainPhaseComplete (no backend HTTP calls
-// needed) so processWorker is a pure no-op. The interesting behaviour is in
+// needed) so processWorker is a pure no-op. The interesting behavior is in
 // the final patch: the interceptor returns 409 on the first attempt and
 // succeeds on the second, verifying that RetryOnConflict re-reads and retries
 // rather than logging and returning the 5-second requeue.

@@ -137,7 +137,7 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 }
 
 // ResolveClusterCRByUUID finds the StorageCluster CR in namespace whose backend
-// UUID matches uuid. Used to go from a cross-cluster reference (which only
+// UUID matches UUID. Used to go from a cross-cluster reference (which only
 // carries the backend UUID) back to the CR, to read config the backend doesn't
 // expose, such as a cluster's backup credentials secret.
 func ResolveClusterCRByUUID(
@@ -488,7 +488,7 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 }
 
 // ParityChunksFromErasureCodingScheme returns just npcs (the parity-chunk
-// count, e.g. "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
+// count, e.g., "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
 // is the failure-domain risk budget the drain coordinator's fdDrainGate
 // spends against — see RequiredNodesFromErasureCodingScheme for the sibling
 // ndcs+npcs total.

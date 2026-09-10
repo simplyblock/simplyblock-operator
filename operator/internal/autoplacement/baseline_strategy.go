@@ -48,7 +48,7 @@ func (b *benchmarkBaselineProvider) BaselineNS(
 		var snodeList simplyblockv1alpha1.StorageNodeSetList
 		if err := b.client.List(ctx, &snodeList, client.InNamespace(input.Namespace)); err != nil {
 			// Stay resilient to a transient list error: skip this namespace rather than
-			// failing the whole evaluation cycle (matches the previous CR-read behaviour).
+			// failing the whole evaluation cycle (matches the previous CR-read behavior).
 			continue
 		}
 		for _, snode := range snodeList.Items {
@@ -107,7 +107,7 @@ type nodeBaseline struct {
 
 // reduceWindowedBaselines reduces per-node windowed samples to a single robust baseline each,
 // applying the cold-start policy. It is pure (no Prometheus, no metrics) so the cold-start
-// and estimator behaviour can be tested directly. A node is dropped when it is under-sampled
+// and estimator behavior can be tested directly. A node is dropped when it is under-sampled
 // under the "defer" policy, or when no positive baseline can be computed from its samples.
 func reduceWindowedBaselines(
 	windowed map[string]map[string][]float64,

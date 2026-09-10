@@ -46,7 +46,7 @@ type NodeRollingRestartStatus struct {
 	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
 }
 
-// NodeRollingRestartSpec configures the node-rolling-restart action behaviour.
+// NodeRollingRestartSpec configures the node-rolling-restart action behavior.
 type NodeRollingRestartSpec struct {
 	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
 	// after the backend node is shut down and before it is restarted, ensuring
@@ -68,7 +68,7 @@ type StorageClusterOpsSpec struct {
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 
-	// NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
+	// NodeRollingRestart configures behavior specific to the node-rolling-restart action.
 	// Ignored for all other actions.
 	// +optional
 	NodeRollingRestart *NodeRollingRestartSpec `json:"nodeRollingRestart,omitempty"`

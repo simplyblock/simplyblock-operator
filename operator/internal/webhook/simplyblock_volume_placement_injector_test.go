@@ -64,7 +64,7 @@ func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeAutoPlaceme
 }
 
 // applyPVCPatches applies the RFC6902 patch set produced by Handle to the original PVC
-// via a real JSON-patch library, mirroring what the k8s apiserver does — avoids having to
+// via a real JSON-patch library, mirroring what the K8s apiserver does — avoids having to
 // guess the exact path granularity the diff library chose for the annotations map.
 func applyPVCPatches(t *testing.T, pvc *corev1.PersistentVolumeClaim, patches []jsonpatch.JsonPatchOperation) *corev1.PersistentVolumeClaim {
 	t.Helper()

@@ -34,7 +34,7 @@ import (
 // gates pod creation, which must not block on webhook availability.)
 type StorageNodeValidator struct {
 	// OperatorNamespace is the namespace the operator runs in. Any service
-	// account in this namespace (i.e. the operator itself) is permitted to change
+	// account in this namespace (i.e., the operator itself) is permitted to change
 	// spec.workerNode; every other identity is rejected.
 	OperatorNamespace string
 }

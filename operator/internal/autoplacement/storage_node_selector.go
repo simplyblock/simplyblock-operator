@@ -11,7 +11,7 @@ import (
 
 // StorageNodeSelectorInput groups the storage nodes belonging to a single Kubernetes
 // namespace. Multiple inputs can be passed to SelectStorageNodes when nodes span
-// more than one namespace (e.g. multi-tenant deployments).
+// more than one namespace (e.g., multi-tenant deployments).
 type StorageNodeSelectorInput struct {
 	// Namespace is the Kubernetes namespace that owns these storage nodes.
 	// Used to scope StorageNode CR lookups when reading baseline latency.
@@ -102,7 +102,7 @@ type nodeRef struct {
 // deviation exceeds cfg.ImbalanceThreshold. Each hot node is paired with the coolest
 // eligible target that is at least cfg.MinHotColdDifferencePct percentage points cooler;
 // when no such target exists the hot node produces no pair (migrating between
-// near-equally-loaded nodes yields no benefit).
+// near-equally loaded nodes yields no benefit).
 //
 // Selection runs over a flat pool of all nodes regardless of cluster; the source/target
 // cluster relationship is decided by isMigrationTargetEligible (intra-cluster only
@@ -137,7 +137,7 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 		nodes = append(nodes, nodeRef{ClusterUUID: clusterUUID, NodeUUID: nodeUUID, DeviationPct: dev})
 	}
 
-	// Pair every hot node with the coolest eligible, sufficiently-cooler target.
+	// Pair every hot node with the coolest eligible, sufficiently cooler target.
 	pairs := make([]NodeMigrationPair, 0, len(nodes))
 	for _, src := range nodes {
 		if src.DeviationPct < cfg.ImbalanceThreshold {
@@ -162,7 +162,7 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 // (migration-target selection), there is no source node to compare against and no
 // MinHotColdDifferencePct gate: placement always wants the single best candidate, however
 // small its lead over the second-best. A node absent from the current Prometheus reading
-// (e.g. freshly onboarded, not yet scraped) is treated as deviation 0 — the best possible
+// (e.g., freshly onboarded, not yet scraped) is treated as deviation 0 — the best possible
 // score — rather than excluded, so it isn't systematically avoided.
 func (sns *StorageNodeSelector) SelectBestNode(
 	ctx context.Context,
@@ -219,7 +219,7 @@ func pickColdTarget(src nodeRef, pool []nodeRef, cfg RebalancingConfig) (nodeRef
 
 // isMigrationTargetEligible reports whether cand may receive a volume migrated from src.
 // Migration is intra-cluster only today, so the target must be in the source's cluster.
-// Cross-cluster migration is a planned follow-up: relaxing this predicate (e.g. gated by
+// Cross-cluster migration is a planned follow-up: relaxing this predicate (e.g., gated by
 // a future cfg flag) is the single change needed here to allow cross-cluster targets.
 func isMigrationTargetEligible(src, cand nodeRef, _ RebalancingConfig) bool {
 	return cand.ClusterUUID == src.ClusterUUID
@@ -341,7 +341,7 @@ func deviationStats(
 		minDev  float64
 		hottest string // nodeUUID with highest deviation
 		coolest string // nodeUUID with lowest deviation
-		first   bool   // sentinel to initialise min/max on first sample
+		first   bool   // sentinel to initialize min/max on first sample
 	}
 	acc := make(map[string]*accumulator)
 

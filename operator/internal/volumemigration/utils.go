@@ -90,7 +90,7 @@ func findPVForVolume(
 // PollMigrationResult is returned by PollMigration.
 type PollMigrationResult struct {
 	// Done is true when the migration has reached a terminal status
-	// (done, failed, or cancelled).
+	// (done, failed, or canceled).
 	Done bool
 	// Succeeded is true when the migration reached the "done" status.
 	Succeeded bool

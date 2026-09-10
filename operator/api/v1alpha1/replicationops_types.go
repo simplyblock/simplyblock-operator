@@ -60,8 +60,8 @@ type ReplicationOpsResult struct {
 // ReplicationOpsSpec defines the desired state of a ReplicationOps.
 type ReplicationOpsSpec struct {
 	// Action is the operation to perform. Immutable.
-	// failover:  unplanned — promote target clone, source may be down.
-	// failback:  restore source as primary after a prior failover.
+	// failover: unplanned — promote target clone, source may be down.
+	// failback: restore source as primary after a prior failover.
 	// migration: planned cutover — calls replication_commit per volume; both clusters stay up.
 	//            State progression: replicating → cutover_pending → cutover_done.
 	// +kubebuilder:validation:Enum=failover;failback;migration
@@ -102,7 +102,7 @@ type ReplicationOpsStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Subphase describes what the operation is currently doing within the phase
-	// (e.g. "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+	// (e.g., "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
 	// +optional
 	Subphase string `json:"subphase,omitempty"`
 

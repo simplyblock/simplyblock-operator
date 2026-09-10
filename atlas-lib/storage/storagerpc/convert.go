@@ -10,7 +10,7 @@ import (
 // Conversion between the nvme snapshot types and their wire form.
 //
 // The mapping is total in both directions: every exported field of every type
-// has a wire field, and nothing is derived, summarised or dropped. That is what
+// has a wire field, and nothing is derived, summarized or dropped. That is what
 // lets a caller on the far side of a link ask the same questions of a device as
 // a caller on the node — Accessible, Siblings, CoTenants and the rest are pure
 // functions of these fields, so they answer identically once the snapshot

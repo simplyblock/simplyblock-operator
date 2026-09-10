@@ -21,7 +21,7 @@ import (
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// NOTE: JSON tags are required. Any new fields you add must have JSON tags for the fields to be serialized.
 
 // StoragePoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
 type StoragePoolQoSThroughputSpec struct {
@@ -87,7 +87,7 @@ type StorageClassParameters struct {
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric"
-	// Fabric is the transport fabric (e.g. tcp).
+	// Fabric is the transport fabric (e.g., TCP).
 	// +kubebuilder:default=tcp
 	Fabric string `json:"fabric,omitempty"`
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.

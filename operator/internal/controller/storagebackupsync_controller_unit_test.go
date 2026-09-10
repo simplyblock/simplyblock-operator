@@ -176,7 +176,7 @@ func TestStorageBackupSyncImportsBackup(t *testing.T) {
 
 // TestStorageBackupSyncImportsWhenNoPVCMatches verifies that a backend backup
 // is still imported as a StorageBackup CR even when its originating lvol has
-// no matching PVC (e.g. the source pool was deleted and recreated) — the
+// no matching PVC (e.g., the source pool was deleted and recreated) — the
 // backend backup and its data remain valid and restorable, so it must not be
 // silently dropped forever.
 func TestStorageBackupSyncImportsWhenNoPVCMatches(t *testing.T) {
@@ -365,7 +365,7 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCRWithoutPVCRef(t *testin
 
 // TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch verifies that
 // a PVC whose lvol annotation disagrees with its PV's volume handle is
-// treated as "no match" (never used as a possibly-wrong PVCRef), but the
+// treated as "no match" (never used as a possibly wrong PVCRef), but the
 // backend backup is still imported rather than silently dropped.
 func TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch(t *testing.T) {
 	srv := syncTestBackupServer(t)

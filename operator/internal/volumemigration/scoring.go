@@ -22,7 +22,7 @@ func ComputeLatencyDeviationPct(
 // A higher score means the volume contributes more I/O load and should be
 // migrated first.
 //
-// throughputBytesPerSec is normalised to MB/s before weighting so both terms
+// throughputBytesPerSec is normalized to MB/s before weighting so both terms
 // are on a comparable numerical scale. Sensible defaults: iopsWeight=1.0,
 // throughputMBWeight=0.1 (1 MB/s ≈ 0.1 of a IOPS unit).
 func VolumeIOScore(

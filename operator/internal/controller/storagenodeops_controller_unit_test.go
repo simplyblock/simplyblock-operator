@@ -132,7 +132,7 @@ func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 // FD1=2/FD2=2/FD3=3. Removing a node from the already-smallest domain (FD1)
 // drops it to 1 while FD3 stays at 3 -- a spread the backend's own
 // check_fd_admission_for_remove correctly refuses (populations {1,2,3}).
-// Removing instead from the domain with slack (FD3) leaves 2/2/2, which is
+// Removing instead from the domain with Slack (FD3) leaves 2/2/2, which is
 // fine. This is the gate that must fire in drainValidate BEFORE Suspending,
 // so an infeasible removal never suspends the node in the first place.
 
@@ -218,7 +218,7 @@ func TestFdRemovalBalanceCheck_RemovingFromThinDomainBlocked(t *testing.T) {
 }
 
 // TestFdRemovalBalanceCheck_NoOpWhenFailureDomainsDisabled locks in the
-// gate's very first early-out, mirroring check_fd_admission_for_remove's
+// gate's very first early out, mirroring check_fd_admission_for_remove's
 // own first line (simplyblock_core): with EnableFailureDomains unset/false,
 // this must never block a removal, regardless of topology -- the exact
 // same 1/2/3 split that TestFdRemovalBalanceCheck_RemovingFromThinDomainBlocked
