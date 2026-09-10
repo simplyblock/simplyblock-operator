@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-09-09  
+**Date:** 2026-09-10  
 **Related designs:** [`design-crd-model.md`](design-crd-model.md) §9 is the migration inventory this document delivers  
 **Test Plan:** [`test-plan-api-upgrade.md`](../../tests/test-plan-api-upgrade.md), not yet written
 
@@ -682,6 +682,31 @@ installed is a write that can only introduce risk.
 
 The whole set is embedded in the installer binary so that the version of the
 CRDs always matches the version of the conversion code that converts them.
+`go:embed` cannot reach outside the directory of the file that declares it, so
+the CRDs controller-gen writes into `config/crd/bases` are copied into
+`internal/upgrade/crds/manifests` by the `crd-embed` target that
+`make -C operator manifests` runs, and the copy is committed. It is the
+arrangement the Helm chart's copy of the same files already uses.
+
+**Which of the three groups a CRD is in is read from the CRD rather than from a
+table**, since a list of kinds is a second place to edit when a kind is added
+and the two disagree the first time one of them is edited. A CRD declaring more
+than one version is converting and a CRD declaring one is not, and the untouched
+ten are the ones the comparison below finds nothing to do for.
+
+**A CRD is written only where it differs from what is installed.** The
+comparison is of the parsed `spec` rather than of the file's bytes, because the
+API server returns a `spec.conversion` of `{strategy: None}` where the file
+declared nothing. That is the only field it defaults: every other part of a
+controller-gen CRD, whole CEL validation blocks included, is returned exactly as
+it was written. So the installer normalizes that one field and compares the rest
+exactly, and a Kubernetes version that defaults something further shows as every
+CRD wanting an update on every run, which the plan reports rather than hides.
+
+A CRD whose conversion webhook has had a CA bundle injected into it keeps that
+bundle. The bundle is written by whatever issues the webhook's certificate (§8)
+rather than by the generated file, so a CRD written straight from the file
+carries an empty one, and conversion then fails for every object of the kind.
 
 The installer MUST wait until each applied CRD is established, which means
 checking `.status.conditions` for `Established` and `NamesAccepted` and
@@ -690,9 +715,17 @@ expects for that CRD's part of the set. A CRD in the second group is verified
 against a different expectation from one in the first, and checking every CRD
 against "both versions are served" is how a new kind reports a false failure.
 
+The installer MUST refuse to write a CRD that no longer declares a version
+`.status.storedVersions` still names. The API server accepts such a CRD and then
+fails every read of the kind, so the refusal names the version and the kind
+instead, and §24's storage-version rewrite is what resolves it.
+
 The installer MUST NOT proceed to the operator upgrade if the API server has not
 accepted every new CRD. A partially applied CRD set is the state that leaves the
-operator reconciling one kind at `v1alpha2` and another at `v1alpha1`.
+operator reconciling one kind at `v1alpha2` and another at `v1alpha1`. Applying
+and verifying are therefore two steps of §9.1 rather than one: the requirement
+is about the set, and the second step is what refuses to go on when any member
+of it did not take.
 
 ---
 
@@ -1984,7 +2017,209 @@ Shared primitives belong in `atlas-lib` rather than here: Kubernetes object
 correlation, error classification, locks, and the state machine of §23 are
 already there (`atlas-lib/README.md`).
 
-### 29.5 What Each Command Owes
+### 29.5 The Extension Framework
+
+`operator/internal/upgrade` is the framework the three commands are assembled
+out of. Nothing in it is a switch over a fixed list, because the set of units
+grows with every API version: a later upgrade brings new rules to check, new
+names to bound, and new objects to transform. Each kind of unit is an interface
+with one registry behind it, so adding a rule to the product is writing one
+value and putting it in one catalog.
+
+| Unit             | Interface                                                  | Lives in                            |
+|------------------|------------------------------------------------------------|-------------------------------------|
+| `Discoverer`     | `Requires() []ID`, `Discover(ctx, *Scope) error`           | `internal/upgrade/discover/`        |
+| `Check`          | `Stages() []Stage`, `Check(ctx, *Scope) (Findings, error)` | `internal/upgrade/check/`           |
+| `Derivation`     | `Formula`, `Written`, `Model`, `Fix`, `Space`, `Inputs`    | `internal/upgrade/derive/`          |
+| `Step`           | five methods over one subject, §29.6                       | `internal/upgrade/steps/`           |
+| `Transformation` | `Source`, `Target`, `Applies`, `Transform`                 | `internal/upgrade/keys/` and beside |
+
+Every unit is a `Rule`: a stable kebab-case `ID` and a one-sentence
+`Description`. The identity is what a report names, what `--skip` takes, and
+what `simplyblock-upgrade rules` lists.
+
+`internal/upgrade/catalog/catalog.go` is the single place the shipped tool's
+units are registered, in the order they run in. It is one file so that the
+answer to what `migrate` actually does is a list somebody can read, and so that
+a test can build a catalog holding one rule without the other forty deciding
+the outcome. The framework holds no global state and no `init` function
+registers anything.
+
+`Scope` is what every unit is handed: the `client.Client` (one that refuses
+writes in the preflight), the `Namespace` the operator's own furniture lives in,
+the cluster-wide `Graph` discovery built, the `Stage`, the run's `Options`, a
+`Log` for diagnosis, and a `Reporter` for the person watching. The log and the
+reporter are separate on purpose, and user-facing output goes to the reporter.
+
+### 29.6 The Step Contract
+
+A step answers five questions about **one subject**, and the runner asks them of
+every subject a run has.
+
+```go
+type Step interface {
+    Rule
+
+    Stage() Stage       // which command it belongs to
+    Phase() Phase       // the migrate state it runs in, ignored elsewhere
+    Requires() []ID     // steps that must have completed first
+
+    Describe(ctx context.Context, s *Scope, subject Subject) (*Action, error)
+    Done(ctx context.Context, s *Scope, subject Subject) (bool, error)
+    Validate(ctx context.Context, s *Scope, subject Subject) error
+    Apply(ctx context.Context, s *Scope, subject Subject) error
+    Verify(ctx context.Context, s *Scope, subject Subject) error
+}
+```
+
+The five are not one question in disguise. §22 states idempotency per object
+rather than per step, and §20 orders the reparenting the same way: a
+`StorageNode` owned by its set is transferred, one already owned by the cluster
+is already migrated and continues, and each move is verified before the next. A
+step that answered once for a whole kind would collapse three nodes into one
+all-or-nothing decision, which is the wrong answer for a run killed after the
+second of them.
+
+**`Describe` returns nil for two different reasons, and both are silence.** The
+subject is not one this step is about, or the subject is already in the state
+the step exists to put it in. So the plan is the outstanding work by
+construction: a rerun's plan shrinks as the migration completes rather than
+restating the work already done. It is also what makes a rerun
+self-healing, since a subject whose state is not what a previous run left behind
+describes an action again.
+
+**`Done` tells the two silences apart.** A subject no step describes is either
+finished or one nothing has taken responsibility for, and those are very
+different answers to whether the migration is complete. `Covered` walks a step
+over every subject and sorts them into `Outstanding`, `Finished`, and
+`Untouched`. A subject every step leaves `Untouched` is a gap in the
+migration.
+
+Five rules hold, and breaking one breaks a guarantee the design makes:
+
+- `Describe` and `Validate` MUST NOT write. Both run in the preflight, where
+  nothing changes.
+- `Describe` MUST be a pure function of its subject and the graph. It runs in
+  the preflight and again in the migration, and a different answer applies
+  something the user was never shown.
+- `Describe` and `Done` MUST derive their answers from the subject rather than
+  from the record of §22.1, so a run killed anywhere resumes correctly.
+- `Apply` is called only where `Describe` returned an action and `Validate`
+  passed.
+- `Verify` runs after `Apply`, and does not run on a subject `Describe`
+  declined.
+
+A step that can describe its work and cannot yet perform it implements
+`Blocked`, whose `BlockedBy()` says what is missing and names the design section
+that would supply it. The runner refuses a stage holding one **before applying
+anything**, because a stage that stops at its fifth step leaves the cluster
+halfway through an upgrade nothing can finish. The set of blocked steps is
+therefore the remaining work, and `preflight` prints it.
+
+### 29.7 Subjects
+
+A subject is what a step is asked about.
+
+```go
+type Subject struct {
+    Ref    ObjectRef     // what a plan line and a finding print
+    Object client.Object // nil when the subject is the upgrade itself
+}
+```
+
+`Scope.Subjects()` is the upgrade first, then the graph's objects with kinds
+sorted and objects in discovery order within a kind. The upgrade comes first
+because the steps that act on it come first: nothing is migrated before the
+cluster can run the operator that migrates it.
+
+**The steps of §9.1 act on the upgrade itself**, which is what `TheUpgrade`
+supplies. Deploying the conversion webhook and upgrading the operator change the
+installation rather than anything in it. The upgrade is a subject like any
+other, so there is one contract, one runner path, and one walk. Such a step
+opens with `if !subject.IsUpgrade() { return nil, nil }`.
+
+**A step whose subjects are not in the graph implements `Enumerator`.**
+
+```go
+type Enumerator interface {
+    Subjects(ctx context.Context, s *Scope) ([]Subject, error)
+}
+```
+
+The graph holds what the cluster has, so a step that creates something acts on a
+subject no discovery can find. §11 is the case: the CRD for a kind that is new
+in `v1alpha2` is exactly the one that is not installed yet. The `Object` such a
+step carries is the object as it is to be written rather than one the cluster
+already holds, and the step reads the live one itself. That is what keeps the
+step's twenty objects on the page instead of behind one line about the
+upgrade.
+
+The runner resolves the two through `SubjectsFor(ctx, s, step)`, so a step that
+does not enumerate is asked about the run's subjects. An enumerating step still
+receives whatever subjects it is handed, and declines the ones that are not its
+own rather than assuming.
+
+### 29.8 The Plan
+
+`Plan` is a hierarchy because the execution is one: `Plan` holds `Task`s, one
+per step, and a `Task` holds `Subtasks`, one `Action` per subject the step
+described work for. The hierarchy is what keeps which step is responsible for a
+change and how many objects one step touches, which is the difference between
+"annotate the release's survivors" and the ninety-five annotations that is.
+
+An `Action` carries the step's `ID`, a `Verb`, the `ObjectRef`, and a `Detail`.
+The verb set is closed (`CREATE`, `UPDATE`, `DELETE`, `REPARENT`, `ANNOTATE`,
+`REWRITE`, `AWAIT`, and `VERIFY`), because a step that cannot describe its work
+as one of these is doing something the plan cannot show a user.
+
+**`Detail` is the data and not a description of the step.** An old value, an
+arrow, and a new one. A step's own explanation belongs in its source, where it
+is read once, rather than in a line printed on every run. A step with nothing
+concrete to say leaves it empty, and `Task.Collapsed()` reports a task whose
+subtasks say nothing the task line does not.
+
+The plan is computed by the same walk that would perform it, with the writes
+left out, which is what makes §27's promise hold.
+
+### 29.9 Writing a Step
+
+The recipe, in order:
+
+1. **Give it an identity** as a `const` beside the others in the package, in
+   kebab case, naming the change rather than the mechanism: `reparent-storage-nodes`,
+   not `owner-reference-updater`.
+2. **Decide what it acts on.** An object the graph holds needs nothing extra.
+   The upgrade itself is `TheUpgrade`. Anything else means `Enumerator`, and the
+   reason belongs in the file's opening comment.
+3. **Write `Describe` first, completely.** It is the half that has to be right
+   before anything is applied, and it is worth having on its own: a step whose
+   `Apply` is a TODO still tells a user exactly what the upgrade owes, per
+   object. `Describe` returning nil where the work is already done is what makes
+   the plan shrink on a rerun.
+4. **Write `Done`** as the positive statement of the same inspection, so a
+   coverage check can tell a finished subject from an abandoned one.
+5. **Write `Validate`, `Apply`, and `Verify`.** `Validate` is the step's own
+   precondition, distinct from the graph-wide checks. `Verify` re-reads and
+   confirms rather than trusting the write.
+6. **Register it** in `internal/upgrade/catalog/catalog.go`. Order within a
+   stage comes from `Requires()` rather than from the slice, so a step added in
+   the wrong place still runs in the right one.
+7. **Test it red first.** Every behavior the step relies on is worth breaking
+   deliberately to watch the test fail, per `AGENTS.md`.
+
+`operator/internal/upgrade/steps/crds.go` is the worked example, and it is the
+one to read before writing another: it enumerates its own subjects, describes a
+create and an update differently, declines a subject that is already what it
+would write, validates a precondition the API server would otherwise accept and
+then fail on, and verifies against the conditions §11 names. `steps/ownership.go`
+is the example for a step over graph objects, and `steps/upgrade.go` holds the
+ones that act on the upgrade itself.
+
+Prose does not belong in a plan line, and a step's reasoning does not belong in
+its `Detail`. Both belong in the file's opening comment and in a `TODO` beside
+the part that is not written yet.
+
+### 29.10 What Each Command Owes
 
 `upgrade` walks §9.1 and MUST NOT perform application-level migration.
 `migrate` walks the graph of §23 and MUST be idempotent (§22).
