@@ -548,6 +548,11 @@ func (in *SimplyblockDriverSpec) DeepCopyInto(out *SimplyblockDriverSpec) {
 	in.ControllerResources.DeepCopyInto(&out.ControllerResources)
 	in.NodeResources.DeepCopyInto(&out.NodeResources)
 	out.SidecarImages = in.SidecarImages
+	if in.EnableServiceAccountAuth != nil {
+		in, out := &in.EnableServiceAccountAuth, &out.EnableServiceAccountAuth
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableVolumeSnapshots != nil {
 		in, out := &in.EnableVolumeSnapshots, &out.EnableVolumeSnapshots
 		*out = new(bool)

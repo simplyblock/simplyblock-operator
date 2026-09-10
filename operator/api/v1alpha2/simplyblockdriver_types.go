@@ -147,6 +147,15 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	SidecarImages SidecarImages `json:"sidecarImages,omitempty"`
 
+	// EnableServiceAccountAuth makes both plugins authenticate to the management
+	// API with their pod's Kubernetes service-account token instead of the
+	// static cluster secret. The control plane has to list those accounts in
+	// SB_K8S_ADMIN_SERVICE_ACCOUNTS for it to work, which is why this is a
+	// deployment-wide switch rather than a per-plugin one.
+	// +kubebuilder:default=false
+	// +optional
+	EnableServiceAccountAuth *bool `json:"enableServiceAccountAuth,omitempty"`
+
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
 	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
 	// controller where the cluster serves neither. False applies none of them.

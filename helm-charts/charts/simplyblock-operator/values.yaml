@@ -2,37 +2,7 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 ---
-driverName: csi.simplyblock.io
-
 image:
-  csi:
-    repository: quay.io/simplyblock-io/spdkcsi
-    tag: v26.2.6
-    pullPolicy: Always
-  csiProvisioner:
-    repository: quay.io/simplyblock-io/csi-provisioner
-    tag: v5.1.0
-    pullPolicy: Always
-  csiAttacher:
-    repository: quay.io/simplyblock-io/csi-attacher
-    tag: v4.7.0
-    pullPolicy: Always
-  nodeDriverRegistrar:
-    repository: quay.io/simplyblock-io/csi-node-driver-registrar
-    tag: v2.12.0
-    pullPolicy: Always
-  csiSnapshotter:
-    repository: quay.io/simplyblock-io/csi-snapshotter
-    tag: v8.2.0
-    pullPolicy: Always
-  csiResizer:
-    repository: quay.io/simplyblock-io/csi-resizer
-    tag: v1.12.0
-    pullPolicy: Always
-  csiHealthMonitor:
-    repository: quay.io/simplyblock-io/csi-external-health-monitor-controller
-    tag: v0.14.0
-    pullPolicy: Always
   csiSnapshotterController:
     repository: quay.io/simplyblock-io/snapshot-controller
     tag: v8.2.0
@@ -58,6 +28,57 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
+# The CSI driver, deployed by the operator from a SimplyblockDriver rather than
+# rendered by this chart. A Kubernetes cluster holds one of these.
+simplyblockDriver:
+  # Whether the chart writes the SimplyblockDriver at all. False leaves the
+  # cluster with no CSI driver unless one is created by hand.
+  create: true
+
+  # The CSI driver name a StorageClass provisions with. Immutable once set:
+  # every PersistentVolume records it, so changing it orphans them all.
+  driverName: csi.simplyblock.io
+
+  image:
+    repository: quay.io/simplyblock-io/spdkcsi
+    tag: v26.2.6
+    pullPolicy: IfNotPresent
+
+  # Snapshot support for this driver: its VolumeSnapshotClass, and the CRDs and
+  # a controller where the cluster serves neither. Distinct from
+  # snapshotcontroller.create below, which is the cluster-wide component.
+  enableVolumeSnapshots: true
+
+  # Both plugins authenticate to the management API with their pod's
+  # service-account token instead of the static cluster secret. The control
+  # plane must list those accounts in SB_K8S_ADMIN_SERVICE_ACCOUNTS.
+  enableServiceAccountAuth: false
+
+  controller:
+    replicas: 1
+    nodeSelector: {}
+    tolerations: []
+    resources: {}
+
+  node:
+    # Empty means every schedulable worker, which is the usual case: a node
+    # that cannot attach a volume cannot run a workload that needs one.
+    nodeSelector: {}
+    tolerations: []
+    resources: {}
+
+  # Override one CSI sidecar image. Unset takes the version the operator ships,
+  # which is the combination it was tested against, so set one only to hold a
+  # pin the operator's release would otherwise move.
+  #
+  #   provisioner: quay.io/simplyblock-io/csi-provisioner:v5.1.0
+  #   attacher: ...
+  #   resizer: ...
+  #   snapshotter: ...
+  #   healthMonitor: ...
+  #   nodeDriverRegistrar: ...
+  sidecarImages: {}
+
 serviceAccount:
   # Specifies whether a serviceAccount should be created
   create: true
@@ -66,34 +87,8 @@ rbac:
   # Specifies whether RBAC resources should be created
   create: true
 
-controller:
-  replicas: 1
-  tolerations:
-    create: false
-    list:
-    - operator: Exists
-      effect:
-      key:
-      value:
-  nodeSelector:
-    create: false
-    key:
-    value:
-  serviceAccountAuth:
-    # When enabled, the CSI driver authenticates with the simplyblock API using
-    # the pod's Kubernetes service account JWT instead of the static cluster_secret.
-    # The CSI controller service account is added to SB_K8S_ADMIN_SERVICE_ACCOUNTS
-    # on the control plane when this is true.
-    enabled: false
-
-snapshotclass:
-  create: true
 
 snapshotcontroller:
-  create: true
-
-externallyManagedConfigmap:
-  # Specifies whether a externallyManagedConfigmap should be created
   create: true
 
 externallyManagedSecret:
@@ -140,24 +135,6 @@ benchmarks: 0
 # AL2_x86_64: eth0
 # AL2023_x86_64_STANDARD: ens5
 
-node:
-  serviceAccountAuth:
-    # When enabled, the CSI node DaemonSet authenticates with the simplyblock API using
-    # the pod's Kubernetes service account JWT instead of the static cluster_secret.
-    # The CSI node service account is added to SB_K8S_ADMIN_SERVICE_ACCOUNTS
-    # on the control plane when this is true.
-    enabled: false
-  tolerations:
-    create: false
-    list:
-    - operator: Exists
-      effect:
-      key:
-      value:
-  nodeSelector:
-    create: false
-    key:
-    value:
 
 storagenode:
   create: false

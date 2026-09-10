@@ -171,6 +171,13 @@ directory from the host, so a sidecar image is a container running beside it wit
 the same access, and the field that names one is worth the same restriction as the
 field that names the driver.
 
+**`enableServiceAccountAuth` makes both plugins authenticate with their pod's
+service-account token** instead of the static cluster secret. It is one switch
+for the deployment rather than one per plugin, because the control plane has to
+list the accounts it will accept in `SB_K8S_ADMIN_SERVICE_ACCOUNTS` and a
+deployment whose two plugins disagree about which credential they present is one
+whose control plane has to be configured for both.
+
 **`enableVolumeSnapshots` decides whether snapshot support is part of this
 deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
 `spec.driverName`, plus the CRDs and a controller where the cluster serves
@@ -409,7 +416,6 @@ this one is what the controller does when it meets them.
 | `StatefulSet`                       | `simplyblock-csi-controller`                                                        | Controller reference     |
 | `ServiceAccount`                    | `simplyblock-csi-node-sa`, `simplyblock-csi-controller-sa`                          | Controller reference     |
 | `ConfigMap`                         | `simplyblock-csi-cm`, `simplyblock-csi-nodeservercm`                                | Controller reference     |
-| `Secret`                            | `simplyblock-csi-secret`, `simplyblock-csi-secret-v2`                               | Controller reference     |
 | `ClusterRole`, `ClusterRoleBinding` | `simplyblock-csi-{node,provisioner,attacher,resizer,health-monitor}-{role,binding}` | `managed-by` label       |
 | `CSIDriver`                         | `spec.driverName`                                                                   | `managed-by` label       |
 | `VolumeSnapshotClass`               | `simplyblock-csi-snapshotclass`                                                     | `managed-by` label       |
@@ -421,6 +427,25 @@ are. An adopted deployment finds the API served, applies nothing, and records
 `status.snapshotSupport: Detected` (§4.1). That is what the field says, whether
 this object's controller brought snapshot support to the cluster, and it did not.
 What the handover leaves unowned is §9 Q2.
+
+**The credentials `Secret` is not in it, and that is the one exclusion worth
+reading twice.** `simplyblock-csi-secret-v2` carries the endpoint and the
+credential each plugin actually uses, and the `StorageCluster` reconciler already
+writes it, upserting one entry per cluster it creates or adopts. Claiming it here
+would put two controllers on one object, alternating its contents, which is the
+failure §3.4 keeps a Kubernetes cluster to one driver to avoid and is no better
+between two kinds than between two drivers. The deployment mounts it and does not
+own it.
+
+**So the control plane reaches the driver through that Secret rather than through
+this controller.** §4.1 has the operator resolve the one `ControlPlane` and write
+its endpoint into the configuration the plugins mount, and the writer is the
+`StorageCluster` reconciler, because the endpoint travels with the cluster
+identity and the credential rather than separately from them.
+
+**`Secret/simplyblock-csi-secret` is in nothing at all.** It is the pre-`v2`
+credential, and no pod in a measured deployment mounts it. It goes with the chart
+templates that rendered it rather than being adopted.
 
 **`ConfigMap/simplyblock-clusters` is not in it either**, despite the name. It is
 the storage-node controller's, mounted by that workload and not by either plugin.

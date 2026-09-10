@@ -128,10 +128,10 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver) corev1.Contai
 			"--nodeid=$(NODE_ID)",
 			"--node",
 		},
-		Env: []corev1.EnvVar{
+		Env: append([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			{Name: "GUARDIAN_MIN_BROKEN_FOR", Value: "30s"},
-		},
+		}, serviceAccountAuthEnv(d)...),
 		Lifecycle: &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", nodePostStartScript}},
 		}},
@@ -288,7 +288,9 @@ func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver) corev1.
 			"--nodeid=$(NODE_ID)",
 			"--controller",
 		},
-		Env:       []corev1.EnvVar{fieldRefEnv("NODE_ID", "spec.nodeName")},
+		Env: append([]corev1.EnvVar{
+			fieldRefEnv("NODE_ID", "spec.nodeName"),
+		}, serviceAccountAuthEnv(d)...),
 		Resources: d.Spec.ControllerResources,
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "socket-dir", MountPath: socketDir},
@@ -296,6 +298,19 @@ func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver) corev1.
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 		},
 	}
+}
+
+// serviceAccountAuthEnv points the plugin at its projected service-account
+// token. The token is mounted by the kubelet at a fixed path in every pod, so
+// enabling this adds an environment variable and no volume.
+func serviceAccountAuthEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.EnvVar {
+	if d.Spec.EnableServiceAccountAuth == nil || !*d.Spec.EnableServiceAccountAuth {
+		return nil
+	}
+	return []corev1.EnvVar{{
+		Name:  "SPDKCSI_API_TOKEN_PATH",
+		Value: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+	}}
 }
 
 // pullPolicy applies the CRD's default, so that an object written before
