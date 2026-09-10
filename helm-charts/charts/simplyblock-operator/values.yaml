@@ -38,8 +38,8 @@ image:
     tag: v8.2.0
     pullPolicy: Always
   simplyblock:
-    repository: docker.io/simplyblock/simplyblock
-    tag: cg-standalone-impl
+    repository: quay.io/simplyblock-io/simplyblock
+    tag: "26.2.6-PRE"
     pullPolicy: Always
   storageNode:
     repository: quay.io/simplyblock-io/storage-node-handler
