@@ -56,6 +56,17 @@ File: `operator/internal/webhook/volumegroupsnapshot_webhook_unit_test.go`
 | U-18 | Membership check: backend unreachable: admitted (fail-open), GroupController backstops                                                      | Boundary | —    |
 | U-19 | Membership check: a selected PVC is not yet bound so its lvol is unknown: admitted (fail-open)                                              | Boundary | —    |
 
+### VolumeMigration Admission Webhook (§9.5)
+
+File: `operator/internal/webhook/volumemigration_webhook_unit_test.go`
+
+| #    | Scenario                                                                                                                         | Type     | Test |
+|------|----------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-21 | Target PV backs a consistency-group member: the create is rejected (fail-closed), the message names the volume and its group     | Negative | —    |
+| U-22 | Target PV backs a non-member volume: the create is admitted, migration proceeds                                                  | Positive | —    |
+| U-23 | Target PV backs a sibling in the same subsystem as a group member: the create is rejected, because the subsystem migrates as one | Negative | —    |
+| U-24 | Backend unreachable so membership cannot be determined: the create is admitted (fail-open), the backend refusal backstops        | Boundary | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -75,6 +86,7 @@ File: `csi-driver/internal/csi/controller/groupsnapshot_test.go`
 | I-05 | Delete a `VolumeGroupSnapshot` whose group was already deleted with its last member: delete returns success                                                                            | Boundary | —    |
 | I-06 | Backend 5xx during the take: the `VolumeGroupSnapshot` reports not-ready, recovers when the backend returns                                                                            | Negative | —    |
 | I-07 | The admission webhook (registered in envtest) rejects a `VolumeGroupSnapshot` whose selector spans two groups at create, and admits a single-group one                                 | Negative | —    |
+| I-08 | The admission webhook (registered in envtest) rejects a `VolumeMigration` whose target PV backs a consistency-group member at create, and admits one for a non-member volume           | Negative | —    |
 
 ---
 
@@ -133,28 +145,28 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 ### M-02 — A consistency-group member cannot be migrated
 
-**Design reference:** §8.4, Open Question 2
+**Design reference:** §8.4, §9.5, Open Question 2
 
-**What to verify:** the backend refuses to migrate a volume that is a consistency-group member, so a group's placement stays fixed and its snapshots can always be frozen on one store.
+**What to verify:** migration of a group member is refused at two layers. The operator's `VolumeMigration` admission webhook (§9.5) declines the create at `kubectl apply`, so the operator never starts the move, and the backend refuses as the last line of defense for any path the webhook does not cover. Either way a group's placement stays fixed and its snapshots can always be frozen on one store.
 
 **Test concept:**
 1. Provision a three-member group.
-2. Attempt to migrate one member to another node.
-3. Assert the migration is refused with a clear error, and the member stays on the pinned store.
+2. Apply a `VolumeMigration` targeting one member's PV. Assert the admission webhook rejects the create, naming the volume and its group, and that no `VolumeMigration` object is created.
+3. Reach the backend migration path directly (bypassing the webhook) and assert it refuses with a clear error, and the member stays on the pinned store.
 
 ---
 
 ## 6. Axis Coverage
 
-| Axis                       | Values covered                                                         | IDs                                  | Not covered                          |
-|----------------------------|------------------------------------------------------------------------|--------------------------------------|--------------------------------------|
-| Cluster topology           | 1 node, multi-node with a pinned group                                 | E-01, E-02                           | asymmetric node sizes                |
-| Group size                 | 1 member, 3+ members                                                   | E-01, E-04                           | very large groups (subsystem slots)  |
-| Membership change          | join at create, one-way detach, death with last member                 | E-01, E-03, E-08, E-11               | re-establish via a labeled clone     |
-| Selector versus membership | equal, extra handle, missing handle, two groups                        | U-04 … U-07, U-12 … U-19, I-03, I-07 | —                                    |
-| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                      | U-04 … U-10, I-04, I-05              | —                                    |
-| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation | E-09, E-10                           | listing under very many generations  |
-| Data correctness           | consistent clone, negative control, delete-preserves                   | E-04, E-05, M-01                     | migration mid-snapshot (M-02 manual) |
+| Axis                       | Values covered                                                         | IDs                                                     | Not covered                          |
+|----------------------------|------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
+| Cluster topology           | 1 node, multi-node with a pinned group                                 | E-01, E-02                                              | asymmetric node sizes                |
+| Group size                 | 1 member, 3+ members                                                   | E-01, E-04                                              | very large groups (subsystem slots)  |
+| Membership change          | join at create, one-way detach, death with last member                 | E-01, E-03, E-08, E-11                                  | re-establish via a labeled clone     |
+| Selector versus membership | equal, extra handle, missing handle, two groups                        | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
+| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                      | U-04 … U-10, I-04, I-05                                 | —                                    |
+| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation | E-09, E-10                                              | listing under very many generations  |
+| Data correctness           | consistent clone, negative control, delete-preserves                   | E-04, E-05, M-01                                        | migration mid-snapshot (M-02 manual) |
 
 ---
 
@@ -162,8 +174,8 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 20        | 0       | U-01 … U-20 |
-| Integration | 7         | 0       | I-01 … I-07 |
+| Unit        | 20        | 0       | U-01 … U-24 |
+| Integration | 7         | 0       | I-01 … I-08 |
 | E2E         | 12        | 0       | E-01 … E-12 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
@@ -175,8 +187,8 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 
 | #           | Gap                                                                                              | Reason                                                                                                         |
 |-------------|--------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| U-01 … U-20 | Provisioner label handling, the CSI GroupController, and the admission webhook                   | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
-| I-01 … I-07 | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                        | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
+| U-01 … U-24 | Provisioner label handling, the CSI GroupController, and the admission webhook                   | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
+| I-01 … I-08 | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                        | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
 | E-01 … E-12 | Membership, placement, cross-volume consistency, clone, representation, and health-precheck live | Depends on the standalone backend group (P0-2, P0-3), which is not shipped                                     |
 | M-01        | Deleting a member preserves its group snapshots                                                  | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
 | M-02        | A member migrated off the pinned store                                                           | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |
