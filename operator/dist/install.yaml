@@ -3045,6 +3045,29 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              enableAtomic4kWrites:
+                default: false
+                description: |-
+                  EnableAtomic4kWrites declares that devices guarantee 4K write atomicity even with a
+                  <4K logical block size (e.g., AWS NVMe is 512B but atomic at 4K), letting checksum
+                  fallback mode run on them despite the data plane's normal >=4K block-size requirement.
+                  Only meaningful when EnableChecksumValidation is true. Cannot be changed after cluster
+                  creation.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableChecksumValidation:
+                default: false
+                description: |-
+                  EnableChecksumValidation enables inline CRC checksum validation on every I/O for
+                  silent-data-error protection. Immutable once set: the backend bakes the checksum method
+                  into each device's bdev_alceml_create call at cluster-create time and never re-applies
+                  it.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableFailureDomains:
                 description: |-
                   EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
@@ -3070,7 +3093,7 @@ spec:
                   used by the cluster for key storage.
                 properties:
                   baseURL:
-                    description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+                    description: BaseURL is the HashiCorp Vault endpoint (e.g., https://vault.example.com:8200).
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
@@ -3086,7 +3109,7 @@ spec:
               maxHugePagesSize:
                 description: |-
                   MaxHugePagesSize is the maximum allocatable size of huge pages on each
-                  storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+                  storage node, for example, `100G` or `1T`. A bare number is interpreted as GB. It is
                   a floor, not a cap: the effective huge-page allocation is the larger of this
                   value and the minimum the node's device and subsystem count requires. When
                   omitted the computed minimum is used.
@@ -3140,7 +3163,7 @@ spec:
               volumeAutoPlacement:
                 description: |-
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
-                  nil/disabled the operator performs only manually-triggered VolumeMigrations.
+                  nil/disabled the operator performs only manually triggered VolumeMigrations.
                 properties:
                   baselineColdStart:
                     description: |-
@@ -3198,7 +3221,7 @@ spec:
                     type: integer
                   iopsWeight:
                     description: IOPSWeight is the weight applied to per-volume IOPS
-                      in the volume IO score. Defaults to 1.0.
+                      in the volume I/O score. Defaults to 1.0.
                     type: number
                   latencyBenchmarkEnabled:
                     description: |-
@@ -3218,7 +3241,7 @@ spec:
                     type: integer
                   metricsBackend:
                     description: MetricsBackend selects the data source for I/O metrics.
-                      Defaults to "prometheus".
+                      Defaults to `prometheus`.
                     enum:
                     - controlplane
                     - prometheus
@@ -3235,12 +3258,12 @@ spec:
                     description: |-
                       MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
                       that a candidate target node must be below the hot source node before a migration is
-                      performed. Prevents migrating between near-equally-loaded nodes. Defaults to 20.
+                      performed. Prevents migrating between near-equally loaded nodes. Defaults to 20.
                     format: int32
                     type: integer
                   prometheusURL:
                     description: PrometheusURL is required when MetricsBackend is
-                      "prometheus".
+                      `prometheus`.
                     type: string
                   storageNodeCandidateCount:
                     description: |-
@@ -3251,7 +3274,7 @@ spec:
                   throughputWeight:
                     description: |-
                       ThroughputWeight is the weight applied to per-volume throughput (MB/s) in the volume
-                      IO score. Defaults to 0.1.
+                      I/O score. Defaults to 0.1.
                     type: number
                 type: object
               volumeMigrationSettings:
@@ -3275,7 +3298,7 @@ spec:
                       interval:
                         description: |-
                           Interval is how often the operator checks whether a realignment is pending
-                          (i.e. at least one volume has moved since the last successful realignment) and,
+                          (i.e., at least one volume has moved since the last successful realignment) and,
                           if so, triggers it. Explicit triggers (see the
                           simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
                           10m.
@@ -3342,6 +3365,10 @@ spec:
               rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field enableChecksumValidation is immutable once set
+              rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
+            - message: field enableAtomic4kWrites is immutable once set
+              rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
@@ -3355,6 +3382,10 @@ spec:
               rule: '!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort'
             - message: snodeApiPort is immutable once set
               rule: '!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort'
+            - message: enableAtomic4kWrites requires enableChecksumValidation to be
+                true
+              rule: '!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites)
+                || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
           status:
             description: status defines the observed state of StorageCluster
             properties:
@@ -3377,7 +3408,7 @@ spec:
                 type: string
               erasureCodingScheme:
                 description: ErasureCodingScheme is the active erasure-coding layout,
-                  for example "2x1".
+                  for example, `2x1`.
                 type: string
               lastDataRealignmentAt:
                 description: |-

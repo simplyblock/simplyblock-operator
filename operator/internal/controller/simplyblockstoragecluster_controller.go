@@ -57,7 +57,7 @@ const (
 	eventReasonBackupCredentialsError = "BackupCredentialsError"
 
 	// eventReasonInvalidConfig is emitted when a user-supplied field in the CR
-	// fails validation (e.g. a non-HTTPS or private-IP URL).
+	// fails validation (e.g., a non-HTTPS or private-IP URL).
 	eventReasonInvalidConfig = "InvalidConfig"
 
 	// eventReasonClusterCreationFailed is emitted when the cluster creation API
@@ -74,7 +74,7 @@ const (
 
 	// clusterSubPhaseCreating is the only Status.SubPhase value used during
 	// cluster creation today. It is a placeholder for future sub-state machine
-	// expansion (e.g. "preparing", "waitingForReachable").
+	// expansion, for example, `preparing` or `waitingForReachable`.
 	clusterSubPhaseCreating = "creating"
 )
 
@@ -111,7 +111,7 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// Reconcile is part of the main Kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
 // the StorageCluster object against the actual cluster state, and then
@@ -158,7 +158,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	log := logf.FromContext(ctx)
 
 	/* -------------------- Claim creation slot -------------------- */
-	// Use an optimistic-lock patch to atomically set Phase="creation".
+	// Use an optimistic-lock patch to atomically set Phase=`creation`.
 	// If a concurrent reconciler already patched this version, the Kubernetes
 	// API server returns 409 and we back off — preventing duplicate cluster creation.
 	base := clusterCR.DeepCopy()
@@ -185,7 +185,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	/* -------------------- Proactive Adoption Check (Helm upgrade) -------------------- */
 	// To migrate from a Helm deployment, create a Secret named
 	// "simplyblock-{clusterName}-upgrade" in the same namespace containing
-	// the cluster's "uuid" and "secret" fields. The operator uses them to
+	// the cluster's `uuid` and `secret` fields. The operator uses them to
 	// fetch the existing cluster and populate the CR status without POSTing.
 	upgradeSecretName := fmt.Sprintf("simplyblock-%s-upgrade", clusterCR.Name)
 	upgradeSecret := &corev1.Secret{}
@@ -266,6 +266,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		BackupConfig:           backupConfig,
 		HashicorpVaultSettings: vaultConfig,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains),
+		InlineChecksum:         ptr.BoolFromOrFalse(clusterCR.Spec.EnableChecksumValidation),
+		Atomic4k:               ptr.BoolFromOrFalse(clusterCR.Spec.EnableAtomic4kWrites),
 	}
 
 	endpoint = "/api/v2/clusters/"
@@ -593,7 +595,7 @@ func hostHasSurvivingSibling(ctx context.Context, c client.Client, namespace, cl
 // known to violate it, rather than discovering that only after suspending
 // the node and having the backend's own admission check reject the
 // DELETE call made much later in the drain (2026-08-13 incident: the node
-// sat suspended while the reconciler retried a permanently-doomed DELETE).
+// sat suspended while the reconciler retried a permanently doomed DELETE).
 //
 // counts must already reflect the removal (the affected domain's count
 // decremented by the caller) and, critically, must still carry an entry --
@@ -847,8 +849,8 @@ func (r *StorageClusterReconciler) syncStatus(
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// effectiveConcurrentRestarts returns min(specVal, ftt), defaulting to 1 when
-// specVal is nil. Both inputs may be nil (ftt comes from the backend response).
+// effectiveConcurrentRestarts returns min(specVal, FTT), defaulting to 1 when
+// specVal is nil. Both inputs may be nil (FTT comes from the backend response).
 func effectiveConcurrentRestarts(specVal, ftt *int32) *int32 {
 	effective := int32(1)
 	if specVal != nil && *specVal > 0 {
