@@ -89,7 +89,9 @@ func NewStorage(volumes VolumeSource, reader client.Reader, capacity CapacitySou
 }
 
 // New implements rest.Storage.
-func (s *Storage) New() runtime.Object { return &metricsv1alpha1.LogicalVolumeMetrics{} }
+func (s *Storage) New() runtime.Object {
+	return &metricsv1alpha1.LogicalVolumeMetrics{}
+}
 
 // Destroy implements rest.Storage. There is nothing to release: no client, no
 // watch, and no connection is owned here.
@@ -97,16 +99,24 @@ func (s *Storage) Destroy() {}
 
 // NamespaceScoped implements rest.Scoper. The resource is namespaced because
 // that is what confines a tenant to their own volumes through ordinary RBAC.
-func (s *Storage) NamespaceScoped() bool { return true }
+func (s *Storage) NamespaceScoped() bool {
+	return true
+}
 
 // GetSingularName implements rest.SingularNameProvider.
-func (s *Storage) GetSingularName() string { return ResourceName }
+func (s *Storage) GetSingularName() string {
+	return ResourceName
+}
 
 // ShortNames implements rest.ShortNamesProvider.
-func (s *Storage) ShortNames() []string { return []string{ShortName} }
+func (s *Storage) ShortNames() []string {
+	return []string{ShortName}
+}
 
 // NewList implements rest.Lister.
-func (s *Storage) NewList() runtime.Object { return &metricsv1alpha1.LogicalVolumeMetricsList{} }
+func (s *Storage) NewList() runtime.Object {
+	return &metricsv1alpha1.LogicalVolumeMetricsList{}
+}
 
 // Get implements rest.Getter. The name is a PersistentVolumeClaim's, so the
 // lookup runs claim to volume and never scans the cache.

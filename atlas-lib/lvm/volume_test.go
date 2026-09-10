@@ -140,11 +140,17 @@ type fakeVolumeProvisioning struct {
 	args    []string
 }
 
-func (f *fakeVolumeProvisioning) Name() string { return f.name }
+func (f *fakeVolumeProvisioning) Name() string {
+	return f.name
+}
 
-func (f *fakeVolumeProvisioning) Handles(def LogicalVolumeDefinition) bool { return f.handles(def) }
+func (f *fakeVolumeProvisioning) Handles(def LogicalVolumeDefinition) bool {
+	return f.handles(def)
+}
 
-func (f *fakeVolumeProvisioning) CreateVolumeArgs(LogicalVolumeDefinition) []string { return f.args }
+func (f *fakeVolumeProvisioning) CreateVolumeArgs(LogicalVolumeDefinition) []string {
+	return f.args
+}
 
 func TestManager_CreateLogicalVolume_DispatchesByHandles(t *testing.T) {
 	RegisterVolumeProvisioning(&fakeVolumeProvisioning{

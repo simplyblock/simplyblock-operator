@@ -18,7 +18,9 @@ type fakeDevices struct {
 	calls int
 }
 
-func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) { return f.devs, nil }
+func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) {
+	return f.devs, nil
+}
 
 func (f *fakeDevices) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
 	f.calls++

@@ -45,7 +45,9 @@ func usageHost(t *testing.T) (ScanConfig, []Disk) {
 }
 
 // free is an exclusive opener that hands over every device.
-func free(string) error { return nil }
+func free(string) error {
+	return nil
+}
 
 func TestReadUsageClimbsFromAPartitionToItsDisk(t *testing.T) {
 	cfg, disks := usageHost(t)

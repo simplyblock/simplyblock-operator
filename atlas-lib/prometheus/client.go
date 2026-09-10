@@ -121,4 +121,6 @@ func (p *Provider) queryMatrix(
 // whole rounds a sample to an integer. Prometheus carries every value as a
 // float, and these are byte counts, nanosecond latencies, and second-resolution
 // timestamps that were integers before they were scraped.
-func whole(v float64) int64 { return int64(math.Round(v)) }
+func whole(v float64) int64 {
+	return int64(math.Round(v))
+}

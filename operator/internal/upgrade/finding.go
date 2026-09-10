@@ -66,7 +66,9 @@ type Finding struct {
 }
 
 // Error reports whether the finding blocks.
-func (f Finding) Error() bool { return f.Severity == SeverityError }
+func (f Finding) Error() bool {
+	return f.Severity == SeverityError
+}
 
 // String renders the finding as the preflight prints it.
 func (f Finding) String() string {
@@ -103,7 +105,9 @@ func (f Findings) Errors() Findings {
 }
 
 // Blocked reports whether anything in the set stops the run.
-func (f Findings) Blocked() bool { return len(f.Errors()) > 0 }
+func (f Findings) Blocked() bool {
+	return len(f.Errors()) > 0
+}
 
 // String renders every finding, one after another. It is what a report prints
 // and what a test compares two runs with.

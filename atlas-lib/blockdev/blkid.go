@@ -48,12 +48,16 @@ type BlkidProber struct {
 }
 
 // NewBlkidProber returns a BlkidProber that runs blkid on the local host.
-func NewBlkidProber() *BlkidProber { return NewBlkidProberWithRunner(execRunner) }
+func NewBlkidProber() *BlkidProber {
+	return NewBlkidProberWithRunner(execRunner)
+}
 
 // NewBlkidProberWithRunner returns a BlkidProber that runs blkid through run, which is
 // how a test supplies scripted answers and how a harness probes a device on
 // another machine.
-func NewBlkidProberWithRunner(run Runner) *BlkidProber { return &BlkidProber{run: run} }
+func NewBlkidProberWithRunner(run Runner) *BlkidProber {
+	return &BlkidProber{run: run}
+}
 
 // ErrPartitionTable reports a device carrying a partition table rather than a
 // filesystem: something is on it, but not something mountable, and formatting

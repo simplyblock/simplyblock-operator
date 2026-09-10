@@ -63,13 +63,19 @@ type Definition struct {
 }
 
 // Name is the CRD's name, which is also its identity in the cluster.
-func (d Definition) Name() string { return d.Object.Name }
+func (d Definition) Name() string {
+	return d.Object.Name
+}
 
 // Kind is the kind the CRD serves.
-func (d Definition) Kind() string { return d.Object.Spec.Names.Kind }
+func (d Definition) Kind() string {
+	return d.Object.Spec.Names.Kind
+}
 
 // Group is the API group the CRD belongs to.
-func (d Definition) Group() string { return d.Object.Spec.Group }
+func (d Definition) Group() string {
+	return d.Object.Spec.Group
+}
 
 // Shape reports which of §11's groups this CRD is in.
 //

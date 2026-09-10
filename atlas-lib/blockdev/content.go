@@ -269,7 +269,9 @@ func firstNonZero(r regions) (int64, bool) {
 	return 0, false
 }
 
-func nonZero(c rune) bool { return c != 0 }
+func nonZero(c rune) bool {
+	return c != 0
+}
 
 // detailOf names every signature found, not just the one that decided the
 // reading, so a refusal shows an operator the whole device in one message.

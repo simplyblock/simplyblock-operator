@@ -390,13 +390,19 @@ func (c *Cluster) removeStateDir(ctx context.Context) error {
 }
 
 // Kubeconfig is this cluster's kubeconfig path.
-func (c *Cluster) Kubeconfig() string { return c.kubeconfig }
+func (c *Cluster) Kubeconfig() string {
+	return c.kubeconfig
+}
 
 // Talosconfig is this cluster's talosconfig, for talosctl commands.
-func (c *Cluster) Talosconfig() string { return c.talosconfig }
+func (c *Cluster) Talosconfig() string {
+	return c.talosconfig
+}
 
 // WorkDir holds the kubeconfig, talosconfig and cluster state.
-func (c *Cluster) WorkDir() string { return c.workDir }
+func (c *Cluster) WorkDir() string {
+	return c.workDir
+}
 
 // controlplaneAddresses returns the Talos API addresses of the control plane,
 // which is what talosctl commands need as --nodes.
@@ -429,7 +435,9 @@ func (c *Cluster) controlplaneAddresses(ctx context.Context) ([]string, error) {
 
 // Addresses are the cluster's Talos API addresses. They are also what an nvmet
 // target on a node advertises as its traddr.
-func (c *Cluster) Addresses() []string { return c.addresses }
+func (c *Cluster) Addresses() []string {
+	return c.addresses
+}
 
 // diagnose collects what can still be read from a cluster that failed to come
 // up. Best effort by design: it runs on a path where something is already wrong,

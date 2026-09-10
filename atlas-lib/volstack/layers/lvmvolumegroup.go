@@ -42,7 +42,9 @@ func NewLVMVolumeGroup(cfg LVMVolumeGroupConfig) *LVMVolumeGroup {
 }
 
 // Name is what the record calls this layer.
-func (l *LVMVolumeGroup) Name() string { return "lvmVolumeGroup" }
+func (l *LVMVolumeGroup) Name() string {
+	return "lvmVolumeGroup"
+}
 
 // membership is which of the devices below already belong to this volume's
 // group, and which do not.

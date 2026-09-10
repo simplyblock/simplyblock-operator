@@ -50,14 +50,28 @@ type Rule struct {
 	Enumerate func(ctx context.Context, s *upgrade.Scope) ([]upgrade.Input, error)
 }
 
-func (r Rule) ID() upgrade.ID             { return r.RuleID }
-func (r Rule) Description() string        { return r.Summary }
-func (r Rule) Written() string            { return r.Where }
-func (r Rule) Model() upgrade.Model       { return r.Which }
-func (r Rule) Formula() atlaskube.Formula { return r.Build }
-func (r Rule) Fix() upgrade.Fix           { return r.Resolution }
+func (r Rule) ID() upgrade.ID {
+	return r.RuleID
+}
+func (r Rule) Description() string {
+	return r.Summary
+}
+func (r Rule) Written() string {
+	return r.Where
+}
+func (r Rule) Model() upgrade.Model {
+	return r.Which
+}
+func (r Rule) Formula() atlaskube.Formula {
+	return r.Build
+}
+func (r Rule) Fix() upgrade.Fix {
+	return r.Resolution
+}
 
-func (r Rule) Space() upgrade.Space { return r.Unique }
+func (r Rule) Space() upgrade.Space {
+	return r.Unique
+}
 
 func (r Rule) Inputs(ctx context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
 	if r.Enumerate == nil {

@@ -130,7 +130,9 @@ type hubRunnable struct{ hub *link.Hub }
 
 // NeedLeaderElection is false: the listener has to exist wherever the Service
 // may route, and leadership is enforced by the hub's Accepting gate instead.
-func (r *hubRunnable) NeedLeaderElection() bool { return false }
+func (r *hubRunnable) NeedLeaderElection() bool {
+	return false
+}
 
 func (r *hubRunnable) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("csi-link")

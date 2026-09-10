@@ -90,7 +90,9 @@ func worker(name string, options ...func(*corev1.Node)) *corev1.Node {
 	return node
 }
 
-func cordoned(node *corev1.Node) { node.Spec.Unschedulable = true }
+func cordoned(node *corev1.Node) {
+	node.Spec.Unschedulable = true
+}
 
 func tainted(node *corev1.Node) {
 	node.Spec.Taints = []corev1.Taint{{

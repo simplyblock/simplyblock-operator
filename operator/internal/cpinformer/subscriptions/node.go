@@ -74,7 +74,9 @@ func NewNodeSubscription() *NodeSubscription {
 }
 
 // Name implements cpinformer.Subscription.
-func (s *NodeSubscription) Name() string { return "storagenode" }
+func (s *NodeSubscription) Name() string {
+	return "storagenode"
+}
 
 // Path implements cpinformer.Subscription: nodes are scoped per cluster. One
 // stream carries every node of the cluster, so the scope has a single element.
@@ -117,7 +119,9 @@ func (s *NodeSubscription) enqueue(ctx context.Context, nodeID string) {
 
 // Triggers is the reconcile-trigger channel, which the reconciler attaches via
 // source.Channel. Each event names the StorageNode object to reconcile.
-func (s *NodeSubscription) Triggers() <-chan event.GenericEvent { return s.ch }
+func (s *NodeSubscription) Triggers() <-chan event.GenericEvent {
+	return s.ch
+}
 
 // Lookup returns the cached node with the given backend id, or ok=false when
 // the control plane no longer reports it. It takes the id rather than an object

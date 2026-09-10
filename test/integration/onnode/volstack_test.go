@@ -189,7 +189,9 @@ func hideTheTargetBacking(t *testing.T) {
 }
 
 // runner is the runner under test, recording to this run's own directory.
-func (h *harness) runner() *volstack.Runner { return volstack.NewRunner(volstack.NewStore(h.records)) }
+func (h *harness) runner() *volstack.Runner {
+	return volstack.NewRunner(volstack.NewStore(h.records))
+}
 
 // blank makes these namespaces read as empty volumes again.
 //
@@ -275,7 +277,9 @@ func zero(t *testing.T, dev blockdev.Device) {
 }
 
 // handle names this volume's stack in the record.
-func (h *harness) handle() string { return h.volume.UUID }
+func (h *harness) handle() string {
+	return h.volume.UUID
+}
 
 // up brings the plan up and fails the test if it could not.
 func (h *harness) up(ctx context.Context, plan volstack.Plan) volstack.Artifact {

@@ -116,7 +116,9 @@ func (DiscardReporter) Findings(Findings)             {}
 func (DiscardReporter) Action(Action)                 {}
 func (DiscardReporter) Plan(Plan)                     {}
 func (DiscardReporter) Progress(string, ...any)       {}
-func (DiscardReporter) Close() error                  { return nil }
+func (DiscardReporter) Close() error {
+	return nil
+}
 
 // TextReporter writes the report a person reads in a terminal that is not one,
 // which is a log file, a CI job, and the Job this tool runs as in a cluster. It
@@ -140,7 +142,9 @@ type TextReporter struct {
 }
 
 // NewTextReporter builds a reporter over a writer.
-func NewTextReporter(out io.Writer) *TextReporter { return &TextReporter{Out: out} }
+func NewTextReporter(out io.Writer) *TextReporter {
+	return &TextReporter{Out: out}
+}
 
 func (r *TextReporter) Stage(stage Stage) {
 	r.line("")
@@ -294,7 +298,9 @@ func (r *TextReporter) Progress(format string, args ...any) {
 }
 
 // Close writes nothing. A text reporter holds no terminal.
-func (r *TextReporter) Close() error { return nil }
+func (r *TextReporter) Close() error {
+	return nil
+}
 
 // line writes one line under the reporter's lock, so two goroutines cannot
 // interleave halves of a finding.

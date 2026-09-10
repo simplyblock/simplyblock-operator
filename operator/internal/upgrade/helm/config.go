@@ -50,7 +50,9 @@ func New(config *rest.Config, namespace string, log func(string, ...any)) (*Clie
 }
 
 // Namespace is where this client's releases live.
-func (c *Client) Namespace() string { return c.namespace }
+func (c *Client) Namespace() string {
+	return c.namespace
+}
 
 // getter answers Helm's questions about which cluster to talk to, with the
 // connection it was handed.
@@ -65,7 +67,9 @@ type getter struct {
 }
 
 // ToRESTConfig returns the connection this was built over.
-func (g *getter) ToRESTConfig() (*rest.Config, error) { return g.config, nil }
+func (g *getter) ToRESTConfig() (*rest.Config, error) {
+	return g.config, nil
+}
 
 // ToDiscoveryClient returns a discovery client that caches in memory. Helm asks
 // what the API server serves once per action and again per object, and an

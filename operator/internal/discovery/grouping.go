@@ -112,7 +112,9 @@ type Grouper interface {
 // — and it is the guess a reviewer regroups.
 type GroupByHardware struct{}
 
-func (GroupByHardware) Name() string { return "identical hardware" }
+func (GroupByHardware) Name() string {
+	return "identical hardware"
+}
 
 func (GroupByHardware) Group(workers []Worker) []Group {
 	bySignature := map[string]*Group{}
@@ -206,7 +208,9 @@ type SingleNodeSet struct {
 // the racks can see there is nothing to preserve in renaming it.
 const DefaultNodeSetName = "discovered"
 
-func (SingleNodeSet) Name() string { return "single node set" }
+func (SingleNodeSet) Name() string {
+	return "single node set"
+}
 
 func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 	if len(groups) == 0 {

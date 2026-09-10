@@ -27,9 +27,13 @@ type memberLayer struct {
 	ensureErr error
 }
 
-func (m *memberLayer) Name() string { return m.name }
+func (m *memberLayer) Name() string {
+	return m.name
+}
 
-func (m *memberLayer) note(verb string) { *m.log = append(*m.log, m.name+":"+verb) }
+func (m *memberLayer) note(verb string) {
+	*m.log = append(*m.log, m.name+":"+verb)
+}
 
 func (m *memberLayer) own() volstack.Artifact {
 	if m.state == volstack.StateAbsent {

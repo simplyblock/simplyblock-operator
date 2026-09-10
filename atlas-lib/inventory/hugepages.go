@@ -69,10 +69,14 @@ type HugePagePool struct {
 }
 
 // AllocatedBytes is how much memory this pool holds.
-func (p HugePagePool) AllocatedBytes() uint64 { return p.Total * p.SizeBytes }
+func (p HugePagePool) AllocatedBytes() uint64 {
+	return p.Total * p.SizeBytes
+}
 
 // FreeBytes is how much of this pool nothing has taken.
-func (p HugePagePool) FreeBytes() uint64 { return p.Free * p.SizeBytes }
+func (p HugePagePool) FreeBytes() uint64 {
+	return p.Free * p.SizeBytes
+}
 
 // NUMAHugePages is one memory node's share of one pool.
 type NUMAHugePages struct {

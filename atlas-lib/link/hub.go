@@ -123,10 +123,14 @@ func NewHub(cfg HubConfig) (*Hub, error) {
 }
 
 // Registry is the set of peers currently linked.
-func (h *Hub) Registry() *Registry { return h.registry }
+func (h *Hub) Registry() *Registry {
+	return h.registry
+}
 
 // Addr is the address the hub listens on.
-func (h *Hub) Addr() net.Addr { return h.cfg.Listener.Addr() }
+func (h *Hub) Addr() net.Addr {
+	return h.cfg.Listener.Addr()
+}
 
 // Serve accepts peer links until ctx ends or the listener fails, then shuts the
 // hub down: the listener closes and every session with it, so peers notice

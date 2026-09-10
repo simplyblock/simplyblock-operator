@@ -22,7 +22,9 @@ import (
 )
 
 // NewProber returns a Prober reading local devices, bypassing the page cache.
-func NewProber(opts ...Option) *Prober { return NewProberWithOpener(OpenLocal, opts...) }
+func NewProber(opts ...Option) *Prober {
+	return NewProberWithOpener(OpenLocal, opts...)
+}
 
 // OpenExclusive asks the kernel whether it will hand the device at path over,
 // and closes it again immediately.
@@ -91,9 +93,13 @@ type localReader struct {
 
 // Degraded reports whether this reader fell back from O_DIRECT, so a caller can
 // count the reads whose freshness the kernel did not guarantee.
-func (r *localReader) Degraded() bool { return !r.direct }
+func (r *localReader) Degraded() bool {
+	return !r.direct
+}
 
-func (r *localReader) Close() error { return r.f.Close() }
+func (r *localReader) Close() error {
+	return r.f.Close()
+}
 
 // ReadAt fills p from off, bounded by ctx.
 //

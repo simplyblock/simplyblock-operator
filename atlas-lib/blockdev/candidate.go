@@ -125,7 +125,9 @@ type Candidate struct {
 }
 
 // Available reports whether the device may be handed to a storage cluster.
-func (c Candidate) Available() bool { return len(c.Rejections) == 0 }
+func (c Candidate) Available() bool {
+	return len(c.Rejections) == 0
+}
 
 // RejectedFor reports whether reason is among the grounds.
 func (c Candidate) RejectedFor(reason Reason) bool {

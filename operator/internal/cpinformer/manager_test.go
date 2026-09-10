@@ -20,8 +20,12 @@ type stubSub struct {
 	events []Event
 }
 
-func (s *stubSub) Name() string      { return "stub" }
-func (s *stubSub) Path(Scope) string { return s.path }
+func (s *stubSub) Name() string {
+	return "stub"
+}
+func (s *stubSub) Path(Scope) string {
+	return s.path
+}
 func (s *stubSub) Ingest(_ context.Context, ev Event) error {
 	s.mu.Lock()
 	s.events = append(s.events, ev)

@@ -65,10 +65,14 @@ func NewLVMLogicalVolume(cfg LVMLogicalVolumeConfig) *LVMLogicalVolume {
 }
 
 // Name is what the record calls this layer.
-func (l *LVMLogicalVolume) Name() string { return "lvmLogicalVolume" }
+func (l *LVMLogicalVolume) Name() string {
+	return "lvmLogicalVolume"
+}
 
 // group is this volume's volume group.
-func (l *LVMLogicalVolume) group() lvm.VolumeGroup { return lvm.VolumeGroup{Name: l.cfg.VolumeGroup} }
+func (l *LVMLogicalVolume) group() lvm.VolumeGroup {
+	return lvm.VolumeGroup{Name: l.cfg.VolumeGroup}
+}
 
 // volume is this volume's logical volume.
 func (l *LVMLogicalVolume) volume() lvm.LogicalVolume {
@@ -230,7 +234,9 @@ func (l *LVMLogicalVolume) create(ctx context.Context) error {
 // down through both, so the hold is given up either way, and giving it up twice
 // would mean this layer deactivating everything else in the group along with its
 // own volume.
-func (l *LVMLogicalVolume) Release(context.Context, volstack.Artifact) error { return nil }
+func (l *LVMLogicalVolume) Release(context.Context, volstack.Artifact) error {
+	return nil
+}
 
 // Destroy removes the volume and the data in it. The group that held it goes
 // with the layer below, which a teardown reaches next. Only a deletion path
@@ -281,11 +287,15 @@ func (l *LVMLogicalVolume) target() lvm.LogicalVolume {
 // NodeCapability is what a node must carry for this volume's type to run there.
 // A type needing a kernel module the node does not have fails as a mount error on
 // the wrong node otherwise, discovered instead of reported.
-func (l *LVMLogicalVolume) NodeCapability() volstack.Capability { return l.cfg.Capability }
+func (l *LVMLogicalVolume) NodeCapability() volstack.Capability {
+	return l.cfg.Capability
+}
 
 // PinsToNode reports false: this layer's durable state is the LVM metadata, which
 // lives on the device and travels with it. Nothing of it stays on the host.
-func (l *LVMLogicalVolume) PinsToNode() bool { return false }
+func (l *LVMLogicalVolume) PinsToNode() bool {
+	return false
+}
 
 // LVMLogicalVolumeParams is what the record carries for this layer.
 type LVMLogicalVolumeParams struct {

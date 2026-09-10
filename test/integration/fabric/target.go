@@ -220,13 +220,17 @@ func (t *Target) DisableNamespace(ctx context.Context, nsid int) error {
 }
 
 // NQN is the subsystem NQN.
-func (t *Target) NQN() string { return t.spec.NQN }
+func (t *Target) NQN() string {
+	return t.spec.NQN
+}
 
 // NamespaceDevice is the loop device backing namespace nsid on the target's
 // node, or "" when AddNamespace never created it. It is the target-side handle
 // on the namespace's bytes: writing a filesystem onto it before (or after) the
 // host connects is how a test puts real data behind the fabric.
-func (t *Target) NamespaceDevice(nsid int) string { return t.namespaces[nsid] }
+func (t *Target) NamespaceDevice(nsid int) string {
+	return t.namespaces[nsid]
+}
 
 // UnlinkPort withdraws the subsystem from its port: the running association
 // drops, the host's controller goes into reconnecting, and — this being the
@@ -253,7 +257,9 @@ func (t *Target) RelinkPort(ctx context.Context) error {
 }
 
 // Endpoint is the address:port an initiator connects to.
-func (t *Target) Endpoint() (string, int) { return t.spec.Addr, t.spec.Port }
+func (t *Target) Endpoint() (string, int) {
+	return t.spec.Addr, t.spec.Port
+}
 
 // Close removes the port, the namespaces and the subsystem, and detaches the
 // loop devices.
@@ -283,7 +289,9 @@ func (t *Target) Close(ctx context.Context) error {
 	return nil
 }
 
-func (t *Target) subsysDir() string { return t.root + "/subsystems/" + t.spec.NQN }
+func (t *Target) subsysDir() string {
+	return t.root + "/subsystems/" + t.spec.NQN
+}
 func (t *Target) portDir() string {
 	return t.root + "/ports/" + strconv.Itoa(t.spec.PortID)
 }

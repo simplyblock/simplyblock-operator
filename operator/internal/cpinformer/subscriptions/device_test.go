@@ -23,7 +23,9 @@ const (
 	sdNodeCR  = "production-7f3a9c"
 )
 
-func deviceScope() cpinformer.Scope { return cpinformer.Scope{sdCluster, sdNode} }
+func deviceScope() cpinformer.Scope {
+	return cpinformer.Scope{sdCluster, sdNode}
+}
 
 // sdNodeObject is the StorageNode the devices belong to. Its namespace is not
 // the operator's on purpose: a device object is created beside its node, so a

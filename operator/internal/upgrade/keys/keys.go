@@ -51,10 +51,14 @@ type Key struct {
 }
 
 // Old is the spelling that shipped.
-func (k Key) Old() string { return OldPrefix + k.Name }
+func (k Key) Old() string {
+	return OldPrefix + k.Name
+}
 
 // New is the spelling the target model uses.
-func (k Key) New() string { return NewPrefix + k.Name }
+func (k Key) New() string {
+	return NewPrefix + k.Name
+}
 
 // LegacyOld is the pre-OldPrefix spelling, and the empty string for a key that
 // never had one.

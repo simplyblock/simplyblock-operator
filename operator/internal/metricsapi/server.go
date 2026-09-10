@@ -161,7 +161,9 @@ func NewServer(
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable: every replica
 // serves, because every replica may be the one the Service routes to.
-func (s *Server) NeedLeaderElection() bool { return false }
+func (s *Server) NeedLeaderElection() bool {
+	return false
+}
 
 // Start implements manager.Runnable. It blocks until ctx is canceled, then
 // drains and shuts the listener down.

@@ -20,7 +20,9 @@ type fakeSubs struct {
 	byNQN func(ctx context.Context, nqn string) (nvme.Subsystem, error)
 }
 
-func (f fakeSubs) List(context.Context) ([]nvme.Subsystem, error) { return nil, nil }
+func (f fakeSubs) List(context.Context) ([]nvme.Subsystem, error) {
+	return nil, nil
+}
 func (f fakeSubs) ByNQN(ctx context.Context, nqn string) (nvme.Subsystem, error) {
 	return f.byNQN(ctx, nqn)
 }

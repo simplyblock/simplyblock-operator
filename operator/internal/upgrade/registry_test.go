@@ -17,9 +17,15 @@ type namedRule struct {
 	requires []ID
 }
 
-func (r namedRule) ID() ID              { return r.id }
-func (r namedRule) Description() string { return r.summary }
-func (r namedRule) Requires() []ID      { return r.requires }
+func (r namedRule) ID() ID {
+	return r.id
+}
+func (r namedRule) Description() string {
+	return r.summary
+}
+func (r namedRule) Requires() []ID {
+	return r.requires
+}
 
 func rule(id ID, requires ...ID) namedRule {
 	return namedRule{id: id, summary: "a rule called " + string(id), requires: requires}

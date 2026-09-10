@@ -27,7 +27,9 @@ type ReadOnlyClient struct {
 }
 
 // NewReadOnlyClient wraps a client so that nothing it is handed to can write.
-func NewReadOnlyClient(c client.Client) client.Client { return ReadOnlyClient{Client: c} }
+func NewReadOnlyClient(c client.Client) client.Client {
+	return ReadOnlyClient{Client: c}
+}
 
 func (r ReadOnlyClient) Create(context.Context, client.Object, ...client.CreateOption) error {
 	return fmt.Errorf("create: %w", ErrReadOnly)

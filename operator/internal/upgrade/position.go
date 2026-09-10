@@ -37,7 +37,9 @@ type ConvertingKind struct {
 }
 
 // CRDName is the CustomResourceDefinition that defines this kind.
-func (c ConvertingKind) CRDName() string { return c.Plural + "." + APIGroup }
+func (c ConvertingKind) CRDName() string {
+	return c.Plural + "." + APIGroup
+}
 
 // ConvertingKinds are the seven of §7.2. Ten of the seventeen registered kinds
 // are absent: five keep one version and are then removed, and five are outside
@@ -77,7 +79,9 @@ type Position struct {
 
 // Partial reports a CRD set that was applied to some kinds and not others,
 // which leaves the operator reconciling one kind at each version.
-func (p Position) Partial() bool { return len(p.Converted) > 0 && len(p.Pending) > 0 }
+func (p Position) Partial() bool {
+	return len(p.Converted) > 0 && len(p.Pending) > 0
+}
 
 // Positioned reads the cluster and reports which command it is ready for.
 //

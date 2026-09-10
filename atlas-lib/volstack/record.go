@@ -72,7 +72,9 @@ type Store struct {
 // NewStore returns a store over dir, which has to outlive the container: a
 // plugin restart is an ordinary event and the record is the only thing that
 // tells the restarted process what the previous one built.
-func NewStore(dir string) *Store { return &Store{dir: dir} }
+func NewStore(dir string) *Store {
+	return &Store{dir: dir}
+}
 
 // path is the record's file, named for the volume handle with the separators a
 // handle carries made safe for a filename. It never leaves the store's own

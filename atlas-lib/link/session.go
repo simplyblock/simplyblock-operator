@@ -127,13 +127,19 @@ func newSession(raw net.Conn, client bool, cfg sessionConfig) (*Session, error) 
 }
 
 // Conn is a client of every service the *other* end registered.
-func (s *Session) Conn() *grpc.ClientConn { return s.cc }
+func (s *Session) Conn() *grpc.ClientConn {
+	return s.cc
+}
 
 // Done is closed once the session has ended, for whatever reason.
-func (s *Session) Done() <-chan struct{} { return s.mux.CloseChan() }
+func (s *Session) Done() <-chan struct{} {
+	return s.mux.CloseChan()
+}
 
 // RemoteAddr is the address of the other end, for diagnostics.
-func (s *Session) RemoteAddr() net.Addr { return s.mux.RemoteAddr() }
+func (s *Session) RemoteAddr() net.Addr {
+	return s.mux.RemoteAddr()
+}
 
 // Close ends the session and releases everything under it. It is idempotent,
 // and safe to call from inside an RPC handler running on this very session —

@@ -285,10 +285,14 @@ type NUMAHugePagesOfSize struct {
 }
 
 // AllocatedBytes is how much huge-page memory this entry accounts for.
-func (n NUMAHugePagesOfSize) AllocatedBytes() uint64 { return n.Total * n.SizeBytes }
+func (n NUMAHugePagesOfSize) AllocatedBytes() uint64 {
+	return n.Total * n.SizeBytes
+}
 
 // FreeBytes is how much of it nothing has taken.
-func (n NUMAHugePagesOfSize) FreeBytes() uint64 { return n.Free * n.SizeBytes }
+func (n NUMAHugePagesOfSize) FreeBytes() uint64 {
+	return n.Free * n.SizeBytes
+}
 
 // ByNUMANode is the inventory grouped by memory node, ascending, with one final
 // entry for what belongs to no node.

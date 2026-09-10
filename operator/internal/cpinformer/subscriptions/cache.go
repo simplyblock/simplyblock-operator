@@ -118,10 +118,14 @@ func (c *Cache[DTO]) Find(id string) (cpinformer.Scope, DTO, bool) {
 }
 
 // List returns every resource cached for one scope.
-func (c *Cache[DTO]) List(scope cpinformer.Scope) []DTO { return c.store.List(scope) }
+func (c *Cache[DTO]) List(scope cpinformer.Scope) []DTO {
+	return c.store.List(scope)
+}
 
 // All returns every cached resource across every scope.
-func (c *Cache[DTO]) All() []DTO { return c.store.All() }
+func (c *Cache[DTO]) All() []DTO {
+	return c.store.All()
+}
 
 // Synced reports whether a scope has received its initial snapshot. Until it
 // has, an absent resource is an absence of information rather than evidence

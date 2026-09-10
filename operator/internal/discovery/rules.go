@@ -121,7 +121,9 @@ type AvailableRule struct {
 	AllowPartitioned bool
 }
 
-func (AvailableRule) Name() string { return "available" }
+func (AvailableRule) Name() string {
+	return "available"
+}
 
 func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.Available {
@@ -151,7 +153,9 @@ type ClassRule struct {
 	Class DeviceClass
 }
 
-func (ClassRule) Name() string { return "device class" }
+func (ClassRule) Name() string {
+	return "device class"
+}
 
 func (r ClassRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if r.Class == ClassNVMe && device.Transport != string(blockdev.TransportNVMe) {
@@ -187,7 +191,9 @@ func addressKind(class DeviceClass) string {
 // waiver would be handed to a cluster as though it were a disk.
 type WholeDiskRule struct{}
 
-func (WholeDiskRule) Name() string { return "whole disk" }
+func (WholeDiskRule) Name() string {
+	return "whole disk"
+}
 
 func (WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.Kind != string(blockdev.KindDisk) {
@@ -207,7 +213,9 @@ type AllowDenyRule struct {
 	Deny  []string
 }
 
-func (AllowDenyRule) Name() string { return "allow and deny lists" }
+func (AllowDenyRule) Name() string {
+	return "allow and deny lists"
+}
 
 func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	address := r.Class.Address(device)
@@ -237,7 +245,9 @@ type ModelRule struct {
 	Model string
 }
 
-func (ModelRule) Name() string { return "model" }
+func (ModelRule) Name() string {
+	return "model"
+}
 
 func (r ModelRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if r.Model == "" {
@@ -255,7 +265,9 @@ type SizeRule struct {
 	Min, Max uint64
 }
 
-func (SizeRule) Name() string { return "size range" }
+func (SizeRule) Name() string {
+	return "size range"
+}
 
 func (r SizeRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.SizeBytes < r.Min {
@@ -276,7 +288,9 @@ func (r SizeRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, stri
 // store on.
 type WorkerHasDevices struct{}
 
-func (WorkerHasDevices) Name() string { return "has devices" }
+func (WorkerHasDevices) Name() string {
+	return "has devices"
+}
 
 func (WorkerHasDevices) Admit(report nodeprobe.Report, admitted []nodeprobe.Device) (bool, string) {
 	if len(admitted) > 0 {
@@ -314,7 +328,9 @@ func describeControllers(controllers []nodeprobe.Controller) string {
 // a fleet that wants only fully readable machines in its draft can say so.
 type WorkerWasReadable struct{}
 
-func (WorkerWasReadable) Name() string { return "fully readable" }
+func (WorkerWasReadable) Name() string {
+	return "fully readable"
+}
 
 func (WorkerWasReadable) Admit(report nodeprobe.Report, _ []nodeprobe.Device) (bool, string) {
 	if len(report.Unreadable) == 0 {

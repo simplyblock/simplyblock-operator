@@ -30,9 +30,13 @@ const (
 	sdNodeCR  = "production-7f3a9c"
 )
 
-func sdScope() cpinformer.Scope { return cpinformer.Scope{sdCluster, sdNodeID} }
+func sdScope() cpinformer.Scope {
+	return cpinformer.Scope{sdCluster, sdNodeID}
+}
 
-func sdName() string { return simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) }
+func sdName() string {
+	return simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)
+}
 
 // fakeDeviceCache is a static DeviceCache for reconciler tests.
 type fakeDeviceCache struct {
@@ -40,8 +44,12 @@ type fakeDeviceCache struct {
 	devices map[string]subscriptions.DeviceDTO
 }
 
-func (f *fakeDeviceCache) Triggers() <-chan event.GenericEvent { return nil }
-func (f *fakeDeviceCache) Synced(cpinformer.Scope) bool        { return f.synced }
+func (f *fakeDeviceCache) Triggers() <-chan event.GenericEvent {
+	return nil
+}
+func (f *fakeDeviceCache) Synced(cpinformer.Scope) bool {
+	return f.synced
+}
 func (f *fakeDeviceCache) Lookup(key types.NamespacedName) (cpinformer.Scope, subscriptions.DeviceDTO, bool) {
 	dto, ok := f.devices[key.Name]
 	if !ok {

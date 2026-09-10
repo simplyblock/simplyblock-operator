@@ -70,11 +70,15 @@ func (im image) Device() Device {
 // read that falls between them: the regions are what was captured, and a prober
 // reaching outside them is a prober reading something the fixture cannot vouch
 // for.
-func (im image) Reader() Reader { return &imageReader{im: im} }
+func (im image) Reader() Reader {
+	return &imageReader{im: im}
+}
 
 type imageReader struct{ im image }
 
-func (r *imageReader) Close() error { return nil }
+func (r *imageReader) Close() error {
+	return nil
+}
 
 func (r *imageReader) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if err := ctx.Err(); err != nil {
@@ -140,7 +144,10 @@ func readRegion(t *testing.T, path, wantSHA, what string) []byte {
 	return data
 }
 
-func sum(b []byte) []byte { h := sha256.Sum256(b); return h[:] }
+func sum(b []byte) []byte {
+	h := sha256.Sum256(b)
+	return h[:]
+}
 
 // imageNames lists every capture on disk, so a fixture that is added without a
 // scenario row still gets its provenance checked.

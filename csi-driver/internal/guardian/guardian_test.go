@@ -46,7 +46,9 @@ const (
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(b bool) *bool {
+	return &b
+}
 
 func newTestGuardian(cs *fake.Clientset) *Guardian {
 	return &Guardian{

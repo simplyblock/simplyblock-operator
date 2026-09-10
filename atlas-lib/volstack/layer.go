@@ -147,7 +147,9 @@ type Geometry struct {
 // Known reports whether this geometry describes a layout a layer above can align
 // to. A virtualized device reports the zero value, and a filesystem over one
 // passes no stripe alignment because there is nothing real to align to.
-func (g Geometry) Known() bool { return g.ChunkBytes > 0 && g.Stripes > 0 }
+func (g Geometry) Known() bool {
+	return g.ChunkBytes > 0 && g.Stripes > 0
+}
 
 // Healer is implemented by a layer whose object can go bad under a live stack
 // and be repaired in place. Heal never recreates: the data already exists.

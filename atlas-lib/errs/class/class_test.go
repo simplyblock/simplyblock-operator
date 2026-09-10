@@ -20,24 +20,40 @@ type httpErr struct {
 	msg  string
 }
 
-func (e *httpErr) Error() string   { return fmt.Sprintf("control-plane returned %d: %s", e.code, e.msg) }
-func (e *httpErr) HTTPStatus() int { return e.code }
+func (e *httpErr) Error() string {
+	return fmt.Sprintf("control-plane returned %d: %s", e.code, e.msg)
+}
+func (e *httpErr) HTTPStatus() int {
+	return e.code
+}
 
 // timeoutErr is a net.Error that timed out.
 type timeoutErr struct{}
 
-func (timeoutErr) Error() string { return "i/o timeout" }
-func (timeoutErr) Timeout() bool { return true }
+func (timeoutErr) Error() string {
+	return "i/o timeout"
+}
+func (timeoutErr) Timeout() bool {
+	return true
+}
 
 // Temporary is deprecated but still part of net.Error.
-func (timeoutErr) Temporary() bool { return true }
+func (timeoutErr) Temporary() bool {
+	return true
+}
 
 // refusedErr is a net.Error that did not time out.
 type refusedErr struct{}
 
-func (refusedErr) Error() string   { return "connection refused" }
-func (refusedErr) Timeout() bool   { return false }
-func (refusedErr) Temporary() bool { return false }
+func (refusedErr) Error() string {
+	return "connection refused"
+}
+func (refusedErr) Timeout() bool {
+	return false
+}
+func (refusedErr) Temporary() bool {
+	return false
+}
 
 var _ net.Error = timeoutErr{}
 var _ net.Error = refusedErr{}
@@ -129,7 +145,9 @@ func TestOf_HTTPStatusWinsOverItsSentinel(t *testing.T) {
 
 type statusWithSentinel struct{ httpErr }
 
-func (e *statusWithSentinel) Unwrap() error { return errs.ErrNotFound }
+func (e *statusWithSentinel) Unwrap() error {
+	return errs.ErrNotFound
+}
 
 func TestOf_TransportAndContext(t *testing.T) {
 	for _, tc := range []struct {

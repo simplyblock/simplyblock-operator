@@ -150,8 +150,12 @@ func newMockSBCLI() *mockSBCLI {
 	return m
 }
 
-func (m *mockSBCLI) URL() string { return m.srv.URL }
-func (m *mockSBCLI) Close()      { m.srv.Close() }
+func (m *mockSBCLI) URL() string {
+	return m.srv.URL
+}
+func (m *mockSBCLI) Close() {
+	m.srv.Close()
+}
 
 // locked wraps a handler so it holds the mock's mutex for the duration of the call.
 func (m *mockSBCLI) locked(h http.HandlerFunc) http.HandlerFunc {

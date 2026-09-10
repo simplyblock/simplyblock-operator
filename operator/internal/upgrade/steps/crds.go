@@ -37,10 +37,18 @@ func crdGVK() schema.GroupVersionKind {
 // applyCRDs writes the embedded CRDs, one subject per CRD.
 type applyCRDs struct{}
 
-func (applyCRDs) ID() upgrade.ID         { return IDApplyCRDs }
-func (applyCRDs) Stage() upgrade.Stage   { return upgrade.StageUpgrade }
-func (applyCRDs) Phase() upgrade.Phase   { return "" }
-func (applyCRDs) Requires() []upgrade.ID { return []upgrade.ID{IDSmokeTestWebhook} }
+func (applyCRDs) ID() upgrade.ID {
+	return IDApplyCRDs
+}
+func (applyCRDs) Stage() upgrade.Stage {
+	return upgrade.StageUpgrade
+}
+func (applyCRDs) Phase() upgrade.Phase {
+	return ""
+}
+func (applyCRDs) Requires() []upgrade.ID {
+	return []upgrade.ID{IDSmokeTestWebhook}
+}
 func (applyCRDs) Description() string {
 	return "applies the CRDs this binary carries, so the schemas installed are the ones its conversion code was built against"
 }
@@ -359,8 +367,12 @@ const establishTimeout = time.Minute
 // what refuses to go on when any of them did not take.
 type verifyCRDVersions struct{ applyCRDs }
 
-func (verifyCRDVersions) ID() upgrade.ID         { return IDVerifyCRDVersions }
-func (verifyCRDVersions) Requires() []upgrade.ID { return []upgrade.ID{IDApplyCRDs} }
+func (verifyCRDVersions) ID() upgrade.ID {
+	return IDVerifyCRDVersions
+}
+func (verifyCRDVersions) Requires() []upgrade.ID {
+	return []upgrade.ID{IDApplyCRDs}
+}
 
 func (verifyCRDVersions) Description() string {
 	return "waits for every applied CRD and checks the API server took all of them, since a partly applied set is the worst outcome"

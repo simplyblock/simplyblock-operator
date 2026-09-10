@@ -30,7 +30,9 @@ func makeVP(uuid, nodeUUID, poolUUID, status string, migrating bool, iops float6
 	}
 }
 
-func neverCooling(_ string) bool { return false }
+func neverCooling(_ string) bool {
+	return false
+}
 
 // volsByNode builds the volumesByNode map expected by SelectVolumesForMigration.
 func volsByNode(vps ...VolumePlacement) map[string][]VolumePlacement {

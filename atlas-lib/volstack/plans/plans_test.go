@@ -252,11 +252,17 @@ func (r *recordingFS) Mount(_ context.Context, _, target, _ string, _ []string) 
 	return nil
 }
 
-func (r *recordingFS) Unmount(context.Context, string) error { return nil }
+func (r *recordingFS) Unmount(context.Context, string) error {
+	return nil
+}
 
-func (r *recordingFS) ForceUnmount(context.Context, string) error { return nil }
+func (r *recordingFS) ForceUnmount(context.Context, string) error {
+	return nil
+}
 
-func (r *recordingFS) Grow(context.Context, []string) error { return nil }
+func (r *recordingFS) Grow(context.Context, []string) error {
+	return nil
+}
 
 func (r *recordingFS) IsMountPoint(_ context.Context, path string) (bool, error) {
 	r.checked = append(r.checked, path)

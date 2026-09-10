@@ -43,7 +43,9 @@ func (e *StatusError) Error() string {
 // HTTPStatus returns the status code the control plane answered with. It is the
 // method the shared classifier looks for, so any error type able to report an
 // HTTP status is classified the same way.
-func (e *StatusError) HTTPStatus() int { return e.StatusCode }
+func (e *StatusError) HTTPStatus() int {
+	return e.StatusCode
+}
 
 // Unwrap returns the atlas sentinel this status stands for, or nil when it has
 // none, so errors.Is(err, errs.ErrNotFound) holds for a 404 without the caller

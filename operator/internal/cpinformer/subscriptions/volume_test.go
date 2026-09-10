@@ -21,7 +21,9 @@ const (
 	lvOther   = "8d0000b2-4c3d-5e6f-a012-3b4c5d6e7f80"
 )
 
-func poolScope(pool string) cpinformer.Scope { return cpinformer.Scope{lvCluster, pool} }
+func poolScope(pool string) cpinformer.Scope {
+	return cpinformer.Scope{lvCluster, pool}
+}
 
 func ingestVolume(t *testing.T, sub *VolumeSubscription, scope cpinformer.Scope, kind, data string) {
 	t.Helper()

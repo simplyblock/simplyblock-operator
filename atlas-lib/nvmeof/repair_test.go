@@ -145,7 +145,9 @@ func (k *kernel) DisconnectController(_ context.Context, ctrl nvme.Controller) e
 	return nil
 }
 
-func (k *kernel) IsConnected(context.Context, string) (bool, error) { return len(k.ctrls) > 0, nil }
+func (k *kernel) IsConnected(context.Context, string) (bool, error) {
+	return len(k.ctrls) > 0, nil
+}
 
 // subsystem is what a sysfs scan would report for the current state.
 func (k *kernel) subsystem() nvme.Subsystem {
@@ -210,7 +212,9 @@ func (r kernelDevs) ListWithSelector(ctx context.Context, sel nvme.DeviceSelecto
 	return sel.Filter(all), nil
 }
 
-func (r kernelDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
+func (r kernelDevs) ByUUID(context.Context, string) (nvme.Device, error) {
+	return nvme.Device{}, nil
+}
 func (r kernelDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, nil
 }

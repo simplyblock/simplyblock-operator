@@ -27,7 +27,9 @@ const (
 var snObject = types.NamespacedName{Namespace: "default", Name: "simplyblock-node-asxeub"}
 
 // nodeScope is a cluster on its own: one stream serves every node of it.
-func nodeScope() cpinformer.Scope { return cpinformer.Scope{snCluster} }
+func nodeScope() cpinformer.Scope {
+	return cpinformer.Scope{snCluster}
+}
 
 func registeredNodes(t *testing.T) *NodeSubscription {
 	t.Helper()
