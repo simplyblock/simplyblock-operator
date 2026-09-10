@@ -70,7 +70,12 @@ RUN curl -fsSL "https://simplyblock.io/assets/images/Logo-white.svg" -o logo-whi
 # depends on a stale checked-in bundle. Same file order as build.md.
 FROM docker.io/library/node:22-alpine AS prepare
 ARG KEEP_MOCKS=0
-ARG BABEL_VERSION=7.29.0
+# @babel/core, @babel/cli and @babel/preset-react are separate packages on
+# separate release trains (like the fontsource packages above): @babel/core
+# published 7.29.0 but @babel/cli and @babel/preset-react did not, so a single
+# shared exact version must be one all three actually have. 7.29.7 exists for
+# all three.
+ARG BABEL_VERSION=7.29.7
 WORKDIR /src
 COPY . .
 RUN npm install --no-save --no-audit --no-fund "@babel/core@${BABEL_VERSION}" "@babel/cli@${BABEL_VERSION}" "@babel/preset-react@${BABEL_VERSION}" \
