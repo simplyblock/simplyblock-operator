@@ -204,9 +204,9 @@ func (cs *Server) prepareCreateVolumeReq(
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
 	}
 
-	var pvcAnns map[string]string
+	var pvcAnns, pvcLabels map[string]string
 	if pvcNameSelected && pvcNamespaceSelected {
-		pvcAnns, err = cs.fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
+		pvcAnns, pvcLabels, err = cs.fetchPVCMeta(ctx, pvcName, pvcNamespace)
 		if err != nil {
 			return nil, false, err
 		}
@@ -256,6 +256,10 @@ func (cs *Server) prepareCreateVolumeReq(
 		LvolID:       lvolID,
 		Namespaced:   maxNamespace > 1,
 		PvcName:      pvcFullName,
+		// Join the volume to its consistency group at creation (design §4.1):
+		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
+		// the control plane pins placement and opens the member's epoch.
+		ConsistencyGroup: pvcLabels[consistencyGroupLabel],
 	}
 	return &createVolReq, podAffinitive, nil
 }

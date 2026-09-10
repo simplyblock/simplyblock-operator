@@ -212,6 +212,10 @@ type CreateLVolData struct {
 	LvolID       string `json:"uid"`
 	Namespaced   bool   `json:"namespaced"`
 	PvcName      string `json:"pvc_name"`
+	// ConsistencyGroup, when set, joins the volume to that consistency group at
+	// creation (the PVC's storage.simplyblock.io/consistency-group label). Omit
+	// for a non-member volume so the control plane treats it as ungrouped.
+	ConsistencyGroup string `json:"consistency_group,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID
