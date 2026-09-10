@@ -49,6 +49,21 @@ skip-path:
   - helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml
   # Published release output.
   - csi-driver/charts/
+  # The CSI controller and node plugins. A node plugin mounts filesystems and
+  # opens raw block devices on the host, so it runs privileged, shares the host
+  # network namespace, and holds CAP_SYS_ADMIN, and the controller is not far
+  # behind. Twenty-five of the findings here are checkov describing that design
+  # back: not privileged, no added capabilities, no host network, a read-only
+  # root filesystem, a high uid. None of them is something this driver can be.
+  #
+  # This gives up seventeen findings that are not about privilege, which is the
+  # cost of skipping by path: checkov cannot skip a check for one file. The
+  # Helm chart under csi-driver/charts is the supported way to install this
+  # driver and these manifests are the walkthrough's manual path, so the
+  # resource limits and probes they lack matter less than they would in the
+  # chart. The two that do matter are recorded in the commit.
+  - csi-driver/deploy/kubernetes/node.yaml
+  - csi-driver/deploy/kubernetes/controller.yaml
   # The upstream snapshot controller, copied from kubernetes-csi/external-snapshotter
   # into both trees with its header comment intact and renamed to
   # simplyblock-snapshot-controller. It deploys, so it is not a fixture, but its
