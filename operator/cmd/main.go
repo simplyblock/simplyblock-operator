@@ -53,6 +53,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -536,6 +537,14 @@ func main() {
 		ProbeImage: os.Getenv(deployment.NodeProbeImageEnv),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
+		os.Exit(1)
+	}
+	if err := (&driver.SimplyblockDriverReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("simplyblockdriver-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterOpsReconciler{

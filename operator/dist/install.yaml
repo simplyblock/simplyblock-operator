@@ -5626,10 +5626,15 @@ rules:
   - ""
   resources:
   - configmaps
+  - secrets
+  - serviceaccounts
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -5690,20 +5695,6 @@ rules:
   verbs:
   - get
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  - serviceaccounts
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
@@ -5728,6 +5719,7 @@ rules:
   - apps
   resources:
   - daemonsets
+  - statefulsets
   verbs:
   - create
   - delete
@@ -5801,6 +5793,32 @@ rules:
   - clusterrolebindings
   - clusterroles
   verbs:
+  - bind
+  - create
+  - delete
+  - escalate
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csidrivers
+  verbs:
   - create
   - delete
   - get
@@ -5830,6 +5848,7 @@ rules:
   - replicationpairs
   - replicationpolicies
   - replicationslots
+  - simplyblockdrivers
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -5859,6 +5878,7 @@ rules:
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
+  - simplyblockdrivers/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -5883,6 +5903,7 @@ rules:
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - simplyblockdrivers/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
@@ -5907,14 +5928,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - simplyblockdrivers
-  verbs:
-  - get
-  - list
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1

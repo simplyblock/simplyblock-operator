@@ -12,13 +12,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sort"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=create,versions=v1alpha2,name=vsimplyblockdriver.simplyblock.io,admissionReviewVersions=v1
@@ -63,30 +63,11 @@ func (v *SimplyblockDriverValidator) Handle(ctx context.Context, req admission.R
 		return admission.Allowed("")
 	}
 
-	holder := oldestDriver(existing.Items)
+	holder := driver.DeploymentHolder(existing.Items)
 	return admission.Denied(fmt.Sprintf(
 		"a Kubernetes cluster holds one SimplyblockDriver, and %s/%s already holds it; "+
 			"edit that object rather than creating a second, which would contend with it "+
 			"over the cluster-scoped RBAC, the CSIDriver registration, and the node plugin's "+
 			"kubelet socket",
 		holder.Namespace, holder.Name))
-}
-
-// oldestDriver picks the object that holds the deployment. It is the oldest, and
-// the namespace and name decide a tie, so that this webhook and the controller
-// reach the same answer from the same list without a lock between them.
-func oldestDriver(items []simplyblockv1alpha2.SimplyblockDriver) simplyblockv1alpha2.SimplyblockDriver {
-	sorted := make([]simplyblockv1alpha2.SimplyblockDriver, len(items))
-	copy(sorted, items)
-	sort.Slice(sorted, func(i, j int) bool {
-		a, b := sorted[i], sorted[j]
-		if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-			return a.CreationTimestamp.Before(&b.CreationTimestamp)
-		}
-		if a.Namespace != b.Namespace {
-			return a.Namespace < b.Namespace
-		}
-		return a.Name < b.Name
-	})
-	return sorted[0]
 }

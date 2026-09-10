@@ -36,7 +36,7 @@ func newDriverScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func driver(name, namespace string) *simplyblockv1alpha2.SimplyblockDriver {
+func testDriverObject(name, namespace string) *simplyblockv1alpha2.SimplyblockDriver {
 	return &simplyblockv1alpha2.SimplyblockDriver{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: simplyblockv1alpha2.SimplyblockDriverSpec{
@@ -70,24 +70,24 @@ func TestSimplyblockDriverValidator(t *testing.T) {
 			name:     "the first driver in an empty cluster is admitted",
 			existing: nil,
 			op:       admissionv1.Create,
-			incoming: driver("simplyblock", "simplyblock"),
+			incoming: testDriverObject("simplyblock", "simplyblock"),
 			allowed:  true,
 		},
 		{
 			// I-18
 			name:        "a second driver in the same namespace is denied",
-			existing:    []client.Object{driver("simplyblock", "simplyblock")},
+			existing:    []client.Object{testDriverObject("simplyblock", "simplyblock")},
 			op:          admissionv1.Create,
-			incoming:    driver("second", "simplyblock"),
+			incoming:    testDriverObject("second", "simplyblock"),
 			allowed:     false,
 			namesHolder: "simplyblock/simplyblock",
 		},
 		{
 			// I-19
 			name:        "a second driver in another namespace is denied",
-			existing:    []client.Object{driver("simplyblock", "simplyblock")},
+			existing:    []client.Object{testDriverObject("simplyblock", "simplyblock")},
 			op:          admissionv1.Create,
-			incoming:    driver("simplyblock", "tenant-b"),
+			incoming:    testDriverObject("simplyblock", "tenant-b"),
 			allowed:     false,
 			namesHolder: "simplyblock/simplyblock",
 		},
@@ -96,9 +96,9 @@ func TestSimplyblockDriverValidator(t *testing.T) {
 			// a second one. A rule over every operation would lock the running
 			// deployment's own spec.
 			name:     "updating the only driver is admitted",
-			existing: []client.Object{driver("simplyblock", "simplyblock")},
+			existing: []client.Object{testDriverObject("simplyblock", "simplyblock")},
 			op:       admissionv1.Update,
-			incoming: driver("simplyblock", "simplyblock"),
+			incoming: testDriverObject("simplyblock", "simplyblock"),
 			allowed:  true,
 		},
 		{
@@ -106,14 +106,14 @@ func TestSimplyblockDriverValidator(t *testing.T) {
 			name:     "creating a driver after the only one was deleted is admitted",
 			existing: nil,
 			op:       admissionv1.Create,
-			incoming: driver("replacement", "simplyblock"),
+			incoming: testDriverObject("replacement", "simplyblock"),
 			allowed:  true,
 		},
 		{
 			name:     "a delete is not intercepted",
-			existing: []client.Object{driver("simplyblock", "simplyblock")},
+			existing: []client.Object{testDriverObject("simplyblock", "simplyblock")},
 			op:       admissionv1.Delete,
-			incoming: driver("simplyblock", "simplyblock"),
+			incoming: testDriverObject("simplyblock", "simplyblock"),
 			allowed:  true,
 		},
 	}
