@@ -103,6 +103,57 @@ func helmMetadataRemovalPatch() []byte {
 	return []byte(b.String())
 }
 
+// inexpressible is the configuration a running plugin can carry that this
+// kind has no field for. Adoption reconciles toward the spec, so a plugin
+// carrying one of these would come out of the handover without it: the apply
+// lists env, volumes, and volumeMounts explicitly, and an entry the spec does
+// not name is an entry the apply removes.
+//
+// Refusing is the only safe answer. Turning TLS off on a deployment that had it
+// is a data path that stops being encrypted, and dropping csi-link is an agent
+// that stops reaching the operator, and neither is a change an administrator
+// asked for by writing a SimplyblockDriver.
+//
+// Both are off by default, which is why the driver could move out of the chart
+// at all. Both need a spec surface before they can be adopted, which is the
+// TODO in workloads.go.
+var inexpressible = []struct {
+	what   string
+	envVar string
+	arg    string
+}{
+	{what: "TLS", envVar: "SB_TLS_SERVE"},
+	{what: "TLS", envVar: "SB_TLS_CONNECT"},
+	{what: "csi-link", arg: "--link"},
+}
+
+// unsupportedConfiguration reports the first thing a running node plugin
+// carries that the spec cannot express.
+func unsupportedConfiguration(ds *appsv1.DaemonSet) (string, bool) {
+	if ds == nil {
+		return "", false
+	}
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, want := range inexpressible {
+			if want.envVar != "" {
+				for _, e := range c.Env {
+					if e.Name == want.envVar {
+						return want.what, true
+					}
+				}
+			}
+			if want.arg != "" {
+				for _, a := range c.Args {
+					if a == want.arg {
+						return want.what, true
+					}
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 // runningDriverName reads the driver name a deployed node plugin registers
 // under, out of the kubelet registration path its registrar was given.
 //

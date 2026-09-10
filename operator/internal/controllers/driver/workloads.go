@@ -52,7 +52,19 @@ func nodePluginHostDir(driver string) string {
 	return kubeletPluginsDir + "/" + driver
 }
 
-// TODO(simplyblockdriver): decide how csiLink reaches the plugins. The chart
+// TODO(simplyblockdriver): give TLS and csi-link a spec surface. The chart
+// could express both and this kind cannot, so adoption refuses a deployment
+// carrying either rather than reconciling it away
+// (adoption.go, unsupportedConfiguration).
+//
+// TLS was the unconditional `simplyblock.tlsEnv`, `tlsVolumeMount`, and
+// `clientTlsVolume` on both plugins, gated on tls.enabled: SB_TLS_SERVE,
+// SB_TLS_PROVIDER, SB_TLS_CLIENT_AUTH, SB_TLS_CONNECT, the FDB_TLS_* set, a
+// serving bundle, and a client certificate per plugin. It is the more urgent of
+// the two, because a deployment that had it is one whose data path is
+// encrypted.
+//
+// csiLink is the second. The chart
 // gated it on csiLink.enabled and gave each plugin three arguments, a
 // service-account token projected for the operator's audience, and a CA bundle
 // from a ConfigMap. None of that is expressible on the CRD, so a deployment

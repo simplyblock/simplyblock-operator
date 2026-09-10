@@ -87,15 +87,16 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, r.finalize(ctx, &d)
 	}
 
-	if !controllerutil.ContainsFinalizer(&d, driverFinalizer) {
-		controllerutil.AddFinalizer(&d, driverFinalizer)
-		if err := r.Update(ctx, &d); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	// The singleton's controller half. The webhook denies a second object at
-	// admission, and this is what holds when the webhook was not serving.
+	// The singleton's controller half, and it runs before the finalizer is
+	// taken. The webhook denies a second object at admission, and this is what
+	// holds when the webhook was not serving.
+	//
+	// The order matters more than it looks. Cluster-scoped names are derived
+	// from the object's name alone and carry no namespace, so a second driver
+	// of the same name in another namespace derives the holder's twelve
+	// cluster-scoped objects exactly. A finalizer on that object would delete
+	// the running deployment's RBAC and registration when somebody removed the
+	// duplicate, which is the opposite of what removing a duplicate should do.
 	holder, err := r.deploymentHolder(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -106,6 +107,13 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			holder.Namespace, holder.Name)
 		r.event(&d, corev1.EventTypeWarning, reasonDuplicateDriver, message)
 		return ctrl.Result{}, r.setStatus(ctx, &d, simplyblockv1alpha2.SimplyblockDriverPhaseInstalling, message)
+	}
+
+	if !controllerutil.ContainsFinalizer(&d, driverFinalizer) {
+		controllerutil.AddFinalizer(&d, driverFinalizer)
+		if err := r.Update(ctx, &d); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Adoption refuses on the one thing the spec cannot change. The counts are
@@ -223,7 +231,10 @@ func (r *SimplyblockDriverReconciler) event(
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(d, nil, eventType, reason, string(d.Status.Phase), "%s", message)
+	// The action is the reason, as every other recorder call in this operator
+	// passes it. It is a required field, and the phase would be empty on the
+	// first event an object ever emits.
+	r.Recorder.Eventf(d, nil, eventType, reason, reason, "%s", message)
 }
 
 // desired is every object this deployment owns, in the order it is applied:
@@ -250,6 +261,14 @@ func (r *SimplyblockDriverReconciler) desired(d *simplyblockv1alpha2.Simplyblock
 	}
 	return objects
 }
+
+// TODO(simplyblockdriver): verify the handover before stripping the release's
+// claim, which is design §4.3's step 6 and design-api-upgrade.md §12.4's, where
+// it calls the verification steps load bearing rather than ceremony. Nothing
+// here reads back that the controller reference or the managed-by label
+// actually landed, so an
+// apply that silently lost ownership is followed by a patch that removes Helm's,
+// leaving the object owned by nobody.
 
 // apply writes every object of the set and reports whether any of them was
 // already there. The apply is a server-side apply under a stable field manager,
@@ -313,6 +332,15 @@ func (r *SimplyblockDriverReconciler) inspectExisting(
 	return carriesHelmMetadata(current), true, nil
 }
 
+// TODO(simplyblockdriver): decide who seeds a SimplyblockDriver's spec from a
+// running deployment, which is design §4.3's "The spec is seeded from what is
+// running" table. Nothing does it: the chart no longer renders the object, and
+// there is no installer in this repository, so on an upgraded cluster somebody
+// writes it by hand. Omitting driverName then defaults it, and the refusal
+// below catches that rather than orphaning volumes, but catching it is not the
+// same as translating it. design-api-upgrade.md §13.1 covers only the values
+// renaming, so the table is unowned in both documents.
+
 // adoptionRefusal compares the driver name a running node plugin registers
 // under against the one the spec declares. The two disagree only where a
 // deployment registered under a name this object cannot be edited to match,
@@ -329,6 +357,14 @@ func (r *SimplyblockDriverReconciler) adoptionRefusal(
 			return "", false, nil
 		}
 		return "", false, err
+	}
+
+	if what, unsupported := unsupportedConfiguration(&node); unsupported {
+		return fmt.Sprintf(
+			"the running node plugin is configured with %s, which this kind has no field for; "+
+				"adopting it would reconcile that configuration away, so the handover stops here "+
+				"rather than turning it off",
+			what), true, nil
 	}
 
 	running, found := runningDriverName(&node)
@@ -398,10 +434,21 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 		return nil
 	}
 
-	for _, obj := range r.desired(d) {
-		if obj.GetNamespace() != "" {
-			continue
-		}
+	// Deleting a driver that never held the deployment must take nothing with
+	// it. The check is repeated here rather than trusted from the reconcile
+	// that added the finalizer, because an object may carry one from before
+	// that ordering existed, and the cost of being wrong is the running
+	// deployment's RBAC and registration.
+	holder, err := r.deploymentHolder(ctx)
+	if err != nil {
+		return err
+	}
+	if holder.Name != "" && (holder.Namespace != d.Namespace || holder.Name != d.Name) {
+		controllerutil.RemoveFinalizer(d, driverFinalizer)
+		return r.Update(ctx, d)
+	}
+
+	for _, obj := range r.ownedClusterScoped(d) {
 		if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 			if errors.IsNotFound(err) {
 				continue
@@ -421,6 +468,25 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 
 	controllerutil.RemoveFinalizer(d, driverFinalizer)
 	return r.Update(ctx, d)
+}
+
+// ownedClusterScoped is everything the finalizer has to consider: the
+// cluster-scoped half of the object set, and the snapshot class whether or not
+// the toggle currently asks for it. A class applied while snapshots were
+// enabled is one nothing else would ever remove.
+func (r *SimplyblockDriverReconciler) ownedClusterScoped(
+	d *simplyblockv1alpha2.SimplyblockDriver,
+) []client.Object {
+	var out []client.Object
+	for _, obj := range r.desired(d) {
+		if obj.GetNamespace() == "" {
+			out = append(out, obj)
+		}
+	}
+	if !snapshotsEnabled(d) {
+		out = append(out, volumeSnapshotClass(d))
+	}
+	return out
 }
 
 // deploymentHolder is the object that owns the deployment: the oldest in the
@@ -451,6 +517,12 @@ func (r *SimplyblockDriverReconciler) setStatus(
 		status.Message = message
 	})
 }
+
+// TODO(simplyblockdriver): publish design §6.2's four gauges,
+// simplyblock_simplyblockdriver_{version_info,nodes_ready_count,
+// nodes_expected_count,controller_ready_state}. The three that are not the
+// version are computable from the health below and need only a collector; the
+// version one waits on §5.
 
 // setHealth writes the phase together with the counts it is explained by, since
 // a phase a reader cannot check against the numbers behind it sends them to

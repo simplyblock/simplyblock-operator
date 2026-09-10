@@ -307,9 +307,10 @@ edge rather than at a Helm release
 ([`design-crd-model.md`](design-crd-model.md) §5), and §4.3 is the inventory.
 
 **Two mechanisms carry that ownership, because half the set is cluster-scoped.**
-The workloads, their `ServiceAccounts`, the `ConfigMap`, and the `Secrets` are
-namespaced and become children by controller reference, which hands their removal
-to the garbage collector. The `CSIDriver` registration, the `ClusterRole` and
+The workloads, their `ServiceAccounts`, and the two `ConfigMaps` are namespaced
+and become children by controller reference, which hands their removal to the
+garbage collector. The credentials `Secret` is namespaced too and is not a child,
+because it is not this deployment's (§4.3). The `CSIDriver` registration, the `ClusterRole` and
 `ClusterRoleBinding` pairs the sidecars and the node plugin need, and the
 `VolumeSnapshotClass` are cluster-scoped, and Kubernetes treats a cluster-scoped
 object owned by a namespaced one as having an owner it cannot resolve, which
@@ -323,7 +324,8 @@ a pool produces, and for the same reason.
 **The two plugins carry the CSI sidecars.** The controller `StatefulSet` runs
 `csi-provisioner`, `csi-attacher`, `csi-resizer`, `csi-snapshotter`, and
 `csi-external-health-monitor-controller` beside the driver. The node `DaemonSet`
-runs `node-driver-registrar` and `livenessprobe`. Each is addressed to this
+runs `node-driver-registrar`, which carries its own HTTP liveness probe rather
+than a separate `livenessprobe` sidecar. Each is addressed to this
 driver's own socket and acts on the objects naming `spec.driverName`, so a cluster
 running a second CSI driver runs a second set of its own.
 
@@ -352,20 +354,24 @@ removes them.
 administrator reading the object learns whether this deployment brought snapshot
 support to the cluster or found it.
 
-**The node configuration `ConfigMap` is where the control plane reaches the
-driver.** The operator resolves the Kubernetes cluster's one `ControlPlane` (§3.4)
-and writes its endpoint and the credentials for it into the configuration both
-plugins mount, so the driver is told where the backend is rather than being
-configured with it separately. A driver whose `ControlPlane` is not `Ready` is
-applied and waits, because a plugin that cannot reach a backend is the same
-situation as a plugin that has not been scheduled yet.
+**The control plane reaches the driver through a Secret this deployment does not
+own.** The endpoint and the credential each plugin uses live in
+`simplyblock-csi-secret-v2`, which the `StorageCluster` reconciler writes,
+upserting one entry per cluster it creates or adopts. This deployment mounts that
+Secret and never writes it, because two controllers writing one object alternate
+its contents. What it does own is the pair of `ConfigMaps` beside it, which carry
+no cluster state at all (§4.3).
 
-**One control plane is not one backend cluster.** The configuration carries a
+**One control plane is not one backend cluster.** That Secret carries a
 `clusters` list of `cluster_id`, `cluster_endpoint`, and `cluster_secret` triples,
 one entry per `StorageCluster` the control plane fronts, and every entry names the
 same endpoint because there is one control plane to name. So a deployment with
 several backend clusters is expressed by the list growing rather than by a second
 driver or a second control plane.
+
+**A driver whose control plane is not reachable is applied and waits**, because a
+plugin that cannot reach a backend is the same situation as a plugin that has not
+been scheduled yet.
 
 **It has no `Ops` companion.** A driver is applied rather than operated: its
 version is a field, its rollout is the DaemonSet's and the StatefulSet's, and
@@ -985,6 +991,15 @@ type SimplyblockDriverSpec struct {
 	// the version this operator release ships.
 	// +optional
 	SidecarImages SidecarImages `json:"sidecarImages,omitempty"`
+
+	// EnableServiceAccountAuth makes both plugins authenticate to the management
+	// API with their pod's Kubernetes service-account token instead of the
+	// static cluster secret. The control plane has to list those accounts in
+	// SB_K8S_ADMIN_SERVICE_ACCOUNTS for it to work, which is why this is a
+	// deployment-wide switch rather than a per-plugin one.
+	// +kubebuilder:default=false
+	// +optional
+	EnableServiceAccountAuth *bool `json:"enableServiceAccountAuth,omitempty"`
 
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
 	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a

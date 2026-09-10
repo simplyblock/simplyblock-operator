@@ -10,9 +10,11 @@ package driver
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -296,5 +298,125 @@ func TestRunningDriverName(t *testing.T) {
 	}}}
 	if _, found := runningDriverName(bare); found {
 		t.Error("a registrar with no registration path reported a driver name")
+	}
+}
+
+// A driver that never held the deployment takes nothing with it when it goes.
+// The cluster-scoped names carry no namespace, so a second driver of the same
+// name derives the holder's twelve exactly, and a finalizer on it would delete
+// the running deployment's RBAC and registration.
+func TestDeletingADuplicateLeavesTheHoldersObjects(t *testing.T) {
+	scheme := reconcilerScheme(t)
+
+	holder := testDriver("simplyblock")
+	holder.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+
+	duplicate := testDriver("simplyblock")
+	duplicate.Namespace = "tenant-b"
+	duplicate.CreationTimestamp = metav1.NewTime(time.Now())
+	duplicate.Finalizers = []string{driverFinalizer}
+	deleted := metav1.NewTime(time.Now())
+	duplicate.DeletionTimestamp = &deleted
+
+	// One object, derived identically by both, and marked by this controller
+	// because the holder applied it.
+	shared := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+		Name:   names(holder).clusterRole(nodeComponent),
+		Labels: map[string]string{managedByLabel: managedByValue},
+	}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(holder, duplicate, shared).
+		WithStatusSubresource(holder, duplicate).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	if err := r.finalize(context.Background(), duplicate); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	var survived rbacv1.ClusterRole
+	if err := c.Get(context.Background(), client.ObjectKey{Name: shared.Name}, &survived); err != nil {
+		t.Fatalf("the duplicate deleted the holder's %s: %v", shared.Name, err)
+	}
+}
+
+// A deployment carrying configuration the spec has no field for is refused
+// rather than reconciled into one that has lost it.
+func TestAdoptionRefusesConfigurationTheSpecCannotExpress(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []corev1.EnvVar
+		args []string
+		want string
+	}{
+		{name: "TLS serving", env: []corev1.EnvVar{{Name: "SB_TLS_SERVE", Value: "1"}}, want: "TLS"},
+		{name: "TLS client", env: []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "1"}}, want: "TLS"},
+		{name: "csi-link", args: []string{"--link"}, want: "csi-link"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := reconcilerScheme(t)
+			d := testDriver("simplyblock")
+			node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+			node.Spec.Template.Spec.Containers[0].Env = tc.env
+			node.Spec.Template.Spec.Containers[0].Args = append(
+				node.Spec.Template.Spec.Containers[0].Args, tc.args...)
+
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(d, node).WithStatusSubresource(d).Build()
+			r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+			message, refused, err := r.adoptionRefusal(context.Background(), d)
+			if err != nil {
+				t.Fatalf("adoptionRefusal: %v", err)
+			}
+			if !refused {
+				t.Fatalf("adopted a deployment configured with %s, which the spec cannot express", tc.want)
+			}
+			if !contains(message, tc.want) {
+				t.Errorf("the refusal %q does not name %q", message, tc.want)
+			}
+		})
+	}
+}
+
+// A plain deployment carries none of it and is adopted.
+func TestAdoptionProceedsWithoutInexpressibleConfiguration(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(d, chartInstalledNodeDaemonSet(d, DefaultDriverName)).
+		WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	if message, refused, err := r.adoptionRefusal(context.Background(), d); err != nil || refused {
+		t.Fatalf("refused = %v (%s), err = %v; want a plain deployment adopted", refused, message, err)
+	}
+}
+
+// The snapshot class is the finalizer's whether or not the toggle currently
+// asks for it, since one applied while snapshots were on is one nothing else
+// would remove.
+func TestFinalizerReachesADisabledSnapshotClass(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	r := &SimplyblockDriverReconciler{Scheme: scheme}
+
+	off := false
+	d := testDriver("simplyblock")
+	d.Spec.EnableVolumeSnapshots = &off
+
+	found := false
+	for _, obj := range r.ownedClusterScoped(d) {
+		if obj.GetName() == names(d).snapshotClass {
+			found = true
+		}
+		if obj.GetNamespace() != "" {
+			t.Errorf("%s is namespaced and the garbage collector already has it", obj.GetName())
+		}
+	}
+	if !found {
+		t.Error("a snapshot class applied before the toggle went false would outlive the object")
 	}
 }

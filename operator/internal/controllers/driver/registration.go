@@ -71,6 +71,16 @@ func volumeSnapshotClass(d *simplyblockv1alpha2.SimplyblockDriver) *unstructured
 // are cluster-scoped and shared, so they carry no owner reference and outlive
 // this object, which is what design §9 Q2 leaves open.
 //
+// status.snapshotSupport is unwritten in both cases today, and Detected is the
+// half that needs nothing new: every adopted cluster is already serving the API,
+// so the discovery check alone would settle it. Installed waits on the apply
+// above, and the Normal SnapshotsEnabled event design §6.1 owes waits with it.
+//
+// The apply is also not tolerant of a cluster that serves no snapshot API. The
+// VolumeSnapshotClass goes into the object set whenever the toggle is on, so on
+// such a cluster the whole reconcile fails on that one object rather than
+// skipping it. Detecting first fixes that too.
+//
 // The test plan's U-04, U-05, and U-38 to U-41 are the rows this owes.
 
 // snapshotsEnabled reports whether this deployment includes snapshot support.
