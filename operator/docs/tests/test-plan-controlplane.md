@@ -45,17 +45,17 @@ File: `operator/internal/controllers/controlplane/controlplane_controller_unit_t
 
 ### The Readiness Probe (design §4.3)
 
-| #    | Scenario                                                                      | Type     | Test |
-|------|-------------------------------------------------------------------------------|----------|------|
-| U-04 | The probe returns 200: the phase becomes `Available` and `message` is cleared | Positive | —    |
-| U-05 | The probe returns 503: the phase becomes `Unavailable`                        | Negative | —    |
-| U-06 | The probe returns 500 with a body: the body reaches `status.message` verbatim | Negative | —    |
-| U-07 | The probe times out: the phase becomes `Unavailable` with the transport error | Negative | —    |
-| U-08 | Connection refused: the phase becomes `Unavailable`, not `Installing`         | Boundary | —    |
-| U-09 | A probe that never succeeded: the phase stays `Installing`, not `Unavailable` | Boundary | —    |
-| U-10 | `status.lastChecked` is stamped on every probe, passing or failing            | Positive | —    |
-| U-11 | A 2xx that is not 200 is treated as success                                   | Boundary | —    |
-| U-12 | A 3xx is treated as failure, since the client does not follow redirects       | Boundary | —    |
+| #    | Scenario                                                                      | Type     | Test                                             |
+|------|-------------------------------------------------------------------------------|----------|--------------------------------------------------|
+| U-04 | The probe returns 200: the phase becomes `Available` and `message` is cleared | Positive | `TestControlPlaneReconcileRecordsAvailablePhase` |
+| U-05 | The probe returns 503: the phase becomes `Unavailable`                        | Negative | —                                                |
+| U-06 | The probe returns 500 with a body: the body reaches `status.message` verbatim | Negative | —                                                |
+| U-07 | The probe times out: the phase becomes `Unavailable` with the transport error | Negative | —                                                |
+| U-08 | Connection refused: the phase becomes `Unavailable`, not `Installing`         | Boundary | —                                                |
+| U-09 | A probe that never succeeded: the phase stays `Installing`, not `Unavailable` | Boundary | —                                                |
+| U-10 | `status.lastChecked` is stamped on every probe, passing or failing            | Positive | `TestControlPlaneReconcileRecordsAvailablePhase` |
+| U-11 | A 2xx that is not 200 is treated as success                                   | Boundary | —                                                |
+| U-12 | A 3xx is treated as failure, since the client does not follow redirects       | Boundary | —                                                |
 
 ### Workload Health and the Phase It Decides (design §4.3)
 
@@ -365,21 +365,21 @@ so their rows are specifications rather than gaps.
 
 ## 6. What Is Not Yet Covered
 
-| #                                                      | Gap                                                       | Reason                                                                                                                                                                                   |
-|--------------------------------------------------------|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-17                                            | The singleton guard, the probe, and the transition events | `ControlPlaneReconciler` has no test file. All of this is shipped behavior and none of it is asserted                                                                                    |
-| U-72 … U-92, U-132 … U-134                             | The component table, the phase it decides, and its events | The controller has one signal today. `U-81` holds design §4.3's rule that `Degraded` stops nothing, and `U-87` and `U-88` hold the rule that only an essential component halts the fleet |
-| U-18 … U-27                                            | The `Source` block                                        | Planned, not built. `spec.source` does not exist, and the endpoint is an environment variable                                                                                            |
-| U-28 … U-39, U-137 … U-146                             | The installation machine and its four detections          | Planned, not built. The chart installs the control plane today (§12, Q2), and `U-139` keeps a shared CRD from being owned by one deployment                                              |
-| U-40 … U-44                                            | Deletion and the cluster hold                             | Planned, not built. The kind carries no finalizer today, so deleting it removes an object and nothing else                                                                               |
-| U-45 … U-61, U-93 … U-110, U-126 … U-131, U-135, U-136 | Every `ControlPlaneOps` scenario                          | The kind does not exist. `U-107` keeps an audit record from owning a backup, and `U-127` pins the drain behind the preflight that can refuse the upgrade outright                        |
-| U-62 … U-71, I-10, I-11, E-10                          | Retired                                                   | The `SimplyblockDriver` rows moved to [`test-plan-simplyblockdriver.md`](test-plan-simplyblockdriver.md) with the kind. The IDs are not reused                                           |
-| I-01 … I-14, I-30 … I-42                               | Every admission rule, including the operations webhook    | Needs `envtest`, because CEL, `Required`, defaulting, and a webhook are enforced by the API server and a fake client applies none of them                                                |
-| I-15 … I-22                                            | Lock, cascade, and namespace isolation                    | Needs `envtest` for real `resourceVersion` conflicts and real garbage collection. I-18 additionally needs the FoundationDB CRDs                                                          |
-| I-21                                                   | The install applying over the chart's objects             | The behavior is undecided, not merely untested. §12, Q2 owns it                                                                                                                          |
-| E-01 … E-18                                            | All end-to-end scenarios                                  | Needs a live deployment with a real FoundationDB. The e2e harness under `test/` is not committed yet. `E-17` is retired with the restore step                                            |
-| M-01 … M-03                                            | Dual ownership, a shared external plane, and lost quorum  | Need two Kubernetes clusters, a shared backend, and provisioner-level failure injection                                                                                                  |
-| Metrics                                                | The nine metrics of design §9.2                           | Designed, not built. Nothing exports a metric for any of these kinds                                                                                                                     |
+| #                                                      | Gap                                                               | Reason                                                                                                                                                                                               |
+|--------------------------------------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-01 … U-03, U-05 … U-09, U-11 … U-17                  | The singleton guard, the failing probe, and the transition events | `U-04` and `U-10` are asserted in `controlplane_controller_test.go`, which the passing probe reaches. Everything the guard and a failing probe decide is shipped behavior and none of it is asserted |
+| U-72 … U-92, U-132 … U-134                             | The component table, the phase it decides, and its events         | The controller has one signal today. `U-81` holds design §4.3's rule that `Degraded` stops nothing, and `U-87` and `U-88` hold the rule that only an essential component halts the fleet             |
+| U-18 … U-27                                            | The `Source` block                                                | Planned, not built. `spec.source` does not exist, and the endpoint is an environment variable                                                                                                        |
+| U-28 … U-39, U-137 … U-146                             | The installation machine and its four detections                  | Planned, not built. The chart installs the control plane today (§12, Q2), and `U-139` keeps a shared CRD from being owned by one deployment                                                          |
+| U-40 … U-44                                            | Deletion and the cluster hold                                     | Planned, not built. The kind carries no finalizer today, so deleting it removes an object and nothing else                                                                                           |
+| U-45 … U-61, U-93 … U-110, U-126 … U-131, U-135, U-136 | Every `ControlPlaneOps` scenario                                  | The kind does not exist. `U-107` keeps an audit record from owning a backup, and `U-127` pins the drain behind the preflight that can refuse the upgrade outright                                    |
+| U-62 … U-71, I-10, I-11, E-10                          | Retired                                                           | The `SimplyblockDriver` rows moved to [`test-plan-simplyblockdriver.md`](test-plan-simplyblockdriver.md) with the kind. The IDs are not reused                                                       |
+| I-01 … I-14, I-30 … I-42                               | Every admission rule, including the operations webhook            | Needs `envtest`, because CEL, `Required`, defaulting, and a webhook are enforced by the API server and a fake client applies none of them                                                            |
+| I-15 … I-22                                            | Lock, cascade, and namespace isolation                            | Needs `envtest` for real `resourceVersion` conflicts and real garbage collection. I-18 additionally needs the FoundationDB CRDs                                                                      |
+| I-21                                                   | The install applying over the chart's objects                     | The behavior is undecided, not merely untested. §12, Q2 owns it                                                                                                                                      |
+| E-01 … E-18                                            | All end-to-end scenarios                                          | Needs a live deployment with a real FoundationDB. The e2e harness under `test/` is not committed yet. `E-17` is retired with the restore step                                                        |
+| M-01 … M-03                                            | Dual ownership, a shared external plane, and lost quorum          | Need two Kubernetes clusters, a shared backend, and provisioner-level failure injection                                                                                                              |
+| Metrics                                                | The nine metrics of design §9.2                                   | Designed, not built. Nothing exports a metric for any of these kinds                                                                                                                                 |
 
 ### Axis coverage
 

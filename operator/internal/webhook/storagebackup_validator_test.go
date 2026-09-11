@@ -185,9 +185,13 @@ func availableBackupObject() *simplyblockv1alpha2.StorageBackup {
 	}
 }
 
-func poolObject() *simplyblockv1alpha1.StoragePool {
-	return &simplyblockv1alpha1.StoragePool{
+// The pool is seeded at v1alpha2 because that is the version an API server
+// stores and serves. See TestARestoreWithResolvableReferencesIsAdmitted for what
+// seeding the retired version concealed.
+func poolObject() *simplyblockv1alpha2.StoragePool {
+	return &simplyblockv1alpha2.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: backupNamespace},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: "production"},
 	}
 }
 
@@ -206,6 +210,12 @@ func restoreOpsObject() *simplyblockv1alpha2.StorageBackupOps {
 	}
 }
 
+// Regression: 2026-09-11-backupops-pool-check-reads-retired-version. The guard
+// resolved the target pool as a v1alpha1 StoragePool after v1alpha2 became the
+// stored version. A read of the retired version is answered only by the
+// conversion webhook, which a fresh install does not deploy, so every restore
+// was denied for naming a pool that exists. This passed throughout, because the
+// fixture seeded the same retired version the guard read.
 func TestARestoreWithResolvableReferencesIsAdmitted(t *testing.T) {
 	v := opsValidator(t, clusterObject(), availableBackupObject(), poolObject())
 

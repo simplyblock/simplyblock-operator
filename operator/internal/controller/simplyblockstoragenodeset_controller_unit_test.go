@@ -12,6 +12,7 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -360,6 +361,41 @@ func TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
 	}
 	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
 		t.Fatalf("expected daemonset to be owned by storagenodeset")
+	}
+}
+
+// Regression: 2026-09-11-nodeset-image-fallback-reads-retired-version. A
+// StorageNodeSet that names no clusterImage takes the image from the singleton
+// ControlPlane, and that read stayed on v1alpha1 after v1alpha2 became the
+// stored version. The API server answers a v1alpha1 read only through the
+// conversion webhook, which a fresh install does not deploy, so the fallback
+// returned NotFound and no DaemonSet was ever created.
+func TestStorageNodeSetDaemonSetImageFallsBackToControlPlane(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-ds-fallback",
+			Namespace: "default",
+			UID:       "uid-fallback",
+		},
+		// No ClusterImage: the ControlPlane is what supplies it.
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeSetStateTestReconciler(t, sn)
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{
+		Name: "simplyblock-storage-node-ds-sn-ds-fallback", Namespace: "default",
+	}, &ds); err != nil {
+		t.Fatalf("daemonset should be created: %v", err)
+	}
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		if c.Image != "test-image:latest" {
+			t.Fatalf("container %q: expected the ControlPlane image, got %q", c.Name, c.Image)
+		}
 	}
 }
 
@@ -1497,13 +1533,22 @@ func newStorageNodeSetStateTestReconciler(
 
 	// Mirror real-cluster state: the Helm chart always creates the singleton
 	// ControlPlane CR before any StorageNodeSet CR is reconciled.
-	singleton := &simplyblockv1alpha1.ControlPlane{
+	//
+	// It is seeded at v1alpha2 because that is the version an API server stores
+	// and serves. Seeding v1alpha1 would assert a read that no cluster answers:
+	// the retired version is served only through the conversion webhook, which a
+	// fresh install does not deploy.
+	singleton := &simplyblockv1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SingletonControlPlaneName,
 			Namespace: testOperatorNamespace,
 		},
-		Spec: simplyblockv1alpha1.ControlPlaneSpec{
-			Image: "test-image:latest",
+		Spec: simplyblockv1alpha2.ControlPlaneSpec{
+			Source: &simplyblockv1alpha2.ControlPlaneSource{
+				Managed: &simplyblockv1alpha2.ManagedControlPlane{
+					Image: "test-image:latest",
+				},
+			},
 		},
 	}
 	// Simulate kubebuilder defaults that the API server would apply.
@@ -1524,7 +1569,7 @@ func newStorageNodeSetStateTestReconciler(
 		WithStatusSubresource(
 			&simplyblockv1alpha1.StorageNodeSet{},
 			&simplyblockv1alpha1.StorageCluster{},
-			&simplyblockv1alpha1.ControlPlane{},
+			&simplyblockv1alpha2.ControlPlane{},
 			&appsv1.DaemonSet{},
 		).
 		WithObjects(allObjects...).
