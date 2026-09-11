@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -150,7 +149,11 @@ func (v *StorageBackupOpsValidator) admitCreate(
 func (v *StorageBackupOpsValidator) poolMustExist(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) *admission.Response {
-	var pool simplyblockv1alpha1.StoragePool
+	// v1alpha2 is the stored version. Reading the pool at v1alpha1 would be
+	// answered only by the conversion webhook, which a fresh install does not
+	// deploy, and this guard would then deny every restore for naming a pool the
+	// cluster has.
+	var pool simplyblockv1alpha2.StoragePool
 	err := v.Client.Get(ctx,
 		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: ops.Namespace}, &pool)
 	if apierrors.IsNotFound(err) {

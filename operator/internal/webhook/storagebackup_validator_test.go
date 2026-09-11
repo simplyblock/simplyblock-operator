@@ -185,9 +185,16 @@ func availableBackupObject() *simplyblockv1alpha2.StorageBackup {
 	}
 }
 
-func poolObject() *simplyblockv1alpha1.StoragePool {
-	return &simplyblockv1alpha1.StoragePool{
+// Regression: 2026-09-11-backupops-pool-check-reads-retired-version. The pool is
+// seeded at v1alpha2 because that is the version an API server stores and
+// serves. Seeded at v1alpha1 it stood in for an object no cluster hands back,
+// because the retired version is answered only by the conversion webhook that a
+// fresh install does not deploy, and the guard reading it there denied every
+// restore for naming a pool that exists.
+func poolObject() *simplyblockv1alpha2.StoragePool {
+	return &simplyblockv1alpha2.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: backupNamespace},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: "production"},
 	}
 }
 

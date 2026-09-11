@@ -50,6 +50,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -331,7 +332,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeSetTLSSecret)),
 		).
 		Watches(
-			&simplyblockv1alpha1.ControlPlane{},
+			&simplyblockv1alpha2.ControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
@@ -586,15 +587,26 @@ func (r *StorageNodeSetReconciler) reconcileDaemonSet(
 ) error {
 
 	if snCR.Spec.ClusterImage == "" {
-		cp := &simplyblockv1alpha1.ControlPlane{}
+		// Read at v1alpha2, the stored version, rather than at this type's own
+		// v1alpha1. A read of the retired version is answered only by the
+		// conversion webhook, which a fresh install does not deploy, and the
+		// cache it would be served from lists empty instead of failing: the
+		// fallback would report the singleton missing on a cluster that has it.
+		cp := &simplyblockv1alpha2.ControlPlane{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SingletonControlPlaneName}, cp); err != nil {
 			return fmt.Errorf("clusterImage not set and ControlPlane %q not found: %w", SingletonControlPlaneName, err)
 		}
-		if cp.Spec.Image == "" {
-			return fmt.Errorf("clusterImage not set and ControlPlane %q has no spec.image", SingletonControlPlaneName)
+		image := ""
+		if cp.Spec.Source != nil && cp.Spec.Source.Managed != nil {
+			image = cp.Spec.Source.Managed.Image
+		}
+		if image == "" {
+			return fmt.Errorf(
+				"clusterImage not set and ControlPlane %q has no spec.source.managed.image",
+				SingletonControlPlaneName)
 		}
 		snCR = snCR.DeepCopy()
-		snCR.Spec.ClusterImage = cp.Spec.Image
+		snCR.Spec.ClusterImage = image
 	}
 
 	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
