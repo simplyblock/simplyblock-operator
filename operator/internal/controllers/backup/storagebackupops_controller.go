@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -87,6 +88,13 @@ type RestoreClient interface {
 	RestoreBackup(ctx context.Context, clusterID string, params controlplane.RestoreBackupParams) (string, error)
 	Volume(ctx context.Context, handle lvol.VolumeHandle) (lvol.Volume, error)
 	Connection(ctx context.Context, handle lvol.VolumeHandle, opts ...lvol.ConnectionOption) (lvol.Connection, error)
+
+	// ListVolumes is how a restarted Restoring step finds the volume a previous
+	// pass created but never recorded, and DeleteVolume is how an abort takes
+	// one back. Without the pair, a restore accepted by the control plane and
+	// then interrupted leaves a volume nothing in Kubernetes accounts for.
+	ListVolumes(ctx context.Context, clusterID, poolID string) ([]lvol.Volume, error)
+	DeleteVolume(ctx context.Context, handle lvol.VolumeHandle) error
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackupops,verbs=get;list;watch;create;update;patch;delete
@@ -273,11 +281,89 @@ func (r *StorageBackupOpsReconciler) unwind(
 				"the operation is running on", current))
 	}
 
+	// Aborting from Restoring is the one abort that has something to take back.
+	// The step asks the control plane for a volume, so an abort observed after
+	// that request was accepted has to delete what it produced: reaching Aborted
+	// with a volume still filling would leave the copy being written into
+	// storage nothing will ever claim, read, or remove.
+	if err := r.discardRestoredVolume(ctx, ops); err != nil {
+		// Not terminal. The operation stays where it is and the abort is honored
+		// on a later pass, because ending it now is what leaks the volume.
+		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops,
+			fmt.Sprintf("the abort is waiting on the restored volume being discarded: %v", err))
+	}
+
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 		ReasonOperationAborted, ReasonOperationAborted,
 		"The operation was aborted at step %s and unwound", current)
 	return r.finish(ctx, ops, simplyblockv1alpha2.StorageBackupOpsPhaseAborted,
 		fmt.Sprintf("aborted at step %s", current))
+}
+
+// discardRestoredVolume deletes the volume this operation asked the control
+// plane for, where it got one. It is idempotent: a volume that is already gone
+// is the state being asked for, and the control-plane client reads a 404 as
+// success.
+//
+// An operation that recorded no volume may still have created one, because the
+// request is made before the identifier is written down. That case is recovered
+// by name rather than left: the volume carries this operation's UID, so a
+// listing finds it even when the status does not.
+func (r *StorageBackupOpsReconciler) discardRestoredVolume(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) error {
+	volumeID := ops.Status.RestoredLvolID
+	if volumeID == "" {
+		recovered, err := r.restoredVolumeByName(ctx, ops)
+		if err != nil {
+			return err
+		}
+		if recovered == "" {
+			return nil // nothing was ever created
+		}
+		volumeID = recovered
+	}
+
+	handle := lvol.NewVolumeHandle(ops.Status.ClusterID, ops.Status.PoolUUID, volumeID)
+	if err := r.API.DeleteVolume(ctx, handle); err != nil {
+		return fmt.Errorf("discard the restored volume %s: %w", volumeID, err)
+	}
+	return nil
+}
+
+// restoredVolumeByName finds the volume a previous pass created for this
+// operation without recording it, and returns the empty string when there is
+// none.
+//
+// The lookup is by the deterministic name the restore was asked for, which is
+// what makes the request recoverable at all: the control plane's restore
+// endpoint creates a volume every time it is called, so a retry that could not
+// tell whether the first call landed would create a second one.
+func (r *StorageBackupOpsReconciler) restoredVolumeByName(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) (string, error) {
+	if ops.Status.ClusterID == "" || ops.Status.PoolUUID == "" {
+		// Validating has not resolved the pool yet, so no restore can have been
+		// asked for and there is nothing to find.
+		return "", nil
+	}
+
+	volumes, err := r.API.ListVolumes(ctx, ops.Status.ClusterID, ops.Status.PoolUUID)
+	if err != nil {
+		return "", fmt.Errorf("look for a volume already restored for %s: %w", ops.Name, err)
+	}
+	wanted := restoredVolumeName(ops)
+	for _, volume := range volumes {
+		if volume.Name != wanted {
+			continue
+		}
+		_, _, volumeID, err := volume.ID.Split()
+		if err != nil {
+			return "", fmt.Errorf("read the identifier of volume %s: %w", wanted, err)
+		}
+		return volumeID.String(), nil
+	}
+	return "", nil
 }
 
 // waitOn requeues for whatever is left of the current step's deadline, so that a
@@ -359,20 +445,35 @@ func resultOf(phase simplyblockv1alpha2.StorageBackupOpsPhase) string {
 	}
 }
 
-// teardown releases the lock and lets the object go.
+// teardown unwinds what the operation created, releases the lock, and lets the
+// object go.
 //
-// It does not undo the work. A restore that has produced a volume and a claim
-// has produced something somebody asked for, and the admission webhook is what
-// refuses a delete from a step where that is true; by the time this runs, either
-// the step was one where nothing was produced, or somebody forced the deletion
-// past the webhook and the record is what is being discarded rather than the
-// data.
+// The admission webhook refuses a delete from the steps where the work cannot be
+// taken back, so what reaches here is either an operation that produced nothing
+// or one whose product this can discard. The discard is the half that used to be
+// missing: deleting an operation that had asked for a restore removed the only
+// record naming the volume, and nothing afterward could find it.
+//
+// A terminal operation is left alone. Its record is the point, and a Succeeded
+// restore's volume belongs to the claim it was bound to rather than to this
+// object, which is the whole reason that claim carries no owner reference back.
 func (r *StorageBackupOpsReconciler) teardown(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(ops, opsFinalizer) {
 		return ctrl.Result{}, nil
 	}
+
+	if !terminal(ops.Status.Phase) {
+		if err := r.discardRestoredVolume(ctx, ops); err != nil {
+			// Holding the object open is the point: the finalizer is what keeps
+			// the volume findable, and releasing it now would lose it.
+			logf.FromContext(ctx).Error(err, "the restored volume could not be discarded",
+				"operation", ops.Name)
+			return ctrl.Result{RequeueAfter: opsRetry}, nil
+		}
+	}
+
 	if err := r.releaseLock(ctx, ops); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -519,25 +620,37 @@ func (r *StorageBackupOpsReconciler) writeStatus(
 	ops *simplyblockv1alpha2.StorageBackupOps,
 	mutate func(*simplyblockv1alpha2.StorageBackupOpsStatus),
 ) error {
-	desired := *ops.Status.DeepCopy()
-	mutate(&desired)
-	desired.ObservedGeneration = ops.Generation
+	// Retried rather than swallowed on a conflict. A caller that read nil would
+	// take the write for done, and finish does: it releases the target's lock
+	// straight afterward, so a dropped terminal status would free the backup for
+	// the next restore while this operation still reported Running.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh simplyblockv1alpha2.StorageBackupOps
+		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+			return err
+		}
 
-	if reflect.DeepEqual(ops.Status, desired) {
-		return nil
-	}
-	patch := client.MergeFromWithOptions(ops.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	ops.Status = desired
-	if err := r.Status().Patch(ctx, ops, patch); err != nil {
-		if apierrors.IsConflict(err) {
-			// The object moved while this pass ran, so this status was computed
-			// from a spec that is no longer current. Reconciling again produces
-			// one that is.
+		desired := *fresh.Status.DeepCopy()
+		mutate(&desired)
+		desired.ObservedGeneration = fresh.Generation
+
+		if reflect.DeepEqual(fresh.Status, desired) {
+			// Still published to the caller, which reads the object it passed in
+			// on the next line of its own logic.
+			ops.Status = desired
+			ops.ResourceVersion = fresh.ResourceVersion
 			return nil
 		}
-		return err
-	}
-	return nil
+
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		fresh.Status = desired
+		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
+			return err
+		}
+		ops.Status = fresh.Status
+		ops.ResourceVersion = fresh.ResourceVersion
+		return nil
+	})
 }
 
 // terminal reports a phase the operation can never leave.

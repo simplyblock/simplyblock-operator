@@ -146,16 +146,34 @@ func (r *StorageBackupOpsReconciler) refuseExistingClaim(
 
 // startRestore asks the control plane for the copy back.
 //
-// status.restoredLvolID is what makes this idempotent, and it has to be,
-// because a second request would produce a second volume nothing accounts for.
-// The volume is named after the operation's UID rather than after anything a
-// user chose, so two restores never collide in the pool and a name says which
-// operation produced it.
+// Making this idempotent is the whole difficulty of the step, and a recorded
+// identifier is not enough on its own: the request is made before the
+// identifier can be written down, so a process that dies in between leaves a
+// volume filling with nothing naming it, and a naive retry asks for a second
+// one. The control plane's restore endpoint creates a volume every time it is
+// called and has no way to be asked twice for the same one.
+//
+// What closes that window is the name. The volume is named after the operation's
+// UID rather than after anything a user chose, so a pass that cannot find the
+// identifier in status can still find the volume in the pool, and adopt it
+// instead of asking again.
 func (r *StorageBackupOpsReconciler) startRestore(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
 ) (bool, error) {
 	if ops.Status.RestoredLvolID != "" {
 		return true, nil
+	}
+
+	// A previous pass may have been answered and then died. Looking first costs
+	// one listing per restore and is what keeps a retry from doubling the
+	// storage the operation occupies.
+	adopted, err := r.restoredVolumeByName(ctx, ops)
+	if err != nil {
+		return false, err
+	}
+	if adopted != "" {
+		return true, r.recordRestoredVolume(ctx, ops, adopted,
+			"A volume this operation had already asked for was adopted rather than restored again")
 	}
 
 	lvolID, err := r.API.RestoreBackup(ctx, ops.Status.ClusterID, controlplane.RestoreBackupParams{
@@ -167,9 +185,17 @@ func (r *StorageBackupOpsReconciler) startRestore(
 		return false, fmt.Errorf("ask the control plane to restore backup %s: %w", ops.Status.BackupID, err)
 	}
 
-	return true, r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
-		status.RestoredLvolID = lvolID
-		status.Message = "The control plane accepted the restore and is filling the volume"
+	return true, r.recordRestoredVolume(ctx, ops, lvolID,
+		"The control plane accepted the restore and is filling the volume")
+}
+
+// recordRestoredVolume writes down which volume this operation is waiting on.
+func (r *StorageBackupOpsReconciler) recordRestoredVolume(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, volumeID, message string,
+) error {
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageBackupOpsStatus) {
+		status.RestoredLvolID = volumeID
+		status.Message = message
 	})
 }
 
@@ -261,8 +287,17 @@ func (r *StorageBackupOpsReconciler) ensurePersistentVolume(
 	var existing corev1.PersistentVolume
 	err := r.Get(ctx, client.ObjectKey{Name: name}, &existing)
 	if err == nil {
-		if existing.Spec.CSI == nil || existing.Spec.CSI.VolumeHandle != string(handle) {
+		// Every one of these has to hold for the volume to be this operation's
+		// own. The name carries the operation's UID, so a mismatch here is
+		// close to impossible in practice, and checking anyway is what keeps the
+		// step from binding a claim to storage somebody else is using.
+		switch {
+		case existing.Spec.CSI == nil || existing.Spec.CSI.VolumeHandle != string(handle):
 			return fatalf("PersistentVolume %s already exists and names another volume", name)
+		case existing.Labels[RestoredByLabel] != ops.Name:
+			return fatalf("PersistentVolume %s already exists and was not created by this operation", name)
+		case !claimRefMatches(existing.Spec.ClaimRef, ops):
+			return fatalf("PersistentVolume %s already exists and is bound to another claim", name)
 		}
 		return nil
 	}
@@ -337,22 +372,19 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 ) error {
 	restore := ops.Spec.Restore
 
-	var existing corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Name: restore.ClaimName, Namespace: ops.Namespace}, &existing)
-	if err == nil {
-		if existing.Labels[RestoredByLabel] != ops.Name {
-			return fatalf("claim %s exists and was not created by this operation", restore.ClaimName)
-		}
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
+	if adopted, err := r.claimIsOurs(ctx, ops, restore.ClaimName); err != nil || adopted {
 		return err
 	}
 
-	labels := map[string]string{RestoredByLabel: ops.Name}
+	// The request's labels first, so that the ownership marker cannot be
+	// overridden by one of them. A claim carrying somebody else's value under
+	// this key would fail the check above on the next pass and strand the
+	// operation, and the key is the operator's rather than the request's.
+	labels := map[string]string{}
 	for key, value := range restore.ClaimLabels {
 		labels[key] = value
 	}
+	labels[RestoredByLabel] = ops.Name
 
 	storageClass, err := r.restoreStorageClassName(ctx, ops)
 	if err != nil {
@@ -374,8 +406,25 @@ func (r *StorageBackupOpsReconciler) ensureClaim(
 			},
 		},
 	}
-	if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+	if err := r.Create(ctx, claim); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		// Somebody created a claim of this name between the check above and this
+		// create. Treating that as success would bind a restore to a claim it
+		// never made, which is the adoption the whole step exists to refuse, so
+		// the object is read back and has to prove it is ours.
+		adopted, err := r.claimIsOurs(ctx, ops, restore.ClaimName)
+		if err != nil {
+			return err
+		}
+		if !adopted {
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ReasonClaimExists, ReasonClaimExists,
+				"Claim %s was created by something else while the restore was binding, so the restore was refused",
+				restore.ClaimName)
+			return fatalf("claim %s was created by something else while this operation was binding it",
+				restore.ClaimName)
+		}
 	}
 	return nil
 }
@@ -398,6 +447,37 @@ func (r *StorageBackupOpsReconciler) restoreStorageClassName(
 			ops.Spec.Restore.TargetPool, err)
 	}
 	return name, nil
+}
+
+// claimIsOurs reports whether a claim of this name exists and was created by
+// this operation. It is the one question both the create path and the recovery
+// path ask, and the label is what answers it: the claim carries no owner
+// reference back to the operation, deliberately, so the marker is the only thing
+// that separates this operation's work from somebody else's claim of the same
+// name.
+func (r *StorageBackupOpsReconciler) claimIsOurs(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, claimName string,
+) (bool, error) {
+	var existing corev1.PersistentVolumeClaim
+	err := r.Get(ctx, client.ObjectKey{Name: claimName, Namespace: ops.Namespace}, &existing)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if existing.Labels[RestoredByLabel] != ops.Name {
+		return false, fatalf("claim %s exists and was not created by this operation", claimName)
+	}
+	return true, nil
+}
+
+// claimRefMatches reports whether a volume is pre-bound to the claim this
+// operation produces.
+func claimRefMatches(ref *corev1.ObjectReference, ops *simplyblockv1alpha2.StorageBackupOps) bool {
+	return ref != nil &&
+		ref.Name == ops.Spec.Restore.ClaimName &&
+		ref.Namespace == ops.Namespace
 }
 
 // backupOf reads the operation's target, which the Binding step needs for the

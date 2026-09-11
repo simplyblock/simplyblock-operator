@@ -138,6 +138,13 @@ type fakeControlPlane struct {
 	detaches    []string
 	restores    int
 	volumeReads int
+
+	// pool is what ListVolumes answers with, which is how a test puts a volume a
+	// previous pass created into the world without a control plane.
+	pool      []lvol.Volume
+	listErr   error
+	deleted   []string
+	deleteErr error
 }
 
 func (f *fakeControlPlane) ListBackupPolicies(
@@ -210,6 +217,21 @@ func (f *fakeControlPlane) Connection(
 	context.Context, lvol.VolumeHandle, ...lvol.ConnectionOption,
 ) (lvol.Connection, error) {
 	return f.connection, f.connectErr
+}
+
+func (f *fakeControlPlane) ListVolumes(context.Context, string, string) ([]lvol.Volume, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.pool, nil
+}
+
+func (f *fakeControlPlane) DeleteVolume(_ context.Context, handle lvol.VolumeHandle) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, string(handle))
+	return nil
 }
 
 // notFoundError satisfies errors.Is against the atlas sentinel the band checks
