@@ -207,7 +207,7 @@ func releaseMigrationPaths(
 		return nil, err
 	}
 	if s.NQN == "" {
-		// Nothing attached for this nqn: the paths are already gone.
+		// Nothing attached for this NQN: the paths are already gone.
 		return nil, nil
 	}
 	return detach(ctx, d, migrationPathVictims(s, conns),
@@ -305,9 +305,9 @@ func reapDeadControllers(
 // the other thing worth reusing here — and when the controller serves no namespace at
 // all. See reapableKind for why that last test is this caller's and not atlas's.
 //
-// Inspect is asked once per exported namespace as well as once for the bare nqn, because
+// Inspect is asked once per exported namespace as well as once for the bare NQN, because
 // its controller-level check needs to know which namespace is meant and stands down when
-// a selector matches several — which a bare nqn does on exactly the multi-namespace
+// a selector matches several — which a bare NQN does on exactly the multi-namespace
 // subsystems this package migrates. That is the same reason diagnose asks that way.
 func reapableDefects(ctx context.Context, sysRoot string, s nvme.Subsystem) []nvmeof.Defect {
 	subs := snapshot{s}

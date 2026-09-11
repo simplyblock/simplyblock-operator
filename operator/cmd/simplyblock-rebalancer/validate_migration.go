@@ -126,7 +126,7 @@ func (v validationRun) run(
 		log.Printf("path %s to %s already present before connecting", addr, nqn)
 	}
 
-	// The freshly connected target path can lag behind: NVMe connect may return before
+	// The freshly connected target path can lag behind: `nvme connect` may return before
 	// its controller is live and the ANA log page settles. Retry the connect+verify
 	// cycle a few times before giving up so a transient lag is not mistaken for a
 	// missing path. Already connected paths are a no-op in ensurePaths, so re-running

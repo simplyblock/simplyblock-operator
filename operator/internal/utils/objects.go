@@ -137,7 +137,7 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 }
 
 // ResolveClusterCRByUUID finds the StorageCluster CR in namespace whose backend
-// UUID matches UUID. Used to go from a cross-cluster reference (which only
+// UUID matches uuid. Used to go from a cross-cluster reference (which only
 // carries the backend UUID) back to the CR, to read config the backend doesn't
 // expose, such as a cluster's backup credentials secret.
 func ResolveClusterCRByUUID(

@@ -34,7 +34,7 @@ type CapacityStat struct {
 type VolumeInfo struct {
 	UUID string `json:"id"`
 	Name string `json:"name"`
-	// nqn is the volume's NVMe subsystem nqn. Namespaced volumes share it with
+	// NQN is the volume's NVMe subsystem NQN. Namespaced volumes share it with
 	// their siblings, and it is the identity a batch migration is addressed by
 	// (see MigrationRef).
 	NQN                   string       `json:"nqn"`
@@ -59,7 +59,7 @@ type ContinueMigrationParams struct {
 	DeadlineSeconds int `json:"deadline_seconds,omitempty"`
 }
 
-// Migrations are addressed by cluster and NVMe subsystem nqn: the control plane
+// Migrations are addressed by cluster and NVMe subsystem NQN: the control plane
 // migrates a whole subsystem at once, covering both a single-namespace subsystem
 // and a namespaced one, where several volumes share it.
 //
@@ -125,7 +125,7 @@ type MigrationDTO struct {
 // normalize fills in what a single-namespace migration's response leaves out.
 // Such a migration still moves exactly one volume, so reporting 0 members would
 // make "how many volumes did this move" wrong for every non-namespaced volume;
-// and it is addressed under the subsystem the caller asked for, so that nqn is
+// and it is addressed under the subsystem the caller asked for, so that NQN is
 // the subsystem being migrated whether or not the response repeats it.
 func (m *MigrationDTO) normalize(nqn string) {
 	if m.MemberCount <= 0 {
@@ -243,7 +243,7 @@ func (c *Client) GetPoolVolumes(
 // single-namespace subsystem that is one volume; for a namespaced one it is the
 // volume and its siblings.
 //
-// The control plane has no volume-by-nqn lookup and its batch-migration DTO reports
+// The control plane has no volume-by-NQN lookup and its batch-migration DTO reports
 // only a member *count*, so membership is derived here by scanning the cluster's
 // pools. Pools are scanned rather than assuming the subsystem's members live in the
 // pool of any one member: a subsystem is scoped to a storage node, not to a pool.

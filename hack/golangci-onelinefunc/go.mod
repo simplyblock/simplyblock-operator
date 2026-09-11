@@ -1,6 +1,6 @@
 module github.com/simplyblock/golangci-onelinefunc
 
-go 1.26.5
+go 1.26.2
 
 require (
 	github.com/golangci/plugin-module-register v0.1.1

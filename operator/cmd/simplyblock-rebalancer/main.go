@@ -77,7 +77,7 @@ type fioOutput struct {
 	} `json:"jobs"`
 }
 
-// ── NVMe list JSON structures ──────────────────────────────────────────────────
+// ── `nvme list` JSON structures ──────────────────────────────────────────────────
 
 type nvmeListOutput struct {
 	Devices []struct {

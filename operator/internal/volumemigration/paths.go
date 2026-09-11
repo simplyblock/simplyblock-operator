@@ -147,7 +147,7 @@ func PresentAddresses(ctx context.Context, sysRoot, nqn string) (map[string]bool
 //
 // Inspect is what names the defects a connect cannot see — a live controller that
 // serves no namespace at all, or serves the subsystem's other namespaces but not
-// this one, or an nqn answered by two kernel subsystem instances at once. Those are
+// this one, or an NQN answered by two kernel subsystem instances at once. Those are
 // the states in which every expected path looks established while the volume has
 // nothing to take over at cutover, and diagnosing them from what the kernel already
 // publishes is what atlas centralizes.
@@ -155,7 +155,7 @@ func PresentAddresses(ctx context.Context, sysRoot, nqn string) (map[string]bool
 // It is asked once per exported namespace rather than once for the subsystem, and
 // that is the whole reason it can say anything here: its controller-level check
 // needs to know which namespace is meant, and stands down when a selector matches
-// several — which a bare nqn does on exactly the multi-namespace subsystems this
+// several — which a bare NQN does on exactly the multi-namespace subsystems this
 // package migrates.
 //
 // No target list is passed. Targets are how Inspect tells an attached endpoint the

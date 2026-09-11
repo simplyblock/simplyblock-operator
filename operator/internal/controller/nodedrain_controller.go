@@ -1441,7 +1441,7 @@ func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string)
 	return uuids
 }
 
-// nextUUIDInList returns the element immediately after current in UUIDs,
+// nextUUIDInList returns the element immediately after current in uuids,
 // or an empty string if current is the last element or not found.
 func nextUUIDInList(uuids []string, current string) string {
 	for i, u := range uuids {
