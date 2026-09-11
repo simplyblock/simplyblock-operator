@@ -143,3 +143,33 @@ func TestOtherOperationsAreNotThisWebhooksBusiness(t *testing.T) {
 		}
 	}
 }
+
+// Regression: 2026-09-11-device-guard-refuses-the-collector. The guard's own
+// contract says a device goes away with the StorageNode that owns it, and the
+// mirror sets that owner reference. Kubernetes acts on it through the garbage
+// collector, whose deletes carry its own identity rather than the operator's, so
+// the guard refused them and every device outlived the node it belonged to. The
+// records left behind are unreclaimable: their owner is gone, so nothing
+// recreates the link, and no caller the guard admits ever asks again.
+func TestTheGarbageCollectorMayDeleteAStorageDevice(t *testing.T) {
+	v := deviceValidator(t, liveNamespace())
+
+	resp := v.Handle(context.Background(), deleteRequest(
+		"system:serviceaccount:kube-system:generic-garbage-collector"))
+	if !resp.Allowed {
+		t.Fatalf("the collector's cascade was refused: %s", resp.Result.Message)
+	}
+}
+
+// The exemption is the collector's identity and not kube-system's: a service
+// account that happens to live there is still a caller with no business
+// withdrawing a device record.
+func TestAnotherKubeSystemAccountMayNotDeleteAStorageDevice(t *testing.T) {
+	v := deviceValidator(t, liveNamespace())
+
+	resp := v.Handle(context.Background(), deleteRequest(
+		"system:serviceaccount:kube-system:some-other-controller"))
+	if resp.Allowed {
+		t.Fatal("a delete from an unrelated kube-system account was admitted")
+	}
+}

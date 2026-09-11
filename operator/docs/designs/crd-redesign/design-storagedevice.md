@@ -489,10 +489,16 @@ is rewritten, so nothing is written at all for those two. `Unknown` replaces
 
 **A user cannot delete a `StorageDevice`.** The object is discovered rather than
 declared (§5.1), so it is not a request anybody made and not theirs to withdraw. A
-validating webhook refuses `DELETE` from every identity except a service account in
-the operator's namespace, which is the same identity test the node's own webhook
-applies to its operator-written fields
-([`design-storagenode.md`](design-storagenode.md) §3.2).
+validating webhook refuses `DELETE` from every identity except three. A service
+account in the operator's namespace is the first, which is the same identity test
+the node's own webhook applies to its operator-written fields
+([`design-storagenode.md`](design-storagenode.md) §3.2). The garbage collector is
+the second: the cascade below is Kubernetes' work rather than the operator's, and
+it arrives as the collector's own service account, so a rule that named only the
+operator would refuse the path this section relies on. A namespace that is itself
+terminating is the third, because the deletes of a teardown come from the
+namespace controller and refusing them leaves the namespace in `Terminating` with
+nothing able to release it.
 
 **The object carries state that only its own continuity holds.**
 `status.activeOpsRef` is the lock a `StorageDeviceOps` acquired, the UID is what
@@ -503,14 +509,14 @@ exists, and every watcher sees a delete and a create while the hardware sat
 untouched. Refusing the deletion is what keeps the object's identity as durable as
 the device it describes.
 
-**The operator deletes them for two reasons and no others.** The device stopped being
-reported, which is §5.2, and the node was deleted, which garbage-collects them through
-the owner reference. That edge is the one
+**They are deleted for two reasons and no others.** The device stopped being
+reported, which is §5.2 and which the operator carries out itself, and the node was
+deleted, which Kubernetes cascades through the owner reference. That edge is the one
 [`design-crd-model.md`](design-crd-model.md) §9.3 lists as depending on this kind
 existing, and this document establishes it.
 
-**No finalizer.** With the delete refused there is nothing to gate: the operator's own
-deletions are the only ones that happen, and each is a record being removed after the
+**No finalizer.** With every other delete refused there is nothing to gate: the two
+above are the only ones that happen, and each is a record being removed after the
 thing it recorded is already gone. A finalizer would add a step to the one path that is
 correct by construction.
 

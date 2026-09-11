@@ -26,6 +26,17 @@ import (
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagedevice,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=storagedevices,verbs=delete,versions=v1alpha2,name=vstoragedevice.simplyblock.io,admissionReviewVersions=v1
 
+// garbageCollectorUsername is the identity Kubernetes cascades under.
+//
+// A device object carries a controller reference to the StorageNode it was found
+// on, so deleting the node is meant to take its devices with it. Kubernetes
+// performs that cascade through the garbage collector, and the collector's
+// deletes arrive as this service account rather than as the operator: the
+// reference was written by the operator, but the delete is the collector's own
+// request. A guard that reads only the caller therefore refuses the one path its
+// own contract relies on.
+const garbageCollectorUsername = "system:serviceaccount:kube-system:generic-garbage-collector"
+
 // StorageDeviceValidator refuses a StorageDevice deletion that is not the
 // operator's own.
 //
@@ -53,11 +64,20 @@ func (v *StorageDeviceValidator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("")
 	}
 
-	// The operator deletes a device object for two reasons and no others: the
-	// device stopped being reported, and the owning node was deleted, which
-	// garbage-collects them.
+	// A device object is deleted for two reasons and no others: the device
+	// stopped being reported, which the operator does itself, and the owning node
+	// was deleted, which Kubernetes cascades.
 	if strings.HasPrefix(req.UserInfo.Username, "system:serviceaccount:"+v.OperatorNamespace+":") {
 		return admission.Allowed("operator-driven deletion")
+	}
+
+	// The second of those two reasons is carried out by the garbage collector
+	// rather than by the operator, so it needs its own exemption. It is matched
+	// exactly rather than by prefix: the account that cascades is one identity,
+	// and every other account in kube-system is as much a stranger to a device
+	// record as a user is.
+	if req.UserInfo.Username == garbageCollectorUsername {
+		return admission.Allowed("owner cascade")
 	}
 
 	// Deleting a namespace makes Kubernetes delete the objects in it, and those
