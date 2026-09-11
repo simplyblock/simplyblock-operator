@@ -99,17 +99,18 @@ would be the old `Degraded` under a new name.
 
 ### Events on Transition (design §4.3, §9.1)
 
-| #    | Scenario                                                                   | Type     | Test |
-|------|----------------------------------------------------------------------------|----------|------|
-| U-13 | `Ready` to `Unavailable`: exactly one `ControlPlaneNotReady` event         | Positive | —    |
-| U-14 | `Unavailable` to `Ready`: exactly one `ControlPlaneReady` event            | Positive | —    |
-| U-15 | Ten consecutive failing probes: exactly one event, not ten                 | Boundary | —    |
-| U-16 | Ten consecutive passing probes after a failure: exactly one recovery event | Boundary | —    |
-| U-17 | The first probe ever, failing: an event is emitted from an empty phase     | Boundary | —    |
-| U-83 | `Ready` to `Degraded`: exactly one `ControlPlaneDegraded` event            | Positive | —    |
-| U-84 | `Degraded` to `Unavailable`: `ControlPlaneNotReady`, not a second degraded | Boundary | —    |
-| U-85 | `Degraded` to `Ready`: exactly one `ControlPlaneReady` event               | Positive | —    |
-| U-86 | Ten consecutive probes with a pod restarting: one event, not ten           | Boundary | —    |
+| #     | Scenario                                                                                  | Type       | Test                                         |
+|-------|-------------------------------------------------------------------------------------------|------------|----------------------------------------------|
+| U-13  | `Ready` to `Unavailable`: exactly one `ControlPlaneNotReady` event                        | Positive   | —                                            |
+| U-14  | `Unavailable` to `Ready`: exactly one `ControlPlaneReady` event                           | Positive   | —                                            |
+| U-15  | Ten consecutive failing probes: exactly one event, not ten                                | Boundary   | —                                            |
+| U-16  | Ten consecutive passing probes after a failure: exactly one recovery event                | Boundary   | —                                            |
+| U-147 | Ten consecutive passing probes: the readiness is announced once in the log, not ten times | Regression | `TestARepeatedReadyProbeIsNotAnnouncedAgain` |
+| U-17  | The first probe ever, failing: an event is emitted from an empty phase                    | Boundary   | —                                            |
+| U-83  | `Ready` to `Degraded`: exactly one `ControlPlaneDegraded` event                           | Positive   | —                                            |
+| U-84  | `Degraded` to `Unavailable`: `ControlPlaneNotReady`, not a second degraded                | Boundary   | —                                            |
+| U-85  | `Degraded` to `Ready`: exactly one `ControlPlaneReady` event                              | Positive   | —                                            |
+| U-86  | Ten consecutive probes with a pod restarting: one event, not ten                          | Boundary   | —                                            |
 
 ### The Source Block (design §3.2, §5)
 

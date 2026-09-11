@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -73,5 +75,84 @@ func TestControlPlaneReconcileRecordsAvailablePhase(t *testing.T) {
 	}
 	if got.Status.LastChecked == nil {
 		t.Fatal("expected the probe to stamp status.lastChecked")
+	}
+}
+
+// recordingSink is a logr sink that keeps what was logged at info level, so a
+// test can assert what a steady state is quiet about. Only the levels this
+// controller uses are recorded; everything else is discarded.
+type recordingSink struct {
+	verbosity int
+	messages  *[]string
+}
+
+func (s recordingSink) Init(logr.RuntimeInfo)        {}
+func (s recordingSink) Enabled(int) bool             { return true }
+func (s recordingSink) WithName(string) logr.LogSink { return s }
+
+func (s recordingSink) Info(level int, msg string, _ ...any) {
+	// controller-runtime logs debug at V(1) and above, and info at V(0).
+	if level+s.verbosity == 0 {
+		*s.messages = append(*s.messages, msg)
+	}
+}
+
+func (s recordingSink) Error(_ error, msg string, _ ...any) {
+	*s.messages = append(*s.messages, msg)
+}
+
+func (s recordingSink) WithValues(...any) logr.LogSink { return s }
+
+func (s recordingSink) V(level int) logr.LogSink {
+	return recordingSink{verbosity: s.verbosity + level, messages: s.messages}
+}
+
+// Regression: 2026-09-11-controlplane-logs-every-probe. The probe repeats every
+// 30 seconds for the life of the cluster, and a readiness that has not changed
+// was announced at info on every one of them: about six thousand lines a day per
+// operator, all of them saying what the line before said. The transition is the
+// event, and it is what the log says too.
+func TestARepeatedReadyProbeIsNotAnnouncedAgain(t *testing.T) {
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/_meta/ready", webapimock.RouteResponse{
+		Status:  http.StatusOK,
+		Body:    `{"status":"ok"}`,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	cp := &simplyblockv1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SingletonControlPlaneName,
+			Namespace: "simplyblock",
+		},
+	}
+	scheme := newTestScheme(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha2.ControlPlane{}).
+		WithObjects(cp).
+		Build()
+	r := &ControlPlaneReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(8)}
+
+	var logged []string
+	ctx := logf.IntoContext(context.Background(), logr.New(recordingSink{messages: &logged}))
+	key := client.ObjectKeyFromObject(cp)
+
+	for i := range 3 {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+
+	var announcements int
+	for _, msg := range logged {
+		if msg == "control plane ready" {
+			announcements++
+		}
+	}
+	if announcements != 1 {
+		t.Fatalf("expected the readiness to be announced once, got %d in %v", announcements, logged)
 	}
 }
