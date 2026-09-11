@@ -230,6 +230,10 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			verbosity,
 			"--timeout=150s",
 			"--leader-election=false",
+			// VolumeGroupSnapshot support (design-consistency-groups.md §9,
+			// P0-4): the sidecar calls the driver's GroupController for a
+			// VolumeGroupSnapshot only behind this gate.
+			"--feature-gates=CSIVolumeGroupSnapshot=true",
 		}),
 		controllerSidecar(d, "csi-attacher", s.attacher, sidecarMount, []string{
 			verbosity,
