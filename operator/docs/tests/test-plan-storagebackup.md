@@ -98,23 +98,24 @@ File: `operator/internal/controllers/backup/storagebackup_controller_unit_test.g
 
 File: `operator/internal/controllers/backup/storagebackupops_restore_test.go`
 
-| #    | Scenario                                                                                                  | Type     | Test |
-|------|-----------------------------------------------------------------------------------------------------------|----------|------|
-| U-39 | A restore into a new claim: the claim is created and bound                                                | Positive | —    |
-| U-40 | The claim already exists at create: the webhook rejects it (design §7)                                    | Negative | —    |
-| U-41 | The claim appears after admission: `Binding` refuses with `ClaimExists`                                   | Negative | —    |
-| U-42 | `spec.restore.targetPool` unset: the backup's own pool is used                                            | Positive | —    |
-| U-43 | The backup's pool no longer exists: refused with `PoolNotFound`, naming it                                | Negative | —    |
-| U-44 | `spec.restore.targetPool` set to a pool that does not exist: refused                                      | Negative | —    |
-| U-45 | The created claim carries `spec.restore.claimLabels`                                                      | Positive | —    |
-| U-46 | The created claim has no owner reference and survives the operation's deletion                            | Positive | —    |
-| U-47 | The restored claim's size matches the backup's                                                            | Positive | —    |
-| U-48 | The restored claim's filesystem matches `status.source.fsType`                                            | Positive | —    |
-| U-49 | The backup is not `Available`: the restore is refused                                                     | Negative | —    |
-| U-50 | `AwaitingVolume` holds until the control plane reports the volume restored                                | Negative | —    |
-| U-51 | An abort during `Validating`: `Aborted`, and nothing was created                                          | Positive | —    |
-| U-52 | An abort during `Binding`: refused by the graph, the operation runs on                                    | Negative | —    |
-| U-71 | A restart mid-`Binding`: the operation completes its own labeled claim rather than tripping `ClaimExists` | Positive | —    |
+| #    | Scenario                                                                                                  | Type       | Test                                             |
+|------|-----------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------|
+| U-39 | A restore into a new claim: the claim is created and bound                                                | Positive   | —                                                |
+| U-40 | The claim already exists at create: the webhook rejects it (design §7)                                    | Negative   | —                                                |
+| U-41 | The claim appears after admission: `Binding` refuses with `ClaimExists`                                   | Negative   | —                                                |
+| U-42 | `spec.restore.targetPool` unset: the backup's own pool is used                                            | Positive   | —                                                |
+| U-43 | The backup's pool no longer exists: refused with `PoolNotFound`, naming it                                | Negative   | —                                                |
+| U-44 | `spec.restore.targetPool` set to a pool that does not exist: refused                                      | Negative   | —                                                |
+| U-74 | `spec.restore.targetPool` set to a pool that exists: admitted, the pool read at the stored version        | Regression | `TestARestoreWithResolvableReferencesIsAdmitted` |
+| U-45 | The created claim carries `spec.restore.claimLabels`                                                      | Positive   | —                                                |
+| U-46 | The created claim has no owner reference and survives the operation's deletion                            | Positive   | —                                                |
+| U-47 | The restored claim's size matches the backup's                                                            | Positive   | —                                                |
+| U-48 | The restored claim's filesystem matches `status.source.fsType`                                            | Positive   | —                                                |
+| U-49 | The backup is not `Available`: the restore is refused                                                     | Negative   | —                                                |
+| U-50 | `AwaitingVolume` holds until the control plane reports the volume restored                                | Negative   | —                                                |
+| U-51 | An abort during `Validating`: `Aborted`, and nothing was created                                          | Positive   | —                                                |
+| U-52 | An abort during `Binding`: refused by the graph, the operation runs on                                    | Negative   | —                                                |
+| U-71 | A restart mid-`Binding`: the operation completes its own labeled claim rather than tripping `ClaimExists` | Positive   | —                                                |
 
 ### Import (withdrawn)
 
