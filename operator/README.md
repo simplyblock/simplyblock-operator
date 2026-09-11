@@ -1,4 +1,4 @@
-# Simplyblock Operator
+# simplyblock Operator
 
 **Kubernetes operator for declarative management of simplyblock storage clusters**
 
@@ -23,42 +23,47 @@ Where the [CSI driver](../csi-driver/README.md) provisions and attaches volumes 
 operator manages the **lifecycle of the storage platform itself** — clusters, nodes, pools, backups,
 restores, and replication.
 
-👉 For full documentation, see the [Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
+👉 For full documentation, see the [simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
 
 ---
 
 ## ✨ Features
 
-| Feature                        | Benefit                                                                        |
-|--------------------------------|--------------------------------------------------------------------------------|
+| Feature                          | Benefit                                                                        |
+|----------------------------------|--------------------------------------------------------------------------------|
 | **Declarative Storage Clusters** | Create, activate, expand, and lifecycle-manage clusters via Kubernetes CRs     |
-| **Storage Node Management**    | Reconciles the storage-node DaemonSet, node labels, and per-namespace RBAC      |
-| **Pool Provisioning**          | Manages storage pools, QoS, dhchap security, and host allow-lists              |
-| **Backup, Restore & Import**   | First-class backups with cross-cluster import and policy-driven retention       |
-| **Snapshot Replication**       | Replicates snapshots between clusters/pools, including failback support         |
-| **Drain-Aware Node Lifecycle** | Coordinates storage-node shutdown/restart with Kubernetes drains via PDBs        |
-| **Standard Kubernetes RBAC**   | Authorization delegated entirely to native K8s RBAC (no custom identity model)   |
-| **mTLS to the Control Plane**  | Optional cert-manager-issued mTLS between the operator and the Web API           |
+| **Storage Node Management**      | Reconciles the storage-node DaemonSet, node labels, and per-namespace RBAC     |
+| **Pool Provisioning**            | Manages storage pools, QoS, dhchap security, and host allow-lists              |
+| **Backup, Restore & Import**     | First-class backups with cross-cluster import and policy-driven retention      |
+| **Snapshot Replication**         | Replicates snapshots between clusters/pools, including failback support        |
+| **Drain-Aware Node Lifecycle**   | Coordinates storage-node shutdown/restart with Kubernetes drains via PDBs      |
+| **Standard Kubernetes RBAC**     | Authorization delegated entirely to native K8s RBAC (no custom identity model) |
+| **mTLS to the Control Plane**    | Optional cert-manager-issued mTLS between the operator and the Web API         |
 
 ---
 
 ## 🧩 Custom Resources
 
-The operator manages the following `storage.simplyblock.io/v1alpha1` resources:
+The operator manages the following `storage.simplyblock.io` resources. Most are
+still served at `v1alpha1`; the kinds the CRD redesign has reworked are served at
+`v1alpha2`, and a kind carrying both is converted by the operator's conversion
+webhook:
 
-| Kind                  | Purpose                                                                 |
-|-----------------------|-------------------------------------------------------------------------|
-| `ControlPlane`        | Singleton gating the system on control-plane readiness                  |
-| `StorageCluster`      | Create/activate/expand clusters and provision per-pool StorageClasses   |
-| `StorageNodeSet`      | Manage storage nodes and the storage-node DaemonSet                     |
-| `Pool`                | Create storage pools with QoS, dhchap security, and host affinity       |
-| `Task`                | Observe long-running cluster tasks                                      |
-| `StorageBackup`       | Snapshot a PVC's backing volume and create a cluster backup             |
-| `BackupRestore`       | Restore a backup into a cluster/pool/node                               |
-| `BackupImport`        | Import a backup from a source cluster's backend into a target cluster   |
-| `BackupPolicy`        | Define retention (`maxVersions`, `maxAge`) attached to PVCs             |
-| `SnapshotReplication` | Replicate snapshots between clusters/pools                              |
-| `VolumeMigration`     | Migrate volumes between clusters                                        |
+| Kind                  | Purpose                                                                  |
+|-----------------------|--------------------------------------------------------------------------|
+| `ControlPlane`        | Singleton gating the system on control-plane readiness                   |
+| `StorageCluster`      | Create/activate/expand clusters and provision per-pool StorageClasses    |
+| `StorageNodeSet`      | Manage storage nodes and the storage-node DaemonSet                      |
+| `Pool`                | Create storage pools with QoS, dhchap security, and host affinity        |
+| `Task`                | Observe long-running cluster tasks                                       |
+| `StorageBackup`       | One copy the cluster's store holds, discovered rather than declared      |
+| `StorageBackupPolicy` | Schedule and retain the backups of the claims a selector matches         |
+| `StorageBackupOps`    | Restore one backup into a new claim                                      |
+| `BackupRestore`       | Restore a backup into a cluster/pool/node (superseded by the above)      |
+| `BackupImport`        | Import a backup from a source cluster's backend into a target cluster    |
+| `BackupPolicy`        | Define retention (`maxVersions`, `maxAge`) attached to PVCs (superseded) |
+| `SnapshotReplication` | Replicate snapshots between clusters/pools                               |
+| `VolumeMigration`     | Migrate volumes between clusters                                         |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed component and reconciliation overview.
 
@@ -70,7 +75,7 @@ The operator is installed as part of a simplyblock deployment via the **official
 the documentation for the supported, end-to-end installation flow — it wires up the control plane, the
 `ControlPlane` CR, cert-manager, and the CSI driver alongside the operator:
 
-👉 **[Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/)**
+👉 **[simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/)**
 
 > The manual and from-source paths below exist for development and troubleshooting only. For any real
 > deployment, use the documentation and Helm charts above.
@@ -79,7 +84,7 @@ the documentation for the supported, end-to-end installation flow — it wires u
 
 ## 🔐 Access Control (RBAC)
 
-The operator delegates user authorisation entirely to standard Kubernetes RBAC.
+The operator delegates user authorization entirely to standard Kubernetes RBAC.
 It does not ship per-CR `admin`/`editor`/`viewer` ClusterRoles or any
 identity-bearing fields on its CRs; cluster admins write `Role`s,
 `RoleBinding`s and `ClusterRoleBinding`s using the normal K8s primitives.
@@ -96,17 +101,17 @@ backend, sets `status.status = "InvalidClusterReference"`, and emits a
 This converts "admin of cluster `foo`" into "admin of the namespace where
 StorageCluster `foo` lives" — a problem standard K8s RBAC already solves
 cleanly. The recommended layout is one namespace per logical storage cluster
-(e.g. `cluster-prod`, `cluster-staging`).
+(for example, `cluster-prod`, `cluster-staging`).
 
 ### Aggregation into the built-in `view`/`edit`/`admin` roles
 
-The operator installs two `ClusterRole`s labelled to aggregate into the
+The operator installs two `ClusterRole`s labeled to aggregate into the
 standard Kubernetes ClusterRoles:
 
-| Operator ClusterRole              | Aggregates into     | Grants on simplyblock CRs            |
-|-----------------------------------|---------------------|--------------------------------------|
-| `simplyblock-aggregate-to-view`   | `view`              | `get`, `list`, `watch`               |
-| `simplyblock-aggregate-to-edit`   | `edit`, `admin`     | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+| Operator ClusterRole            | Aggregates into | Grants on simplyblock CRs                                     |
+|---------------------------------|-----------------|---------------------------------------------------------------|
+| `simplyblock-aggregate-to-view` | `view`          | `get`, `list`, `watch`                                        |
+| `simplyblock-aggregate-to-edit` | `edit`, `admin` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 
 Effect: anyone already bound to the built-in `view`, `edit`, or `admin`
 ClusterRole in a namespace automatically gets the corresponding access to the
@@ -125,7 +130,7 @@ kubectl create rolebinding alice-admin \
 
 ### Per-resource scoping with `resourceNames`
 
-For finer-grained delegation — e.g. admin only of `StorageCluster/prod`, not
+For finer-grained delegation — for example, admin only of `StorageCluster/prod`, not
 any other `StorageCluster` in the same namespace — write a `Role` with
 `resourceNames`:
 
@@ -164,7 +169,7 @@ subjects:
 > for `list`, `watch`, and `create`. A user with only the Role above can
 > `kubectl get storagecluster prod` (a named GET) but not
 > `kubectl get storagecluster` (a LIST) — they will need a separate, broader
-> binding (e.g. the `view` ClusterRole) if you want them to enumerate. This is
+> binding (for example, the `view` ClusterRole) if you want them to enumerate. This is
 > a property of K8s RBAC, not the operator.
 
 ### Delegating who can create clusters and grant admin
@@ -177,7 +182,7 @@ common patterns:
   aggregation role makes that work). To stop arbitrary users from creating
   namespaces, restrict `create namespaces` at the cluster scope.
 * **Gate by SA.** Reserve `create storageclusters` for a small set of service
-  accounts (e.g. your platform automation) and have them stand up tenant
+  accounts (for example, your platform automation) and have them stand up tenant
   namespaces on demand.
 
 To let a "cluster owner" delegate admin to teammates *without* giving them

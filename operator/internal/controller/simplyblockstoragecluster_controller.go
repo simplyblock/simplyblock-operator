@@ -90,6 +90,30 @@ type StorageClusterReconciler struct {
 	// carries every node of it, so the cluster is what opens and closes it
 	// rather than any one node. Optional (nil in tests).
 	NodeScopes *cpinformer.ScopeSet
+
+	// BackupScopes are the data-protection band's streams, which are per
+	// cluster for the same reason the node stream is. They are a slice because
+	// backups and backup policies are two streams opened and closed together:
+	// both are scoped to this cluster, and a cluster with one and not the other
+	// would report copies nobody scheduled or a schedule nothing reports on.
+	BackupScopes []*cpinformer.ScopeSet
+
+	// BackupRegistrars learn which object a backend cluster id belongs to.
+	//
+	// The band needs it and the node stream does not, and the difference is
+	// where the object goes: a device object is created beside the StorageNode
+	// that owns it, whose namespace that node's own registration carries, while
+	// a backup object has no owner and belongs beside this cluster. Nothing else
+	// knows both ids at once, so this reconciler is where the mapping is made.
+	BackupRegistrars []ClusterRegistrar
+}
+
+// ClusterRegistrar records which StorageCluster object a backend cluster id
+// belongs to. The backup subscriptions implement it; the interface is declared
+// here so that this package does not depend on which of them does.
+type ClusterRegistrar interface {
+	RegisterCluster(clusterID string, cluster types.NamespacedName)
+	UnregisterCluster(clusterID string)
 }
 
 type CSICredentials struct {
@@ -145,6 +169,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if r.NodeScopes != nil {
 			r.NodeScopes.Add(cpinformer.Scope{clusterCR.Status.UUID})
 		}
+		r.openBackupStreams(clusterCR)
 		return r.syncStatus(ctx, clusterCR)
 	}
 
@@ -484,6 +509,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 	if r.NodeScopes != nil {
 		r.NodeScopes.Remove(cpinformer.Scope{clusterUUID})
 	}
+	r.closeBackupStreams(clusterUUID)
 
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
@@ -888,4 +914,29 @@ func stripeParityChunks(s *simplyblockv1alpha1.StripeSpec) int {
 		return 1
 	}
 	return ptr.IntFrom(s.ParityChunks, 1)
+}
+
+// openBackupStreams tells the data-protection band that this cluster exists and
+// where its objects belong. Adding a scope already present is a no-op, which is
+// what makes this safe on every reconcile rather than only on the first.
+func (r *StorageClusterReconciler) openBackupStreams(clusterCR *simplyblockv1alpha1.StorageCluster) {
+	for _, registrar := range r.BackupRegistrars {
+		registrar.RegisterCluster(clusterCR.Status.UUID, client.ObjectKeyFromObject(clusterCR))
+	}
+	for _, scopes := range r.BackupScopes {
+		scopes.Add(cpinformer.Scope{clusterCR.Status.UUID})
+	}
+}
+
+// closeBackupStreams stops streaming a cluster that is going away, and forgets
+// where its objects belonged. A stream left open would reconnect against a
+// cluster that no longer exists, and a mapping left behind would name a
+// namespace for objects nothing will create.
+func (r *StorageClusterReconciler) closeBackupStreams(clusterUUID string) {
+	for _, scopes := range r.BackupScopes {
+		scopes.Remove(cpinformer.Scope{clusterUUID})
+	}
+	for _, registrar := range r.BackupRegistrars {
+		registrar.UnregisterCluster(clusterUUID)
+	}
 }

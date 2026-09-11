@@ -131,6 +131,65 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha2-storagebackup
+  failurePolicy: Ignore
+  name: vstoragebackup.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - DELETE
+    resources:
+    - storagebackups
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha2-storagebackupops
+  failurePolicy: Fail
+  name: vstoragebackupops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - DELETE
+    resources:
+    - storagebackupops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha2-storagebackuppolicy
+  failurePolicy: Fail
+  name: vstoragebackuppolicy.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - storagebackuppolicies
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha2-storagedevice
   failurePolicy: Ignore
   name: vstoragedevice.simplyblock.io

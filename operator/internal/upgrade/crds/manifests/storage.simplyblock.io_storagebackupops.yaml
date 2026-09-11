@@ -1,0 +1,250 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagebackupops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageBackupOps
+    listKind: StorageBackupOpsList
+    plural: storagebackupops
+    shortNames:
+    - sbops
+    singular: storagebackupops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.backupRef
+      name: Backup
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .status.claimName
+      name: Claim
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageBackupOps is a single operation performed against one StorageBackup. It
+          runs to a terminal phase and stays afterward as the audit record of what was
+          restored, into which pool, and how it ended.
+
+          The claim a restore produces is not owned by the operation and outlives it:
+          nobody restores a backup in order to keep a StorageBackupOps, so deleting the
+          audit record must not delete the recovered volume.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the operation to perform
+            properties:
+              abort:
+                description: |-
+                  Abort asks a running operation to stop at its next step and unwind. It is
+                  the one field of this spec that may be edited after the object is created,
+                  because it is the one thing about an operation that can legitimately be
+                  decided after it started.
+
+                  A restore cannot be aborted once it has created a logical volume, and the
+                  action's graph declares that rather than this field: an abort arriving
+                  later is reported as an illegal transition while the operation runs on,
+                  rather than leaving the work half undone.
+                type: boolean
+              action:
+                description: Action is the operation to perform.
+                enum:
+                - Restore
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              backupRef:
+                description: |-
+                  BackupRef names the StorageBackup this operation acts on, in this
+                  namespace. Required, since Restore is the only action and every backup in
+                  the store has an object.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              clusterRef:
+                description: ClusterRef names the StorageCluster the operation runs
+                  against.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              restore:
+                description: Restore parameterizes action Restore.
+                properties:
+                  claimAnnotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  claimLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      ClaimLabels and ClaimAnnotations are applied to the created claim, so that
+                      a restored volume can be selected by a policy or an application the same
+                      way its original was.
+                    type: object
+                  claimName:
+                    description: |-
+                      ClaimName is the PersistentVolumeClaim to create. It must not already
+                      exist: a restore that adopted an existing claim would replace a running
+                      workload's data with the backup's.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  targetPool:
+                    description: |-
+                      TargetPool is the StoragePool to restore into. It is required rather than
+                      defaulted: a backup found in the store may have been written by another
+                      cluster, so status.source.poolName names a pool this cluster need not
+                      have, and which pool a volume lands in is a tenancy and QoS decision
+                      nobody should make by omission.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - claimName
+                - targetPool
+                type: object
+            required:
+            - action
+            - backupRef
+            - clusterRef
+            type: object
+          status:
+            description: status defines the observed state of StorageBackupOps
+            properties:
+              backupID:
+                description: |-
+                  BackupID is the copy the restore read from, recorded so the operation says
+                  what it restored after the object list has moved on.
+                type: string
+              claimName:
+                description: |-
+                  ClaimName is the PersistentVolumeClaim a Restore produced. It is written
+                  before the claim is created rather than after, because the claim carries
+                  no owner reference back: a restarted Binding step recognizes its own work
+                  by this name together with the storage.simplyblock.io/restored-by label on
+                  the claim, and refuses a claim of the right name that carries neither.
+                type: string
+              clusterID:
+                description: ClusterID is the backend cluster the operation ran against.
+                type: string
+              completedAt:
+                description: CompletedAt is when it reached a terminal phase.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the operation moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from. On this kind it advances at most twice, and the second advance is
+                  precisely the signal that spec.abort has been observed.
+                format: int64
+                type: integer
+              persistentVolumeName:
+                description: |-
+                  PersistentVolumeName is the PV the operation wrote for the restored
+                  volume.
+                type: string
+              phase:
+                description: Phase is the operation's own progress.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Aborted
+                type: string
+              poolUUID:
+                description: |-
+                  PoolUUID is the backend identifier of spec.restore.targetPool, resolved
+                  once at Validating.
+                type: string
+              restoredLvolID:
+                description: |-
+                  RestoredLvolID is the logical volume the control plane created. It is
+                  written before the claim, so a restarted Binding step knows what it is
+                  binding.
+                type: string
+              startedAt:
+                description: StartedAt is when the operation acquired its target's
+                  lock.
+                format: date-time
+                type: string
+              step:
+                description: |-
+                  Step is the position of the running action's state machine. It is
+                  persisted before the side effect that step performs. The closed set is a
+                  CEL rule rather than an Enum marker because a marker cannot reach a field
+                  whose type is declared in another module.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Validating'',''Restoring'',''AwaitingVolume'',''Binding'']'
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

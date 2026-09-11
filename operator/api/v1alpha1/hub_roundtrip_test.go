@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -85,25 +86,43 @@ func TestStorageBackupRoundTripsFromTheHub(t *testing.T) {
 	hub := &v1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: v1alpha2.StorageBackupSpec{
-			ClusterRef:        "production",
-			PVCRef:            &v1alpha2.PersistentVolumeClaimRef{Name: "claim-1", Namespace: "apps"},
-			SnapshotName:      "snap-1",
-			SourceClusterUUID: "11111111-2222-3333-4444-555555555555",
+			ClusterRef: "production",
+			BackupID:   "backup-uuid",
 		},
 		Status: v1alpha2.StorageBackupStatus{
-			Phase:        v1alpha2.BackupPhaseDone,
-			Message:      "completed",
-			ClusterUUID:  "cluster-uuid",
-			PVName:       "pv-1",
-			PoolName:     "pool-1",
-			LvolID:       "lvol-uuid",
-			FSType:       "ext4",
-			SnapshotID:   "snapshot-uuid",
-			BackupID:     "backup-uuid",
-			S3ID:         42,
-			Size:         1 << 30,
-			AllowedHosts: []map[string]string{{"host": "a"}},
-			CreatedAt:    &created,
+			Phase:     v1alpha2.StorageBackupPhaseAvailable,
+			APIStatus: "completed",
+			ClusterID: "cluster-uuid",
+			Backup: &v1alpha2.BackupCopy{
+				BackupID:         "backup-uuid",
+				S3ID:             42,
+				Size:             ptr.To(int64(1 << 30)),
+				PreviousBackupID: "prev-uuid",
+				StartedAt:        &created,
+				CompletedAt:      &created,
+			},
+			Source: &v1alpha2.BackupSource{
+				ClaimName:            "claim-1",
+				ClaimNamespace:       "apps",
+				PersistentVolumeName: "pv-1",
+				PoolName:             "pool-1",
+				PoolUUID:             "pool-uuid",
+				LvolID:               "lvol-uuid",
+				LvolName:             "lvol-1",
+				FSType:               "ext4",
+				SnapshotID:           "snapshot-uuid",
+				SnapshotName:         "snap-1",
+				NodeID:               "node-uuid",
+				ClusterUUID:          "source-cluster-uuid",
+			},
+			// The lock is the field this trip exists for. It lives only in the
+			// hub's vocabulary, and a conversion with nowhere to put it would
+			// free the lock on every write while v1alpha1 is the storage
+			// version, so two restores of one backup would each believe they
+			// held it.
+			ActiveOpsRef:       "restore-1",
+			Message:            "completed",
+			ObservedGeneration: 3,
 		},
 	}
 

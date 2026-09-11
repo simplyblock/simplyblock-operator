@@ -115,6 +115,23 @@ func qosFromParams(p map[string]string) (QoSLimits, error) {
 	return QoSLimits{RWIOPS: rwIOPS, RWMBytes: rwMB, RMBytes: rMB, WMBytes: wMB}, nil
 }
 
+// storageClassNames is the formula a StoragePool's StorageClass is named by.
+// The upgrade tool checks names against this same formula, which is the reason
+// it is written down once rather than twice: a producer and a checker that
+// disagree report a collision nothing can reproduce, or miss one that is real.
+var storageClassNames = Formula{Kind: ObjectName, Prefix: "simplyblock-"}
+
+// StorageClassNameFor is the name of the StorageClass a pool generates.
+//
+// A bound claim pins spec.storageClassName immutably, so this name being wrong
+// is expensive to resolve: a pool whose class has to be renamed means its
+// volumes move to claims on a new class, which is a data migration on a running
+// cluster. The digest a truncation adds is what keeps two pools whose long names
+// share a prefix from deriving one class between them.
+func StorageClassNameFor(namespace, clusterName, poolName string) string {
+	return storageClassNames.Derive(namespace, clusterName, poolName).Value
+}
+
 // StorageClassNameFromPV returns the name of the StorageClass that provisioned
 // pv, and whether one is set. It reads Spec.StorageClassName, falling back to
 // the legacy beta annotation for PVs created before it was promoted.

@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -167,7 +168,7 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 			Namespace: "default",
 		},
 		Status: simplyblockv1alpha2.StorageBackupStatus{
-			Phase:   simplyblockv1alpha2.BackupPhaseFailed,
+			Phase:   simplyblockv1alpha2.StorageBackupPhaseFailed,
 			Message: "Snapshot snap-1 not found",
 		},
 	}
@@ -473,13 +474,15 @@ func TestBackupRestoreAcceptsARestoreOnItsLastAttempt(t *testing.T) {
 	// The backup finishes, so the next pass can place the restore.
 	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "late-backup", Namespace: "default"},
+		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "mycluster", BackupID: "backup-id"},
 		Status: simplyblockv1alpha2.StorageBackupStatus{
-			Phase:    simplyblockv1alpha2.BackupPhaseDone,
-			BackupID: "backup-id",
-			PoolName: "pool-a",
-			PoolUUID: "pool-uuid",
-			LvolID:   "source-lvol",
-			Size:     1 << 30,
+			Phase:  simplyblockv1alpha2.StorageBackupPhaseAvailable,
+			Backup: &simplyblockv1alpha2.BackupCopy{BackupID: "backup-id", Size: ptr.To(int64(1 << 30))},
+			Source: &simplyblockv1alpha2.BackupSource{
+				PoolName: "pool-a",
+				PoolUUID: "pool-uuid",
+				LvolID:   "source-lvol",
+			},
 		},
 	}
 	if err := k8sClient.Create(context.Background(), backup); err != nil {
