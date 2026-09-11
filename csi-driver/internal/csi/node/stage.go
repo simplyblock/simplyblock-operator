@@ -163,8 +163,24 @@ func (ns *Server) NodeUnstageVolume(
 
 	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
-		klog.Errorf("failed to lookup volume context, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		// NodeStageVolume was interrupted before it could write this volume's
+		// stash (see the matching recovery in NodeStageVolume, above): the mount
+		// is already removed, but there is no NQN/model left to rebuild an
+		// initiator from, so any NVMe-oF connection this volume made cannot be
+		// identified and torn down here. Blocking the unstage forever over a leak
+		// we cannot safely locate is worse: it pins the VolumeAttachment and
+		// permanently prevents the pod from being rescheduled anywhere. Proceed
+		// and leave the leak, if any, for manual or guardian-driven cleanup.
+		klog.Errorf(
+			"volume %s has no stash at %s (%v); its mount is removed, but any NVMe-oF "+
+				"connection it made cannot be identified and disconnected here; proceeding "+
+				"with unstage anyway rather than blocking the volume forever",
+			volumeID, stagingParentPath, err,
+		)
+		if cleanupErr := cleanUpVolumeContext(stagingParentPath); cleanupErr != nil {
+			klog.Warningf("failed to clean up volume context for %s: %v", volumeID, cleanupErr)
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
 	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
