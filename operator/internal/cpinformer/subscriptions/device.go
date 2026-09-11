@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
@@ -150,7 +150,7 @@ func (s *DeviceSubscription) objectKey(scope cpinformer.Scope, deviceID string) 
 	}
 	return types.NamespacedName{
 		Namespace: node.Namespace,
-		Name:      simplyblockv1alpha1.StorageDeviceName(node.Name, deviceID),
+		Name:      simplyblockv1alpha2.StorageDeviceName(node.Name, deviceID),
 	}, true
 }
 
@@ -167,7 +167,7 @@ func (s *DeviceSubscription) enqueue(ctx context.Context, scope cpinformer.Scope
 	if !ok {
 		return
 	}
-	sd := &simplyblockv1alpha1.StorageDevice{}
+	sd := &simplyblockv1alpha2.StorageDevice{}
 	sd.SetNamespace(key.Namespace)
 	sd.SetName(key.Name)
 	select {

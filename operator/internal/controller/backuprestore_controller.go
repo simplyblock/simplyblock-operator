@@ -38,6 +38,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -267,7 +268,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
-	backup := &simplyblockv1alpha1.StorageBackup{}
+	backup := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(ctx, client.ObjectKey{
 		Name:      restoreCR.Spec.BackupRef.Name,
 		Namespace: restoreCR.Namespace,
@@ -622,7 +623,7 @@ func (r *BackupRestoreReconciler) resolvePool(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	backup *simplyblockv1alpha1.StorageBackup,
+	backup *simplyblockv1alpha2.StorageBackup,
 ) (poolName, poolUUID string, err error) {
 	if restoreCR.Spec.TargetPool != "" {
 		poolName = restoreCR.Spec.TargetPool

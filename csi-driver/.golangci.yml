@@ -52,3 +52,12 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+
+# golangci-lint reports at most three occurrences of the same message and fifty
+# per linter by default, so a run that says "3 issues" may be hiding thirty. A
+# rule like onelinefunc produces one identical message per site, which is
+# exactly the shape that cap truncates, and a gate that under-reports is worse
+# than a slow one.
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0

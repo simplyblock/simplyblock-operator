@@ -202,6 +202,13 @@ func (p *certManagerProvisioner) injectCABundle(ctx context.Context, ca []byte) 
 		}
 	}
 
+	// The converted kinds' CRDs need the same CA, plus a service reference that
+	// resolves in this namespace. injectConversionTrust is shared with the
+	// pre-start bootstrap so the two cannot drift.
+	if err := injectConversionTrust(ctx, p.client, p.apiReader, ca, p.namespace); err != nil {
+		return err
+	}
+
 	p.lastCA = ca
 	return nil
 }

@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -166,7 +166,7 @@ type backupContext struct {
 }
 
 func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	backupCR := &simplyblockv1alpha1.StorageBackup{}
+	backupCR := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(ctx, req.NamespacedName, backupCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -178,8 +178,8 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Imported backups (created by BackupImport controller) have their status managed
 	// externally. Skip snapshot/backup creation and treat as terminal once Done.
 	if backupCR.Spec.SourceClusterUUID != "" {
-		if backupCR.Status.Phase == simplyblockv1alpha1.BackupPhaseDone ||
-			backupCR.Status.Phase == simplyblockv1alpha1.BackupPhaseFailed {
+		if backupCR.Status.Phase == simplyblockv1alpha2.BackupPhaseDone ||
+			backupCR.Status.Phase == simplyblockv1alpha2.BackupPhaseFailed {
 			return ctrl.Result{}, nil
 		}
 		// Still pending status patch from BackupImport controller; requeue briefly.
@@ -234,17 +234,17 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // return result immediately (either an error or a requeue).
 func (r *StorageBackupReconciler) prepareBackupContext(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 ) (*backupContext, ctrl.Result, bool, error) {
-	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterRef)
 	if err != nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 			status.Message = err.Error()
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupClusterLookupError, eventReasonBackupClusterLookupError, "Failed to resolve cluster UUID for %s: %v", backupCR.Spec.ClusterName, err)
+		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupClusterLookupError, eventReasonBackupClusterLookupError, "Failed to resolve cluster UUID for %s: %v", backupCR.Spec.ClusterRef, err)
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
@@ -252,8 +252,8 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 
 	source, err := r.resolveBackupSource(ctx, backupCR, clusterUUID)
 	if err != nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 			status.ClusterUUID = clusterUUID
 			status.Message = err.Error()
 		}); patchErr != nil {
@@ -265,8 +265,8 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 
 	poolUUID, err := r.lookupPoolUUID(ctx, apiClient, clusterUUID, source.PoolName)
 	if err != nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 			status.ClusterUUID = clusterUUID
 			status.PVCNamespace = source.PVCNamespace
 			status.PVName = source.PVName
@@ -281,7 +281,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
-	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 		status.ClusterUUID = clusterUUID
 		status.PVCNamespace = source.PVCNamespace
 		status.PVName = source.PVName
@@ -290,7 +290,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		status.LvolID = source.LvolID
 		status.FSType = source.FSType
 		if status.Phase == "" {
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 		}
 	}); patchErr != nil {
 		return nil, ctrl.Result{}, true, patchErr
@@ -308,13 +308,13 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 // objects. Returns done=true when the caller should return result immediately.
 func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	bctx *backupContext,
 ) (ctrl.Result, bool, error) {
 	log := logf.FromContext(ctx)
 
 	if backupCR.Status.SnapshotName == "" {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.SnapshotName = r.snapshotNameFor(backupCR)
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
@@ -344,10 +344,10 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 			}
 		}
 
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.SnapshotID = snapshotID
 			status.Message = "Snapshot created; submitting backup request"
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
@@ -374,10 +374,10 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 			}
 		}
 
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.BackupID = backupID
 			status.Message = backupPendingMessage
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
+			status.Phase = simplyblockv1alpha2.BackupPhasePending
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
@@ -389,12 +389,12 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 // syncBackupProgress polls the API for the current backup state and updates status.
 func (r *StorageBackupReconciler) syncBackupProgress(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	bctx *backupContext,
 ) (ctrl.Result, error) {
 	backups, err := r.listBackups(ctx, bctx.apiClient, bctx.clusterUUID)
 	if err != nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.Message = err.Error()
 		}); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -405,10 +405,10 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 
 	backup := findBackupByID(backups, backupCR.Status.BackupID)
 	if backup == nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.Message = backupPendingMessage
 			if status.Phase == "" {
-				status.Phase = simplyblockv1alpha1.BackupPhasePending
+				status.Phase = simplyblockv1alpha2.BackupPhasePending
 			}
 		}); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -416,7 +416,7 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 		return ctrl.Result{RequeueAfter: backupProgressRequeue}, nil
 	}
 
-	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 		status.APIStatus = backup.Status
 		status.Phase = backupPhaseFromAPIStatus(backup.Status)
 		status.Message = fmt.Sprintf("Backup status: %s", backup.Status)
@@ -445,14 +445,14 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 
 func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageBackup{}).
+		For(&simplyblockv1alpha2.StorageBackup{}).
 		Named("storagebackup").
 		Complete(r)
 }
 
 func (r *StorageBackupReconciler) handleDeletion(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -469,7 +469,7 @@ func (r *StorageBackupReconciler) handleDeletion(
 	clusterUUID := backupCR.Status.ClusterUUID
 
 	if clusterUUID == "" {
-		resolvedClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
+		resolvedClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterRef)
 		if err == nil {
 			clusterUUID = resolvedClusterUUID
 		}
@@ -528,7 +528,7 @@ func (r *StorageBackupReconciler) apiClient() *webapi.Client {
 
 func (r *StorageBackupReconciler) resolveBackupSource(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	clusterUUID string,
 ) (*backupSource, error) {
 	if backupCR.Spec.PVCRef == nil {
@@ -792,7 +792,7 @@ func isDuplicateBackupError(err error) bool {
 
 func (r *StorageBackupReconciler) handleAPIError(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	clusterUUID string,
 	err error,
 ) (ctrl.Result, error) {
@@ -803,18 +803,18 @@ func (r *StorageBackupReconciler) handleAPIError(
 		// runs inline on a duplicate hadn't caught up yet. Mark pending and requeue so
 		// the next reconcile's recovery lookup gets another chance.
 		if isDuplicateNameError(err) || isDuplicateBackupError(err) {
-			if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+			if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 				status.ClusterUUID = clusterUUID
-				status.Phase = simplyblockv1alpha1.BackupPhasePending
+				status.Phase = simplyblockv1alpha2.BackupPhasePending
 				status.Message = apiErr.Message
 			}); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
 			return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
 		}
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 			status.ClusterUUID = clusterUUID
-			status.Phase = simplyblockv1alpha1.BackupPhaseFailed
+			status.Phase = simplyblockv1alpha2.BackupPhaseFailed
 			status.Message = apiErr.Message
 		}); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -822,9 +822,9 @@ func (r *StorageBackupReconciler) handleAPIError(
 		return ctrl.Result{}, nil
 	}
 
-	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha2.StorageBackupStatus) {
 		status.ClusterUUID = clusterUUID
-		status.Phase = simplyblockv1alpha1.BackupPhasePending
+		status.Phase = simplyblockv1alpha2.BackupPhasePending
 		status.Message = err.Error()
 	}); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -835,8 +835,8 @@ func (r *StorageBackupReconciler) handleAPIError(
 
 func (r *StorageBackupReconciler) patchStatus(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
-	mutate func(status *simplyblockv1alpha1.StorageBackupStatus),
+	backupCR *simplyblockv1alpha2.StorageBackup,
+	mutate func(status *simplyblockv1alpha2.StorageBackupStatus),
 ) error {
 	desired := backupCR.Status
 	mutate(&desired)
@@ -849,7 +849,7 @@ func (r *StorageBackupReconciler) patchStatus(
 	return r.Status().Patch(ctx, backupCR, patch)
 }
 
-func (r *StorageBackupReconciler) snapshotNameFor(backupCR *simplyblockv1alpha1.StorageBackup) string {
+func (r *StorageBackupReconciler) snapshotNameFor(backupCR *simplyblockv1alpha2.StorageBackup) string {
 	if backupCR.Spec.SnapshotName != "" {
 		return backupCR.Spec.SnapshotName
 	}
@@ -894,19 +894,19 @@ func findBackupByID(backups []backupAPIResponse, backupID string) *backupAPIResp
 func backupPhaseFromAPIStatus(status string) string {
 	switch status {
 	case backupAPIStatusPending:
-		return simplyblockv1alpha1.BackupPhasePending
+		return simplyblockv1alpha2.BackupPhasePending
 	case backupAPIStatusInProgress:
-		return simplyblockv1alpha1.BackupPhaseInProgress
+		return simplyblockv1alpha2.BackupPhaseInProgress
 	case backupAPIStatusCompleted:
-		return simplyblockv1alpha1.BackupPhaseDone
+		return simplyblockv1alpha2.BackupPhaseDone
 	case backupAPIStatusFailed:
-		return simplyblockv1alpha1.BackupPhaseFailed
+		return simplyblockv1alpha2.BackupPhaseFailed
 	case backupAPIStatusMerging:
-		return simplyblockv1alpha1.BackupPhaseMerging
+		return simplyblockv1alpha2.BackupPhaseMerging
 	case backupAPIStatusDeleting:
-		return simplyblockv1alpha1.BackupPhaseDeleting
+		return simplyblockv1alpha2.BackupPhaseDeleting
 	default:
-		return simplyblockv1alpha1.BackupPhasePending
+		return simplyblockv1alpha2.BackupPhasePending
 	}
 }
 

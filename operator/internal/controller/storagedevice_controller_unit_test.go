@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
@@ -35,7 +37,7 @@ func sdScope() cpinformer.Scope {
 }
 
 func sdName() string {
-	return simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)
+	return simplyblockv1alpha2.StorageDeviceName(sdNodeCR, sdDevice)
 }
 
 // fakeDeviceCache is a static DeviceCache for reconciler tests.
@@ -70,23 +72,25 @@ func sdNodeObject() *simplyblockv1alpha1.StorageNode {
 // fake client only answers a MatchingFields query for an index it was given.
 func sdReconciler(t *testing.T, cache DeviceCache, objs ...client.Object) *StorageDeviceReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha1.StorageDevice{}).
+		WithStatusSubresource(&simplyblockv1alpha2.StorageDevice{}).
 		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
 		WithObjects(objs...).
 		Build()
-	return &StorageDeviceReconciler{Client: c, Scheme: scheme, Devices: cache}
+	return &StorageDeviceReconciler{
+		Client: c, Scheme: scheme, Devices: cache, Recorder: events.NewFakeRecorder(64),
+	}
 }
 
 func sdReq() ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "sb", Name: sdName()}}
 }
 
-func getSD(t *testing.T, c client.Client) (*simplyblockv1alpha1.StorageDevice, error) {
+func getSD(t *testing.T, c client.Client) (*simplyblockv1alpha2.StorageDevice, error) {
 	t.Helper()
-	var sd simplyblockv1alpha1.StorageDevice
+	var sd simplyblockv1alpha2.StorageDevice
 	err := c.Get(context.Background(), sdReq().NamespacedName, &sd)
 	return &sd, err
 }
@@ -97,27 +101,27 @@ func TestDevicePhaseFromStatus(t *testing.T) {
 	cases := []struct {
 		name string
 		dto  subscriptions.DeviceDTO
-		want simplyblockv1alpha1.StorageDevicePhase
+		want simplyblockv1alpha2.StorageDevicePhase
 	}{
-		{"online", subscriptions.DeviceDTO{Status: "online"}, simplyblockv1alpha1.StorageDevicePhaseOnline},
-		{"journal device is serving", subscriptions.DeviceDTO{Status: "JM_DEV"}, simplyblockv1alpha1.StorageDevicePhaseOnline},
-		{"failed", subscriptions.DeviceDTO{Status: "failed"}, simplyblockv1alpha1.StorageDevicePhaseFailed},
-		{"failed and migrated is still failed", subscriptions.DeviceDTO{Status: "failed_and_migrated"}, simplyblockv1alpha1.StorageDevicePhaseFailed},
-		{"removed", subscriptions.DeviceDTO{Status: "removed"}, simplyblockv1alpha1.StorageDevicePhaseRemoved},
+		{"online", subscriptions.DeviceDTO{Status: "online"}, simplyblockv1alpha2.StorageDevicePhaseOnline},
+		{"journal device is serving", subscriptions.DeviceDTO{Status: "JM_DEV"}, simplyblockv1alpha2.StorageDevicePhaseOnline},
+		{"failed", subscriptions.DeviceDTO{Status: "failed"}, simplyblockv1alpha2.StorageDevicePhaseFailed},
+		{"failed and migrated is still failed", subscriptions.DeviceDTO{Status: "failed_and_migrated"}, simplyblockv1alpha2.StorageDevicePhaseFailed},
+		{"removed", subscriptions.DeviceDTO{Status: "removed"}, simplyblockv1alpha2.StorageDevicePhaseRemoved},
 		// Serving and should not be: the definition of Degraded.
-		{"read only", subscriptions.DeviceDTO{Status: "read_only"}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
-		{"cannot allocate", subscriptions.DeviceDTO{Status: "cannot_allocate"}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
-		{"new is not yet in the layout", subscriptions.DeviceDTO{Status: "new"}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
-		{"unavailable", subscriptions.DeviceDTO{Status: "unavailable"}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
+		{"read only", subscriptions.DeviceDTO{Status: "read_only"}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
+		{"cannot allocate", subscriptions.DeviceDTO{Status: "cannot_allocate"}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
+		{"new is not yet in the layout", subscriptions.DeviceDTO{Status: "new"}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
+		{"unavailable", subscriptions.DeviceDTO{Status: "unavailable"}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
 		// An online device whose health the control plane reports as bad is
 		// serving and should not be, which is Degraded rather than Online.
-		{"failing health check", subscriptions.DeviceDTO{Status: "online", HealthCheck: ptr.To(false)}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
-		{"io error", subscriptions.DeviceDTO{Status: "online", IOError: true}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
-		{"retries exhausted", subscriptions.DeviceDTO{Status: "online", RetriesExhaust: true}, simplyblockv1alpha1.StorageDevicePhaseDegraded},
+		{"failing health check", subscriptions.DeviceDTO{Status: "online", HealthCheck: ptr.To(false)}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
+		{"io error", subscriptions.DeviceDTO{Status: "online", IOError: true}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
+		{"retries exhausted", subscriptions.DeviceDTO{Status: "online", RetriesExhaust: true}, simplyblockv1alpha2.StorageDevicePhaseDegraded},
 		// A health check that does not apply is not a failing one.
-		{"health check not applicable", subscriptions.DeviceDTO{Status: "online", HealthCheck: nil}, simplyblockv1alpha1.StorageDevicePhaseOnline},
-		{"unrecognized status", subscriptions.DeviceDTO{Status: "something-new"}, simplyblockv1alpha1.StorageDevicePhaseUnknown},
-		{"empty status", subscriptions.DeviceDTO{}, simplyblockv1alpha1.StorageDevicePhaseUnknown},
+		{"health check not applicable", subscriptions.DeviceDTO{Status: "online", HealthCheck: nil}, simplyblockv1alpha2.StorageDevicePhaseOnline},
+		{"unrecognized status", subscriptions.DeviceDTO{Status: "something-new"}, simplyblockv1alpha2.StorageDevicePhaseUnknown},
+		{"empty status", subscriptions.DeviceDTO{}, simplyblockv1alpha2.StorageDevicePhaseUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,10 +133,10 @@ func TestDevicePhaseFromStatus(t *testing.T) {
 }
 
 func TestDeviceRoleFromStatus(t *testing.T) {
-	if got := deviceRole(subscriptions.DeviceDTO{Status: "JM_DEV"}); got != simplyblockv1alpha1.StorageDeviceRoleJournal {
+	if got := deviceRole(subscriptions.DeviceDTO{Status: "JM_DEV"}); got != simplyblockv1alpha2.StorageDeviceRoleJournal {
 		t.Errorf("journal device role = %q", got)
 	}
-	if got := deviceRole(subscriptions.DeviceDTO{Status: "online"}); got != simplyblockv1alpha1.StorageDeviceRoleStorage {
+	if got := deviceRole(subscriptions.DeviceDTO{Status: "online"}); got != simplyblockv1alpha2.StorageDeviceRoleStorage {
 		t.Errorf("storage device role = %q", got)
 	}
 }
@@ -159,10 +163,10 @@ func TestStorageDeviceReconcileCreatesAndUpdates(t *testing.T) {
 	if sd.Spec.NodeRef != sdNodeCR || sd.Spec.DeviceID != sdDevice {
 		t.Errorf("spec = %+v", sd.Spec)
 	}
-	if sd.Status.Phase != simplyblockv1alpha1.StorageDevicePhaseOnline || sd.Status.DeviceStatus != "online" {
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseOnline || sd.Status.DeviceStatus != "online" {
 		t.Errorf("status = %+v", sd.Status)
 	}
-	if sd.Status.Capacity == nil || *sd.Status.Capacity.TotalBytes != 3840755982336 || *sd.Status.Capacity.UsedBytes != 1920377991168 {
+	if sd.Status.Capacity == nil || *sd.Status.Capacity.TotalBytes != 3840755982336 {
 		t.Errorf("capacity = %+v", sd.Status.Capacity)
 	}
 	if sd.Status.Hardware == nil || sd.Status.Hardware.PCIAddress != "0000:5e:00.0" || sd.Status.Hardware.SerialNumber != "S4J9NX0R500123" {
@@ -185,7 +189,7 @@ func TestStorageDeviceReconcileCreatesAndUpdates(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	sd, _ = getSD(t, r.Client)
-	if sd.Status.Phase != simplyblockv1alpha1.StorageDevicePhaseFailed || sd.Status.DeviceStatus != "failed" {
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseFailed || sd.Status.DeviceStatus != "failed" {
 		t.Errorf("status not updated: %+v", sd.Status)
 	}
 }
@@ -211,10 +215,10 @@ func TestStorageDeviceReconcileWaitsForItsNode(t *testing.T) {
 }
 
 func TestStorageDeviceReconcileDeletesWhenGoneAndSynced(t *testing.T) {
-	existing := &simplyblockv1alpha1.StorageDevice{
+	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
-		Spec:       simplyblockv1alpha1.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
-		Status:     simplyblockv1alpha1.StorageDeviceStatus{ClusterID: sdCluster, NodeID: sdNodeID},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
+		Status:     simplyblockv1alpha2.StorageDeviceStatus{ClusterID: sdCluster, NodeID: sdNodeID},
 	}
 	// Device absent from the cache, scope synced → the drive is gone and so is
 	// its object.
@@ -229,10 +233,10 @@ func TestStorageDeviceReconcileDeletesWhenGoneAndSynced(t *testing.T) {
 }
 
 func TestStorageDeviceReconcileWaitsForSyncBeforeDeleting(t *testing.T) {
-	existing := &simplyblockv1alpha1.StorageDevice{
+	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
-		Spec:       simplyblockv1alpha1.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
-		Status:     simplyblockv1alpha1.StorageDeviceStatus{ClusterID: sdCluster, NodeID: sdNodeID},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
+		Status:     simplyblockv1alpha2.StorageDeviceStatus{ClusterID: sdCluster, NodeID: sdNodeID},
 	}
 	// Absent from a NOT-yet-synced cache is an absence of information rather
 	// than information, so the object must be left alone.
@@ -302,7 +306,7 @@ func TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace(t *testing.T) {
 
 	// Wherever the mirror chose to put it, it has to be the owner's namespace:
 	// that is the only namespace in which the controller reference resolves.
-	var devices simplyblockv1alpha1.StorageDeviceList
+	var devices simplyblockv1alpha2.StorageDeviceList
 	if err := r.List(context.Background(), &devices); err != nil {
 		t.Fatalf("list devices: %v", err)
 	}
@@ -320,20 +324,22 @@ func sdReconcilerWithInterceptor(
 	t *testing.T, cache DeviceCache, funcs interceptor.Funcs, objs ...client.Object,
 ) *StorageDeviceReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha1.StorageDevice{}).
+		WithStatusSubresource(&simplyblockv1alpha2.StorageDevice{}).
 		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
 		WithObjects(objs...).
 		WithInterceptorFuncs(funcs).
 		Build()
-	return &StorageDeviceReconciler{Client: c, Scheme: scheme, Devices: cache}
+	return &StorageDeviceReconciler{
+		Client: c, Scheme: scheme, Devices: cache, Recorder: events.NewFakeRecorder(64),
+	}
 }
 
 func sdConflictErr() error {
 	return apierrors.NewConflict(
-		simplyblockv1alpha1.GroupVersion.WithResource("storagedevices").GroupResource(), sdName(), nil,
+		simplyblockv1alpha2.GroupVersion.WithResource("storagedevices").GroupResource(), sdName(), nil,
 	)
 }
 
@@ -359,9 +365,9 @@ func sdOnlineCache() *fakeDeviceCache {
 // from the object, so a conflict is never a lost decision: re-reading and
 // writing again converges on the same result.
 func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
-	existing := &simplyblockv1alpha1.StorageDevice{
+	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
-		Spec:       simplyblockv1alpha1.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
 	}
 
 	statusUpdates := 0
@@ -370,7 +376,7 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 			ctx context.Context, c client.Client, subResourceName string,
 			obj client.Object, opts ...client.SubResourceUpdateOption,
 		) error {
-			if subResourceName == "status" {
+			if subResourceName == statusSubresource {
 				statusUpdates++
 				if statusUpdates == 1 {
 					return sdConflictErr()
@@ -390,7 +396,7 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if sd.Status.Phase != simplyblockv1alpha1.StorageDevicePhaseOnline {
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseOnline {
 		t.Errorf("status lost after the conflict retry: %+v", sd.Status)
 	}
 	if sd.Status.Capacity == nil || *sd.Status.Capacity.TotalBytes != 3840755982336 {
@@ -403,7 +409,7 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 // is written on the next reconcile, and that write can be rejected too.
 func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
 	// No spec: the mirror must fill it in, which is the write that conflicts.
-	existing := &simplyblockv1alpha1.StorageDevice{
+	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
 	}
 

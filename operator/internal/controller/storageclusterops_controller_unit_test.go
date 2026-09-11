@@ -13,6 +13,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -34,7 +35,7 @@ func newClusterOpsReconciler(t *testing.T, objects ...client.Object) *StorageClu
 	)
 	cl := newTestClient(t, scheme,
 		[]client.Object{
-			&simplyblockv1alpha1.StorageClusterOps{},
+			&simplyblockv1alpha2.StorageClusterOps{},
 			&simplyblockv1alpha1.StorageCluster{},
 		},
 		objects...,
@@ -55,14 +56,14 @@ func newTestStorageCluster() *simplyblockv1alpha1.StorageCluster {
 	}
 }
 
-func newTestStorageClusterOps(clusterRef, action string) *simplyblockv1alpha1.StorageClusterOps {
-	return &simplyblockv1alpha1.StorageClusterOps{
+func newTestStorageClusterOps(clusterRef string, action simplyblockv1alpha2.StorageClusterOpsAction) *simplyblockv1alpha2.StorageClusterOps {
+	return &simplyblockv1alpha2.StorageClusterOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       scopsTestOpsName,
 			Namespace:  scopsTestNS,
 			Finalizers: []string{utils.FinalizerStorageClusterOps},
 		},
-		Spec: simplyblockv1alpha1.StorageClusterOpsSpec{
+		Spec: simplyblockv1alpha2.StorageClusterOpsSpec{
 			ClusterRef: clusterRef,
 			Action:     action,
 		},
@@ -73,8 +74,8 @@ func newTestStorageClusterOps(clusterRef, action string) *simplyblockv1alpha1.St
 
 func TestStorageClusterOps_TerminalSucceeded_IsNoop(t *testing.T) {
 	cluster := newTestStorageCluster()
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -88,8 +89,8 @@ func TestStorageClusterOps_TerminalSucceeded_IsNoop(t *testing.T) {
 
 func TestStorageClusterOps_TerminalFailed_IsNoop(t *testing.T) {
 	cluster := newTestStorageCluster()
-	ops := newTestStorageClusterOps(scopsTestClusterName, "expand")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseFailed
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionExpand)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseFailed
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -104,7 +105,7 @@ func TestStorageClusterOps_TerminalFailed_IsNoop(t *testing.T) {
 // ── TestReconcile_ClusterNotFound ─────────────────────────────────────────────
 
 func TestStorageClusterOps_ClusterNotFound_Fails(t *testing.T) {
-	ops := newTestStorageClusterOps("missing-cluster", "activate")
+	ops := newTestStorageClusterOps("missing-cluster", simplyblockv1alpha2.StorageClusterOpsActionActivate)
 	r := newClusterOpsReconciler(t, ops)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -112,9 +113,9 @@ func TestStorageClusterOps_ClusterNotFound_Fails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var updated simplyblockv1alpha1.StorageClusterOps
+	var updated simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updated)
-	if updated.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if updated.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Errorf("phase: got %q want Failed", updated.Status.Phase)
 	}
 	if updated.Status.Message == "" {
@@ -128,7 +129,7 @@ func TestStorageClusterOps_RequeuesWhenAnotherOpsActive(t *testing.T) {
 	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOtherOps
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -149,7 +150,7 @@ func TestStorageClusterOps_RequeuesWhenAnotherOpsActive(t *testing.T) {
 
 func TestStorageClusterOps_AcquiresLockAndTransitionsOutOfPending(t *testing.T) {
 	cluster := newTestStorageCluster()
-	ops := newTestStorageClusterOps(scopsTestClusterName, "shutdown")
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionShutdown)
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	// shutdown POSTs to the backend — fails with no real API, so the ops ends up
@@ -157,9 +158,9 @@ func TestStorageClusterOps_AcquiresLockAndTransitionsOutOfPending(t *testing.T) 
 	// dispatch ran) and that activeOpsRef is cleared again (failOps released it).
 	r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}}) //nolint:errcheck
 
-	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	var updatedOps simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
-	if updatedOps.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhasePending || updatedOps.Status.Phase == "" {
+	if updatedOps.Status.Phase == simplyblockv1alpha2.StorageClusterOpsPhasePending || updatedOps.Status.Phase == "" {
 		t.Errorf("ops should have left Pending phase, got %q", updatedOps.Status.Phase)
 	}
 
@@ -177,8 +178,8 @@ func TestStorageClusterOps_SucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOpsName
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.succeedOps(context.Background(), ops, cluster, "activated successfully")
@@ -189,9 +190,9 @@ func TestStorageClusterOps_SucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 		t.Error("expected no requeue after success")
 	}
 
-	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	var updatedOps simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
-	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded {
+	if updatedOps.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
 		t.Errorf("phase: got %q want Succeeded", updatedOps.Status.Phase)
 	}
 	if updatedOps.Status.Message != "activated successfully" {
@@ -214,8 +215,8 @@ func TestStorageClusterOps_FailOps_SetsPhaseAndClearsLock(t *testing.T) {
 	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOpsName
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "expand")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionExpand)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.failOps(context.Background(), ops, cluster, "expand POST failed: status 500")
@@ -226,9 +227,9 @@ func TestStorageClusterOps_FailOps_SetsPhaseAndClearsLock(t *testing.T) {
 		t.Error("expected no requeue after failure")
 	}
 
-	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	var updatedOps simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
-	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if updatedOps.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Errorf("phase: got %q want Failed", updatedOps.Status.Phase)
 	}
 	if updatedOps.Status.Message != "expand POST failed: status 500" {
@@ -246,8 +247,8 @@ func TestStorageClusterOps_FailOps_SetsPhaseAndClearsLock(t *testing.T) {
 }
 
 func TestStorageClusterOps_FailOps_NilCluster_DoesNotPanic(t *testing.T) {
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, ops)
 
 	_, err := r.failOps(context.Background(), ops, nil, "cluster not found")
@@ -255,9 +256,9 @@ func TestStorageClusterOps_FailOps_NilCluster_DoesNotPanic(t *testing.T) {
 		t.Fatalf("failOps with nil cluster returned error: %v", err)
 	}
 
-	var updated simplyblockv1alpha1.StorageClusterOps
+	var updated simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updated)
-	if updated.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if updated.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Errorf("phase: got %q want Failed", updated.Status.Phase)
 	}
 }
@@ -268,7 +269,7 @@ func TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner(t *testing.T) {
 	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOtherOps
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	r.releaseClusterLock(context.Background(), ops, cluster)
@@ -281,7 +282,7 @@ func TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner(t *testing.T) {
 }
 
 func TestStorageClusterOps_ReleaseLock_NilCluster_DoesNotPanic(t *testing.T) {
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
 	r := newClusterOpsReconciler(t, ops)
 
 	// Should be a no-op and not panic.
@@ -300,9 +301,9 @@ func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var updated simplyblockv1alpha1.StorageClusterOps
+	var updated simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updated)
-	if updated.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if updated.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Errorf("phase: got %q want Failed for unknown action", updated.Status.Phase)
 	}
 }
@@ -311,19 +312,19 @@ func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
 
 func TestStorageClusterOps_NodeRollingRestart_Initialises(t *testing.T) {
 	cluster := newTestStorageCluster()
-	ops := newTestStorageClusterOps(scopsTestClusterName, "node-rolling-restart")
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionRollingRestart)
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	// First reconcile: the state machine sets ops.Status.Triggered=true and
 	// requeues. No backend is available so it can't list nodes yet.
 	r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}}) //nolint:errcheck
 
-	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	var updatedOps simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
 	if !updatedOps.Status.Triggered {
 		t.Error("ops.status.triggered should be true after first reconcile")
 	}
-	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseRunning {
+	if updatedOps.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
 		t.Errorf("ops phase: got %q want Running", updatedOps.Status.Phase)
 	}
 }
@@ -359,8 +360,8 @@ func TestReconcileActivateWaitsForFailureDomainReadiness(t *testing.T) {
 		},
 	}
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops, nodeSet)
 
 	res, err := r.reconcileActivate(context.Background(), ops, cluster)
@@ -373,7 +374,7 @@ func TestReconcileActivateWaitsForFailureDomainReadiness(t *testing.T) {
 	if ops.Status.Triggered {
 		t.Fatalf("expected ops to stay untriggered while failure domains aren't ready")
 	}
-	if ops.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if ops.Status.Phase == simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Fatalf("expected ops to stay out of Failed while waiting on failure-domain readiness")
 	}
 }
@@ -400,8 +401,8 @@ func TestReconcileActivateProceedsOnceFailureDomainsAreReady(t *testing.T) {
 		},
 	}
 
-	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	ops := newTestStorageClusterOps(scopsTestClusterName, simplyblockv1alpha2.StorageClusterOpsActionActivate)
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops, nodeSet)
 
 	// No real webapi backend is reachable from this unit test, so once the
@@ -414,9 +415,9 @@ func TestReconcileActivateProceedsOnceFailureDomainsAreReady(t *testing.T) {
 		t.Fatalf("reconcileActivate returned error: %v", err)
 	}
 
-	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	var updatedOps simplyblockv1alpha2.StorageClusterOps
 	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
-	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+	if updatedOps.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
 		t.Fatalf("expected the call to proceed past the FD gate to the (failing, no backend) "+
 			"activate attempt, got phase %q", updatedOps.Status.Phase)
 	}

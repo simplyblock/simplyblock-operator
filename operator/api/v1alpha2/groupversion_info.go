@@ -1,16 +1,19 @@
 // Package v1alpha2 is the storage version of the simplyblock API group and the
-// shape every controller reads. It carries the property names settled by the CRD
-// redesign; v1alpha1 keeps the names that shipped and converts into this package
-// through the conversion webhook, so no reconciler has to know that an older
-// spelling exists.
+// shape every controller reads. It holds two kinds of type, which differ in
+// whether anything converts into them.
 //
-// This package is the conversion hub: every type here implements conversion.Hub
-// and none of them implements ConvertTo or ConvertFrom. The spoke side lives
-// beside the older types, in api/v1alpha1/*_conversion.go.
-//
+// A kind the CRD redesign renamed a property on has a v1alpha1 spoke: this
+// package declares the settled names, v1alpha1 keeps the names that shipped, and
+// the conversion webhook translates between them, so no reconciler has to know
+// that an older spelling exists. Those types implement conversion.Hub and
+// nothing else; the spoke side lives beside the older types, in
+// api/v1alpha1/*_conversion.go, and
 // operator/docs/designs/crd-redesign/design-property-renames.md is the inventory
-// of what was renamed and why, and its §3 is the mechanism this package is the
-// hub of.
+// of what moved and why.
+//
+// A kind the redesign introduces has no spoke and needs no Hub: it was never
+// published under v1alpha1, so there is no older shape to convert from and its
+// CRD declares one version.
 //
 // +kubebuilder:object:generate=true
 // +groupName=storage.simplyblock.io

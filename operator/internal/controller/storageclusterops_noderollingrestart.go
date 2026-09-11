@@ -31,17 +31,18 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // reconcileNodeRollingRestart drives the full node-rolling-restart state machine for a
-// StorageClusterOps CR. State is tracked in ops.Status.NodeRollingRestartStatus so
+// StorageClusterOps CR. State is tracked in ops.Status.RollingRestart so
 // that it survives operator restarts. ops.Status.Triggered is set on first
 // entry to prevent re-initialising a run that is already in progress.
 func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -50,7 +51,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 	if !ops.Status.Triggered {
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		ops.Status.NodeRollingRestartStatus = nil
+		ops.Status.RollingRestart = nil
 		ops.Status.Message = "Initialising node-rolling-restart"
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
@@ -66,7 +67,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 	}
 
 	// Discover all nodes on first reconcile after initialization.
-	if ops.Status.NodeRollingRestartStatus == nil {
+	if ops.Status.RollingRestart == nil {
 		nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "Failed to list storage nodes for node-rolling-restart init")
@@ -80,7 +81,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 			uuids = append(uuids, n.UUID)
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
-		ops.Status.NodeRollingRestartStatus = &simplyblockv1alpha1.NodeRollingRestartStatus{
+		ops.Status.RollingRestart = &simplyblockv1alpha2.RollingRestartStatus{
 			PendingNodes:   uuids,
 			ProcessedNodes: []string{},
 			NodePhase:      nodeRollingRestartFirstPhase(),
@@ -92,7 +93,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 	if len(nrs.PendingNodes) == 0 {
 		return r.succeedOps(ctx, ops, cluster, "All nodes rolling-restarted successfully")
 	}
@@ -119,14 +120,14 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartSnodeRefresh(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 
 	// Write-ahead: advance to snode-refresh-wait before the irreversible pod delete.
 	patch := client.MergeFrom(ops.DeepCopy())
@@ -160,7 +161,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartSnodeRefresh(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartSnodeRefreshWait(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
@@ -178,7 +179,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartSnodeRefreshWait(
 	}
 
 	log.Info("Storage node pod refreshed, proceeding to restart", "nodeUUID", nodeUUID)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.NodePhase = utils.NodeRollingRestartPhaseRestarting
 	nrs.PhaseTriggered = false
@@ -194,7 +195,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartSnodeRefreshWait(
 // PhaseTriggered=true before the API call, then fires the API call.
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartTriggerPhase(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	alreadyDoneStatuses []string,
@@ -203,7 +204,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartTriggerPhase(
 	actionName string,
 ) *ctrl.Result {
 	log := logf.FromContext(ctx)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 
 	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
@@ -252,13 +253,13 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartTriggerPhase(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartShuttingDown(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 
 	if !nrs.PhaseTriggered {
 		// Safety check: all peer nodes must be online before we shut this one down.
@@ -305,7 +306,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartShuttingDown(
 
 	log.Info("Polling node status after shutdown trigger", "nodeUUID", nodeUUID, "status", nodeStatus)
 
-	refreshSNode := ops.Spec.NodeRollingRestart != nil && ops.Spec.NodeRollingRestart.RefreshSNodeAPI
+	refreshSNode := ops.Spec.RollingRestart != nil && ops.Spec.RollingRestart.RefreshSNodeAPI
 
 	switch nodeStatus {
 	case utils.NodeStatusOffline, utils.NodeStatusInRestart:
@@ -331,13 +332,13 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartShuttingDown(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartRestarting(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
@@ -380,13 +381,13 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartRestarting(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartRebalancing(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := ops.Status.NodeRollingRestartStatus
+	nrs := ops.Status.RollingRestart
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)

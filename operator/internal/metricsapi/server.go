@@ -37,7 +37,7 @@ import (
 	basecompatibility "k8s.io/component-base/compatibility"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 )
 
 // Default wiring of the listener. The port is the conventional one for an
@@ -93,6 +93,7 @@ func NewServer(
 	volumes VolumeSource,
 	reader client.Reader,
 	capacity CapacitySource,
+	deviceCapacity DeviceCapacitySource,
 	log logr.Logger,
 ) (*Server, error) {
 	opts.withDefaults()
@@ -129,10 +130,10 @@ func NewServer(
 	// management type converter from it. Serving it also makes `kubectl explain`
 	// work against this group.
 	namer := openapinamer.NewDefinitionNamer(Scheme)
-	config.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(metricsv1alpha1.GetOpenAPIDefinitions, namer)
+	config.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(openAPIDefinitions, namer)
 	config.OpenAPIConfig.Info.Title = "simplyblock-metrics"
 	config.OpenAPIConfig.Info.Version = operatorAPIVersion
-	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(metricsv1alpha1.GetOpenAPIDefinitions, namer)
+	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(openAPIDefinitions, namer)
 	config.OpenAPIV3Config.Info.Title = "simplyblock-metrics"
 	config.OpenAPIV3Config.Info.Version = operatorAPIVersion
 
@@ -148,9 +149,10 @@ func NewServer(
 		return nil, fmt.Errorf("metricsapi: build api server: %w", err)
 	}
 
-	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha1.GroupName, Scheme, ParameterCodec, Codecs)
-	group.VersionedResourcesStorageMap[metricsv1alpha1.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName: NewStorage(volumes, reader, capacity),
+	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha2.GroupName, Scheme, ParameterCodec, Codecs)
+	group.VersionedResourcesStorageMap[metricsv1alpha2.GroupVersion.Version] = map[string]rest.Storage{
+		ResourceName:       NewStorage(volumes, reader, capacity),
+		DeviceResourceName: NewDeviceStorage(reader, deviceCapacity),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		return nil, fmt.Errorf("metricsapi: install api group: %w", err)
@@ -168,7 +170,7 @@ func (s *Server) NeedLeaderElection() bool {
 // Start implements manager.Runnable. It blocks until ctx is canceled, then
 // drains and shuts the listener down.
 func (s *Server) Start(ctx context.Context) error {
-	s.log.Info("aggregated metrics API listening", "group", metricsv1alpha1.GroupName)
+	s.log.Info("aggregated metrics API listening", "group", metricsv1alpha2.GroupName)
 	if err := s.server.PrepareRun().RunWithContext(ctx); err != nil {
 		return fmt.Errorf("metricsapi: serve: %w", err)
 	}

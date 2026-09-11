@@ -12,7 +12,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
@@ -36,7 +36,7 @@ var sdNodeObject = types.NamespacedName{Namespace: "default", Name: sdNodeCR}
 func deviceObjectKey() types.NamespacedName {
 	return types.NamespacedName{
 		Namespace: sdNodeObject.Namespace,
-		Name:      simplyblockv1alpha1.StorageDeviceName(sdNodeObject.Name, sdDevice),
+		Name:      simplyblockv1alpha2.StorageDeviceName(sdNodeObject.Name, sdDevice),
 	}
 }
 
@@ -100,7 +100,7 @@ func TestDeviceSubscriptionSnapshotCachesSyncsAndTriggers(t *testing.T) {
 	ingestDevice(t, sub, cpinformer.EventSnapshot,
 		`[{"id":"`+sdDevice+`","cluster_id":"`+sdCluster+`","storage_node_id":"`+sdNode+`","status":"online","size":4096}]`)
 
-	want := simplyblockv1alpha1.StorageDeviceName(sdNodeObject.Name, sdDevice)
+	want := simplyblockv1alpha2.StorageDeviceName(sdNodeObject.Name, sdDevice)
 	if got := drainDeviceTrigger(t, sub); got != want {
 		t.Errorf("trigger = %q, want %q", got, want)
 	}
@@ -121,7 +121,7 @@ func TestDeviceSubscriptionSnapshotRemovalTriggersVanishedDevice(t *testing.T) {
 	// A device pulled while the operator was disconnected is absent from the
 	// next snapshot; the relist must still enqueue it so its object is removed.
 	ingestDevice(t, sub, cpinformer.EventSnapshot, `[]`)
-	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
+	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha2.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("relist trigger = %q", got)
 	}
 	if _, _, ok := sub.Lookup(deviceObjectKey()); ok {
@@ -135,7 +135,7 @@ func TestDeviceSubscriptionDeleteDropsFromCacheAndTriggers(t *testing.T) {
 	drainDeviceTrigger(t, sub)
 
 	ingestDevice(t, sub, cpinformer.EventDeleted, `{"id":"`+sdDevice+`","status":"removed"}`)
-	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
+	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha2.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("delete trigger = %q", got)
 	}
 	if _, _, ok := sub.Lookup(deviceObjectKey()); ok {
@@ -173,7 +173,7 @@ func TestDeviceSubscriptionCachesButDoesNotTriggerForUnknownNode(t *testing.T) {
 	// Once the node registers, the next event reaches the reconciler.
 	sub.RegisterNode(sdNode, sdNodeObject)
 	ingestDevice(t, sub, cpinformer.EventUpdated, `{"id":"`+sdDevice+`","status":"online"}`)
-	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
+	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha2.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("trigger after registration = %q", got)
 	}
 }

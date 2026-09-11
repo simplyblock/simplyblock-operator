@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
 **Date:** 2026-08-19 (last updated 2026-09-08)  
-**API groups:** `storage.simplyblock.io/v1alpha1`, and `metrics.simplyblock.io/v1alpha1` for the readings that are not resources (§7.13)  
+**API groups:** `storage.simplyblock.io/v1alpha1`, and `metrics.simplyblock.io/v1alpha2` for the readings that are not resources (§7.13)  
 **Diagram:** [`assets/crd-overview.jpg`](assets/crd-overview.jpg)
 
 ---
@@ -42,7 +42,7 @@ and behaves nothing like it when something is deleted.
 One group is not enough for all of it. A measurement of a volume is not desired
 state, nothing reconciles toward it, and storing one per volume would write the
 workload's I/O rate into etcd, so measurements are served from a second group,
-`metrics.simplyblock.io/v1alpha1`, by an aggregated API server rather than kept as
+`metrics.simplyblock.io/v1alpha2`, by an aggregated API server rather than kept as
 resources. Which of the two a number belongs in is §7.13.
 
 ---
@@ -1118,7 +1118,7 @@ kind under one prefix, which is what a dashboard selects on.
 Every number this operator publishes about a simplyblock object is either state
 something reconciles toward or a measurement of what the storage is doing, and
 only the first is a custom resource. A measurement is served from
-`metrics.simplyblock.io/v1alpha1`, a second API group the operator registers from
+`metrics.simplyblock.io/v1alpha2`, a second API group the operator registers from
 an extension API server running inside its own process. A kind there is computed
 from the control-plane cache when a client asks for it and is never persisted,
 which is the trade `metrics.k8s.io` makes for `PodMetrics`.
@@ -1181,7 +1181,7 @@ less than the whole answer and more than refusing to answer.
 The group depends on the same stream §7.7 does, because the volumes it lists come
 from the subscription's cache rather than from a call per read. Both arrive
 together: `design-sse-push-notifications.md` on the `sse` branch owns the stream,
-and the branch carries the group as `operator/api/metrics/v1alpha1` and its server
+and the branch carries the group as `operator/api/metrics/v1alpha2` and its server
 as `operator/internal/metricsapi`.
 
 ---

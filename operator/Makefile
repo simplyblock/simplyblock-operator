@@ -75,8 +75,12 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	@# controller-gen has no marker for spec.conversion, so the stanza is written
+	@# back after every regeneration. It runs before crd-embed so that the copy the
+	@# upgrade tool carries is the one with the stanza in it.
+	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
 	$(MAKE) crd-embed
 
 # The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and
@@ -94,18 +98,26 @@ crd-embed: ## Copy the generated CRDs next to the package that embeds them.
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+# The versions of the metrics group that openapi-gen runs over. There is one
+# today, and the loop is what a second one would need: the generator writes one
+# file per output package, and the aggregated API server merges the definitions
+# of every version it serves.
+METRICS_API_VERSIONS ?= v1alpha2
+
 .PHONY: openapi
 openapi: openapi-gen ## Generate the OpenAPI v3 definitions the aggregated metrics API server serves.
-	"$(OPENAPI_GEN)" \
-		--output-file zz_generated.openapi.go \
-		--output-dir ./api/metrics/v1alpha1 \
-		--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1 \
-		--go-header-file hack/boilerplate.go.txt \
-		k8s.io/apimachinery/pkg/apis/meta/v1 \
-		k8s.io/apimachinery/pkg/api/resource \
-		k8s.io/apimachinery/pkg/runtime \
-		k8s.io/apimachinery/pkg/version \
-		github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1
+	for version in $(METRICS_API_VERSIONS); do \
+		"$(OPENAPI_GEN)" \
+			--output-file zz_generated.openapi.go \
+			--output-dir ./api/metrics/$$version \
+			--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/$$version \
+			--go-header-file hack/boilerplate.go.txt \
+			k8s.io/apimachinery/pkg/apis/meta/v1 \
+			k8s.io/apimachinery/pkg/api/resource \
+			k8s.io/apimachinery/pkg/runtime \
+			k8s.io/apimachinery/pkg/version \
+			github.com/simplyblock/simplyblock-operator/api/metrics/$$version || exit 1; \
+	done
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

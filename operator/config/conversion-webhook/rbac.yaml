@@ -1,0 +1,79 @@
+# What the conversion webhook is allowed to do, which is deliberately almost
+# nothing.
+#
+# It converts between two representations of an object the API server hands it,
+# and it keeps its own serving certificate and the CRDs' trust in that
+# certificate current. It reads no simplyblock custom resource
+# (design-api-upgrade.md §6.1), so it is granted no access to any of them.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-operator-conversion-webhook
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/component: conversion-webhook
+---
+# Writing is restricted to the CRDs that declare a converted kind. Patching an
+# arbitrary CRD is close to cluster-admin in effect, since a rewritten schema or
+# conversion stanza reaches every object of that kind.
+#
+# Reading stays cluster-wide because it cannot be otherwise: cert-controller's
+# rotator establishes an informer on CustomResourceDefinition to re-inject the CA
+# when one changes, and Kubernetes RBAC ignores resourceNames for list and watch.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-operator-conversion-webhook
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames:
+      - controlplanes.storage.simplyblock.io
+      - storagebackups.storage.simplyblock.io
+      - storageclusterops.storage.simplyblock.io
+      - storagenodeops.storage.simplyblock.io
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-operator-conversion-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-operator-conversion-webhook
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-operator-conversion-webhook
+---
+# The serving certificate is the webhook's own Secret, not the operator's. A
+# webhook waiting on the operator's Secret would be waiting on the operator
+# having started, which is the coupling §6.1 removes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simplyblock-operator-conversion-webhook
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Only under SB_TLS_PROVIDER=cert-manager, where the webhook asks cert-manager
+  # to issue its certificate rather than signing one itself.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simplyblock-operator-conversion-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simplyblock-operator-conversion-webhook
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-operator-conversion-webhook

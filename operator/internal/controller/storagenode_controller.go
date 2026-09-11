@@ -43,6 +43,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -1074,9 +1075,9 @@ func (r *StorageNodeReconciler) handleDeletion(
 	// delete the failed ops to retry, or restore the worker to
 	// spec.workerNodes to keep it.
 	opsName := sn.Name + "-remove"
-	var removeOps simplyblockv1alpha1.StorageNodeOps
+	var removeOps simplyblockv1alpha2.StorageNodeOps
 	if err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: sn.Namespace}, &removeOps); err == nil {
-		if removeOps.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		if removeOps.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
 			r.Recorder.Eventf(sn, nil, "Warning", "RemoveOpsFailed", "RemoveOpsFailed",
 				"node removal failed (%s); the node was NOT removed and this StorageNode "+
 					"will not be deleted -- delete StorageNodeOps/%s to retry, or restore "+
@@ -1099,7 +1100,7 @@ func (r *StorageNodeReconciler) ensureRemoveOps(
 	sn *simplyblockv1alpha1.StorageNode,
 ) error {
 	opsName := sn.Name + "-remove"
-	var existing simplyblockv1alpha1.StorageNodeOps
+	var existing simplyblockv1alpha2.StorageNodeOps
 	err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: sn.Namespace}, &existing)
 	if err == nil {
 		return nil // already exists
@@ -1108,11 +1109,11 @@ func (r *StorageNodeReconciler) ensureRemoveOps(
 		return err
 	}
 
-	ops := simplyblockv1alpha1.StorageNodeOps{}
+	ops := simplyblockv1alpha2.StorageNodeOps{}
 	ops.Name = opsName
 	ops.Namespace = sn.Namespace
-	ops.Spec.StorageNodeRef = sn.Name
-	ops.Spec.Action = utils.NodeActionRemove
+	ops.Spec.NodeRef = sn.Name
+	ops.Spec.Action = simplyblockv1alpha2.StorageNodeOpsActionRemove
 	if err := controllerutil.SetControllerReference(sn, &ops, r.Scheme); err != nil {
 		return err
 	}
@@ -1191,7 +1192,7 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&simplyblockv1alpha1.StorageNodeSet{},
 			handler.EnqueueRequestsFromMapFunc(r.storageNodeSetToStorageNodeRequests),
 		).
-		Owns(&simplyblockv1alpha1.StorageNodeOps{})
+		Owns(&simplyblockv1alpha2.StorageNodeOps{})
 
 	// A pushed control-plane change reconciles the node it named. The events
 	// already carry the object's own name, so they need no map function.
