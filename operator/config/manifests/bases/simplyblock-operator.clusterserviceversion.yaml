@@ -19,6 +19,8 @@ metadata:
     features.operators.openshift.io/token-auth-aws: "false"
     features.operators.openshift.io/token-auth-azure: "false"
     features.operators.openshift.io/token-auth-gcp: "false"
+    repository: https://github.com/simplyblock/simplyblock-operator
+    support: https://simplyblock.io/contact/
   name: simplyblock-operator.v0.1.0
   namespace: placeholder
 spec:
@@ -131,54 +133,82 @@ spec:
         displayName: Storage Pool UUID
         path: uuid
       version: v1alpha1
-    - description: SnapshotReplication is the Schema for the snapshotreplications
-        API
-      displayName: Snapshot Replication
-      kind: SnapshotReplication
-      name: snapshotreplications.storage.simplyblock.io
-      specDescriptors:
-      - displayName: Action
-        path: action
-      - description: 'Optional: volumes to exclude from failback.'
-        displayName: Exclude Volume IDs
-        path: excludeVolumeIDs
-      - description: |-
-          Optional: only these volumes are included in failback.
-          If empty, all volumes are candidates unless excluded below.
-        displayName: Include Volume IDs
-        path: includeVolumeIDs
-      - description: 'snapshot replication interval in seconds (default: 300sec)'
-        displayName: Interval
-        path: interval
-      - description: Source cluster for the snapshots
-        displayName: Source Cluster
-        path: sourceCluster
-      - description: required for failback to a fresh source cluster
-        displayName: Source Pool
-        path: sourcePool
-      - description: Target cluster for replication
-        displayName: Target Cluster
-        path: targetCluster
-      - description: Target cluster pool for replication
-        displayName: Target Pool
-        path: targetPool
-      - description: snapshot replication timeout
-        displayName: Timeout
-        path: timeout
-      - description: 'Optional: list of volumes to replicate. Empty means all volumes'
-        displayName: Volume IDs
-        path: volumeIDs
-      statusDescriptors:
-      - description: Conditions provides human-readable status conditions for kubectl
-          get output.
-        displayName: Conditions
-        path: conditions
-      - displayName: Configured
-        path: configured
-      - description: Per-volume replication status
-        displayName: Volumes
-        path: volumes
+    - description: BackupImport is the Schema for the backupimports API.
+      displayName: Backup Import
+      kind: BackupImport
+      name: backupimports.storage.simplyblock.io
       version: v1alpha1
+    - description: BackupPolicy is the Schema for the backuppolicies API.
+      displayName: Backup Policy
+      kind: BackupPolicy
+      name: backuppolicies.storage.simplyblock.io
+      version: v1alpha1
+    - description: ControlPlane is the Schema for the controlplanes API.
+      displayName: Control Plane
+      kind: ControlPlane
+      name: controlplanes.storage.simplyblock.io
+      version: v1alpha1
+    - description: ReplicationOps is the Schema for the replicationops API.
+      displayName: Replication Ops
+      kind: ReplicationOps
+      name: replicationops.storage.simplyblock.io
+      version: v1alpha1
+    - description: ReplicationPair is the Schema for the replicationpairs API.
+      displayName: Replication Pair
+      kind: ReplicationPair
+      name: replicationpairs.storage.simplyblock.io
+      version: v1alpha1
+    - description: ReplicationPolicy is the Schema for the replicationpolicies API.
+      displayName: Replication Policy
+      kind: ReplicationPolicy
+      name: replicationpolicies.storage.simplyblock.io
+      version: v1alpha1
+    - description: ReplicationSlot is the Schema for the replicationslots API.
+      displayName: Replication Slot
+      kind: ReplicationSlot
+      name: replicationslots.storage.simplyblock.io
+      version: v1alpha1
+    - description: StorageNode is the Schema for the storagenodes API.
+      displayName: Storage Node
+      kind: StorageNode
+      name: storagenodes.storage.simplyblock.io
+      version: v1alpha1
+    - description: StorageNodeOps is the Schema for the storagenodeops API.
+      displayName: Storage Node Ops
+      kind: StorageNodeOps
+      name: storagenodeops.storage.simplyblock.io
+      version: v1alpha1
+    - description: VolumeMigration is the Schema for the volumemigrations API.
+      displayName: Volume Migration
+      kind: VolumeMigration
+      name: volumemigrations.storage.simplyblock.io
+      version: v1alpha1
+    - description: ClusterDeploymentConfig is the Schema for the clusterdeploymentconfigs
+        API.
+      displayName: Cluster Deployment Config
+      kind: ClusterDeploymentConfig
+      name: clusterdeploymentconfigs.storage.simplyblock.io
+      version: v1alpha2
+    - description: OperatorOps is the Schema for the operatorops API.
+      displayName: Operator Ops
+      kind: OperatorOps
+      name: operatorops.storage.simplyblock.io
+      version: v1alpha2
+    - description: SimplyblockDriver is the Schema for the simplyblockdrivers API.
+      displayName: Simplyblock Driver
+      kind: SimplyblockDriver
+      name: simplyblockdrivers.storage.simplyblock.io
+      version: v1alpha2
+    - description: StorageClusterOps is the Schema for the storageclusterops API.
+      displayName: Storage Cluster Ops
+      kind: StorageClusterOps
+      name: storageclusterops.storage.simplyblock.io
+      version: v1alpha1
+    - description: StorageDevice is the Schema for the storagedevices API.
+      displayName: Storage Device
+      kind: StorageDevice
+      name: storagedevices.storage.simplyblock.io
+      version: v1alpha2
     - description: StorageBackup is the Schema for the storagebackups API.
       displayName: Storage Backup
       kind: StorageBackup
