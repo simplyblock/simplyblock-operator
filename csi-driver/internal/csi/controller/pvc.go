@@ -14,20 +14,27 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func (cs *Server) fetchPVCAnnotations(
+// consistencyGroupLabel names the consistency group a PVC's volume joins at
+// creation (design §4.1). Mirrors the operator's constant of the same name.
+const consistencyGroupLabel = "storage.simplyblock.io/consistency-group"
+
+// fetchPVCMeta reads a PVC once and returns both its annotations and its labels.
+// Provisioning sources placement and QoS from annotations and consistency-group
+// membership from a label, so both come from the single Get.
+func (cs *Server) fetchPVCMeta(
 	ctx context.Context,
 	pvcName, pvcNamespace string,
-) (map[string]string, error) {
+) (annotations, labels map[string]string, err error) {
 	if cs.kubeClient == nil {
-		return nil, fmt.Errorf("kubernetes client not configured (no in-cluster config)")
+		return nil, nil, fmt.Errorf("kubernetes client not configured (no in-cluster config)")
 	}
 	pvc, err := cs.kubeClient.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("failed to get PVC %s in namespace %s: %v", pvcName, pvcNamespace, err)
-		return nil, fmt.Errorf("could not get PVC %s in namespace %s: %w", pvcName, pvcNamespace, err)
+		return nil, nil, fmt.Errorf("could not get PVC %s in namespace %s: %w", pvcName, pvcNamespace, err)
 	}
 
-	return pvc.Annotations, nil
+	return pvc.Annotations, pvc.Labels, nil
 }
 
 // removePVCAnnotations deletes the given annotation keys from a PVC via a JSON

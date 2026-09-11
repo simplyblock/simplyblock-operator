@@ -103,6 +103,11 @@ func (s *nonBlockingGRPCServer) serve(
 	}
 	if cs != nil {
 		csi.RegisterControllerServer(server, cs)
+		// Register the GroupController service too when the controller
+		// implements it (VolumeGroupSnapshot support, design §9).
+		if gcs, ok := cs.(csi.GroupControllerServer); ok {
+			csi.RegisterGroupControllerServer(server, gcs)
+		}
 	}
 	if ns != nil {
 		csi.RegisterNodeServer(server, ns)

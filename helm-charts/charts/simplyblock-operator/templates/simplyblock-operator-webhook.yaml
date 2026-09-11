@@ -93,6 +93,44 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
+      path: /validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot
+  failurePolicy: Fail
+  name: volumegroupsnapshot-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - groupsnapshot.storage.k8s.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    resources:
+    - volumegroupsnapshots
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha1-volumemigration
+  failurePolicy: Fail
+  name: volumemigration-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - volumemigrations
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha1-replicationops
   failurePolicy: Fail
   name: vreplicationops.simplyblock.io
@@ -162,5 +200,24 @@ webhooks:
     - UPDATE
     resources:
     - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops
+  failurePolicy: Fail
+  name: vvolumegroupsnapshotops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - volumegroupsnapshotops
   sideEffects: None
 {{- end }}

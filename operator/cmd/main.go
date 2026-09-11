@@ -47,6 +47,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+
 	"github.com/simplyblock/atlas/link"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -82,6 +85,12 @@ func init() {
 	// v1alpha1 stays registered because it is still the storage version and still
 	// served (design-property-renames.md §3.8).
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
+	// external-snapshotter VolumeGroupSnapshot: the operator serves a validating
+	// webhook on it (design §9.4) but does not own the CRD.
+	utilruntime.Must(volumegroupsnapshotv1beta1.AddToScheme(scheme))
+	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
+	// enumerates a group snapshot's member snapshots (design §7.4).
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -641,6 +650,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
 		os.Exit(1)
 	}
+	if err := (&controller.VolumeGroupSnapshotOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Provision the admission webhooks' serving certificate at runtime (self-signed
@@ -696,6 +713,24 @@ func main() {
 				NodeSelector: autoplacement.NewStorageNodeSelector(mgr.GetClient()),
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot",
+			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
+		setupLog.Info("registered volumegroupsnapshot validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops",
+			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered volumegroupsnapshotops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumemigration",
+			&webhook.Admission{Handler: &internalwebhook.VolumeMigrationValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
+		setupLog.Info("registered volumemigration validating webhook")
 	}()
 
 	// The aggregated metrics API: LogicalVolumeMetrics served from the volume

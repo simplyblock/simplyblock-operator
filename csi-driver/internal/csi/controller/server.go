@@ -3,6 +3,7 @@
 package controller
 
 import (
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -10,6 +11,10 @@ import (
 
 type Server struct {
 	*csicommon.DefaultControllerServer
+	// The GroupController service (VolumeGroupSnapshot) is implemented in
+	// groupsnapshot.go; embedding the unimplemented server satisfies the
+	// interface's forward-compat guard for any method not overridden.
+	csi.UnimplementedGroupControllerServer
 	volumeLocks *csicommon.VolumeLocks
 	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
 	// cleanup). Built once at construction and reused, and nil when no in-cluster

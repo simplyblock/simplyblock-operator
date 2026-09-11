@@ -26,9 +26,10 @@ func rule(groups []string, resources []string, verbs ...string) rbacv1.PolicyRul
 }
 
 var (
-	core     = []string{""}
-	storage  = []string{"storage.k8s.io"}
-	snapshot = []string{"snapshot.storage.k8s.io"}
+	core          = []string{""}
+	storage       = []string{"storage.k8s.io"}
+	snapshot      = []string{"snapshot.storage.k8s.io"}
+	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
 )
 
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
@@ -52,6 +53,12 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(snapshot, []string{"volumesnapshotcontents"}, "create", "get", "list", "watch", "update", "delete", "patch"),
 		rule(snapshot, []string{"volumesnapshotclasses"}, "get", "list", "watch"),
 		rule(snapshot, []string{"volumesnapshotcontents/status"}, "get", "update", "patch"),
+		// VolumeGroupSnapshot support (design-consistency-groups.md §9, P0-4):
+		// the csi-snapshotter sidecar watches VolumeGroupSnapshotContent and
+		// drives the GroupController behind the CSIVolumeGroupSnapshot gate.
+		rule(groupsnapshot, []string{"volumegroupsnapshotclasses"}, "get", "list", "watch"),
+		rule(groupsnapshot, []string{"volumegroupsnapshotcontents"}, "create", "get", "list", "watch", "update", "delete", "patch"),
+		rule(groupsnapshot, []string{"volumegroupsnapshotcontents/status"}, "get", "update", "patch"),
 		rule(storage, []string{"csinodes"}, "get", "list", "watch"),
 		rule(core, []string{"nodes"}, "get", "list", "watch"),
 		rule(storage, []string{"volumeattachments"}, "get", "list", "watch"),
