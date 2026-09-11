@@ -107,17 +107,18 @@ func (s recordingSink) V(level int) logr.LogSink {
 	return recordingSink{verbosity: s.verbosity + level, messages: s.messages}
 }
 
-// Regression: 2026-09-11-controlplane-logs-every-probe. The probe repeats every
-// 30 seconds for the life of the cluster, and a readiness that has not changed
-// was announced at info on every one of them: about six thousand lines a day per
-// operator, all of them saying what the line before said. The transition is the
-// event, and it is what the log says too.
-func TestARepeatedReadyProbeIsNotAnnouncedAgain(t *testing.T) {
+// probeRepeatedly runs ten reconciles against a control plane answering with the
+// given status, and returns everything they logged at info. Ten because that is
+// what the plan's transition rows count: one is a transition and nine are the
+// steady state, which is where a per-probe line would show up.
+func probeRepeatedly(t *testing.T, status int, body string) []string {
+	t.Helper()
+
 	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/_meta/ready", webapimock.RouteResponse{
-		Status:  http.StatusOK,
-		Body:    `{"status":"ok"}`,
+		Status:  status,
+		Body:    body,
 		Headers: map[string]string{"Content-Type": "application/json"},
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
@@ -134,25 +135,51 @@ func TestARepeatedReadyProbeIsNotAnnouncedAgain(t *testing.T) {
 		WithStatusSubresource(&simplyblockv1alpha2.ControlPlane{}).
 		WithObjects(cp).
 		Build()
-	r := &ControlPlaneReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(8)}
+	r := &ControlPlaneReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16)}
 
 	var logged []string
 	ctx := logf.IntoContext(context.Background(), logr.New(recordingSink{messages: &logged}))
 	key := client.ObjectKeyFromObject(cp)
 
-	for i := range 3 {
+	for i := range 10 {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 			t.Fatalf("reconcile %d: %v", i, err)
 		}
 	}
+	return logged
+}
 
-	var announcements int
+// countMessages returns how many of the logged lines carry exactly this message.
+func countMessages(logged []string, message string) int {
+	var count int
 	for _, msg := range logged {
-		if msg == "control plane ready" {
-			announcements++
+		if msg == message {
+			count++
 		}
 	}
-	if announcements != 1 {
-		t.Fatalf("expected the readiness to be announced once, got %d in %v", announcements, logged)
+	return count
+}
+
+// Regression: 2026-09-11-controlplane-logs-every-probe. The probe repeats every
+// 30 seconds for the life of the cluster, and a readiness that has not changed
+// was announced at info on every one of them: about six thousand lines a day per
+// operator, all of them saying what the line before said. The transition is the
+// event, and it is what the log says too.
+func TestARepeatedReadyProbeIsNotAnnouncedAgain(t *testing.T) {
+	logged := probeRepeatedly(t, http.StatusOK, `{"status":"ok"}`)
+
+	if got := countMessages(logged, "control plane ready"); got != 1 {
+		t.Fatalf("expected the readiness to be announced once, got %d in %v", got, logged)
+	}
+}
+
+// The same in the other direction, which is the one an operator is more likely to
+// be reading: a control plane that has been down for an hour says so once, and
+// the hour of probes behind it is at debug.
+func TestARepeatedFailingProbeIsNotAnnouncedAgain(t *testing.T) {
+	logged := probeRepeatedly(t, http.StatusServiceUnavailable, `{"status":"fdb unavailable"}`)
+
+	if got := countMessages(logged, "control plane not ready"); got != 1 {
+		t.Fatalf("expected the failure to be announced once, got %d in %v", got, logged)
 	}
 }
