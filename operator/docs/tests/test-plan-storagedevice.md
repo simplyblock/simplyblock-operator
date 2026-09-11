@@ -41,23 +41,24 @@ Files: `operator/internal/controller/storagedevice_controller_unit_test.go`,
 `operator/internal/cpinformer/subscriptions/device_test.go` for the naming the
 subscription performs.
 
-| #    | Scenario                                                                 | Type       | Test                                                     |
-|------|--------------------------------------------------------------------------|------------|----------------------------------------------------------|
-| U-01 | A node with four devices, no objects: four objects are created           | Positive   | —                                                        |
-| U-02 | Each object is named `<node>-<short-device-id>` and is a valid DNS label | Positive   | `TestDeviceSubscriptionSnapshotCachesSyncsAndTriggers`   |
-| U-03 | Each object carries a controller reference to its `StorageNode`          | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
-| U-04 | Each object carries the cluster, node, and worker labels                 | Positive   | `TestTheMirrorLabelsADeviceWithItsClusterNodeAndWorker`  |
-| U-05 | A device whose object exists: the object is updated, not recreated       | Negative   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
-| U-06 | A node with no devices: no object is created and none is removed         | Boundary   | —                                                        |
-| U-07 | A node with one device: one object                                       | Boundary   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
-| U-08 | Two nodes with a device of the same ID: two objects, no collision        | Boundary   | —                                                        |
-| U-09 | A device list that has not changed: no status patch is issued            | Negative   | —                                                        |
-| U-10 | A device ID long enough to overflow the name: truncated and still unique | Boundary   | —                                                        |
-| U-77 | A label somebody stripped is restored, and a foreign label is kept       | Boundary   | `TestTheMirrorRestoresALabelSomebodyRemoved`             |
-| U-81 | The object is created in the owning node's namespace, not the operator's | Regression | `TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace` |
-| U-82 | A device whose node object is absent: no ownerless object is created     | Negative   | `TestStorageDeviceReconcileWaitsForItsNode`              |
-| U-79 | A status write rejected with a conflict is retried, not surfaced         | Regression | `TestStorageDeviceStatusUpdateRetriesOnConflict`         |
-| U-80 | A spec write rejected with a conflict is retried                         | Regression | `TestStorageDeviceSpecUpdateRetriesOnConflict`           |
+| #     | Scenario                                                                 | Type       | Test                                                     |
+|-------|--------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-01  | A node with four devices, no objects: four objects are created           | Positive   | —                                                        |
+| U-02  | Each object is named `<node>-<short-device-id>` and is a valid DNS label | Positive   | `TestDeviceSubscriptionSnapshotCachesSyncsAndTriggers`   |
+| U-03  | Each object carries a controller reference to its `StorageNode`          | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-04  | Each object carries the cluster, node, and worker labels                 | Positive   | `TestTheMirrorLabelsADeviceWithItsClusterNodeAndWorker`  |
+| U-05  | A device whose object exists: the object is updated, not recreated       | Negative   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-06  | A node with no devices: no object is created and none is removed         | Boundary   | —                                                        |
+| U-07  | A node with one device: one object                                       | Boundary   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-08  | Two nodes with a device of the same ID: two objects, no collision        | Boundary   | —                                                        |
+| U-09  | A device list that has not changed: no status patch is issued            | Negative   | —                                                        |
+| U-10  | A device ID long enough to overflow the name: truncated and still unique | Boundary   | —                                                        |
+| U-77  | A label somebody stripped is restored, and a foreign label is kept       | Boundary   | `TestTheMirrorRestoresALabelSomebodyRemoved`             |
+| U-81  | The object is created in the owning node's namespace, not the operator's | Regression | `TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace` |
+| U-82  | A device whose node object is absent: no ownerless object is created     | Negative   | `TestStorageDeviceReconcileWaitsForItsNode`              |
+| U-79  | A status write rejected with a conflict is retried, not surfaced         | Regression | `TestStorageDeviceStatusUpdateRetriesOnConflict`         |
+| U-80  | A spec write rejected with a conflict is retried                         | Regression | `TestStorageDeviceSpecUpdateRetriesOnConflict`           |
+| U-118 | An owned label the mirror can no longer resolve is removed               | Boundary   | `TestALabelThatStopsBeingResolvableIsRemoved`            |
 
 ### Status Mapping (design §4.2)
 
@@ -89,18 +90,19 @@ subscription performs.
 
 ### A Device That Stops Being Reported (design §5.2)
 
-| #    | Scenario                                                                      | Type     | Test                                                   |
-|------|-------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-23 | A device last reported as `removed`: the object is deleted, `DeviceRemoved`   | Positive | `TestARemovedDeviceIsDeletedWithoutAWarning`           |
-| U-24 | A device that was serving until it vanished: deleted, `DeviceDisappeared`     | Negative | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
-| U-25 | Both events land on the `StorageNode`, not on the disappearing object         | Positive | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
-| U-26 | A scope whose first snapshot has not arrived: nothing is deleted              | Negative | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
-| U-27 | A cold cache is not read as every device disappearing                         | Negative | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
-| U-28 | An unreachable node reporting no devices: objects kept and moved to `Unknown` | Positive | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
-| U-29 | A device that reappears: its object is recreated with the same name           | Boundary | —                                                      |
-| U-78 | A restarting node's devices survive the restart rather than churning          | Boundary | `TestARestartingNodesDevicesAreKept`                   |
-| U-83 | A synced scope on an online node saying nothing: the object is deleted        | Positive | `TestStorageDeviceReconcileDeletesWhenGoneAndSynced`   |
-| U-84 | The `Unknown` transition is announced once, as `DeviceStateUnknown`           | Positive | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
+| #     | Scenario                                                                      | Type       | Test                                                   |
+|-------|-------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-23  | A device last reported as `removed`: the object is deleted, `DeviceRemoved`   | Positive   | `TestARemovedDeviceIsDeletedWithoutAWarning`           |
+| U-24  | A device that was serving until it vanished: deleted, `DeviceDisappeared`     | Negative   | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
+| U-25  | Both events land on the `StorageNode`, not on the disappearing object         | Positive   | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
+| U-26  | A scope whose first snapshot has not arrived: nothing is deleted              | Negative   | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
+| U-27  | A cold cache is not read as every device disappearing                         | Negative   | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
+| U-28  | An unreachable node reporting no devices: objects kept and moved to `Unknown` | Positive   | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
+| U-29  | A device that reappears: its object is recreated with the same name           | Boundary   | —                                                      |
+| U-78  | A restarting node's devices survive the restart rather than churning          | Boundary   | `TestARestartingNodesDevicesAreKept`                   |
+| U-83  | A synced scope on an online node saying nothing: the object is deleted        | Positive   | `TestStorageDeviceReconcileDeletesWhenGoneAndSynced`   |
+| U-84  | The `Unknown` transition is announced once, as `DeviceStateUnknown`           | Positive   | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
+| U-119 | The `Unknown` write rejected with a conflict is retried, not surfaced         | Regression | `TestTheUnknownTransitionRetriesOnConflict`            |
 
 ### Deletion (design §5.3)
 
@@ -124,22 +126,23 @@ File: `operator/internal/webhook/storagedevice_validator_test.go`
 File: `operator/internal/controller/storagedevice_collector_test.go`, and the
 mirror's own file for the events it emits.
 
-| #     | Scenario                                                                     | Type     | Test                                                   |
-|-------|------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-89  | A device found for the first time: `DeviceDiscovered`, on the node           | Positive | `TestDiscoveryIsAnnouncedOnTheNode`                    |
-| U-74  | A phase change is announced once, and a settled device announces nothing     | Positive | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
-| U-75  | A device that was `Online` when first seen is not announced as recovered     | Negative | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
-| U-90  | The size and the phase of each device are published as gauges                | Positive | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
-| U-91  | A device's phase gauge is 1 for its phase and 0 for every other              | Boundary | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
-| U-92  | The per-node device count and failed count match the objects                 | Positive | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
-| U-93  | What a device holds is published from Prometheus, one query per cluster      | Positive | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
-| U-94  | No Prometheus: no used-bytes series, and every other gauge still published   | Negative | `TestWithoutPrometheusTheRestIsStillPublished`         |
-| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected | Negative | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
-| U-96  | A device that went away leaves no series behind                              | Boundary | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
-| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once      | Positive | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
-| U-98  | A device that empties and fills again: a second crossing and a second event  | Boundary | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
-| U-99  | A device under the threshold: nothing is announced                           | Negative | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
-| U-100 | A cluster declaring no threshold: the default applies rather than no warning | Boundary | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
+| #     | Scenario                                                                                             | Type     | Test                                                   |
+|-------|------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                   | Positive | `TestDiscoveryIsAnnouncedOnTheNode`                    |
+| U-74  | A phase change is announced once, and a settled device announces nothing                             | Positive | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
+| U-75  | A device that was `Online` when first seen is not announced as recovered                             | Negative | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
+| U-90  | The size and the phase of each device are published as gauges                                        | Positive | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                      | Boundary | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-92  | The per-node device count and failed count match the objects                                         | Positive | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
+| U-93  | What a device holds is published from Prometheus, one query per cluster                              | Positive | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
+| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                           | Negative | `TestWithoutPrometheusTheRestIsStillPublished`         |
+| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                         | Negative | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
+| U-96  | A device that went away leaves no series behind                                                      | Boundary | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
+| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about | Boundary | `TestTheCollectorForgetsADeviceThatWentAway`           |
+| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                              | Positive | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-99  | A device under the threshold: nothing is announced                                                   | Negative | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
+| U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
 
 ### The Readings (design §4.4)
 
@@ -159,18 +162,18 @@ File: `operator/internal/metricsapi/devicestorage_test.go`
 | U-110 | `kubectl get sdm` renders a row per reading, with a cell per column  | Positive | `TestDeviceTableRendersTheReading`            |
 | U-111 | The resource is namespaced and answers to `sdm`                      | Positive | `TestDeviceStorageIdentity`                   |
 
-### The Served Versions (design §4.4)
+### The Served Version (design §4.4)
 
 File: `operator/internal/metricsapi/scheme_test.go`
 
-| #     | Scenario                                                                   | Type     | Test                                      |
-|-------|----------------------------------------------------------------------------|----------|-------------------------------------------|
-| U-112 | Each kind of the metrics group is registered under exactly its own version | Positive | `TestSchemeKnowsBothVersions`             |
-| U-113 | `v1alpha2` is the preferred version discovery reports                      | Positive | `TestTheNewerVersionIsPreferred`          |
-| U-114 | A reading round-trips through the codec with its kind intact               | Positive | `TestCodecRoundTripsADeviceReading`       |
-| U-115 | Both versions install, each with its own resource                          | Positive | `TestBothVersionsInstall`                 |
-| U-116 | The merged OpenAPI definitions cover both versions' kinds                  | Boundary | `TestOpenAPIDefinitionsCoverBothVersions` |
-| U-117 | Every served version has an `APIService` whose CA bundle is injected       | Boundary | `TestEveryServedVersionGetsItsCABundle`   |
+| #     | Scenario                                                                     | Type     | Test                                         |
+|-------|------------------------------------------------------------------------------|----------|----------------------------------------------|
+| U-112 | Every kind of the metrics group is registered at the version it is served at | Positive | `TestSchemeKnowsTheServedKinds`              |
+| U-113 | The group serves one version, and it is `v1alpha2`                           | Boundary | `TestTheGroupServesOneVersion`               |
+| U-114 | A reading round-trips through the codec with its kind intact                 | Positive | `TestCodecRoundTripsADeviceReading`          |
+| U-115 | The group installs with both resources under its version                     | Positive | `TestAPIGroupInstalls`                       |
+| U-116 | The OpenAPI definitions cover every served kind                              | Boundary | `TestOpenAPIDefinitionsCoverEveryServedKind` |
+| U-117 | Every served version has an `APIService` whose CA bundle is injected         | Boundary | `TestEveryServedVersionGetsItsCABundle`      |
 
 ### StorageDeviceOps: Restart and Test (design §6)
 
@@ -328,11 +331,11 @@ node down with it and costs the cluster a node's worth of redundancy.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 105       | 72      | 33          |
+| Unit        | 108       | 75      | 33          |
 | Integration | 16        | 0       | 16          |
 | E2E         | 14        | 0       | 14          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **138**   | **72**  | **66**      |
+| **Total**   | **141**   | **75**  | **66**      |
 
 Superseded rows are excluded from the counts: their behavior is gone rather than
 untested.

@@ -317,3 +317,49 @@ func recorderOf(t *testing.T, c *StorageDeviceCollector) *events.FakeRecorder {
 	}
 	return rec
 }
+
+// The crossing memory is keyed by object, and an object that goes away takes its
+// entry with it. Two things go wrong otherwise: the map grows for the life of the
+// process, one entry per device ever seen, and a device object recreated under
+// the same name inherits a crossing it never made, so its first real DeviceNearlyFull
+// is swallowed.
+func TestTheCollectorForgetsADeviceThatWentAway(t *testing.T) {
+	capacity := &fakeCapacitySource{samples: map[string]map[string]prometheus.Capacity{
+		sdCluster: {sdDevice: {Total: 1000, Used: 900, SampledAt: time.Unix(1, 0)}},
+	}}
+	device := collectorDevice(
+		"production-7f3a9c-5e0000a1", simplyblockv1alpha2.StorageDevicePhaseOnline, sdDevice, 1000)
+	c := newCollector(t, capacity, collectorCluster(75), device)
+
+	if err := c.collect(context.Background()); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if !announced(recorderOf(t, c), "DeviceNearlyFull") {
+		t.Fatal("a full device was not warned about")
+	}
+
+	// The drive is pulled, so the mirror deletes its object.
+	if err := c.Delete(context.Background(), device); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := c.collect(context.Background()); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(c.full) != 0 {
+		t.Errorf("the crossing memory holds %d entries for devices that are gone", len(c.full))
+	}
+
+	// A replacement arrives under the same name, already full. It has made no
+	// crossing this collector has seen, so it gets its own warning.
+	if err := c.Create(context.Background(), collectorDevice(
+		"production-7f3a9c-5e0000a1", simplyblockv1alpha2.StorageDevicePhaseOnline, sdDevice, 1000,
+	)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := c.collect(context.Background()); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if !announced(recorderOf(t, c), "DeviceNearlyFull") {
+		t.Error("a replacement device inherited the crossing of the device it replaced")
+	}
+}

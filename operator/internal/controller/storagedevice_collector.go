@@ -78,7 +78,10 @@ type StorageDeviceCollector struct {
 	// full remembers which devices have already been warned about, so a device
 	// that stays full is one event rather than one per tick. A device that
 	// empties is forgotten, which is what makes the next filling a second
-	// crossing and a second warning.
+	// crossing and a second warning, and so is a device that goes away: the map
+	// is pruned to the objects each pass listed, so it cannot grow with every
+	// drive the fleet has ever held, and a replacement arriving under the same
+	// name does not inherit a crossing it never made.
 	full map[string]bool
 }
 
@@ -150,7 +153,29 @@ func (c *StorageDeviceCollector) collect(ctx context.Context) error {
 		nodeDeviceFailedCount.WithLabelValues(key.cluster, key.node).Set(float64(failed[key]))
 	}
 
+	c.forgetDevicesThatWentAway(devices.Items)
 	return c.publishOccupancy(ctx, devices.Items)
+}
+
+// forgetDevicesThatWentAway prunes the crossing memory to the devices this pass
+// listed, which is the same reason the gauges are rebuilt whole rather than
+// updated in place: what an object no longer says about itself has to stop being
+// remembered somewhere, and the full list is the only place that knows.
+func (c *StorageDeviceCollector) forgetDevicesThatWentAway(
+	devices []simplyblockv1alpha2.StorageDevice,
+) {
+	if len(c.full) == 0 {
+		return
+	}
+	present := make(map[string]bool, len(devices))
+	for i := range devices {
+		present[client.ObjectKeyFromObject(&devices[i]).String()] = true
+	}
+	for key := range c.full {
+		if !present[key] {
+			delete(c.full, key)
+		}
+	}
 }
 
 // publishPhase writes the device's phase as one series per phase, so that every

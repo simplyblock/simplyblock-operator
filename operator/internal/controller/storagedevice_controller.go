@@ -189,18 +189,37 @@ func (r *StorageDeviceReconciler) unreported(
 func (r *StorageDeviceReconciler) markUnobservable(
 	ctx context.Context, sd *simplyblockv1alpha2.StorageDevice, node *simplyblockv1alpha1.StorageNode,
 ) error {
-	switch sd.Status.Phase {
-	case simplyblockv1alpha2.StorageDevicePhaseFailed,
-		simplyblockv1alpha2.StorageDevicePhaseRemoved,
-		simplyblockv1alpha2.StorageDevicePhaseUnknown:
-		return nil
-	}
-
 	previous := sd.Status.Phase
-	sd.Status.Phase = simplyblockv1alpha2.StorageDevicePhaseUnknown
-	sd.Status.Message = fmt.Sprintf(
+	message := fmt.Sprintf(
 		"storage node %s is %s, so the device's state is not observable", node.Name, nodeState(node))
-	if err := r.Status().Update(ctx, sd); err != nil {
+
+	// The same conflict the upsert path retries reaches here, and for the same
+	// reason: this reconcile may have started from a cached object the API server
+	// has already moved past. What to write is decided by the node's state rather
+	// than by the object, so re-reading and writing again converges on the same
+	// result instead of losing a decision.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var current simplyblockv1alpha2.StorageDevice
+		if err := r.Get(ctx, client.ObjectKeyFromObject(sd), &current); err != nil {
+			return err
+		}
+		switch current.Status.Phase {
+		case simplyblockv1alpha2.StorageDevicePhaseFailed,
+			simplyblockv1alpha2.StorageDevicePhaseRemoved,
+			simplyblockv1alpha2.StorageDevicePhaseUnknown:
+			previous = current.Status.Phase
+			return nil
+		}
+		previous = current.Status.Phase
+		current.Status.Phase = simplyblockv1alpha2.StorageDevicePhaseUnknown
+		current.Status.Message = message
+		if err := r.Status().Update(ctx, &current); err != nil {
+			return err
+		}
+		*sd = current
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	r.announcePhase(sd, previous)
@@ -424,9 +443,23 @@ func (r *StorageDeviceReconciler) deviceLabels(
 	return labels, nil
 }
 
+// deviceOwnedLabels are the keys the mirror writes and is therefore responsible
+// for removing. A key is on this list whether or not the current reconcile could
+// resolve a value for it, which is what makes the removal possible at all.
+var deviceOwnedLabels = []string{
+	simplyblockv1alpha2.DeviceLabelCluster,
+	simplyblockv1alpha2.DeviceLabelNode,
+	simplyblockv1alpha2.DeviceLabelWorker,
+}
+
 // applyLabels writes the mirror's labels onto sd and reports whether anything
 // changed. Only the keys the mirror owns are touched, so a label somebody else
 // put on the object survives a reconcile.
+//
+// An owned key with no resolved value is removed rather than left at what it said
+// before. The label is the mirror's statement about the device now, and a worker
+// label that outlives the node's own sends somebody holding a failed drive to a
+// machine it is not in, which is worse than sending them nowhere.
 func applyLabels(sd *simplyblockv1alpha2.StorageDevice, owned map[string]string) bool {
 	changed := false
 	for key, value := range owned {
@@ -438,6 +471,15 @@ func applyLabels(sd *simplyblockv1alpha2.StorageDevice, owned map[string]string)
 		}
 		sd.Labels[key] = value
 		changed = true
+	}
+	for _, key := range deviceOwnedLabels {
+		if _, published := owned[key]; published {
+			continue
+		}
+		if _, present := sd.Labels[key]; present {
+			delete(sd.Labels, key)
+			changed = true
+		}
 	}
 	return changed
 }

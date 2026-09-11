@@ -17,6 +17,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -425,5 +427,81 @@ func TestADeviceWithNoHardwareFieldsCarriesNoHardware(t *testing.T) {
 	}
 	if sd.Status.Capacity == nil {
 		t.Error("a reported size must still be published")
+	}
+}
+
+// The Unknown transition writes status like every other path, and is enqueued the
+// same two ways, so it can start from a cached object the API server has already
+// moved past. The upsert path retries a rejected write rather than surfacing it,
+// and this path has the same reason to: what it writes is decided by the node's
+// state rather than by the object, so re-reading and writing again converges.
+func TestTheUnknownTransitionRetriesOnConflict(t *testing.T) {
+	statusUpdates := 0
+	r := sdReconcilerWithInterceptor(t,
+		&fakeDeviceCache{synced: true, devices: map[string]subscriptions.DeviceDTO{}},
+		interceptor.Funcs{
+			SubResourceUpdate: func(
+				ctx context.Context, c client.Client, subResourceName string,
+				obj client.Object, opts ...client.SubResourceUpdateOption,
+			) error {
+				if subResourceName == statusSubresource {
+					statusUpdates++
+					if statusUpdates == 1 {
+						return sdConflictErr()
+					}
+				}
+				return c.Status().Update(ctx, obj, opts...)
+			},
+		},
+		sdNodeWithStatus(utils.NodeStatusUnreachable), sdNodeSet(),
+		existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, "online"))
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("a 409 on the Unknown write must be retried, not surfaced: %v", err)
+	}
+	if statusUpdates < 2 {
+		t.Fatalf("expected the status write to be retried, got %d attempt(s)", statusUpdates)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseUnknown {
+		t.Errorf("phase = %q, want Unknown after the retry", sd.Status.Phase)
+	}
+}
+
+// The labels are the mirror's output, so a value that stops being resolvable stops
+// being published. A worker label left behind after the node lost its own points
+// an incident at a machine the drive is not in, which is worse than no label.
+func TestALabelThatStopsBeingResolvableIsRemoved(t *testing.T) {
+	node := sdNodeWithStatus(utils.NodeStatusOnline)
+	delete(node.Labels, simplyblockv1alpha2.DeviceLabelWorker)
+
+	stale := existingDevice(simplyblockv1alpha2.StorageDevicePhaseOnline, "online")
+	stale.Labels = map[string]string{
+		simplyblockv1alpha2.DeviceLabelCluster: "production",
+		simplyblockv1alpha2.DeviceLabelNode:    sdNodeCR,
+		simplyblockv1alpha2.DeviceLabelWorker:  "worker-3",
+		"unrelated":                            "kept",
+	}
+
+	r := sdReconciler(t, sdOnlineCache(), node, sdNodeSet(), stale)
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, ok := sd.Labels[simplyblockv1alpha2.DeviceLabelWorker]; ok {
+		t.Errorf("a worker label the node no longer carries was kept: %v", sd.Labels)
+	}
+	if sd.Labels[simplyblockv1alpha2.DeviceLabelCluster] != "production" {
+		t.Errorf("a label that still resolves was dropped: %v", sd.Labels)
+	}
+	if sd.Labels["unrelated"] != "kept" {
+		t.Errorf("a label the mirror does not own was dropped: %v", sd.Labels)
 	}
 }

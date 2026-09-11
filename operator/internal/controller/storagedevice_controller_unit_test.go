@@ -368,7 +368,7 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 			ctx context.Context, c client.Client, subResourceName string,
 			obj client.Object, opts ...client.SubResourceUpdateOption,
 		) error {
-			if subResourceName == "status" {
+			if subResourceName == statusSubresource {
 				statusUpdates++
 				if statusUpdates == 1 {
 					return sdConflictErr()

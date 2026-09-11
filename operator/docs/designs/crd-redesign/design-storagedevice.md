@@ -345,6 +345,14 @@ duplicates something already reachable through the node. The cluster label is th
 `StorageNodeSet`, so the mirror resolves it there rather than deriving it from
 `status.clusterID`.
 
+**The three keys are the mirror's to write and to remove.** A label it cannot
+resolve a value for is taken off the object rather than left at what it said
+before, because the label is a statement about the device now: a worker label
+outliving the node's own sends somebody holding a failed drive to a machine it is
+not in, which is worse than sending them nowhere. A label the mirror does not own
+is left where it is, since the object is the operator's to describe and somebody
+else's to annotate.
+
 ### 4.4 StorageDeviceMetrics
 
 Declared in `operator/api/metrics/v1alpha2/storagedevicemetrics_types.go`, short

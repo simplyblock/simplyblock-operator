@@ -11,6 +11,10 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
+// statusSubresource is the name a client passes to a SubResourceUpdate
+// interceptor for a status write, which is how a test makes one fail.
+const statusSubresource = "status"
+
 func newTestScheme(t *testing.T, addToScheme ...func(*runtime.Scheme) error) *runtime.Scheme {
 	t.Helper()
 
