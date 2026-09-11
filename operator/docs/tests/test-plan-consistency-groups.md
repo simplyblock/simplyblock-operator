@@ -7,7 +7,7 @@ Scope is the CSI driver and the Kubernetes surface this repository builds. The c
 
 Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster, pure functions, a fake `client.Client`, a mock HTTP backend), `I-` is integration (full reconcile or sidecar loop against `envtest` and a mock backend), `E-` is end-to-end (a live cluster and the real data path), and `M-` is manual (needs failure injection or orchestration not automated yet). Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §7 with its reason.
 
-The whole design is Draft, so every row is currently `—`. The plan is the target coverage, and the `Test` columns fill in as the work lands.
+The plan is the target coverage, and the `Test` columns fill in as the work lands. The `VolumeGroupSnapshotOps` unit rows (U-25 … U-33) are implemented; every other row is still `—`.
 
 ---
 
@@ -69,19 +69,19 @@ File: `operator/internal/webhook/volumemigration_webhook_unit_test.go`
 
 ### VolumeGroupSnapshotOps: Restore (design §7.4)
 
-Files: `operator/internal/controller/volumegroupsnapshotops_controller_unit_test.go` and `operator/internal/webhook/volumegroupsnapshotops_validator_unit_test.go`
+Files: `operator/internal/controller/volumegroupsnapshotops_controller_unit_test.go` and `operator/internal/webhook/volumegroupsnapshotops_validator_test.go`
 
-| #    | Scenario                                                                                                                                               | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-25 | Ready target with N member snapshots: one claim per member is created, each `dataSource` its member snapshot, named `<prefix>-<source PVC>`            | Positive | —    |
-| U-26 | `namePrefix` empty: restored claims are prefixed with the operation's own name                                                                         | Boundary | —    |
-| U-27 | `restore.consistencyGroup` set: every restored claim carries the membership label with that value                                                      | Positive | —    |
-| U-28 | `restore.consistencyGroup` empty: restored claims carry no membership label                                                                            | Negative | —    |
-| U-29 | Incomplete generation with `enablePartialRestore` off: the operation fails naming the missing members, and no claim is created                         | Negative | —    |
-| U-30 | Incomplete generation with `enablePartialRestore` on: the present members are restored, and `membersExpected` against `membersBound` reports the gap   | Boundary | —    |
-| U-31 | A derived claim name collides with an existing claim: the operation fails naming the claim, and claims already created are left in place               | Negative | —    |
-| U-32 | Target exists but is not `ReadyToUse`: the operation holds in `Pending` with a `RestoreBlocked` event, creates no claim, and proceeds once it is ready | Boundary | —    |
-| U-33 | Admission: a `volumeGroupSnapshotRef` that resolves is admitted, and one naming no `VolumeGroupSnapshot` in the namespace is rejected at create        | Negative | —    |
+| #    | Scenario                                                                                                                                               | Type     | Test                                                |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------|
+| U-25 | Ready target with N member snapshots: one claim per member is created, each `dataSource` its member snapshot, named `<prefix>-<source PVC>`            | Positive | `TestGroupRestore_CreatesOneClaimPerMember`         |
+| U-26 | `namePrefix` empty: restored claims are prefixed with the operation's own name                                                                         | Boundary | `TestGroupRestore_HonorsNamePrefix`                 |
+| U-27 | `restore.consistencyGroup` set: every restored claim carries the membership label with that value                                                      | Positive | `TestGroupRestore_ConsistencyGroupLabel`            |
+| U-28 | `restore.consistencyGroup` empty: restored claims carry no membership label                                                                            | Negative | `TestGroupRestore_ConsistencyGroupLabel`            |
+| U-29 | Incomplete generation with `enablePartialRestore` off: the operation fails naming the missing members, and no claim is created                         | Negative | `TestGroupRestore_IncompleteGenerationFails`        |
+| U-30 | Incomplete generation with `enablePartialRestore` on: the present members are restored, and `membersExpected` against `membersBound` reports the gap   | Boundary | `TestGroupRestore_PartialRestore`                   |
+| U-31 | A derived claim name collides with an existing claim: the operation fails naming the claim, and claims already created are left in place               | Negative | `TestGroupRestore_ClaimCollisionFails`              |
+| U-32 | Target exists but is not `ReadyToUse`: the operation holds in `Pending` with a `RestoreBlocked` event, creates no claim, and proceeds once it is ready | Boundary | `TestGroupRestore_WaitsForTargetReady`              |
+| U-33 | Admission: a `volumeGroupSnapshotRef` that resolves is admitted, and one naming no `VolumeGroupSnapshot` in the namespace is rejected at create        | Negative | `TestVolumeGroupSnapshotOpsValidator_RefResolution` |
 
 ---
 
@@ -209,7 +209,7 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 33        | 0       | U-01 … U-33 |
+| Unit        | 33        | 9       | U-01 … U-24 |
 | Integration | 12        | 0       | I-01 … I-12 |
 | E2E         | 14        | 0       | E-01 … E-14 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -225,7 +225,7 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 | U-01 … U-24                          | Provisioner label handling, the CSI GroupController, and the admission webhook                               | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
 | I-01 … I-08                          | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                                    | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
 | E-01 … E-12                          | Membership, placement, cross-volume consistency, clone, representation, and health-precheck live             | Depends on the standalone backend group (P0-2, P0-3), which is not shipped                                     |
-| U-25 … U-33, I-09 … I-12, E-13, E-14 | The `VolumeGroupSnapshotOps` restore: claim derivation, admission, lifecycle, and the live one-apply restore | Phase 3 not implemented: the kind, its webhook, and its controller do not exist yet (design §7.4)              |
+| U-25 … U-33, I-09 … I-12, E-13, E-14 | The `VolumeGroupSnapshotOps` restore: claim derivation, admission, lifecycle, and the live one-apply restore | `TestGroupRestore_CreatesOneClaimPerMember`                                                                    |
 | —                                    | Restore into another namespace                                                                               | The Ops kind is namespaced and restores into its own namespace, and a cross-namespace restore is not designed  |
 | M-01                                 | Deleting a member preserves its group snapshots                                                              | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
 | M-02                                 | A member migrated off the pinned store                                                                       | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |

@@ -563,7 +563,7 @@ const (
 )
 
 // VolumeGroupSnapshotOpsStep is one step of a running operation. The enum is the
-// union of every action's steps; which steps belong to which action is declared
+// union of every action's steps. Which steps belong to which action is declared
 // by the action's state-machine graph rather than by this type.
 // +kubebuilder:validation:Enum=Validating;CreatingClaims;WaitingForBind
 type VolumeGroupSnapshotOpsStep string

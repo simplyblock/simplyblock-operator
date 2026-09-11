@@ -48,6 +48,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 
 	"github.com/simplyblock/atlas/link"
 
@@ -84,6 +85,9 @@ func init() {
 	// external-snapshotter VolumeGroupSnapshot: the operator serves a validating
 	// webhook on it (design §9.4) but does not own the CRD.
 	utilruntime.Must(volumegroupsnapshotv1beta1.AddToScheme(scheme))
+	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
+	// enumerates a group snapshot's member snapshots (design §7.4).
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -614,6 +618,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
 		os.Exit(1)
 	}
+	if err := (&controller.VolumeGroupSnapshotOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupSnapshotOps")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Provision the mutating-webhook serving certificate at runtime (self-signed
@@ -663,6 +675,10 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered volumegroupsnapshot validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops",
+			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered volumegroupsnapshotops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumemigration",
 			&webhook.Admission{Handler: &internalwebhook.VolumeMigrationValidator{

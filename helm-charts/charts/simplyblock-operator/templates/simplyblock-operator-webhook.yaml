@@ -163,4 +163,23 @@ webhooks:
     resources:
     - storagenodes
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops
+  failurePolicy: Fail
+  name: vvolumegroupsnapshotops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - volumegroupsnapshotops
+  sideEffects: None
 {{- end }}
