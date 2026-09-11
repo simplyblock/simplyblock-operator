@@ -252,6 +252,8 @@ rules:
   - replicationpolicies
   - replicationslots
   - simplyblockdrivers
+  - storagebackupops
+  - storagebackuppolicies
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -283,7 +285,8 @@ rules:
   - replicationpolicies/finalizers
   - replicationslots/finalizers
   - simplyblockdrivers/finalizers
-  - storagebackups/finalizers
+  - storagebackupops/finalizers
+  - storagebackuppolicies/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
@@ -309,6 +312,8 @@ rules:
   - replicationpolicies/status
   - replicationslots/status
   - simplyblockdrivers/status
+  - storagebackupops/status
+  - storagebackuppolicies/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status

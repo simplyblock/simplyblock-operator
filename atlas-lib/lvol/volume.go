@@ -62,4 +62,12 @@ type Volume struct {
 	Pool      string
 	SizeBytes uint64
 	NQN       string // subsystem NQN this volume is published under
+
+	// Status is the control plane's own lifecycle string for the volume, in the
+	// control plane's spelling and therefore not an enum here. It is what
+	// separates a volume that exists from one that is usable: a volume restored
+	// from a backup exists the moment the restore is accepted and is readable
+	// only once it reports online, and a transfer that gave up reports
+	// restore_failed rather than disappearing.
+	Status string
 }

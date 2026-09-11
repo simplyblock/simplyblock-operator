@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/simplyblock/atlas/controlplane"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -53,6 +54,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
@@ -344,6 +346,13 @@ func main() {
 	// backend-id-to-object mapping the events are named by.
 	nodeSubscription := subscriptions.NewNodeSubscription()
 	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
+	// The data-protection band's two streams, both scoped per cluster. The
+	// backup stream is the only source of a StorageBackup object, so the cluster
+	// that opens it is also what registers the namespace its objects belong in.
+	backupSubscription := subscriptions.NewBackupSubscription()
+	backupScopes := cpSubscriptions.AddSubscription(backupSubscription)
+	backupPolicySubscription := subscriptions.NewBackupPolicySubscription()
+	backupPolicyScopes := cpSubscriptions.AddSubscription(backupPolicySubscription)
 	// How full a node is exists only in the metrics the control plane exports,
 	// so it comes from Prometheus rather than from the API or the stream. An
 	// endpoint that cannot be reached leaves the capacity absent from the
@@ -442,11 +451,16 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorder("storagecluster-controller"),
-		Namespace:  operatorNamespace,
-		NodeScopes: nodeScopes,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
+		Namespace:    operatorNamespace,
+		NodeScopes:   nodeScopes,
+		BackupScopes: []*cpinformer.ScopeSet{backupScopes, backupPolicyScopes},
+		BackupRegistrars: []controller.ClusterRegistrar{
+			&backupSubscription.ClusterRegistry,
+			&backupPolicySubscription.ClusterRegistry,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
@@ -497,12 +511,44 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageBackupReconciler{
+	// The data-protection band. The mirror is what creates every StorageBackup
+	// object, so nothing here takes a backup: a policy tells the control plane
+	// to, and the operations kind reads one back into a claim.
+	backupAPIConfig, err := webapi.ControlPlaneConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve the control plane the backup band writes to")
+		os.Exit(1)
+	}
+	backupAPI, err := controlplane.New(backupAPIConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to build the control-plane client the backup band writes through")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
+		Backups:  backupSubscription,
 		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupPolicyReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackuppolicy-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupRestoreReconciler{
@@ -511,14 +557,6 @@ func main() {
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
-		os.Exit(1)
-	}
-	if err := (&controller.StorageBackupSyncReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagebackupsync-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupSync")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupPolicyReconciler{
@@ -727,6 +765,21 @@ func main() {
 				Decoder: admission.NewDecoder(mgr.GetScheme()),
 			}})
 		setupLog.Info("registered storagepool validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackup",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
+		setupLog.Info("registered storagebackup validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackuppolicy",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupPolicyValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagebackuppolicy validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagebackupops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{

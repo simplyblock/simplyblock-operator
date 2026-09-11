@@ -106,6 +106,26 @@ func Moved() []Key {
 	}
 }
 
+// BackupPolicy is the row a claim's backup membership travels under.
+//
+// It is named because §16.2's policy copy needs that one row rather than the
+// inventory: a claim annotated with a policy's name becomes a claim labeled with
+// it, and the label has to be the same key under whichever of its three
+// spellings the claim happens to carry. Finding it by walking Moved and matching
+// a string literal would put that literal in two files.
+//
+// It panics for a row that is not there, which can only happen if somebody
+// removes it from the inventory, and a migration that silently stopped
+// converting policies is a worse outcome than a build that stops.
+func BackupPolicy() Key {
+	for _, key := range Moved() {
+		if key.Name == "backup-policy" {
+			return key
+		}
+	}
+	panic("keys: backup-policy is no longer in the inventory, and the policy migration needs it")
+}
+
 // Found is one key of a row that an object carries under an older spelling,
 // together with the spelling the target model uses.
 type Found struct {
