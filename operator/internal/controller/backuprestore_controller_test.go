@@ -23,8 +23,20 @@ import (
 const lvolUUID = "lvol-uuid"
 
 func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	k8sClient := newTestClient(t, scheme, nil)
+	scheme := newTestScheme(t, corev1.AddToScheme,
+		simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
+	// The restored volume names a class the pool it was restored into is
+	// assigned, rather than one derived from the pool's name: a class is
+	// authored, and a pool may have any number of them.
+	sourcePool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: "mycluster"},
+		Status: simplyblockv1alpha2.StoragePoolStatus{
+			UUID:              "pool-uuid",
+			StorageClassNames: []string{"restore-target-class"},
+		},
+	}
+	k8sClient := newTestClient(t, scheme, nil, sourcePool)
 
 	apiClient := &webapi.Client{
 		BaseURL: "http://simplyblock.test",
@@ -120,7 +132,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 		t.Fatalf("failed to get created PV: %v", err)
 	}
 
-	wantStorageClass := "simplyblock-default-mycluster-pool-a"
+	wantStorageClass := "restore-target-class"
 	if pv.Spec.StorageClassName != wantStorageClass {
 		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
 	}

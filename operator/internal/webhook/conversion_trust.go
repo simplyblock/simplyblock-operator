@@ -38,7 +38,7 @@ import (
 // compromised webhook is worth bounding, even though the resourceNames list has
 // to be kept beside the one in config/crd/converted-kinds.txt.
 // TestManagerRoleNamesOnlyTheConvertedCRDs is what keeps the two in step.
-// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;update;patch,resourceNames=controlplanes.storage.simplyblock.io;storagebackups.storage.simplyblock.io;storageclusterops.storage.simplyblock.io;storagenodeops.storage.simplyblock.io
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;update;patch,resourceNames=controlplanes.storage.simplyblock.io;storagebackups.storage.simplyblock.io;storageclusterops.storage.simplyblock.io;storagenodeops.storage.simplyblock.io;storagepools.storage.simplyblock.io
 //
 // Reading stays cluster-wide because it cannot be otherwise: cert-controller's
 // rotator establishes an informer on CustomResourceDefinition to re-inject the CA

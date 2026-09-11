@@ -5641,13 +5641,181 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagepoolops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StoragePoolOps
+    listKind: StoragePoolOpsList
+    plural: storagepoolops
+    shortNames:
+    - spops
+    singular: storagepoolops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.poolRef
+      name: Pool
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StoragePoolOps is a single operation performed against one StoragePool.
+          Analogous to a Kubernetes Job: it drives an action to completion and records
+          the result, and only one StoragePoolOps may be active per StoragePool at a
+          time, which the pool's status.activeOpsRef enforces.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StoragePoolOpsSpec is one operation to perform against one
+              StoragePool.
+            properties:
+              abort:
+                description: Abort asks a running operation to stop at its next step
+                  and unwind.
+                type: boolean
+              action:
+                description: |-
+                  Action is the operation to perform. Immutable: an operation that changed
+                  what it was doing halfway through would have a status describing neither.
+                enum:
+                - Rebalance
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              poolRef:
+                description: |-
+                  PoolRef names the StoragePool this operation acts on, in this object's own
+                  namespace. The operation never owns its target, because deleting the
+                  record of an operation must not delete the pool it operated on.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - action
+            - poolRef
+            type: object
+          status:
+            description: StoragePoolOpsStatus is the observed state of one pool operation.
+            properties:
+              completedAt:
+                description: CompletedAt is when it reached a terminal phase.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the operation moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operation's own progress.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Aborted
+                type: string
+              startedAt:
+                description: StartedAt is when the operation acquired its target's
+                  lock.
+                format: date-time
+                type: string
+              step:
+                description: |-
+                  Step is the position of the running action's state machine. It is
+                  persisted before the side effect that step performs. The rule repeats the
+                  StoragePoolOpsStep enum because a marker cannot reach a field of the
+                  shared snapshot type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Validating'',''Migrating'']'
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagepools.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StoragePool
     listKind: StoragePoolList
     plural: storagepools
+    shortNames:
+    - sp
     singular: storagepool
   scope: Namespaced
   versions:
@@ -5778,7 +5946,7 @@ spec:
                     type: boolean
                   fabric:
                     default: tcp
-                    description: Fabric is the transport fabric (e.g. tcp).
+                    description: Fabric is the transport fabric, for example, TCP.
                     type: string
                   filesystem:
                     default: xfs
@@ -5816,10 +5984,10 @@ spec:
                     description: |-
                       Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
                       plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
-                      StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+                      StorageClass that omits tune2fs_reserved_blocks. A default of `0` here would not be a
                       no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
-                      the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
-                      "0".
+                      the call when the parameter is empty (see stageVolume in the CSI driver), not when it is
+                      `0`.
                     type: string
                 type: object
                 x-kubernetes-validations:
@@ -5885,6 +6053,336 @@ spec:
             type: object
         required:
         - spec
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.limits.capacity
+      name: Capacity
+      type: string
+    - jsonPath: .status.storageClassNames
+      name: Classes
+      type: string
+    - jsonPath: .status.uuid
+      name: UUID
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StoragePool carves a StorageCluster into a unit with its own capacity limit
+          and QoS ceilings, and it is what a StorageClass is assigned to. It is
+          therefore the join between the storage administrator's world and the
+          application developer's, a join held together by three labels, an opaque
+          parameter map, and a finalizer rather than by the API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StoragePoolSpec is the desired state of one tenancy unit
+              within a cluster.
+            properties:
+              allowedNodes:
+                description: |-
+                  AllowedNodes restricts which storage nodes may host this pool's volumes.
+                  Empty means every node in the cluster. Narrowing it stops new volumes
+                  landing on the removed nodes and leaves the existing ones where they are.
+
+                  The list is left exactly as authored: a name that no longer resolves is
+                  dropped from Status.AllowedNodes rather than pruned from here, so a node
+                  removed for maintenance and added back under the same name returns to the
+                  pools that named it without anybody re-authoring them.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              clusterRef:
+                description: |-
+                  ClusterRef names the StorageCluster this pool is carved out of, in this
+                  pool's own namespace. The cluster owns this object by controller
+                  reference, so deleting the cluster deletes its pools, held behind each
+                  pool's own finalizer while classes are assigned or volumes are bound.
+
+                  Immutable from creation: which cluster a pool is in is its identity.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              limits:
+                description: |-
+                  Limits are the ceilings the pool as a whole is held to. Mutable: raising a
+                  pool's capacity is an ordinary operation the control plane supports, and it
+                  does not touch any StorageClass.
+                properties:
+                  capacity:
+                    description: |-
+                      Capacity is the total capacity the pool may allocate, written the way an
+                      administrator writes one: `10T`, `500G`. Empty is unlimited.
+                    type: string
+                  iops:
+                    description: |-
+                      IOPS is the pool-wide ceiling on operations per second, both directions
+                      together. Zero is unlimited, which is the control plane's own convention
+                      for these values.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  maxVolumeSize:
+                    description: |-
+                      MaxVolumeSize is the largest single logical volume the pool will create.
+                      Empty is unlimited.
+                    type: string
+                  throughput:
+                    description: Throughput is the pool-wide throughput ceiling.
+                    properties:
+                      read:
+                        description: Read is the read-only ceiling, written as max_read_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      readWrite:
+                        description: |-
+                          ReadWrite is the ceiling on both directions together, written as
+                          max_mbytes_per_sec. It is not an access mode, which is the confusion the
+                          older class key qos_rw_mbytes invited.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      write:
+                        description: Write is the write-only ceiling, written as max_write_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                type: object
+              volumeDefaults:
+                description: |-
+                  VolumeDefaults are what every volume in the pool is created with.
+                  Immutable once set, because StorageClass.parameters is immutable in the
+                  Kubernetes API: a pool whose defaults changed would have a class the
+                  operator cannot update. Changing them means creating a new pool.
+                properties:
+                  enableCompression:
+                    description: EnableCompression compresses logical volumes.
+                    type: boolean
+                  enableDHCHAP:
+                    description: |-
+                      EnableDHCHAP authenticates NVMe-oF connections to this pool's volumes.
+                      Authentication is only enforced when AllowedNodes is non-empty, because
+                      the generated class gets its node selector from that list and a class's
+                      parameters cannot be edited afterward.
+                    type: boolean
+                  enableEncryption:
+                    description: |-
+                      EnableEncryption encrypts logical volumes, using the key store the cluster
+                      names in its own spec.
+                    type: boolean
+                  enableReplication:
+                    description: EnableReplication replicates logical volumes.
+                    type: boolean
+                  fabric:
+                    description: |-
+                      Fabric is the storage fabric a volume is served over, defaulting to the
+                      cluster's.
+                    type: string
+                  filesystem:
+                    default: xfs
+                    description: |-
+                      Filesystem is what a volume is formatted with. The values are the kernel's
+                      names for filesystems, which is why they are not recased: this group did
+                      not invent the words.
+                    enum:
+                    - ext4
+                    - xfs
+                    type: string
+                  iops:
+                    description: |-
+                      IOPS is each volume's ceiling on operations per second, both directions
+                      together. Zero is unlimited. It is written into the class as max_iops.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  maxNamespacesPerSubsystem:
+                    description: |-
+                      MaxNamespacesPerSubsystem caps how many namespaces share one NVMe-oF
+                      subsystem.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  priorityClass:
+                    description: |-
+                      PriorityClass is the logical-volume priority class the control plane
+                      places with.
+                    type: string
+                  throughput:
+                    description: Throughput is each volume's throughput ceiling, in
+                      megabytes per second.
+                    properties:
+                      read:
+                        description: Read is the read-only ceiling, written as max_read_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      readWrite:
+                        description: |-
+                          ReadWrite is the ceiling on both directions together, written as
+                          max_mbytes_per_sec. It is not an access mode, which is the confusion the
+                          older class key qos_rw_mbytes invited.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      write:
+                        description: Write is the write-only ceiling, written as max_write_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  tune2fsReservedBlocks:
+                    description: |-
+                      Tune2fsReservedBlocks is the reserved-block percentage passed to tune2fs
+                      on an ext4 volume. Empty means the filesystem's own default, which is not
+                      the same as `0`: the node plugin skips the call entirely when this is
+                      empty, and runs `tune2fs -m 0` when it is `0`.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - clusterRef
+            type: object
+            x-kubernetes-validations:
+            - message: field volumeDefaults is immutable once set
+              rule: '!has(oldSelf.volumeDefaults) || has(self.volumeDefaults)'
+          status:
+            description: StoragePoolStatus is the observed state of one pool.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the StoragePoolOps currently allowed to act on this
+                  pool. Empty when none is running.
+                type: string
+              allowedNodes:
+                description: |-
+                  AllowedNodes is Spec.AllowedNodes resolved against the StorageNodes that
+                  exist, which is what the control plane is sent. An empty list here is not
+                  the same as an absent Spec.AllowedNodes: absent means every node, and
+                  empty after resolution means the pool can place nothing.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              defaultStorageClassName:
+                description: |-
+                  DefaultStorageClassName is the class the operator wrote for the default
+                  pool, set on that pool only. It records that the class was created, so a
+                  class missing while this is set was deleted deliberately and is not
+                  written again.
+                type: string
+              limits:
+                description: Limits is what the control plane reports the ceilings
+                  to be.
+                properties:
+                  host:
+                    description: Host is the backend host enforcing the pool's QoS.
+                    type: string
+                  iops:
+                    description: IOPS is the combined ceiling the control plane is
+                      enforcing.
+                    format: int32
+                    type: integer
+                  throughput:
+                    description: Throughput is the throughput ceiling the control
+                      plane is enforcing.
+                    properties:
+                      read:
+                        description: Read is the read-only ceiling, written as max_read_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      readWrite:
+                        description: |-
+                          ReadWrite is the ceiling on both directions together, written as
+                          max_mbytes_per_sec. It is not an access mode, which is the confusion the
+                          older class key qos_rw_mbytes invited.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      write:
+                        description: Write is the write-only ceiling, written as max_write_mbytes_per_sec.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                type: object
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the pool moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of this pool.
+                enum:
+                - Pending
+                - Ready
+                - Deleting
+                type: string
+              status:
+                description: |-
+                  Status is the lifecycle the control plane reports, in the control plane's
+                  own spelling, which is why it carries no Enum here.
+                type: string
+              storageClassNames:
+                description: |-
+                  StorageClassNames are the classes assigned to this pool, found by the
+                  three storage.simplyblock.io labels a class carries. Empty means no class
+                  draws from this pool yet, which is a valid state and what a freshly
+                  created cluster's default pool has before anybody writes one. Publishing
+                  it is what makes the assignment readable from the pool, and what a
+                  deletion is held on.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              uuid:
+                description: |-
+                  UUID is the backend pool UUID. Empty means the pool has not been created,
+                  and it is the field the controller branches on.
+                type: string
+            type: object
         type: object
     served: true
     storage: true
@@ -6390,6 +6888,7 @@ rules:
   - storagebackups.storage.simplyblock.io
   - storageclusterops.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
+  - storagepools.storage.simplyblock.io
   resources:
   - customresourcedefinitions
   verbs:
@@ -6547,6 +7046,7 @@ rules:
   - storagenodeops
   - storagenodes
   - storagenodesets
+  - storagepoolops
   - storagepools
   - tasks
   - volumemigrations
@@ -6576,6 +7076,7 @@ rules:
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagenodesets/finalizers
+  - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -6602,6 +7103,7 @@ rules:
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
+  - storagepoolops/status
   - storagepools/status
   - tasks/status
   - volumemigrations/status
@@ -6715,6 +7217,7 @@ rules:
   resources:
   - logicalvolumemetrics
   - storagedevicemetrics
+  - storagepoolmetrics
   verbs:
   - get
   - list
@@ -7295,4 +7798,24 @@ webhooks:
     - UPDATE
     resources:
     - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagepool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: vstoragepool.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - storagepools
   sideEffects: None

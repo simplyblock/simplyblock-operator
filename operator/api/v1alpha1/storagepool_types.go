@@ -20,9 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // StoragePoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
 type StoragePoolQoSThroughputSpec struct {
 	// Read is the read throughput limit for the pool.
@@ -87,7 +84,7 @@ type StorageClassParameters struct {
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric"
-	// Fabric is the transport fabric (e.g. tcp).
+	// Fabric is the transport fabric, for example, TCP.
 	// +kubebuilder:default=tcp
 	Fabric string `json:"fabric,omitempty"`
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.
@@ -95,10 +92,10 @@ type StorageClassParameters struct {
 	MaxNamespacePerSubsys string `json:"maxNamespacePerSubsys,omitempty"`
 	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
 	// plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
-	// StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+	// StorageClass that omits tune2fs_reserved_blocks. A default of `0` here would not be a
 	// no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
-	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
-	// "0".
+	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it is
+	// `0`.
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
 	// Filesystem is the filesystem used to format logical volumes of this pool.

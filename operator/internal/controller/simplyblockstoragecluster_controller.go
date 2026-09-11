@@ -145,6 +145,11 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if r.NodeScopes != nil {
 			r.NodeScopes.Add(cpinformer.Scope{clusterCR.Status.UUID})
 		}
+		// A cluster with no pool can hold no volumes, so it is created with one
+		// (storagecluster_defaultpool.go). It runs here rather than in
+		// reconcileCreate because the pool's own controller needs the cluster's
+		// UUID, and a pool written before there is one would only wait.
+		r.ensureDefaultPool(ctx, clusterCR)
 		return r.syncStatus(ctx, clusterCR)
 	}
 
