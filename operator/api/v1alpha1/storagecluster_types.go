@@ -355,7 +355,10 @@ type StorageClusterSpec struct {
 	// it produces must match across the cluster, so it is stated rather than left
 	// to a per-node heuristic.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// beyond this budget for the system, and the control plane's core layout
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
