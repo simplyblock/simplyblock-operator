@@ -58,6 +58,13 @@ import (
 )
 
 // reconcileDeletion runs the teardown and the two holds in front of it.
+//
+// An empty clusterUUID means the cluster is already gone, which is not an edge
+// case: it is the cascade, and garbage collection deletes a pool as soon as its
+// owner is removed. Everything here still applies in that case except the one
+// call that needs a control plane, because both holds are about Kubernetes
+// objects that are still there to be seen, and the local cleanup is Kubernetes
+// objects too. Only the backend DELETE is skipped.
 func (r *StoragePoolReconciler) reconcileDeletion(
 	ctx context.Context,
 	p *simplyblockv1alpha2.StoragePool,
@@ -69,7 +76,7 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 	if !controllerutil.ContainsFinalizer(p, FinalizerStoragePool) {
 		return ctrl.Result{}, nil
 	}
-	if r.VolumeScopes != nil && p.Status.UUID != "" {
+	if r.VolumeScopes != nil && clusterUUID != "" && p.Status.UUID != "" {
 		r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, p.Status.UUID})
 	}
 
@@ -113,10 +120,15 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 	}
 
 	if p.Status.UUID != "" {
-		if err := r.deleteBackendPool(ctx, api, clusterUUID, p); err != nil {
-			r.event(p, corev1.EventTypeWarning, PoolDeletionFailed,
-				"the control plane refused to delete pool %q: %v", p.Name, err)
-			return ctrl.Result{RequeueAfter: requeueBackend}, nil
+		// A cluster that is already gone took its pools with it, so there is no
+		// backend pool left to delete and nothing to ask. Skipping the call is
+		// the only thing an absent cluster changes.
+		if clusterUUID != "" {
+			if err := r.deleteBackendPool(ctx, api, clusterUUID, p); err != nil {
+				r.event(p, corev1.EventTypeWarning, PoolDeletionFailed,
+					"the control plane refused to delete pool %q: %v", p.Name, err)
+				return ctrl.Result{RequeueAfter: requeueBackend}, nil
+			}
 		}
 		// The labels come off last, because they are what a volume still in the
 		// pool would have needed, and clearing them before the pool is gone
@@ -128,20 +140,6 @@ func (r *StoragePoolReconciler) reconcileDeletion(
 		}
 	}
 
-	return r.releaseFinalizer(ctx, p)
-}
-
-// releaseWithoutBackend finishes a deletion that can reach no control plane,
-// which is what a pool whose cluster has already gone is left with. The two
-// holds still apply — they are Kubernetes objects and are still there to be
-// seen — and what is skipped is only the backend call, which has nothing to
-// talk to.
-func (r *StoragePoolReconciler) releaseWithoutBackend(
-	ctx context.Context, p *simplyblockv1alpha2.StoragePool,
-) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(p, FinalizerStoragePool) {
-		return ctrl.Result{}, nil
-	}
 	return r.releaseFinalizer(ctx, p)
 }
 

@@ -282,7 +282,7 @@ func TestTheDefaultPoolsClassIsWrittenOnceAndNotRecreated(t *testing.T) {
 
 	p, _ := reconcileSettled(t, r, name)
 
-	className := DefaultStorageClassName(testCluster)
+	className := DefaultStorageClassName(testNamespace, testCluster)
 	if p.Status.DefaultStorageClassName != className {
 		t.Fatalf("status.defaultStorageClassName = %q, want %q",
 			p.Status.DefaultStorageClassName, className)
@@ -477,7 +477,7 @@ func TestTheTwoLimitGroupsGoToDifferentPlaces(t *testing.T) {
 	reconcileSettled(t, r, name)
 
 	var class storagev1.StorageClass
-	key := client.ObjectKey{Name: DefaultStorageClassName(testCluster)}
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
 	if err := r.Get(context.Background(), key, &class); err != nil {
 		t.Fatalf("the default class was not written: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestAZeroVolumeDefaultReachesTheClassAsZero(t *testing.T) {
 	reconcileSettled(t, r, name)
 
 	var class storagev1.StorageClass
-	key := client.ObjectKey{Name: DefaultStorageClassName(testCluster)}
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
 	if err := r.Get(context.Background(), key, &class); err != nil {
 		t.Fatalf("the default class was not written: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestTheGeneratedClassCarriesOnlyTheCurrentQoSSpelling(t *testing.T) {
 	reconcileSettled(t, r, name)
 
 	var class storagev1.StorageClass
-	key := client.ObjectKey{Name: DefaultStorageClassName(testCluster)}
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
 	if err := r.Get(context.Background(), key, &class); err != nil {
 		t.Fatalf("the default class was not written: %v", err)
 	}

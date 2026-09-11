@@ -126,6 +126,7 @@ type controlPlane struct {
 	onCreate func()
 
 	posts   int
+	puts    int
 	deletes int
 	hosts   []string
 
@@ -166,6 +167,9 @@ func (cp *controlPlane) handle(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(cp.createBody))
 			return
 		}
+		writeJSON(w, cp.pool)
+	case r.Method == http.MethodPut:
+		cp.puts++
 		writeJSON(w, cp.pool)
 	case r.Method == http.MethodDelete:
 		cp.deletes++

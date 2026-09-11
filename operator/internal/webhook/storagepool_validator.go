@@ -35,7 +35,15 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagepool,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagepools,verbs=create,versions=v1alpha2,name=vstoragepool.simplyblock.io,admissionReviewVersions=v1
+// matchPolicy=Equivalent is load-bearing rather than a default worth inheriting.
+// The CRD serves v1alpha1 as well, and under the API server's default Exact
+// policy a rule naming only v1alpha2 does not see a v1alpha1 create at all — so
+// a client writing the older version would place a pool naming a cluster that
+// does not exist, which spec.clusterRef being immutable makes permanent.
+// Equivalent has the API server convert the request to v1alpha2 and send it
+// here, so the guard holds whichever version was written.
+
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagepool,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagepools,verbs=create,versions=v1alpha2,name=vstoragepool.simplyblock.io,admissionReviewVersions=v1
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 

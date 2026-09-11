@@ -211,7 +211,7 @@ func TestAnAuthoredClassHoldsTheDeletion(t *testing.T) {
 func TestTheOperatorsOwnClassDoesNotHold(t *testing.T) {
 	cp, rec := newControlPlane(t), &recorder{}
 	name := DefaultPoolName(testCluster)
-	managed := newClass(DefaultStorageClassName(testCluster), assignmentLabels(name, true), nil)
+	managed := newClass(DefaultStorageClassName(testNamespace, testCluster), assignmentLabels(name, true), nil)
 	r := newReconciler(t, cp, rec,
 		newCluster(testClusterUUID), deleting(name), managed)
 
@@ -221,7 +221,7 @@ func TestTheOperatorsOwnClassDoesNotHold(t *testing.T) {
 		t.Fatal("the operator's own class held the pool's deletion")
 	}
 	var class storagev1.StorageClass
-	key := client.ObjectKey{Name: DefaultStorageClassName(testCluster)}
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
 	if err := r.Get(context.Background(), key, &class); err == nil {
 		t.Error("the operator's own class outlived the pool it was written for")
 	}
@@ -292,5 +292,67 @@ func TestAPoolWhoseClusterWentFirstStillReleases(t *testing.T) {
 
 	if poolExists(t, r, "tenant-a") {
 		t.Error("the pool is stuck in Terminating behind a cluster that no longer exists")
+	}
+}
+
+// The cascade is the path §6 exists for, and it is the one where the cluster is
+// gone by the time the pool reconciles: garbage collection deletes a pool as
+// soon as its owner is removed. A pool that released its finalizer here because
+// it could not reach a control plane would take a bound volume's backing store
+// with it, which is precisely the outcome the holds are for.
+func TestABoundVolumeHoldsEvenWhenTheClusterIsGone(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	r := newReconciler(t, cp, rec,
+		deleting("tenant-a"),
+		boundVolume("pv-1", testPoolUUID),
+	)
+
+	reconcileTimes(t, r, "tenant-a", 2)
+
+	if !poolExists(t, r, "tenant-a") {
+		t.Fatal("the pool released its finalizer with a volume still bound, " +
+			"because its cluster had already gone")
+	}
+	if !rec.has(VolumesStillBound) {
+		t.Errorf("no %s event: %+v", VolumesStillBound, rec.events)
+	}
+}
+
+// An authored class holds a cascade too. The operator cannot clean it up whether
+// or not the cluster is reachable.
+func TestAnAuthoredClassHoldsEvenWhenTheClusterIsGone(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	authored := newClass("fast-xfs", assignmentLabels("tenant-a", false), nil)
+	r := newReconciler(t, cp, rec, deleting("tenant-a"), authored)
+
+	reconcileTimes(t, r, "tenant-a", 2)
+
+	if !poolExists(t, r, "tenant-a") {
+		t.Fatal("the pool released its finalizer with a class still assigned")
+	}
+	if !rec.has(StorageClassStillAssigned) {
+		t.Errorf("no %s event: %+v", StorageClassStillAssigned, rec.events)
+	}
+}
+
+// With nothing holding it, a pool whose cluster went first still cleans up what
+// it can: the operator's own class is a Kubernetes object and needs no control
+// plane to delete.
+func TestACascadeStillCleansUpWhatIsLocal(t *testing.T) {
+	cp, rec := newControlPlane(t), &recorder{}
+	name := DefaultPoolName(testCluster)
+	managed := newClass(DefaultStorageClassName(testNamespace, testCluster),
+		assignmentLabels(name, true), nil)
+	r := newReconciler(t, cp, rec, deleting(name), managed)
+
+	reconcileTimes(t, r, name, 1)
+
+	if poolExists(t, r, name) {
+		t.Fatal("nothing held the pool and it was not released")
+	}
+	var class storagev1.StorageClass
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
+	if err := r.Get(context.Background(), key, &class); err == nil {
+		t.Error("the operator's own class outlived a pool it was written for")
 	}
 }

@@ -78,7 +78,26 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 		return
 	}
 
-	if err := r.Create(ctx, p); err != nil && !apierrors.IsAlreadyExists(err) {
+	err := r.Create(ctx, p)
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		// A pool of that name is already there, and it need not be this
+		// cluster's: somebody may have authored one before the cluster existed,
+		// naming a different cluster entirely. Annotating the cluster as having
+		// written it would credit this cluster with a pool that carves up
+		// another, and nothing would ever notice, because this runs once.
+		existing := &simplyblockv1alpha2.StoragePool{}
+		key := client.ObjectKey{Namespace: cluster.Namespace, Name: name}
+		if getErr := r.Get(ctx, key, existing); getErr != nil {
+			log.Error(getErr, "reading the pool that already has the default name", "pool", name)
+			return
+		}
+		if existing.Spec.ClusterRef != cluster.Name || !metav1.IsControlledBy(existing, cluster) {
+			log.Info("the default pool's name is taken by a pool this cluster does not own",
+				"pool", name, "clusterRef", existing.Spec.ClusterRef)
+			return
+		}
+	case err != nil:
 		log.Error(err, "writing the cluster's default pool", "pool", name)
 		return
 	}

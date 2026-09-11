@@ -74,13 +74,18 @@ func AssignmentLabels(p *simplyblockv1alpha2.StoragePool) map[string]string {
 // DefaultStorageClassName is the name of the class the operator writes for a
 // cluster's default pool.
 //
+// The namespace is in the name because a StorageClass is cluster-scoped and a
+// StorageCluster is not: two namespaces may each hold a cluster called
+// production, and a name derived from the cluster alone would have the second
+// default pool collide with the first one's class instead of getting its own.
+//
 // It is a derived name only because the operator has to choose one, and nothing
 // reads it back: the pool records what was written in
 // status.defaultStorageClassName, and every other question about which classes a
 // pool has is answered by AssignmentLabels. An authored class is called whatever
 // its author wants.
-func DefaultStorageClassName(clusterName string) string {
-	return "simplyblock-" + clusterName
+func DefaultStorageClassName(namespace, clusterName string) string {
+	return "simplyblock-" + namespace + "-" + clusterName
 }
 
 // DefaultPoolName is the name of the pool created alongside a cluster, so that a
@@ -118,8 +123,13 @@ func AssignedClasses(
 
 // IsOperatorManaged reports whether the operator wrote this class and may
 // therefore delete it.
+//
+// The value is compared rather than merely tested for presence. The label is the
+// whole of the difference between a class the operator cleans up and one it
+// refuses to touch, so an authored class carrying somebody else's managed-by
+// must not be read as this operator's and deleted along with the pool.
 func IsOperatorManaged(class *storagev1.StorageClass) bool {
-	return class != nil && class.Labels[LabelManagedBy] != ""
+	return class != nil && class.Labels[LabelManagedBy] == ManagedByStorageCluster
 }
 
 // ClassParameters builds the parameters a class assigned to this pool carries.
@@ -161,7 +171,12 @@ func ClassParameters(p *simplyblockv1alpha2.StoragePool, clusterUUID string) map
 		setInt(kube.ParamMaxWriteMBytesPerSec, t.Write)
 	}
 	setBool(kube.ParamEncryption, defaults.EnableEncryption)
+	setBool(kube.ParamCompression, defaults.EnableCompression)
+	setBool(kube.ParamReplication, defaults.EnableReplication)
 	setInt(kube.ParamMaxNamespacePerSubsys, defaults.MaxNamespacesPerSubsystem)
+	if defaults.PriorityClass != "" {
+		params[kube.ParamPriorityClass] = defaults.PriorityClass
+	}
 	if defaults.Filesystem != "" {
 		params[paramFSType] = defaults.Filesystem
 	}

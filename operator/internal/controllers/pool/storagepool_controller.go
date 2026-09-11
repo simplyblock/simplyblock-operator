@@ -199,9 +199,11 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// simply not finished, which is the ordinary state of a manifest that
 		// declares a cluster and its pools in one apply. Both hold at Pending.
 		if !p.DeletionTimestamp.IsZero() {
-			// A pool whose cluster went away still has to finish deleting, and
-			// nothing on the backend can be reached to do it with.
-			return r.releaseWithoutBackend(ctx, p)
+			// A pool whose cluster went away still deletes through the same
+			// path, holds and all. That path is reached with an empty cluster
+			// UUID and skips only the backend call: this is the cascade, so it
+			// is where the holds matter most rather than least.
+			return r.reconcileDeletion(ctx, p, nil, "")
 		}
 		r.event(p, corev1.EventTypeNormal, ClusterNotReady,
 			"waiting for StorageCluster %q in namespace %s: %v",
@@ -235,6 +237,16 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.ensureDefaultClass(ctx, p, clusterUUID); err != nil {
 		log.Error(err, "writing the default pool's storage class")
 		return ctrl.Result{RequeueAfter: requeueNotReady}, nil
+	}
+
+	// spec.limits is mutable, so raising a pool's capacity has to reach the
+	// control plane. It runs before the status sync because status.observedGeneration
+	// is written there: reporting a generation as observed while the control
+	// plane still enforces the previous ceilings is the one outcome worse than
+	// not applying them at all, since it is indistinguishable from success.
+	if err := r.applyLimits(ctx, api, clusterUUID, p); err != nil {
+		log.Error(err, "applying the pool's limits to the control plane")
+		return ctrl.Result{RequeueAfter: requeueBackend}, nil
 	}
 
 	resolved := r.resolveAllowedNodes(ctx, p)
@@ -416,7 +428,7 @@ func (r *StoragePoolReconciler) ensureDefaultClass(
 		return nil
 	}
 
-	name := DefaultStorageClassName(p.Spec.ClusterRef)
+	name := DefaultStorageClassName(p.Namespace, p.Spec.ClusterRef)
 	labels := AssignmentLabels(p)
 	labels[LabelManagedBy] = ManagedByStorageCluster
 
@@ -434,7 +446,27 @@ func (r *StoragePoolReconciler) ensureDefaultClass(
 		ReclaimPolicy:        ptr.To(corev1.PersistentVolumeReclaimDelete),
 		AllowVolumeExpansion: ptr.To(true),
 	}
-	if err := r.Create(ctx, class); err != nil && !apierrors.IsAlreadyExists(err) {
+	err := r.Create(ctx, class)
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		// The name is taken. A StorageClass is cluster-scoped, so the occupant
+		// may be nothing to do with this pool, and recording it as the pool's
+		// default would leave the pool claiming a class that provisions
+		// somewhere else — and never writing the one it needs, since this runs
+		// once. The name is only adopted when the object is recognizably the
+		// one this operator would have written.
+		existing := &storagev1.StorageClass{}
+		if getErr := r.Get(ctx, client.ObjectKey{Name: name}, existing); getErr != nil {
+			return fmt.Errorf("read the storage class %q that already exists: %w", name, getErr)
+		}
+		if !r.isOurDefaultClass(existing, p) {
+			r.event(p, corev1.EventTypeWarning, StorageClassNameTaken,
+				"storage class %q already exists and is not this pool's, so the default pool has "+
+					"none; assign a class to it by label, or delete the class occupying the name",
+				name)
+			return nil
+		}
+	case err != nil:
 		return fmt.Errorf("create the default storage class %q: %w", name, err)
 	}
 
@@ -447,6 +479,27 @@ func (r *StoragePoolReconciler) ensureDefaultClass(
 	r.event(p, corev1.EventTypeNormal, StorageClassCreated,
 		"wrote storage class %q for the default pool", name)
 	return nil
+}
+
+// isOurDefaultClass reports whether an existing class is the one this operator
+// would have written for this pool.
+//
+// The test is the assignment labels plus the managed marker, and not the
+// parameters: a class the operator wrote under an earlier release carries the
+// older QoS spelling, and parameters are immutable, so demanding they match
+// would refuse the operator's own class forever.
+func (r *StoragePoolReconciler) isOurDefaultClass(
+	class *storagev1.StorageClass, p *simplyblockv1alpha2.StoragePool,
+) bool {
+	if !IsOperatorManaged(class) || class.Provisioner != utils.CSIProvisioner {
+		return false
+	}
+	for key, want := range AssignmentLabels(p) {
+		if class.Labels[key] != want {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveAllowedNodes turns the authored list into the one the world can honor.
@@ -668,6 +721,46 @@ func (r *StoragePoolReconciler) syncStatus(
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// applyLimits sends spec.limits to the control plane when the pool's generation
+// has moved past what status last observed.
+//
+// The generation is the trigger rather than a comparison against what the
+// control plane reports, because the two vocabularies do not line up: a capacity
+// of "10T" becomes a byte count, and an unset ceiling becomes zero, so a diff
+// against the reported values would send an update on every pass for a pool that
+// asked for nothing. A generation only moves when somebody edited the spec.
+func (r *StoragePoolReconciler) applyLimits(
+	ctx context.Context,
+	api *webapi.Client,
+	clusterUUID string,
+	p *simplyblockv1alpha2.StoragePool,
+) error {
+	if p.Status.ObservedGeneration == p.Generation {
+		return nil
+	}
+
+	params := utils.PoolUpdateParams{
+		Name:          p.Name,
+		PoolMax:       parseSize(limitCapacity(p)),
+		VolumeMaxSize: parseSize(limitMaxVolumeSize(p)),
+		MaxRwIOPS:     int(int32Value(limitIOPS(p))),
+		MaxRwMB:       int(int32Value(limitThroughput(p, readWrite))),
+		MaxRMB:        int(int32Value(limitThroughput(p, read))),
+		MaxWMB:        int(int32Value(limitThroughput(p, write))),
+	}
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, p.Status.UUID)
+	body, status, err := api.Do(ctx, http.MethodPut, endpoint, params)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d: %s", status, string(body))
+		}
+		return fmt.Errorf("update pool %s: %w", p.Name, err)
+	}
+	logf.FromContext(ctx).Info("applied the pool's limits",
+		"pool", p.Name, "generation", p.Generation)
+	return nil
 }
 
 // readPool fetches one pool from the control plane.

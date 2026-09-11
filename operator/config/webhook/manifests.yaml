@@ -152,6 +152,7 @@ webhooks:
       namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-storagepool
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vstoragepool.simplyblock.io
   rules:
   - apiGroups:

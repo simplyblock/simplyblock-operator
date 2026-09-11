@@ -24,6 +24,12 @@ const (
 	StorageClassAssigned = "StorageClassAssigned"
 	// StorageClassCreated says the operator wrote the class for a default pool.
 	StorageClassCreated = "StorageClassCreated"
+	// StorageClassNameTaken says the name the default pool's class would have
+	// had belongs to somebody else's class. A StorageClass is cluster-scoped, so
+	// this is reachable without anybody touching this namespace, and the pool is
+	// left without a default class rather than credited with one that
+	// provisions elsewhere.
+	StorageClassNameTaken = "StorageClassNameTaken"
 	// QoSParameterConflict says an assigned class states one ceiling under two
 	// spellings. The pool controller raises it when it indexes the class, which
 	// is usually well before anybody's claim reaches it, and the CSI driver

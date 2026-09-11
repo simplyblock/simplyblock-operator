@@ -174,6 +174,59 @@ func TestStoragePoolAnUndecodableStashIsDropped(t *testing.T) {
 	}
 }
 
+// U-114: an explicit enableDHCHAP of false survives.
+//
+// v1alpha1 has a field for the toggle, but a bool rather than a pointer, so it
+// can say true and it cannot tell false from absent. Without a stash the false
+// comes back nil — and on a pool whose defaults are nothing else it takes the
+// whole spec.volumeDefaults block with it, a block that is immutable once set
+// and so could never be restored.
+func TestStoragePoolExplicitFalseDHCHAPSurvives(t *testing.T) {
+	hub := &v1alpha2.StoragePool{
+		Spec: v1alpha2.StoragePoolSpec{
+			ClusterRef:     "production",
+			VolumeDefaults: &v1alpha2.VolumeDefaults{EnableDHCHAP: ptr.To(false)},
+		},
+	}
+
+	var stored StoragePool
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StoragePool
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if back.Spec.VolumeDefaults == nil {
+		t.Fatal("spec.volumeDefaults is nil, so an immutable block was lost on one write")
+	}
+	if back.Spec.VolumeDefaults.EnableDHCHAP == nil {
+		t.Fatal("enableDHCHAP came back absent, not false")
+	}
+	if *back.Spec.VolumeDefaults.EnableDHCHAP {
+		t.Error("enableDHCHAP came back true, inverting what was written")
+	}
+}
+
+// A real v1alpha1 client writing dhchap: true carries no stash, and the toggle
+// still converts up from the field it does have.
+func TestStoragePoolDHCHAPFromAV1Alpha1Client(t *testing.T) {
+	stored := StoragePool{Spec: StoragePoolSpec{ClusterName: "production", DHCHAP: true}}
+
+	var hub v1alpha2.StoragePool
+	if err := stored.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if hub.Spec.VolumeDefaults == nil || hub.Spec.VolumeDefaults.EnableDHCHAP == nil {
+		t.Fatal("an object a v1alpha1 client wrote lost its dhchap toggle")
+	}
+	if !*hub.Spec.VolumeDefaults.EnableDHCHAP {
+		t.Error("dhchap: true converted to enableDHCHAP: false")
+	}
+}
+
 // An annotation a user wrote is left alone. The conversion owns its own keys and
 // nothing else on the object.
 func TestStoragePoolStashLeavesOtherAnnotationsAlone(t *testing.T) {

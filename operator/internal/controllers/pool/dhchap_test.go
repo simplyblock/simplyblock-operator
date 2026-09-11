@@ -28,7 +28,7 @@ import (
 func readDefaultClass(t *testing.T, r *StoragePoolReconciler) *storagev1.StorageClass {
 	t.Helper()
 	var class storagev1.StorageClass
-	key := client.ObjectKey{Name: DefaultStorageClassName(testCluster)}
+	key := client.ObjectKey{Name: DefaultStorageClassName(testNamespace, testCluster)}
 	if err := r.Get(context.Background(), key, &class); err != nil {
 		t.Fatalf("the default class was not written: %v", err)
 	}

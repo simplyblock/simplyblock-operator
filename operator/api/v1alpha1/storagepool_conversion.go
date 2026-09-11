@@ -73,6 +73,14 @@ const (
 	annoStatusActiveOpsRef      = "storage.simplyblock.io/conversion-status.activeOpsRef"
 	annoStatusMessage           = "storage.simplyblock.io/conversion-status.message"
 	annoStatusObservedGeneraton = "storage.simplyblock.io/conversion-status.observedGeneration"
+
+	// enableDHCHAP is stashed for a narrower reason than the rest: v1alpha1 has
+	// a field for it, but a bool rather than a pointer, so it can say true and
+	// it cannot tell false from absent. An explicit false would otherwise come
+	// back nil, and on a pool whose defaults are nothing else it would take the
+	// whole spec.volumeDefaults block down with it — a block that is immutable
+	// once set and so could never be restored.
+	annoEnableDHCHAP = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableDHCHAP"
 )
 
 // ConvertTo converts this StoragePool to the v1alpha2 hub.
@@ -140,10 +148,14 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 		if err := stash(meta, annoPriorityClass, d.PriorityClass); err != nil {
 			return err
 		}
+		if err := stash(meta, annoEnableDHCHAP, d.EnableDHCHAP); err != nil {
+			return err
+		}
 	} else {
 		// The block itself is gone, so any value stashed from an earlier write
 		// is stale: leaving it would restore defaults the hub no longer states.
-		clear(meta, annoEnableCompression, annoEnableReplication, annoPriorityClass)
+		clear(meta, annoEnableCompression, annoEnableReplication, annoPriorityClass,
+			annoEnableDHCHAP)
 	}
 
 	status := src.Status
@@ -172,6 +184,7 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 	var (
 		compression *bool
 		replication *bool
+		dhchap      *bool
 		priority    string
 	)
 	if err := unstash(meta, annoEnableCompression, &compression); err != nil {
@@ -183,7 +196,10 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 	if err := unstash(meta, annoPriorityClass, &priority); err != nil {
 		return err
 	}
-	if compression != nil || replication != nil || priority != "" {
+	if err := unstash(meta, annoEnableDHCHAP, &dhchap); err != nil {
+		return err
+	}
+	if compression != nil || replication != nil || dhchap != nil || priority != "" {
 		// The block is allocated only when something restored into it, for the
 		// reason volumeDefaultsToHub returns nil rather than an empty struct.
 		if dst.Spec.VolumeDefaults == nil {
@@ -192,6 +208,13 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 		dst.Spec.VolumeDefaults.EnableCompression = compression
 		dst.Spec.VolumeDefaults.EnableReplication = replication
 		dst.Spec.VolumeDefaults.PriorityClass = priority
+		// The stash is the authority when there is one, because it can say
+		// false and spec.dhchap cannot. An object a real v1alpha1 client wrote
+		// carries no stash, and volumeDefaultsToHub has already read its
+		// spec.dhchap.
+		if dhchap != nil {
+			dst.Spec.VolumeDefaults.EnableDHCHAP = dhchap
+		}
 	}
 
 	var phase string

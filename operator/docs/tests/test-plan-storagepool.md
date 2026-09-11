@@ -177,6 +177,32 @@ the rows that say it does not happen.
 | U-101 | A hand-edited annotation costs its own field and no other                        | Negative   | `TestStoragePoolAnUndecodableStashIsDropped`      |
 | U-102 | An annotation a user wrote is left alone                                         | Negative   | `TestStoragePoolStashLeavesOtherAnnotationsAlone` |
 
+### What the Review on #525 Found (design §5, §6, §11)
+
+File: `operator/internal/controllers/pool/review_test.go`, and
+`deletion_test.go` for the cascade.
+
+Four of these share a root: a cluster-scoped name or an `AlreadyExists` result
+was treated as if it belonged to this pool. A `StorageClass` is cluster-scoped
+and the operator watches every namespace, so "the object with the name I would
+have used" and "my object" are separate claims.
+
+| #     | Scenario                                                                            | Type       | Test                                               |
+|-------|-------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| U-103 | A bound volume holds the cascade, where the cluster is already gone                 | Regression | `TestABoundVolumeHoldsEvenWhenTheClusterIsGone`    |
+| U-104 | An authored class holds the cascade too                                             | Regression | `TestAnAuthoredClassHoldsEvenWhenTheClusterIsGone` |
+| U-105 | A cascade still deletes the operator's own class, which needs no control plane      | Positive   | `TestACascadeStillCleansUpWhatIsLocal`             |
+| U-106 | Two namespaces with one cluster name get distinct default class names               | Regression | `TestTwoNamespacesGetDistinctDefaultClassNames`    |
+| U-107 | A `managed-by` naming another operator is not read as this one's                    | Negative   | `TestSomebodyElsesManagedByIsNotOurs`              |
+| U-108 | And that class holds the pool's deletion                                            | Negative   | `TestAClassAnotherOperatorManagesHoldsTheDeletion` |
+| U-109 | A foreign class occupying the default name is reported, not adopted                 | Negative   | `TestAForeignClassDoesNotBecomeTheDefault`         |
+| U-110 | The operator's own class is adopted on a retry after a lost status patch            | Boundary   | `TestTheOperatorsOwnClassIsAdoptedOnRetry`         |
+| U-111 | An edited `spec.limits` reaches the control plane before the generation is observed | Regression | `TestAChangedLimitReachesTheControlPlane`          |
+| U-112 | A pool nobody edited sends no update                                                | Negative   | `TestAnUneditedPoolSendsNoUpdate`                  |
+| U-113 | All three previously dropped volume defaults reach the class                        | Regression | `TestEveryVolumeDefaultReachesTheClass`            |
+| U-114 | An explicit `enableDHCHAP: false` survives the round trip through v1alpha1          | Regression | `TestStoragePoolExplicitFalseDHCHAPSurvives`       |
+| U-115 | The conversion webhook's own role names every converted CRD                         | Regression | `TestConversionWebhookRoleNamesEveryConvertedCRD`  |
+
 ### The Admission Guard (design §3.4)
 
 File: `operator/internal/webhook/storagepool_validator_test.go`
@@ -359,11 +385,11 @@ warning of.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 102       | 93      | 9           |
+| Unit        | 115       | 106     | 9           |
 | Integration | 19        | 0       | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **137**   | **93**  | **44**      |
+| **Total**   | **150**   | **106** | **44**      |
 
 **The unit class carries what it can, and the nine it does not are three
 kinds of gap.** Five are `Rebalance`, which design §7 marks provisional and the
