@@ -50,9 +50,9 @@ lint: golangci
 include ../scripts/tools.mk
 
 .PHONY: golangci
-golangci: golangci-lint
+golangci: custom-gcl
 	@echo === running golangci-lint
-	@"$(GOLANGCI_LINT)" run ./...
+	@"$(CUSTOM_GCL)" run ./...
 
 .PHONY: fmt
 fmt:

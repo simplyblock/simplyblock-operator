@@ -125,12 +125,24 @@ type planned struct {
 	needs   []upgrade.ID
 }
 
-func (p planned) ID() upgrade.ID         { return p.id }
-func (p planned) Description() string    { return p.summary }
-func (p planned) Stage() upgrade.Stage   { return upgrade.StageUpgrade }
-func (p planned) Phase() upgrade.Phase   { return "" }
-func (p planned) Requires() []upgrade.ID { return p.needs }
-func (p planned) BlockedBy() string      { return p.blocked }
+func (p planned) ID() upgrade.ID {
+	return p.id
+}
+func (p planned) Description() string {
+	return p.summary
+}
+func (p planned) Stage() upgrade.Stage {
+	return upgrade.StageUpgrade
+}
+func (p planned) Phase() upgrade.Phase {
+	return ""
+}
+func (p planned) Requires() []upgrade.ID {
+	return p.needs
+}
+func (p planned) BlockedBy() string {
+	return p.blocked
+}
 
 // Describe reports the work against the upgrade itself, and nothing against any
 // other subject.
@@ -198,9 +210,15 @@ type handOverRelease struct {
 	described
 }
 
-func (h handOverRelease) ID() upgrade.ID     { return h.id }
-func (handOverRelease) Stage() upgrade.Stage { return upgrade.StageUpgrade }
-func (handOverRelease) Phase() upgrade.Phase { return "" }
+func (h handOverRelease) ID() upgrade.ID {
+	return h.id
+}
+func (handOverRelease) Stage() upgrade.Stage {
+	return upgrade.StageUpgrade
+}
+func (handOverRelease) Phase() upgrade.Phase {
+	return ""
+}
 
 func (handOverRelease) Requires() []upgrade.ID {
 	return []upgrade.ID{IDVerifyCRDVersions}

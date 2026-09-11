@@ -17,7 +17,9 @@ type recordingConnector struct {
 	err          error
 }
 
-func (c *recordingConnector) Connect(context.Context, Target) error { return nil }
+func (c *recordingConnector) Connect(context.Context, Target) error {
+	return nil
+}
 func (c *recordingConnector) ConnectPaths(context.Context, []Target) ([]PathResult, error) {
 	return nil, nil
 }
@@ -36,7 +38,9 @@ func (c *recordingConnector) DisconnectController(_ context.Context, ctrl nvme.C
 	c.controllers = append(c.controllers, ctrl.ID)
 	return nil
 }
-func (c *recordingConnector) IsConnected(context.Context, string) (bool, error) { return true, nil }
+func (c *recordingConnector) IsConnected(context.Context, string) (bool, error) {
+	return true, nil
+}
 
 // stubMultiNamespace substitutes the subsystem capability answer, standing in for
 // the Identify Controller command the real one may issue.

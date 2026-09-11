@@ -22,9 +22,15 @@ type describedOnly struct {
 	applied int
 }
 
-func (d *describedOnly) Stage() Stage      { return StageUpgrade }
-func (d *describedOnly) Phase() Phase      { return "" }
-func (d *describedOnly) BlockedBy() string { return d.reason }
+func (d *describedOnly) Stage() Stage {
+	return StageUpgrade
+}
+func (d *describedOnly) Phase() Phase {
+	return ""
+}
+func (d *describedOnly) BlockedBy() string {
+	return d.reason
+}
 
 func (d *describedOnly) Describe(_ context.Context, _ *Scope, subject Subject) (*Action, error) {
 	if !subject.IsUpgrade() {
@@ -33,9 +39,15 @@ func (d *describedOnly) Describe(_ context.Context, _ *Scope, subject Subject) (
 	return &Action{Rule: d.id, Verb: VerbCreate, Object: subject.Ref, Detail: "something"}, nil
 }
 
-func (d *describedOnly) Done(context.Context, *Scope, Subject) (bool, error) { return false, nil }
-func (d *describedOnly) Validate(context.Context, *Scope, Subject) error     { return nil }
-func (d *describedOnly) Verify(context.Context, *Scope, Subject) error       { return nil }
+func (d *describedOnly) Done(context.Context, *Scope, Subject) (bool, error) {
+	return false, nil
+}
+func (d *describedOnly) Validate(context.Context, *Scope, Subject) error {
+	return nil
+}
+func (d *describedOnly) Verify(context.Context, *Scope, Subject) error {
+	return nil
+}
 
 func (d *describedOnly) Apply(context.Context, *Scope, Subject) error {
 	d.applied++

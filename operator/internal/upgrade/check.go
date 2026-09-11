@@ -39,9 +39,15 @@ type CheckFunc struct {
 	Fn      func(ctx context.Context, s *Scope) (Findings, error)
 }
 
-func (c CheckFunc) ID() ID              { return c.RuleID }
-func (c CheckFunc) Description() string { return c.Summary }
-func (c CheckFunc) Stages() []Stage     { return c.RunIn }
+func (c CheckFunc) ID() ID {
+	return c.RuleID
+}
+func (c CheckFunc) Description() string {
+	return c.Summary
+}
+func (c CheckFunc) Stages() []Stage {
+	return c.RunIn
+}
 
 func (c CheckFunc) Check(ctx context.Context, s *Scope) (Findings, error) {
 	return c.Fn(ctx, s)

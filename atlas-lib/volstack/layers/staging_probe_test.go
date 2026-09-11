@@ -19,7 +19,9 @@ import (
 // the only probes a test counts are the filesystem layer's.
 type constDevice struct{}
 
-func (constDevice) Name() string { return "below" }
+func (constDevice) Name() string {
+	return "below"
+}
 
 func (constDevice) Observe(context.Context, volstack.Artifact) (volstack.State, volstack.Artifact, error) {
 	return volstack.StateReady, belowArtifact(), nil
@@ -29,8 +31,12 @@ func (constDevice) Ensure(context.Context, volstack.Artifact) (volstack.Artifact
 	return belowArtifact(), nil
 }
 
-func (constDevice) Release(context.Context, volstack.Artifact) error { return nil }
-func (constDevice) Destroy(context.Context, volstack.Artifact) error { return nil }
+func (constDevice) Release(context.Context, volstack.Artifact) error {
+	return nil
+}
+func (constDevice) Destroy(context.Context, volstack.Artifact) error {
+	return nil
+}
 
 func TestBringingAStackUpReadsTheDeviceOnce(t *testing.T) {
 	cases := []struct {

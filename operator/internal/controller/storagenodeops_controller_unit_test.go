@@ -219,7 +219,7 @@ func TestFdRemovalBalanceCheck_RemovingFromThinDomainBlocked(t *testing.T) {
 }
 
 // TestFdRemovalBalanceCheck_NoOpWhenFailureDomainsDisabled locks in the
-// gate's very first early-out, mirroring check_fd_admission_for_remove's
+// gate's very first early out, mirroring check_fd_admission_for_remove's
 // own first line (simplyblock_core): with EnableFailureDomains unset/false,
 // this must never block a removal, regardless of topology -- the exact
 // same 1/2/3 split that TestFdRemovalBalanceCheck_RemovingFromThinDomainBlocked
@@ -546,7 +546,7 @@ func TestResolveOpsSystemVolumeFilter_InvalidPatternReturnsError(t *testing.T) {
 // EndpointSlice builder and the migrate flow's DNS gate: a slice built by
 // BuildStorageNodeSetEndpointSlice must be found by endpointSliceHasWorker. The
 // two independently encoded the slice name and hostname, and a rename that
-// touched only the builder silently wedged migrations at "waiting for DNS".
+// touched only the builder silently wedged migrations at `waiting for DNS`.
 func TestEndpointSliceHasWorker_MatchesBuilderOutput(t *testing.T) {
 	const ns = "test"
 	const worker = "worker-5.ocp.simplyblock.ai"

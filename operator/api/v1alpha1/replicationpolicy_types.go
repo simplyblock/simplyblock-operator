@@ -35,7 +35,7 @@ type ReplicationPolicySpec struct {
 	// +optional
 	Mode string `json:"mode,omitempty"`
 
-	// Interval is how often a replication snapshot is taken (e.g. "5m", "1h").
+	// Interval is how often a replication snapshot is taken (e.g., `5m`, `1h`).
 	// +kubebuilder:default="5m"
 	// +optional
 	Interval string `json:"interval,omitempty"`

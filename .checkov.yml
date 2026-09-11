@@ -1,0 +1,111 @@
+# checkov policy for this repository, read by MegaLinter's REPOSITORY_CHECKOV.
+#
+# Which directories are scanned is set in .mega-linter.yml, not here. checkov
+# ignores a `directory:` key whenever the command line carries `--directory`,
+# and MegaLinter always passes one. What is left for this file is the paths
+# inside those directories that are nobody's to fix, and the checks to skip.
+#
+# skip-path takes a plain path substring, not a regex. An entry written as
+# `helm-charts/charts/[0-9]+\.[0-9]+\.[0-9]+/` aborts the whole run with
+# `re.PatternError: nothing to repeat`, and because the traceback is raised
+# inside a forked worker it names no file and no pattern. It also turned out to
+# be unnecessary: those version-numbered directories hold one .tgz archive
+# each, and checkov does not read inside an archive.
+#
+# Naming this file at the repository root replaces the configuration MegaLinter
+# ships inside its image, so the two settings that one made are carried forward.
+quiet: true
+
+skip-check:
+  # Carried over from MegaLinter's own configuration, which this file replaces.
+  # A HEALTHCHECK instruction is not how a Kubernetes workload reports health.
+  - CKV_DOCKER_2
+
+  # Every one of the 36 resources this reported sits in a namespace called
+  # `default`, because that is what a Helm template renders to when nothing
+  # passes --namespace: the resources come out named
+  # Deployment.default.simplyblock-webappapi and the like. An installation names
+  # its namespace, and the manifests under csi-driver/deploy leave it out on
+  # purpose so a reader can apply them wherever they are working.
+  - CKV_K8S_21
+
+  # The charts take an image repository and a tag as values, which is how a user
+  # points them at their own registry or pins their own build. Requiring a digest
+  # would mean the chart could no longer be configured that way. The tags
+  # themselves are still checked, by CKV_K8S_14, which is not skipped: it found
+  # simplyblock/spdkcsi:latest in two manifests that ought to name a version.
+  - CKV_K8S_43
+
+skip-path:
+  # Vendored dependency charts: third-party manifests this repository packages
+  # but does not write.
+  - helm-charts/charts/simplyblock-operator/charts/
+  # The three paths `make helm-sync` writes into the development chart. A
+  # finding here belongs to the operator's Kubebuilder markers and API types,
+  # the same reason operator/config/rbac/ is skipped below, so it is fixed
+  # there and synced rather than edited in the chart.
+  - helm-charts/charts/simplyblock-operator/crds/
+  - helm-charts/charts/simplyblock-operator/templates/roles/
+  - helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml
+  # Published release output.
+  - csi-driver/charts/
+  # The CSI controller and node plugins. A node plugin mounts filesystems and
+  # opens raw block devices on the host, so it runs privileged, shares the host
+  # network namespace, and holds CAP_SYS_ADMIN, and the controller is not far
+  # behind. Twenty-five of the findings here are checkov describing that design
+  # back: not privileged, no added capabilities, no host network, a read-only
+  # root filesystem, a high uid. None of them is something this driver can be.
+  #
+  # This gives up seventeen findings that are not about privilege, which is the
+  # cost of skipping by path: checkov cannot skip a check for one file. The
+  # Helm chart under csi-driver/charts is the supported way to install this
+  # driver and these manifests are the walkthrough's manual path, so the
+  # resource limits and probes they lack matter less than they would in the
+  # chart. The two that do matter are recorded in the commit.
+  - csi-driver/deploy/kubernetes/node.yaml
+  - csi-driver/deploy/kubernetes/controller.yaml
+  # The upstream snapshot controller, copied from kubernetes-csi/external-snapshotter
+  # into both trees with its header comment intact and renamed to
+  # simplyblock-snapshot-controller. It deploys, so it is not a fixture, but its
+  # 37 findings belong to the project that wrote it: changing them here would
+  # fork a vendored manifest and lose the changes at the next copy.
+  - setup-snapshot-controller.yaml
+  # Test fixtures. These are pods and claims a test run creates and deletes, on
+  # a test cluster, and no installation ever carries them: the nine templates
+  # under e2e/templates are applied by the Ginkgo suite, and testpod,
+  # testclone, testrestore, and the WordPress and MySQL demo are the ones the
+  # install walkthrough has a reader apply by hand to prove the driver works.
+  # deploy.sh names what an installation actually applies, and none of these
+  # appear in it. Two hundred and fifty-seven findings asking a throwaway pod
+  # for a seccomp profile and a liveness probe.
+  #
+  # deploy/kubernetes/controller.yaml and node.yaml are deliberately not here.
+  # deploy.sh does apply those, so they describe workloads that run.
+  - csi-driver/e2e/
+  - csi-driver/deploy/kubernetes/test
+  - csi-driver/deploy/kubernetes/mysql-pvc.yaml
+  # Generated. A finding here belongs to the Kubebuilder markers and the API
+  # types it is rendered from, so it is fixed there and regenerated.
+  - operator/config/crd/
+  - operator/config/rbac/
+  # The Kustomize overlays, which are strategic-merge patch fragments rather
+  # than whole manifests. MegaLinter's image carries no Kustomize binary, so
+  # checkov reports `Framework will be disabled for this run` and falls back to
+  # reading each file as a complete resource. It then reports every field the
+  # fragment does not repeat: 38 findings across two patches, including a
+  # read-only root filesystem that config/manager/manager.yaml does set. The
+  # base is not skipped, because it is a whole manifest and its findings are
+  # real.
+  - operator/config/default/
+  - operator/dist/
+  # Outside the three directories checkov is meant to cover (helm-charts,
+  # csi-driver, and operator). Scoping by skip-path rather than by repeating
+  # `--directory` is deliberate: three --directory flags make checkov run its
+  # whole registry once per directory and report each finding up to three times,
+  # which inflated 592 distinct findings to 1364.
+  - atlas-lib/
+  - test/
+  - shared/
+  - .github/
+  - .claude/
+  - megalinter-reports/

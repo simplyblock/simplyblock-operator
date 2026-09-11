@@ -89,7 +89,9 @@ func (s *Server) Port() int {
 }
 
 // URL is the base URL for a client in this process.
-func (s *Server) URL() string { return fmt.Sprintf("http://127.0.0.1:%d", s.Port()) }
+func (s *Server) URL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d", s.Port())
+}
 
 // URLFor is the base URL for a client that reaches this host at addr — the
 // cluster network's gateway, for something running on a node.
@@ -167,7 +169,9 @@ func notImplemented(w http.ResponseWriter, r *http.Request) {
 // a 404 carrying the message.
 type hostError string
 
-func (e hostError) Error() string { return string(e) }
+func (e hostError) Error() string {
+	return string(e)
+}
 
 func poolDTO(p Pool) StoragePoolDTO {
 	return StoragePoolDTO{

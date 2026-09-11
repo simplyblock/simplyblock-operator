@@ -93,7 +93,9 @@ func NewDeviceSubscription() *DeviceSubscription {
 }
 
 // Name implements cpinformer.Subscription.
-func (s *DeviceSubscription) Name() string { return "device" }
+func (s *DeviceSubscription) Name() string {
+	return "device"
+}
 
 // Path implements cpinformer.Subscription: devices are scoped per (cluster,
 // storage node). The control plane offers no cluster-wide device stream, so one
@@ -176,7 +178,9 @@ func (s *DeviceSubscription) enqueue(ctx context.Context, scope cpinformer.Scope
 
 // Triggers is the reconcile-trigger channel; the reconciler attaches it via
 // source.Channel. Each event names the StorageDevice object to reconcile.
-func (s *DeviceSubscription) Triggers() <-chan event.GenericEvent { return s.ch }
+func (s *DeviceSubscription) Triggers() <-chan event.GenericEvent {
+	return s.ch
+}
 
 // Lookup returns the cached device that the named StorageDevice object mirrors,
 // with the scope it belongs to, or ok=false if the control plane no longer

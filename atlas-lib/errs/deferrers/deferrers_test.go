@@ -10,7 +10,9 @@ import (
 
 type errCloser struct{ err error }
 
-func (e errCloser) Close() error { return e.err }
+func (e errCloser) Close() error {
+	return e.err
+}
 
 func captureLogger(t *testing.T) *bytes.Buffer {
 	t.Helper()

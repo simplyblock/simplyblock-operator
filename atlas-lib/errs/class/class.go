@@ -70,7 +70,9 @@ type Class struct {
 }
 
 // Permanent reports whether retrying is pointless.
-func (c Class) Permanent() bool { return !c.Retryable }
+func (c Class) Permanent() bool {
+	return !c.Retryable
+}
 
 // httpStatuser is implemented by errors that carry an HTTP status, as
 // controlplane.StatusError does. The classifier looks for the method rather than
@@ -130,10 +132,14 @@ func Of(err error) Class {
 }
 
 // Code is Of(err).Code, for callers that need nothing else.
-func Code(err error) codes.Code { return Of(err).Code }
+func Code(err error) codes.Code {
+	return Of(err).Code
+}
 
 // Retryable is Of(err).Retryable, the operator's requeue-or-fail decision.
-func Retryable(err error) bool { return Of(err).Retryable }
+func Retryable(err error) bool {
+	return Of(err).Retryable
+}
 
 // Status returns err as a gRPC status error carrying Of(err).Code and err's
 // message: what an RPC handler returns. A nil err stays nil, and an err that
@@ -262,5 +268,9 @@ type peerError struct {
 	err error
 }
 
-func (e peerError) Error() string { return e.msg }
-func (e peerError) Unwrap() error { return e.err }
+func (e peerError) Error() string {
+	return e.msg
+}
+func (e peerError) Unwrap() error {
+	return e.err
+}

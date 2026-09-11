@@ -461,8 +461,8 @@ func (r *StorageClusterOpsReconciler) reconcileStart(
 }
 
 // reconcileRestart handles a two-phase cluster restart: POST /shutdown, wait
-// until the cluster leaves "active", then POST /start and wait until it returns
-// to "active". The sub-phase is tracked in ops.Status.Message.
+// until the cluster leaves `active`, then POST /start and wait until it returns
+// to `active`. The sub-phase is tracked in ops.Status.Message.
 func (r *StorageClusterOpsReconciler) reconcileRestart(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,

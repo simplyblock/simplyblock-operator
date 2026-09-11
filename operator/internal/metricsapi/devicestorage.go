@@ -79,7 +79,9 @@ func NewDeviceStorage(reader client.Reader, capacity DeviceCapacitySource) *Devi
 }
 
 // New implements rest.Storage.
-func (s *DeviceStorage) New() runtime.Object { return &metricsv1alpha2.StorageDeviceMetrics{} }
+func (s *DeviceStorage) New() runtime.Object {
+	return &metricsv1alpha2.StorageDeviceMetrics{}
+}
 
 // Destroy implements rest.Storage. There is nothing to release: no client, no
 // watch, and no connection is owned here.
@@ -87,13 +89,19 @@ func (s *DeviceStorage) Destroy() {}
 
 // NamespaceScoped implements rest.Scoper. The resource is namespaced because
 // that is what confines a reader to the namespaces they already have.
-func (s *DeviceStorage) NamespaceScoped() bool { return true }
+func (s *DeviceStorage) NamespaceScoped() bool {
+	return true
+}
 
 // GetSingularName implements rest.SingularNameProvider.
-func (s *DeviceStorage) GetSingularName() string { return DeviceResourceName }
+func (s *DeviceStorage) GetSingularName() string {
+	return DeviceResourceName
+}
 
 // ShortNames implements rest.ShortNamesProvider.
-func (s *DeviceStorage) ShortNames() []string { return []string{DeviceShortName} }
+func (s *DeviceStorage) ShortNames() []string {
+	return []string{DeviceShortName}
+}
 
 // NewList implements rest.Lister.
 func (s *DeviceStorage) NewList() runtime.Object {

@@ -1,0 +1,26 @@
+{
+  "threshold": 3,
+  "reporters": [
+    "html",
+    "markdown"
+  ],
+  "ignore": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.rbenv/**",
+    "**/.venv/**",
+    "**/*cache*/**",
+    "**/.github/**",
+    "**/.idea/**",
+    "**/report/**",
+    "helm-charts/charts/**",
+    "csi-driver/charts/**",
+    "operator/config/**",
+    "operator/dist/**",
+    "**/*.svg",
+    "**/*.gen.go",
+    "**/*.deepcopy.go",
+    "**/*_types.go",
+    "**/*_test.go"
+  ]
+}

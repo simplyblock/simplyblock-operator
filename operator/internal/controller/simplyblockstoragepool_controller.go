@@ -239,13 +239,13 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// // --- Handle update ---
 	// updateParams := utils.PoolUpdateParams{
-	// 	Name:    storagePoolCR.Name,
+	// 	Name: storagePoolCR.Name,
 	// 	PoolMax: utils.IntPtrOrDefault(storagePoolCR.Spec.RWLimit, 0),
 	// 	// VolumeMaxSize: storagePoolCR.Spec.CapacityLimitIntPtr(),
 	// 	MaxRwIOPS: utils.IntPtrOrDefault(storagePoolCR.Spec.QoSIOPSLimit, 0),
-	// 	MaxRwMB:   utils.IntPtrOrDefault(storagePoolCR.Spec.RWLimit, 0),
-	// 	MaxRMB:    utils.IntPtrOrDefault(storagePoolCR.Spec.RLimit, 0),
-	// 	MaxWMB:    utils.IntPtrOrDefault(storagePoolCR.Spec.WLimit, 0),
+	// 	MaxRwMB: utils.IntPtrOrDefault(storagePoolCR.Spec.RWLimit, 0),
+	// 	MaxRMB: utils.IntPtrOrDefault(storagePoolCR.Spec.RLimit, 0),
+	// 	MaxWMB: utils.IntPtrOrDefault(storagePoolCR.Spec.WLimit, 0),
 	// }
 
 	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, storagePoolCR.Status.UUID)

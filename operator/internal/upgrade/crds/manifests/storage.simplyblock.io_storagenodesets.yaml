@@ -80,7 +80,7 @@ spec:
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
-                  When omitted no limits are enforced, which preserves the previous behaviour.
+                  When omitted no limits are enforced, which preserves the previous behavior.
                 properties:
                   claims:
                     description: |-
@@ -145,7 +145,7 @@ spec:
                 type: array
               deviceNames:
                 description: DeviceNames explicitly defines a comma separated list
-                  of nvme namespace names like nvme0n1,nvme1n1...
+                  of NVMe namespace names like nvme0n1,nvme1n1...
                 items:
                   type: string
                 type: array
@@ -171,7 +171,7 @@ spec:
                   Expand indicates that storage nodes added from this StorageNodeSet are being
                   added to expand an already-active cluster. When true the backend node-add
                   endpoint receives expand=true, which triggers the appropriate rebalancing
-                  behaviour for in-place cluster growth.
+                  behavior for in-place cluster growth.
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -294,7 +294,7 @@ spec:
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
-                        (e.g. ["nvme0n1","nvme1n1"]).
+                        (e.g., ["nvme0n1","nvme1n1"]).
                       items:
                         type: string
                       type: array
@@ -309,7 +309,7 @@ spec:
                     expand:
                       description: |-
                         Expand marks this node as a cluster-expansion add. When true the backend
-                        node-add endpoint receives expand=true, triggering rebalancing behaviour
+                        node-add endpoint receives expand=true, triggering rebalancing behavior
                         appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
                       type: boolean
                     failureDomain:
@@ -362,7 +362,7 @@ spec:
                       type: boolean
                     spdkImage:
                       description: SpdkImage overrides the SPDK image for this node
-                        (e.g. for phased rollouts).
+                        (e.g., for phased rollouts).
                       type: string
                     spdkProxyImage:
                       description: SpdkProxyImage overrides the SPDK proxy image for
@@ -371,7 +371,7 @@ spec:
                     spdkSystemMemory:
                       description: |-
                         SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-                        (e.g. "4G", "512M").
+                        (e.g., `4G`, `512M`).
                       pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                       type: string
                     ubuntuHost:
@@ -458,7 +458,7 @@ spec:
                 type: string
               spdkSystemMemory:
                 description: |-
-                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g., `4G`, `512M`).
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                 type: string
@@ -531,7 +531,7 @@ spec:
             properties:
               creatingNodes:
                 description: CreatingNodes is the count of StorageNode CRs with status
-                  "in_creation".
+                  `in_creation`.
                 type: integer
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
@@ -672,11 +672,11 @@ spec:
                 type: array
               offlineNodes:
                 description: OfflineNodes is the count of StorageNode CRs with status
-                  "offline".
+                  `offline`.
                 type: integer
               onlineNodes:
                 description: OnlineNodes is the count of StorageNode CRs with status
-                  "online".
+                  `online`.
                 type: integer
               pendingNodeAdds:
                 additionalProperties:
@@ -691,7 +691,7 @@ spec:
                 type: object
               removedNodes:
                 description: RemovedNodes is the count of StorageNode CRs with status
-                  "removed".
+                  `removed`.
                 type: integer
               schedulingFailedWorkers:
                 additionalProperties:
@@ -703,7 +703,7 @@ spec:
                 type: object
               suspendedNodes:
                 description: SuspendedNodes is the count of StorageNode CRs with status
-                  "suspended".
+                  `suspended`.
                 type: integer
               totalNodes:
                 description: TotalNodes is the total number of owned StorageNode CRs.

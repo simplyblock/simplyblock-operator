@@ -66,7 +66,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRollingRestart(
 		return r.failOps(ctx, ops, cluster, fmt.Sprintf("resolve cluster UUID: %v", err))
 	}
 
-	// Discover all nodes on first reconcile after initialisation.
+	// Discover all nodes on first reconcile after initialization.
 	if ops.Status.RollingRestart == nil {
 		nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 		if err != nil {

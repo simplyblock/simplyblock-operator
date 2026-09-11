@@ -17,7 +17,7 @@ type PathState struct {
 	Address string // "<ip>:<port>"
 	// Present is false when no controller for this address exists at all.
 	Present bool
-	// State is the controller's kernel state: "live", "connecting", "resetting", ...
+	// State is the controller's kernel state: `live`, `connecting`, `resetting`, ...
 	// Only a live controller can carry I/O.
 	State string
 	// ANAStates are the ANA states of this controller's paths to the subsystem's
@@ -150,7 +150,7 @@ func PresentAddresses(ctx context.Context, sysRoot, nqn string) (map[string]bool
 // this one, or an NQN answered by two kernel subsystem instances at once. Those are
 // the states in which every expected path looks established while the volume has
 // nothing to take over at cutover, and diagnosing them from what the kernel already
-// publishes is what atlas centralises.
+// publishes is what atlas centralizes.
 //
 // It is asked once per exported namespace rather than once for the subsystem, and
 // that is the whole reason it can say anything here: its controller-level check
@@ -205,7 +205,7 @@ func diagnose(ctx context.Context, sysRoot string, s nvme.Subsystem) []string {
 }
 
 // VerifyMigrationPaths checks that every expected target path is established on this
-// host and parked, i.e. ready to take over at cutover but not serving yet.
+// host and parked, i.e., ready to take over at cutover but not serving yet.
 //
 // Each path must be:
 //

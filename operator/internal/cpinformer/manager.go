@@ -159,7 +159,9 @@ func (m *SubscriptionManager) AddSubscription(sub Subscription) *ScopeSet {
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
-func (m *SubscriptionManager) NeedLeaderElection() bool { return bool(m.election) }
+func (m *SubscriptionManager) NeedLeaderElection() bool {
+	return bool(m.election)
+}
 
 // Start runs every subscription until ctx is canceled, then tears the streams
 // down. It implements manager.Runnable.

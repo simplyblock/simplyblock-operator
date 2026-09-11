@@ -37,9 +37,13 @@ type fakeLayer struct {
 	ensured  []string // the device names this layer was handed, per Ensure
 }
 
-func (f *fakeLayer) Name() string { return f.name }
+func (f *fakeLayer) Name() string {
+	return f.name
+}
 
-func (f *fakeLayer) note(verb string) { *f.log = append(*f.log, f.name+":"+verb) }
+func (f *fakeLayer) note(verb string) {
+	*f.log = append(*f.log, f.name+":"+verb)
+}
 
 func (f *fakeLayer) Observe(_ context.Context, below Artifact) (State, Artifact, error) {
 	f.note("observe")
@@ -533,7 +537,9 @@ type compositeLayer struct {
 	members Plan
 }
 
-func (c compositeLayer) Members() Plan { return c.members }
+func (c compositeLayer) Members() Plan {
+	return c.members
+}
 
 // A fan-in layer's sub-plan is recorded, in order and as a field of its own.
 // The order cannot be recovered from a set, and a failover that reassembles the

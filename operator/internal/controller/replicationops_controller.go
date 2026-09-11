@@ -576,7 +576,7 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 
 // reconcileFailbackWait polls slots until every one is replicating/source, then
 // marks the ReplicationOps Succeeded. It is entered on every reconcile when
-// subphase == "WaitingForSlots".
+// subphase == `WaitingForSlots`.
 func (r *ReplicationOpsReconciler) reconcileFailbackWait(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,

@@ -279,7 +279,7 @@ func TestPresentAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PresentAddresses: %v", err)
 	}
-	// Both count as present: presence is about "was this address here before", not
+	// Both count as present: presence is about "was this address here before," not
 	// about health.
 	for _, addr := range []string{"10.0.0.114:4428", "10.0.0.112:4428"} {
 		if !got[addr] {

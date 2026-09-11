@@ -27,7 +27,9 @@ func newLVMGroup(perDevice map[string]string) (*LVMVolumeGroup, *lvmCommands) {
 }
 
 // ours is what pvs prints for a member of this volume's group.
-func ours() string { return "  " + testVG + "\n" }
+func ours() string {
+	return "  " + testVG + "\n"
+}
 
 // Members carrying no group at all are what a bring-up creates one over.
 func TestLVMVolumeGroupAbsentCreates(t *testing.T) {

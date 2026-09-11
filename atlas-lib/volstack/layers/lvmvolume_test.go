@@ -48,7 +48,9 @@ func newLVMVolume(vg, lvs, attr string, def lvm.LogicalVolumeDefinition) *lvmVol
 }
 
 // present is the lvs listing for a volume group holding this volume.
-func present() string { return "  " + testLV + "\n" }
+func present() string {
+	return "  " + testLV + "\n"
+}
 
 // A group holding no volume of ours is the only state an lvcreate may run in.
 // The group itself is already there by then, made by the layer below.

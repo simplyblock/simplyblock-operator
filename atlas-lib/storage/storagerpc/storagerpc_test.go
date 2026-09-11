@@ -52,7 +52,9 @@ type fakeDevices struct {
 	err     error
 }
 
-func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) { return f.devices, f.err }
+func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) {
+	return f.devices, f.err
+}
 
 func (f *fakeDevices) ListWithSelector(ctx context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
 	all, err := f.List(ctx)

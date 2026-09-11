@@ -139,7 +139,7 @@ func TestReconcileStart_AcceptedAfterDeferral_ClearsDeferredSince(t *testing.T) 
 }
 
 // Every connect parameter has to reach the validation Job: the job passes them to
-// `nvme connect`, and a dropped timeout changes the path's failure behaviour.
+// `nvme connect`, and a dropped timeout changes the path's failure behavior.
 //
 // One is not passed through. ctrl_loss_tmo is replaced with vmigration.CtrlLossTmoSec,
 // because a migration target path becomes the volume's data path at cutover and must
@@ -186,7 +186,7 @@ func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
 // ---- performMigration: the branches around the continue call ----
 
 // A migration that reached a terminal state on its own must not be continued or
-// cancelled; it advances to Running so the polling path classifies the outcome.
+// canceled; it advances to Running so the polling path classifies the outcome.
 func TestPerformMigration_AlreadyTerminal_AdvancesForClassification(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
@@ -214,7 +214,7 @@ func TestPerformMigration_AlreadyTerminal_AdvancesForClassification(t *testing.T
 }
 
 // The continue call can report an error after having taken effect. If the migration
-// has moved past pre_created, it started — cancelling it would kill a healthy move.
+// has moved past pre_created, it started — canceling it would kill a healthy move.
 func TestPerformMigration_ContinueErroredButAdvanced_TreatedAsContinued(t *testing.T) {
 	var cancelCalled bool
 	calls := 0
@@ -382,7 +382,7 @@ func TestReconcileRunning_WithinInitialDelay_DoesNotPoll(t *testing.T) {
 }
 
 // A migration still in flight past the stuck timeout is surfaced as a warning while
-// polling continues — it may yet finish, and cancelling it is the operator's call.
+// polling continues — it may yet finish, and canceling it is the operator's call.
 func TestReconcileRunning_PastStuckTimeout_WarnsAndKeepsPolling(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"snap_copy","status":"running"}`))

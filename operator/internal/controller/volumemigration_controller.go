@@ -53,7 +53,7 @@ type VolumeMigrationReconciler struct {
 	coreClient corev1client.CoreV1Interface
 	// apiReader is an uncached reader (mgr.GetAPIReader) used for the
 	// "is this volume actively consumed?" decision. A stale informer cache could
-	// otherwise miss a genuinely-running consumer and cause validation to be
+	// otherwise miss a genuinely running consumer and cause validation to be
 	// skipped for a live volume, breaking its I/O path after cutover.
 	apiReader client.Reader
 }
@@ -82,7 +82,7 @@ const maxMigrationDeferral = 10 * time.Minute
 // validationJobDeadline per Job (Jobs run in parallel, so that is not additive).
 const (
 	// maxConsumerWait bounds how long we wait for every consumer pod of the
-	// subsystem to be Running. Past it the migration is cancelled rather than
+	// subsystem to be Running. Past it the migration is canceled rather than
 	// continued with an unvalidated node — a consumer that starts mid-migration
 	// stages against the source and is stranded at cutover.
 	maxConsumerWait = 60 * time.Second
@@ -99,7 +99,7 @@ const (
 )
 
 // errConsumerNotReady indicates that a pod references the volume's PVC but is not
-// Running yet (e.g. Pending or scheduling). A consumer is coming, so validation
+// Running yet (e.g., Pending or scheduling). A consumer is coming, so validation
 // must NOT be skipped: the caller should wait and validate on the consumer's node
 // once it is Running, rather than continuing the migration unvalidated.
 var errConsumerNotReady = errors.New("volume has a consumer that is not running yet")
@@ -592,7 +592,7 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 //
 // It is what closes the gap a per-node release cannot. The Job that fails releases its
 // own paths on the way out, but the nodes whose validation *passed* exited successfully
-// and are never told that the migration was cancelled anyway — by another node's failure,
+// and are never told that the migration was canceled anyway — by another node's failure,
 // or by the operator giving up on a consumer that never started. Their target paths stay
 // connected, retry a target that has stopped answering for them, and settle into the husk
 // that blocks the next migration of the subsystem. Before this, nothing on the node ever
@@ -601,7 +601,7 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 // Every recorded node is asked, not only the ones that passed. Release is idempotent and
 // declines to touch a path that is serving, so asking a node that already released costs
 // one Job and reports nothing; guessing which nodes still hold paths would mean trusting
-// Succeeded to mean "connected", which it does not — a Job killed mid-run leaves paths
+// Succeeded to mean `connected`, which it does not — a Job killed mid-run leaves paths
 // with no record of them at all.
 //
 // Best effort, and deliberately not waited on: the migration's outcome is already decided
@@ -762,7 +762,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 
 	m, err := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID)
 	if err != nil {
-		// Transient read failure: requeue without failing or cancelling.
+		// Transient read failure: requeue without failing or canceling.
 		log.Error(err, "Cannot read migration before continue; requeuing", "migration", vm.Status.MigrationUUID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
@@ -777,7 +777,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
 			// The continue may have taken effect despite the error. Only a
 			// migration still stuck in pre_created is a genuine start failure
-			// worth cancelling; anything else means it already advanced.
+			// worth canceling; anything else means it already advanced.
 			if m2, gerr := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); gerr == nil && m2.Phase == webapi.MigrationPhasePreCreated {
 				// Best-effort: the CR fails either way, but a failed cancel leaves
 				// target-side objects behind, so it must not be silent.

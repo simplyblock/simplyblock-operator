@@ -1,7 +1,7 @@
 // Package link carries gRPC between the operator and the CSI driver over
 // connections the CSI driver opens.
 //
-// # Why the connection runs backwards
+// # Why the connection runs backward
 //
 // The operator is the one that needs to ask questions — what does this node's
 // fabric look like, are this volume's paths up — and the answers live on the
@@ -16,7 +16,7 @@
 // discovered, and the only reachability the deployment needs is the one it
 // already has — pods reaching a Service.
 //
-// # How a backwards connection still speaks ordinary gRPC
+// # How a backward connection still speaks ordinary gRPC
 //
 // gRPC assumes the side that dialed is the client. Here it is the server, so
 // something has to separate the two roles from the direction the TCP connection

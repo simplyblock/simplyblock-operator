@@ -22,7 +22,9 @@ const (
 )
 
 // Capabilities is what [NewServer] serves, for an agent's Hello.
-func Capabilities() []string { return []string{CapabilitySubsystems, CapabilityDevices} }
+func Capabilities() []string {
+	return []string{CapabilitySubsystems, CapabilityDevices}
+}
 
 // Server answers NVMe lookups against the node it runs on.
 //

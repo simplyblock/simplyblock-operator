@@ -76,7 +76,7 @@ spec:
                     - name
                   type: object
                 snapshotName:
-                  description: SnapshotName optionally overrides the internally-created snapshot name.
+                  description: SnapshotName optionally overrides the internally created snapshot name.
                   type: string
                 sourceClusterUUID:
                   description: |-
@@ -116,7 +116,7 @@ spec:
                   type: string
                 fsType:
                   description: |-
-                    FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+                    FSType is the filesystem type of the source PersistentVolume (e.g., `ext4`,
                     "xfs"), captured at backup time so a restore can preserve it regardless of
                     which StorageClass the restored PVC ends up using.
                   type: string
@@ -159,7 +159,7 @@ spec:
                   format: int64
                   type: integer
                 snapshotID:
-                  description: SnapshotID is the internally-created snapshot UUID used for the backup request.
+                  description: SnapshotID is the internally created snapshot UUID used for the backup request.
                   type: string
                 snapshotName:
                   description: SnapshotName is the snapshot name used for the backup request.

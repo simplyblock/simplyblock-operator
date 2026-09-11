@@ -97,10 +97,14 @@ type Filesystem struct {
 }
 
 // NewFilesystem returns the filesystem layer for one volume.
-func NewFilesystem(cfg FilesystemConfig) *Filesystem { return &Filesystem{cfg: cfg} }
+func NewFilesystem(cfg FilesystemConfig) *Filesystem {
+	return &Filesystem{cfg: cfg}
+}
 
 // Name is what the record calls this layer.
-func (f *Filesystem) Name() string { return "filesystem" }
+func (f *Filesystem) Name() string {
+	return "filesystem"
+}
 
 // Observe reads the device below and reports what may be done to it.
 //
@@ -234,7 +238,9 @@ func (f *Filesystem) clear(ctx context.Context) error {
 // Destroy does nothing. Removing a filesystem means removing the volume it is
 // on, which is the control plane's, and a node reaching for that on a teardown
 // is the defect the separation of Release and Destroy exists to prevent.
-func (f *Filesystem) Destroy(context.Context, volstack.Artifact) error { return nil }
+func (f *Filesystem) Destroy(context.Context, volstack.Artifact) error {
+	return nil
+}
 
 // Healthy reports whether the mount is still serving.
 //

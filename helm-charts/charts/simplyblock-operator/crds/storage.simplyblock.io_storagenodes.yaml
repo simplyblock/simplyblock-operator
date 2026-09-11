@@ -86,7 +86,7 @@ spec:
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
-                      (e.g. ["nvme0n1","nvme1n1"]).
+                      (e.g., ["nvme0n1","nvme1n1"]).
                     items:
                       type: string
                     type: array
@@ -101,7 +101,7 @@ spec:
                   expand:
                     description: |-
                       Expand marks this node as a cluster-expansion add. When true the backend
-                      node-add endpoint receives expand=true, triggering rebalancing behaviour
+                      node-add endpoint receives expand=true, triggering rebalancing behavior
                       appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
                     type: boolean
                   failureDomain:
@@ -153,7 +153,7 @@ spec:
                     type: boolean
                   spdkImage:
                     description: SpdkImage overrides the SPDK image for this node
-                      (e.g. for phased rollouts).
+                      (e.g., for phased rollouts).
                     type: string
                   spdkProxyImage:
                     description: SpdkProxyImage overrides the SPDK proxy image for
@@ -162,7 +162,7 @@ spec:
                   spdkSystemMemory:
                     description: |-
                       SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-                      (e.g. "4G", "512M").
+                      (e.g., `4G`, `512M`).
                     pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                     type: string
                   ubuntuHost:
@@ -172,7 +172,7 @@ spec:
                 type: object
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
-                  (e.g. "0", "1"). Immutable.
+                  (e.g., `0`, `1`). Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -332,7 +332,7 @@ spec:
                     type: integer
                 type: object
               status:
-                description: Status is the backend-reported node status (e.g. online,
+                description: Status is the backend-reported node status (e.g., online,
                   suspended, offline).
                 type: string
               uptime:

@@ -69,7 +69,9 @@ func NewVolumeSubscription() *VolumeSubscription {
 }
 
 // Name implements cpinformer.Subscription.
-func (s *VolumeSubscription) Name() string { return "volume" }
+func (s *VolumeSubscription) Name() string {
+	return "volume"
+}
 
 // Path implements cpinformer.Subscription: volumes are scoped per (cluster,
 // pool), so one stream is opened per storage pool.

@@ -178,13 +178,17 @@ func (s *Shell) LoadedModules(ctx context.Context) (string, error) {
 }
 
 // Node is the node this shell runs on.
-func (s *Shell) Node() string { return s.node }
+func (s *Shell) Node() string {
+	return s.node
+}
 
 // Pod is the pod this shell runs as. A caller that has to address the pod
 // directly, rather than through Run, asks for it here: deriving the name from
 // the node a second time is a second copy of the sanitizing rule, and the two
 // stop agreeing the first time the rule changes.
-func (s *Shell) Pod() string { return s.pod }
+func (s *Shell) Pod() string {
+	return s.pod
+}
 
 // unnameable matches every run of characters a Kubernetes name may not hold.
 //

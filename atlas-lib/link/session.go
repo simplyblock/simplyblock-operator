@@ -19,7 +19,7 @@ import (
 //
 // Both ends hold the same thing. Each runs a grpc.Server over the streams the
 // other opens and a grpc.ClientConn over the streams it opens itself, so which
-// end dialled stops mattering the moment the session exists. That symmetry is
+// end dialed stops mattering the moment the session exists. That symmetry is
 // the whole reason for the multiplexer: it is what lets the CSI driver dial out
 // and still be the one answering calls.
 type Session struct {
@@ -127,13 +127,19 @@ func newSession(raw net.Conn, client bool, cfg sessionConfig) (*Session, error) 
 }
 
 // Conn is a client of every service the *other* end registered.
-func (s *Session) Conn() *grpc.ClientConn { return s.cc }
+func (s *Session) Conn() *grpc.ClientConn {
+	return s.cc
+}
 
 // Done is closed once the session has ended, for whatever reason.
-func (s *Session) Done() <-chan struct{} { return s.mux.CloseChan() }
+func (s *Session) Done() <-chan struct{} {
+	return s.mux.CloseChan()
+}
 
 // RemoteAddr is the address of the other end, for diagnostics.
-func (s *Session) RemoteAddr() net.Addr { return s.mux.RemoteAddr() }
+func (s *Session) RemoteAddr() net.Addr {
+	return s.mux.RemoteAddr()
+}
 
 // Close ends the session and releases everything under it. It is idempotent,
 // and safe to call from inside an RPC handler running on this very session —
@@ -161,7 +167,7 @@ func (s *Session) dial(ctx context.Context, _ string) (net.Conn, error) {
 		return nil, ErrNoSession
 	}
 
-	// yamux's Open takes no context, so honour the caller's deadline here
+	// yamux's Open takes no context, so honor the caller's deadline here
 	// instead of inheriting the multiplexer's stream-open timeout.
 	type opened struct {
 		conn net.Conn

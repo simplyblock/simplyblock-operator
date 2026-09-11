@@ -12,7 +12,7 @@ import (
 )
 
 // Released names one controller that was disconnected, for the Job log and the
-// operator's post-mortem. The address is what an operator recognises a path by; the
+// operator's post-mortem. The address is what an operator recognizes a path by; the
 // controller ID is what the kernel logged it under.
 type Released struct {
 	Controller string // "nvme7"
@@ -100,7 +100,7 @@ func migrationPathVictims(s nvme.Subsystem, conns []Connection) []nvme.Controlle
 	// prevent, so the state is declined rather than acted on.
 	//
 	// What makes this safe to decline is that it costs nothing but a round: a leak is
-	// recognisable precisely because some path is serving while the migration's are not,
+	// recognizable precisely because some path is serving while the migration's are not,
 	// so a real one is still there to release on the next attempt, and the husk it leaves
 	// is ReapDeadControllers' to clear — that pass reads namespace legs rather than ANA
 	// states and is unaffected by the window.

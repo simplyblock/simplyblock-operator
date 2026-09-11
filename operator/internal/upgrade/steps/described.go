@@ -29,13 +29,19 @@ type described struct {
 }
 
 // BlockedBy is what the runner reads to refuse the stage.
-func (d described) BlockedBy() string { return d.blocked }
+func (d described) BlockedBy() string {
+	return d.blocked
+}
 
 func (d described) Validate(context.Context, *upgrade.Scope, upgrade.Subject) error {
 	return d.refuse()
 }
-func (d described) Apply(context.Context, *upgrade.Scope, upgrade.Subject) error  { return d.refuse() }
-func (d described) Verify(context.Context, *upgrade.Scope, upgrade.Subject) error { return d.refuse() }
+func (d described) Apply(context.Context, *upgrade.Scope, upgrade.Subject) error {
+	return d.refuse()
+}
+func (d described) Verify(context.Context, *upgrade.Scope, upgrade.Subject) error {
+	return d.refuse()
+}
 
 // refuse is what these return if they are ever reached, which would mean the
 // runner's refusal had been bypassed.

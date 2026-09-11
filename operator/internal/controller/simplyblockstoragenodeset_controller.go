@@ -124,7 +124,7 @@ var (
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// Reconcile is part of the main Kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
 // the StorageNodeSet object against the actual cluster state, and then
@@ -441,7 +441,7 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 	return true, r.Update(ctx, snCR)
 }
 
-// storageNodeUUIDLabelPrefix marks a worker Node with the SimplyBlock storage-node
+// storageNodeUUIDLabelPrefix marks a worker Node with the simplyblock storage-node
 // instance(s) co-located on it. The label KEY is "<prefix><clusterUUID>.<socketIndex>"
 // and must stay stable for the Node's lifetime — Kubernetes' external-provisioner
 // caches the *set* of topology keys in the CSINode object at node-plugin
@@ -451,7 +451,7 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 // when a node is replaced) since values are always read fresh — only the key must
 // never depend on anything that can change post-registration. Cluster-scoping the
 // key (not just the value) also stops a worker hosting instances from more than one
-// SimplyBlock cluster from having one cluster's slot collide with another's.
+// simplyblock cluster from having one cluster's slot collide with another's.
 // Consumed by the CSI node plugin (csi-driver/internal/csi/node) to advertise
 // CSI topology, and by the CSI controller (createVolume) to co-locate a new volume's
 // primary with whichever worker the consuming Pod is scheduled to. Keep this literal
@@ -474,7 +474,7 @@ func labelWorkerNodes(
 	extraWorkers ...string,
 ) error {
 	// Collect all workers: spec.workerNodes, any explicitly requested extras
-	// (e.g. a migration target not yet in the spec), plus any manually created
+	// (e.g., a migration target not yet in the spec), plus any manually created
 	// StorageNode CRs that reference this StorageNodeSet but are not in spec.workerNodes.
 	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes)+len(extraWorkers))
 	for _, w := range sn.Spec.WorkerNodes {
@@ -550,7 +550,7 @@ func labelWorkerNodes(
 			slot := strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)
 			sep := strings.LastIndex(slot, ".")
 			if sep < 0 || slot[:sep] != clusterUUID {
-				// Slot belongs to a different SimplyBlock cluster (a worker can host
+				// Slot belongs to a different simplyblock cluster (a worker can host
 				// storage-node instances from more than one) or is malformed — leave
 				// it untouched; this reconcile only owns clusterUUID's slots.
 				continue
@@ -855,7 +855,7 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 	// portsWithAnyPod tracks every RPC port that has a matching pod object AT
 	// ALL, ready or not -- computed separately from byPort (ready pods only)
 	// so the delete pass below can tell "pod is genuinely gone" apart from
-	// "pod exists but isn't ready this instant". RPC_PORT is a static env var
+	// "pod exists but isn't ready this instant." RPC_PORT is a static env var
 	// on the pod spec, readable the moment the pod is scheduled, well before
 	// it ever becomes ready, so this is safe to compute from the full list.
 	byPort := map[int32][]utils.SpdkProxyEndpoint{}
@@ -1080,7 +1080,7 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 			return ctrl.Result{}, err
 		}
 		// Only count the slot if the POST was genuinely sent (PendingNodeAdds
-		// was set). A transient failure (e.g. checkNodeInfoReachable) clears
+		// was set). A transient failure (e.g., checkNodeInfoReachable) clears
 		// PendingNodeAdds immediately, so the slot should not be consumed.
 		if !alreadyInFlight && workerIsInFlight(snCR, nodeName) {
 			availableSlots--

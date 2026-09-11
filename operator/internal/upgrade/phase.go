@@ -141,4 +141,6 @@ func (p Phase) Describe() string {
 }
 
 // Terminal reports whether a phase ends the walk.
-func (p Phase) Terminal() bool { return p == PhaseCompleted || p == PhaseFailed }
+func (p Phase) Terminal() bool {
+	return p == PhaseCompleted || p == PhaseFailed
+}

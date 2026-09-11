@@ -46,7 +46,9 @@ type mountCall struct {
 	options                []string
 }
 
-func newFakeFS() *fakeFS { return &fakeFS{mountPoints: map[string]bool{}} }
+func newFakeFS() *fakeFS {
+	return &fakeFS{mountPoints: map[string]bool{}}
+}
 
 func (f *fakeFS) Format(_ context.Context, device, fsType string, options []string) error {
 	f.formatted = append(f.formatted, formatCall{device, fsType, options})

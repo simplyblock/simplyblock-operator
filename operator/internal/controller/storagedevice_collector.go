@@ -91,7 +91,9 @@ type StorageDeviceCollector struct {
 // per-cluster facts rather than per-replica ones, and the events are written to
 // the API: a follower publishing both would double every event and make the
 // gauges depend on which replica a scrape reached.
-func (c *StorageDeviceCollector) NeedLeaderElection() bool { return true }
+func (c *StorageDeviceCollector) NeedLeaderElection() bool {
+	return true
+}
 
 // Start implements manager.Runnable: collect once immediately, so a restart does
 // not leave the gauges empty for an interval, then on every tick.

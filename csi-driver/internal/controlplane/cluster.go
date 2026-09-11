@@ -93,13 +93,19 @@ type ClusterClient struct {
 	poolID string // pool scope for this client, empty meaning cluster-level only
 }
 
-func (c *ClusterClient) ClusterID() string { return c.API.ClusterID }
-func (c *ClusterClient) PoolID() string    { return c.poolID }
+func (c *ClusterClient) ClusterID() string {
+	return c.API.ClusterID
+}
+func (c *ClusterClient) PoolID() string {
+	return c.poolID
+}
 
 // ScopeToPool binds this client to one storage pool, so a volume operation
 // need not scan every pool to find its volume. It is set once, immediately
 // after construction, by whoever resolved the pool reference.
-func (c *ClusterClient) ScopeToPool(poolID string) { c.poolID = poolID }
+func (c *ClusterClient) ScopeToPool(poolID string) {
+	c.poolID = poolID
+}
 
 // poolForVolume returns the pool ID for lvolID. If this client is already
 // scoped to a pool, that pool ID is returned immediately. Otherwise, all pools

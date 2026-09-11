@@ -57,7 +57,9 @@ type certManagerProvisioner struct {
 	lastCA   []byte
 }
 
-func (p *certManagerProvisioner) NeedLeaderElection() bool { return false }
+func (p *certManagerProvisioner) NeedLeaderElection() bool {
+	return false
+}
 
 func (p *certManagerProvisioner) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("webhook-cert-manager-provisioner")

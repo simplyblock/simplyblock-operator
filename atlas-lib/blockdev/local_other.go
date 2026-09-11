@@ -23,17 +23,25 @@ var errNotLinux = errors.New("blockdev: reading a local block device is supporte
 
 // NewProber returns a Prober whose reads report that this platform has no local
 // block devices to read.
-func NewProber(opts ...Option) *Prober { return NewProberWithOpener(OpenLocal, opts...) }
+func NewProber(opts ...Option) *Prober {
+	return NewProberWithOpener(OpenLocal, opts...)
+}
 
 // OpenLocal reports that a local device cannot be opened on this platform.
-func OpenLocal(context.Context, Device) (Reader, error) { return nil, errNotLinux }
+func OpenLocal(context.Context, Device) (Reader, error) {
+	return nil, errNotLinux
+}
 
 // ResolveDevice reports that a local device cannot be inspected on this platform.
-func ResolveDevice(string) (Device, error) { return Device{}, errNotLinux }
+func ResolveDevice(string) (Device, error) {
+	return Device{}, errNotLinux
+}
 
 // OpenExclusive reports that the kernel cannot be asked here.
 //
 // It is deliberately not ErrDeviceBusy. A probe that could not be made says
 // nothing about the device, and answering "busy" would put a reason on a
 // refusal that this platform never established.
-func OpenExclusive(string) error { return errNotLinux }
+func OpenExclusive(string) error {
+	return errNotLinux
+}

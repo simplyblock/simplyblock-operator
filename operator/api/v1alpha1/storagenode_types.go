@@ -30,7 +30,7 @@ import (
 // of StorageNodeSetSpec. When a field is set here it takes precedence over the
 // fleet default; when omitted the fleet default applies.
 type StorageNodeOverrides struct {
-	// SpdkImage overrides the SPDK image for this node (e.g. for phased rollouts).
+	// SpdkImage overrides the SPDK image for this node (e.g., for phased rollouts).
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
 
@@ -39,7 +39,7 @@ type StorageNodeOverrides struct {
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
 	// SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-	// (e.g. "4G", "512M").
+	// (e.g., `4G`, `512M`).
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
@@ -65,7 +65,7 @@ type StorageNodeOverrides struct {
 	DriveSizeRange string `json:"driveSizeRange,omitempty"`
 
 	// DeviceNames explicitly defines the NVMe namespace names to use on this node
-	// (e.g. ["nvme0n1","nvme1n1"]).
+	// (e.g., ["nvme0n1","nvme1n1"]).
 	// +optional
 	DeviceNames []string `json:"deviceNames,omitempty"`
 
@@ -94,7 +94,7 @@ type StorageNodeOverrides struct {
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
 
 	// Expand marks this node as a cluster-expansion add. When true the backend
-	// node-add endpoint receives expand=true, triggering rebalancing behaviour
+	// node-add endpoint receives expand=true, triggering rebalancing behavior
 	// appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
 	// +optional
 	Expand *bool `json:"expand,omitempty"`
@@ -114,7 +114,7 @@ type StorageNodeSpec struct {
 	// +kubebuilder:validation:Required
 	WorkerNode string `json:"workerNode"`
 
-	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g. "0", "1"). Immutable.
+	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g., `0`, `1`). Immutable.
 	// +k8s:immutable
 	// +optional
 	SocketID string `json:"socketId,omitempty"`
@@ -209,7 +209,7 @@ type StorageNodeStatus struct {
 	// +optional
 	UUID string `json:"uuid,omitempty"`
 
-	// Status is the backend-reported node status (e.g. online, suspended, offline).
+	// Status is the backend-reported node status (e.g., online, suspended, offline).
 	// +optional
 	Status string `json:"status,omitempty"`
 

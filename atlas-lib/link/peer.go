@@ -12,7 +12,7 @@ import (
 
 // PeerKind is the role a peer links as. It is part of a peer's identity rather
 // than a property of it: what the operator wants is "the peer that can answer
-// for node worker-3", and the kind is what separates that from a controller
+// for node worker-3," and the kind is what separates that from a controller
 // that happens to run on worker-3.
 type PeerKind string
 
@@ -34,16 +34,24 @@ type PeerID struct {
 }
 
 // NodePeer is the id of the CSI node plugin on the named Kubernetes node.
-func NodePeer(node string) PeerID { return PeerID{Kind: PeerKindNode, Name: node} }
+func NodePeer(node string) PeerID {
+	return PeerID{Kind: PeerKindNode, Name: node}
+}
 
 // ControllerPeer is the id of the CSI controller plugin in the named pod.
-func ControllerPeer(pod string) PeerID { return PeerID{Kind: PeerKindController, Name: pod} }
+func ControllerPeer(pod string) PeerID {
+	return PeerID{Kind: PeerKindController, Name: pod}
+}
 
-// String renders the id as "kind/name", e.g. "node/worker-3".
-func (id PeerID) String() string { return string(id.Kind) + "/" + id.Name }
+// String renders the id as `kind/name`, e.g., `node/worker-3`.
+func (id PeerID) String() string {
+	return string(id.Kind) + "/" + id.Name
+}
 
 // Zero reports whether the id names nothing.
-func (id PeerID) Zero() bool { return id.Kind == "" && id.Name == "" }
+func (id PeerID) Zero() bool {
+	return id.Kind == "" && id.Name == ""
+}
 
 // validate rejects ids that cannot address a peer. It is deliberately not a
 // check against the known kinds: an authenticator is free to mint kinds this
@@ -107,19 +115,29 @@ type Peer struct {
 
 // Conn is the connection to the peer: a client of every service the peer
 // registered on its side of the link.
-func (p *Peer) Conn() grpc.ClientConnInterface { return p.session.Conn() }
+func (p *Peer) Conn() grpc.ClientConnInterface {
+	return p.session.Conn()
+}
 
 // HasCapability reports whether the peer said it serves the named capability.
 // Asking beats calling and handling codes.Unimplemented, which is
 // indistinguishable from a peer that is merely older.
-func (p *Peer) HasCapability(name string) bool { return slices.Contains(p.Capabilities, name) }
+func (p *Peer) HasCapability(name string) bool {
+	return slices.Contains(p.Capabilities, name)
+}
 
 // Done is closed when the peer's session ends, whether it was torn down, timed
 // out or lost.
-func (p *Peer) Done() <-chan struct{} { return p.session.Done() }
+func (p *Peer) Done() <-chan struct{} {
+	return p.session.Done()
+}
 
 // Close tears the peer's session down. The peer is expected to reconnect.
-func (p *Peer) Close() error { return p.session.Close() }
+func (p *Peer) Close() error {
+	return p.session.Close()
+}
 
-// String renders the peer as "kind/name@instance-uid".
-func (p *Peer) String() string { return p.ID.String() + "@" + p.InstanceUID }
+// String renders the peer as `kind/name@instance-uid`.
+func (p *Peer) String() string {
+	return p.ID.String() + "@" + p.InstanceUID
+}

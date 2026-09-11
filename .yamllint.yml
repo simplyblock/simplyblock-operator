@@ -1,0 +1,32 @@
+# yamllint rules for this repository, read by MegaLinter's YAML_YAMLLINT, which
+# is the only YAML gate here. Prettier is disabled in .mega-linter.yml because
+# its indentation opinions contradict these.
+#
+# The defaults produced 885 findings over the tree, and 749 of them came from
+# three rules that encode a house style this repository does not hold. Those
+# three are relaxed below. Everything else is left at its default, including
+# the whitespace and syntax rules that catch real breakage.
+---
+extends: default
+
+rules:
+  # 624 findings. yamllint's default insists a sequence be indented under its
+  # key, which Kubernetes manifests conventionally do not do. `consistent` still
+  # catches a file that changes its mind halfway through.
+  indentation:
+    spaces: consistent
+    indent-sequences: consistent
+
+  # 101 findings. A leading `---` matters in a multi-document stream and is
+  # noise in the single-document files that make up nearly all of this tree.
+  document-start: disable
+
+  # 24 findings, every one of them a GitHub workflow's `on:` key, which YAML 1.1
+  # reads as the boolean true. The values are still checked.
+  truthy:
+    check-keys: false
+
+  # 20 findings. Generated and hand-written manifests both carry long image
+  # references and annotations that no wrapping improves.
+  line-length:
+    max: 160

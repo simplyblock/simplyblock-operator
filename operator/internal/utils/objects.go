@@ -488,7 +488,7 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 }
 
 // ParityChunksFromErasureCodingScheme returns just npcs (the parity-chunk
-// count, e.g. "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
+// count, e.g., "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
 // is the failure-domain risk budget the drain coordinator's fdDrainGate
 // spends against — see RequiredNodesFromErasureCodingScheme for the sibling
 // ndcs+npcs total.

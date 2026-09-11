@@ -120,7 +120,9 @@ type Volume struct {
 
 // HighAvailability reports whether the volume has more than one node, which is
 // what ha_type means in the control plane.
-func (v Volume) HighAvailability() bool { return len(v.Nodes) > 1 }
+func (v Volume) HighAvailability() bool {
+	return len(v.Nodes) > 1
+}
 
 // allowedHost finds a volume's ACL entry for a host NQN.
 func (v Volume) allowedHost(nqn string) (AllowedHost, bool) {

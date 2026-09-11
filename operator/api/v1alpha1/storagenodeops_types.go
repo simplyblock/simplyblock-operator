@@ -55,7 +55,7 @@ const (
 	// restart is asynchronous, so the op only advances to Promoting after the
 	// node has left online (restart started) and returned to online (restart
 	// finished) — issuing /promote earlier races the in-flight restart's node
-	// writes and leaves the relocated devices stuck in "new".
+	// writes and leaves the relocated devices stuck in `new`.
 	StorageNodeOpsSubPhaseRestarting StorageNodeOpsSubPhase = "Restarting"
 	// StorageNodeOpsSubPhasePromoting marks that a migrate op has issued the
 	// control-plane /promote for the relocated node (guards against re-promoting).
@@ -67,7 +67,7 @@ type DrainOpsSpec struct {
 	// SystemVolumeFilterRegex is a Go regular expression matched against backend
 	// volume names. Matching volumes are treated as system volumes: excluded from
 	// drain migration and deleted inline during the Verifying phase.
-	// Defaults to "^sb-fio-baseline-.*".
+	// Defaults to `^sb-fio-baseline-.*`.
 	// +optional
 	SystemVolumeFilterRegex *string `json:"systemVolumeFilterRegex,omitempty"`
 }

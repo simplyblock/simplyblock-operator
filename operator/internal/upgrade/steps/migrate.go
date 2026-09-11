@@ -82,10 +82,18 @@ func Migrate() []upgrade.Step {
 // before the release that stops.
 type rewriteKeys struct{}
 
-func (rewriteKeys) ID() upgrade.ID         { return IDRewriteKeys }
-func (rewriteKeys) Stage() upgrade.Stage   { return upgrade.StageMigrate }
-func (rewriteKeys) Phase() upgrade.Phase   { return upgrade.PhaseTransforming }
-func (rewriteKeys) Requires() []upgrade.ID { return nil }
+func (rewriteKeys) ID() upgrade.ID {
+	return IDRewriteKeys
+}
+func (rewriteKeys) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (rewriteKeys) Phase() upgrade.Phase {
+	return upgrade.PhaseTransforming
+}
+func (rewriteKeys) Requires() []upgrade.ID {
+	return nil
+}
 
 func (rewriteKeys) Description() string {
 	return "writes the storage.simplyblock.io spelling of every key an object still carries under the old prefix"
@@ -115,7 +123,9 @@ func (r rewriteKeys) Done(_ context.Context, _ *upgrade.Scope, subject upgrade.S
 
 // Validate has nothing to refuse. The write adds a key beside one that is
 // already there, so there is no state it can arrive in that makes it unsafe.
-func (rewriteKeys) Validate(context.Context, *upgrade.Scope, upgrade.Subject) error { return nil }
+func (rewriteKeys) Validate(context.Context, *upgrade.Scope, upgrade.Subject) error {
+	return nil
+}
 
 // Apply writes the new keys, preserving each value verbatim.
 func (r rewriteKeys) Apply(ctx context.Context, s *upgrade.Scope, subject upgrade.Subject) error {
@@ -225,10 +235,18 @@ func withKey(values map[string]string, key, value string) map[string]string {
 // the target model keeps.
 type deleteBackupImports struct{}
 
-func (deleteBackupImports) ID() upgrade.ID         { return IDDeleteBackupImport }
-func (deleteBackupImports) Stage() upgrade.Stage   { return upgrade.StageMigrate }
-func (deleteBackupImports) Phase() upgrade.Phase   { return upgrade.PhaseDeleting }
-func (deleteBackupImports) Requires() []upgrade.ID { return nil }
+func (deleteBackupImports) ID() upgrade.ID {
+	return IDDeleteBackupImport
+}
+func (deleteBackupImports) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (deleteBackupImports) Phase() upgrade.Phase {
+	return upgrade.PhaseDeleting
+}
+func (deleteBackupImports) Requires() []upgrade.ID {
+	return nil
+}
 
 func (deleteBackupImports) Description() string {
 	return "deletes each BackupImport, which §16.2 retires because the store is the inventory"
@@ -289,11 +307,21 @@ type renameKind struct {
 	as string
 }
 
-func (r renameKind) ID() upgrade.ID       { return r.id }
-func (r renameKind) Description() string  { return r.summary }
-func (renameKind) Stage() upgrade.Stage   { return upgrade.StageMigrate }
-func (renameKind) Phase() upgrade.Phase   { return upgrade.PhaseTransforming }
-func (renameKind) Requires() []upgrade.ID { return nil }
+func (r renameKind) ID() upgrade.ID {
+	return r.id
+}
+func (r renameKind) Description() string {
+	return r.summary
+}
+func (renameKind) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (renameKind) Phase() upgrade.Phase {
+	return upgrade.PhaseTransforming
+}
+func (renameKind) Requires() []upgrade.ID {
+	return nil
+}
 
 // Describe names the object that would be created, which needs the source and
 // not the target type.
@@ -332,10 +360,18 @@ type normalizeHandles struct {
 	described
 }
 
-func (n normalizeHandles) ID() upgrade.ID       { return n.id }
-func (normalizeHandles) Stage() upgrade.Stage   { return upgrade.StageMigrate }
-func (normalizeHandles) Phase() upgrade.Phase   { return upgrade.PhaseHandles }
-func (normalizeHandles) Requires() []upgrade.ID { return nil }
+func (n normalizeHandles) ID() upgrade.ID {
+	return n.id
+}
+func (normalizeHandles) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (normalizeHandles) Phase() upgrade.Phase {
+	return upgrade.PhaseHandles
+}
+func (normalizeHandles) Requires() []upgrade.ID {
+	return nil
+}
 
 func (normalizeHandles) Description() string {
 	return "records the normalized handle on each volume whose pool segment carries a name rather than a UUID"

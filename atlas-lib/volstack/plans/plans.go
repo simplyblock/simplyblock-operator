@@ -69,19 +69,27 @@ type Volume struct {
 }
 
 // VolumeGroup is the name of the group this volume's LVM layers use.
-func (v Volume) VolumeGroup() string { return VolumeGroupName(v.UUID) }
+func (v Volume) VolumeGroup() string {
+	return VolumeGroupName(v.UUID)
+}
 
 // LogicalVolume is the name of the one logical volume inside that group.
-func (v Volume) LogicalVolume() string { return LogicalVolumeName(v.UUID) }
+func (v Volume) LogicalVolume() string {
+	return LogicalVolumeName(v.UUID)
+}
 
 // VolumeGroupName is the group-naming rule, exported for a caller that has a
 // volume's identity and no plan: a teardown working from a stack record, or a
 // sweep looking for what this driver left on a node, has to name the group the
 // way the plan that created it did, character for character.
-func VolumeGroupName(uuid string) string { return volumeGroupPrefix + uuid }
+func VolumeGroupName(uuid string) string {
+	return volumeGroupPrefix + uuid
+}
 
 // LogicalVolumeName is the same rule for the volume inside the group.
-func LogicalVolumeName(uuid string) string { return logicalVolumePrefix + uuid }
+func LogicalVolumeName(uuid string) string {
+	return logicalVolumePrefix + uuid
+}
 
 // LogicalVolumeOptions is what the LVM rows differ in. The linear, VDO, and
 // striped plans use one lvmLogicalVolume layer with different contents here,

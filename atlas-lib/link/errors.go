@@ -20,7 +20,9 @@ var ErrNoSession error = noSessionError{}
 
 type noSessionError struct{}
 
-func (noSessionError) Error() string { return "no live session for peer" }
+func (noSessionError) Error() string {
+	return "no live session for peer"
+}
 
 func (noSessionError) GRPCStatus() *status.Status {
 	return status.New(codes.Unavailable, "no live session for peer")

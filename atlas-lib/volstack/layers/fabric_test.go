@@ -33,7 +33,9 @@ type fakeConnector struct {
 	disconnectErr error
 }
 
-func (f *fakeConnector) Connect(context.Context, nvmeof.Target) error { return f.connectErr }
+func (f *fakeConnector) Connect(context.Context, nvmeof.Target) error {
+	return f.connectErr
+}
 
 func (f *fakeConnector) ConnectPaths(_ context.Context, ts []nvmeof.Target) ([]nvmeof.PathResult, error) {
 	f.connected = append(f.connected, ts)
@@ -52,9 +54,13 @@ func (f *fakeConnector) Disconnect(_ context.Context, nqn string) error {
 	return f.disconnectErr
 }
 
-func (f *fakeConnector) DisconnectController(context.Context, nvme.Controller) error { return nil }
+func (f *fakeConnector) DisconnectController(context.Context, nvme.Controller) error {
+	return nil
+}
 
-func (f *fakeConnector) IsConnected(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeConnector) IsConnected(context.Context, string) (bool, error) {
+	return false, nil
+}
 
 // fakeDevices answers device lookups from a fixed list.
 type fakeDevices struct {
@@ -66,7 +72,9 @@ type fakeDevices struct {
 	asked []nvme.DeviceSelector
 }
 
-func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) { return f.devices, f.err }
+func (f *fakeDevices) List(context.Context) ([]nvme.Device, error) {
+	return f.devices, f.err
+}
 
 func (f *fakeDevices) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
 	f.asked = append(f.asked, sel)

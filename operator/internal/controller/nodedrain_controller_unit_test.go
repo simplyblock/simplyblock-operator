@@ -356,7 +356,7 @@ func TestFdDrainGate2DomainsWholeDomainPlusOtherIsUnsafe(t *testing.T) {
 func TestFdDrainGate2DomainsOnePerDomainPlusExtraInEitherIsUnsafe(t *testing.T) {
 	// 1 node down in each of domains 1 and 2 already (the safe combo) --
 	// piling a SECOND node onto EITHER domain must now be blocked, even
-	// though that domain is already "active". This is the exact gap the old
+	// though that domain is already `active`. This is the exact gap the old
 	// unconditional-piling logic missed.
 	counts := map[int32]int{1: 1, 2: 1}
 	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); !blocked {
@@ -1040,7 +1040,7 @@ func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
 // controller would silently revert to the pre-reconcile state.
 //
 // Setup: one worker already in DrainPhaseComplete (no backend HTTP calls
-// needed) so processWorker is a pure no-op. The interesting behaviour is in
+// needed) so processWorker is a pure no-op. The interesting behavior is in
 // the final patch: the interceptor returns 409 on the first attempt and
 // succeeds on the second, verifying that RetryOnConflict re-reads and retries
 // rather than logging and returning the 5-second requeue.

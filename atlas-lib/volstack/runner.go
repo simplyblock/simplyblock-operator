@@ -22,7 +22,9 @@ type Runner struct {
 }
 
 // NewRunner returns a runner recording into store.
-func NewRunner(store *Store) *Runner { return &Runner{store: store} }
+func NewRunner(store *Store) *Runner {
+	return &Runner{store: store}
+}
 
 // Up brings the plan up bottom to top and returns what the topmost layer
 // exposes, which is what the RPC acts on.

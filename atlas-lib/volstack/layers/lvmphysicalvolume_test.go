@@ -84,7 +84,9 @@ func keysFor(args []string) []string {
 }
 
 // ran reports whether this command was issued at all.
-func (l *lvmCommands) ran(command string) bool { return l.indexOf(command) >= 0 }
+func (l *lvmCommands) ran(command string) bool {
+	return l.indexOf(command) >= 0
+}
 
 // indexOf is where this command was issued, or -1, so a test can assert an order
 // as well as a presence.
@@ -106,7 +108,9 @@ func (l *lvmCommands) issued() string {
 	return strings.Join(lines, "\n")
 }
 
-func (l *lvmCommands) manager() *lvm.Manager { return lvm.NewManagerWithRunner(l.run) }
+func (l *lvmCommands) manager() *lvm.Manager {
+	return lvm.NewManagerWithRunner(l.run)
+}
 
 const (
 	testVG = "vol-33333333-3333-3333-3333-333333333333"

@@ -76,7 +76,9 @@ type ObjectRef struct {
 }
 
 // Kind is the object's kind, which is what a reader groups by.
-func (r ObjectRef) Kind() string { return r.GVK.Kind }
+func (r ObjectRef) Kind() string {
+	return r.GVK.Kind
+}
 
 // String renders the reference the way a plan names it.
 func (r ObjectRef) String() string {

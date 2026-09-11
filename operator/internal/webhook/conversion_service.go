@@ -42,7 +42,9 @@ type conversionServiceReconciler struct {
 // NeedLeaderElection reports that only the leader corrects the CRDs. They are
 // cluster-scoped and shared, so several replicas writing the same field would
 // contend for nothing.
-func (r *conversionServiceReconciler) NeedLeaderElection() bool { return true }
+func (r *conversionServiceReconciler) NeedLeaderElection() bool {
+	return true
+}
 
 // Start re-applies the correction until the manager shuts down.
 //

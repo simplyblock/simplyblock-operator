@@ -56,14 +56,20 @@ var _ interface {
 
 // IsIdempotent reports that the handler must resolve a conflict by looking up the
 // existing object (e.g., a 409 on create) before returning.
-func (c classifiedError) IsIdempotent() bool { return c.class.Idempotent }
+func (c classifiedError) IsIdempotent() bool {
+	return c.class.Idempotent
+}
 
 // IsSuccess reports that the error is a no-op for this RPC and it should return
 // success (e.g., a 404 on delete).
-func (c classifiedError) IsSuccess() bool { return c.class.Success }
+func (c classifiedError) IsSuccess() bool {
+	return c.class.Success
+}
 
 // Retryable reports whether retrying the operation can help.
-func (c classifiedError) Retryable() bool { return c.class.Retryable }
+func (c classifiedError) Retryable() bool {
+	return c.class.Retryable
+}
 
 // Error implements error.
 func (c classifiedError) Error() string {

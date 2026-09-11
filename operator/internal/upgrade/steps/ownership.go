@@ -176,11 +176,21 @@ type reparentStep struct {
 	needs   []upgrade.ID
 }
 
-func (r reparentStep) ID() upgrade.ID         { return r.id }
-func (r reparentStep) Description() string    { return r.summary }
-func (r reparentStep) Stage() upgrade.Stage   { return upgrade.StageMigrate }
-func (r reparentStep) Phase() upgrade.Phase   { return upgrade.PhaseOwnership }
-func (r reparentStep) Requires() []upgrade.ID { return r.needs }
+func (r reparentStep) ID() upgrade.ID {
+	return r.id
+}
+func (r reparentStep) Description() string {
+	return r.summary
+}
+func (r reparentStep) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (r reparentStep) Phase() upgrade.Phase {
+	return upgrade.PhaseOwnership
+}
+func (r reparentStep) Requires() []upgrade.ID {
+	return r.needs
+}
 
 // Describe reports the move, and nothing for a subject already owned by its
 // cluster. That is not a change to skip: it is a change that does not exist, so
@@ -274,15 +284,23 @@ type retireStep struct {
 	needs []upgrade.ID
 }
 
-func (retireStep) ID() upgrade.ID       { return IDRetireNodeSets }
-func (retireStep) Stage() upgrade.Stage { return upgrade.StageMigrate }
-func (retireStep) Phase() upgrade.Phase { return upgrade.PhaseOwnership }
+func (retireStep) ID() upgrade.ID {
+	return IDRetireNodeSets
+}
+func (retireStep) Stage() upgrade.Stage {
+	return upgrade.StageMigrate
+}
+func (retireStep) Phase() upgrade.Phase {
+	return upgrade.PhaseOwnership
+}
 
 func (retireStep) Description() string {
 	return "deletes a StorageNodeSet once everything it held has been reparented"
 }
 
-func (r retireStep) Requires() []upgrade.ID { return r.needs }
+func (r retireStep) Requires() []upgrade.ID {
+	return r.needs
+}
 
 // Describe reports the deletion for a set the graph still holds.
 func (r retireStep) Describe(_ context.Context, s *upgrade.Scope, subject upgrade.Subject) (*upgrade.Action, error) {

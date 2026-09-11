@@ -29,14 +29,20 @@ type Members struct {
 
 // NewMembers returns a composite over the given layers, in the order they are to
 // be assembled.
-func NewMembers(members volstack.Plan) *Members { return &Members{members: members} }
+func NewMembers(members volstack.Plan) *Members {
+	return &Members{members: members}
+}
 
 // Name is what the record calls this layer.
-func (m *Members) Name() string { return "members" }
+func (m *Members) Name() string {
+	return "members"
+}
 
 // Members is the sub-plan, which the record carries as a field of its own so
 // that a teardown replays the order rather than re-deriving it.
-func (m *Members) Members() volstack.Plan { return m.members }
+func (m *Members) Members() volstack.Plan {
+	return m.members
+}
 
 // Observe reports the composite as only as present as its members.
 //

@@ -13,7 +13,7 @@ import (
 // whose consumer disappeared between that decision and the Job starting has nothing
 // left to validate.
 //
-// A lookup that cannot be trusted is an error rather than "absent", because the two
+// A lookup that cannot be trusted is an error rather than `absent`, because the two
 // are not equally safe: reporting a connected host as unconnected would let the
 // migration cut over without switching that host's paths, which is the outage this
 // check exists to prevent. An empty subsystem list is treated the same way — on a node

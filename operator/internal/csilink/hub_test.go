@@ -1,5 +1,5 @@
 // Tests for the hub's certificate reloader, the part of this package with
-// behaviour worth pinning: it decides when a keypair on disk has been rotated,
+// behavior worth pinning: it decides when a keypair on disk has been rotated,
 // and getting that decision wrong means a long-lived listener serves an expired
 // certificate until the operator happens to restart.
 package csilink

@@ -1,0 +1,44 @@
+# golangci-lint configuration for atlas-lib.
+#
+# The module had no configuration and so ran golangci-lint's standard set. That
+# set is kept here rather than replaced: `default: standard` is what was already
+# in effect, and the only addition is this repository's own onelinefunc linter,
+# which needs a config file to be enabled in.
+#
+# onelinefunc comes from a plugin, so the stock golangci-lint does not know it
+# and rejects this file. Run the binary .custom-gcl.yml builds, which is what
+# `make lint` and repo_lint.yaml both use.
+---
+version: "2"
+
+run:
+  allow-parallel-runners: true
+
+linters:
+  default: standard
+  enable:
+    - onelinefunc
+  settings:
+    custom:
+      onelinefunc:
+        type: module
+        description: A function declaration's body does not share a line with its signature.
+        original-url: hack/golangci-onelinefunc
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+
+# golangci-lint reports at most three occurrences of the same message and fifty
+# per linter by default, so a run that says "3 issues" may be hiding thirty. A
+# rule like onelinefunc produces one identical message per site, which is
+# exactly the shape that cap truncates, and a gate that under-reports is worse
+# than a slow one.
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0

@@ -41,7 +41,9 @@ type Capacity struct {
 // Sampled reports whether the control plane has ever taken this reading. An
 // unsampled Capacity is all zeros, which is indistinguishable from a genuinely
 // empty entity without asking.
-func (c Capacity) Sampled() bool { return !c.SampledAt.IsZero() }
+func (c Capacity) Sampled() bool {
+	return !c.SampledAt.IsZero()
+}
 
 // The entity a capacity sample belongs to, as the exporter names it: the metric
 // prefix, and the label carrying the entity's UUID.

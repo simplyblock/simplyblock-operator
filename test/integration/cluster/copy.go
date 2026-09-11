@@ -70,4 +70,6 @@ func (c *Cluster) CopyTo(ctx context.Context, namespace, pod, local, remote stri
 }
 
 // shellWord makes one value safe as a single shell word.
-func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+func shellWord(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

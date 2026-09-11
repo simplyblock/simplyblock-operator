@@ -31,7 +31,7 @@ type sseEvent struct {
 //
 // It implements the parsing rules relevant to this contract: `field: value`
 // lines (a single leading space after the colon is stripped), multi-line
-// `data` joined with "\n", comment lines (leading ":"), and dispatch on a blank
+// `data` joined with `"\n"`, comment lines (leading `:`), and dispatch on a blank
 // line. `id:` and `retry:` are accepted and ignored — the contract emits no
 // `id:`, and reconnect backoff is handled by the caller. A trailing event not
 // terminated by a blank line is discarded, per the SSE specification.
@@ -94,7 +94,7 @@ func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) erro
 
 // openStream issues the watch request for one resource path and returns the
 // live response. The caller owns resp.Body and must close it. The request
-// carries the stream's lifetime via ctx; cancelling ctx aborts the in-flight read.
+// carries the stream's lifetime via ctx; canceling ctx aborts the in-flight read.
 func openStream(ctx context.Context, cfg StreamConfig, path string) (*http.Response, error) {
 	url := strings.TrimRight(cfg.Endpoint, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

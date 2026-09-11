@@ -106,7 +106,7 @@ type BackupRestoreStatus struct {
 	PoolUUID string `json:"poolUUID,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Restored LVOL ID"
-	// RestoredLvolID is the UUID of the newly-created logical volume.
+	// RestoredLvolID is the UUID of the newly created logical volume.
 	RestoredLvolID string `json:"restoredLvolID,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Persistent Volume"

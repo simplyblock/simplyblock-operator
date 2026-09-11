@@ -12,7 +12,7 @@ import (
 // Registry is the set of peers currently linked to a hub — who is reachable
 // right now, and how to reach them.
 //
-// It is the hub's answer to "call node worker-3", and the place absence is
+// It is the hub's answer to "call node worker-3," and the place absence is
 // expressed: a peer that has not linked, or whose session just dropped, is
 // simply not in it, and lookups fail with [ErrNoSession]. Registration happens
 // through the hub as sessions complete their handshake; callers read.
@@ -85,7 +85,7 @@ func (r *Registry) Len() int {
 // register installs p and returns the peer it displaced, if any.
 //
 // A peer that links while an entry for it already exists is the normal shape of
-// a restart: the pod came back and dialled in before the hub noticed the old
+// a restart: the pod came back and dialed in before the hub noticed the old
 // TCP connection was half-open. The new session wins — it is the one demonstrably
 // alive — and the caller closes the displaced one.
 func (r *Registry) register(p *Peer) *Peer {

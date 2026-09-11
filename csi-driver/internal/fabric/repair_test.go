@@ -425,13 +425,17 @@ func (f fakeSubs) ByNQN(_ context.Context, nqn string) (nvme.Subsystem, error) {
 
 type fakeDevs struct{ devices []nvme.Device }
 
-func (f fakeDevs) List(context.Context) ([]nvme.Device, error) { return f.devices, nil }
+func (f fakeDevs) List(context.Context) ([]nvme.Device, error) {
+	return f.devices, nil
+}
 
 func (f fakeDevs) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
 	return sel.Filter(f.devices), nil
 }
 
-func (f fakeDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, errs404 }
+func (f fakeDevs) ByUUID(context.Context, string) (nvme.Device, error) {
+	return nvme.Device{}, errs404
+}
 func (f fakeDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, errs404
 }

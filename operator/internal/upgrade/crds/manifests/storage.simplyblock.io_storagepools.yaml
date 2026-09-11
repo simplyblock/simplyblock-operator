@@ -141,7 +141,7 @@ spec:
                     type: boolean
                   fabric:
                     default: tcp
-                    description: Fabric is the transport fabric (e.g. tcp).
+                    description: Fabric is the transport fabric (e.g., `tcp`).
                     type: string
                   filesystem:
                     default: xfs
@@ -182,7 +182,7 @@ spec:
                       StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
                       no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
                       the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
-                      "0".
+                      `0`.
                     type: string
                 type: object
                 x-kubernetes-validations:

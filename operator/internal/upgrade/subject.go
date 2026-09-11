@@ -50,10 +50,14 @@ type Subject struct {
 
 // IsUpgrade reports whether this is the upgrade rather than an object in the
 // cluster.
-func (s Subject) IsUpgrade() bool { return s.Object == nil }
+func (s Subject) IsUpgrade() bool {
+	return s.Object == nil
+}
 
 // String renders the subject the way a plan names it.
-func (s Subject) String() string { return s.Ref.String() }
+func (s Subject) String() string {
+	return s.Ref.String()
+}
 
 // TheUpgrade is the subject the steps of §9.1 act on. There is exactly one per
 // run, and it is named for the namespace the operator's own furniture lives in,

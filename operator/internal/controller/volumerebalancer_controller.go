@@ -203,7 +203,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 
 	// Dry-run: when migration creation is disabled the rebalancer still evaluated load and
 	// emitted deviation metrics above; we log the candidates it *would* migrate but create
-	// no VolumeMigration CRs (e.g. to run workload tests without rebalancer interference).
+	// no VolumeMigration CRs (e.g., to run workload tests without rebalancer interference).
 	if !cfg.MigrationEnabled {
 		for _, mc := range toMigrate {
 			log.Info("migrationEnabled=false; skipping migration (dry-run)",
@@ -522,7 +522,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 }
 
 // movingVolumes names the VolumeMigrations for this cluster that the control plane has
-// accepted and not yet finished, i.e. the ones that may be moving data right now.
+// accepted and not yet finished, i.e., the ones that may be moving data right now.
 //
 // Deliberately keyed on MigrationUUID rather than phase alone. A CR whose submission
 // was refused — which is exactly what happens while a realignment is running, since the

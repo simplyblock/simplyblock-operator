@@ -17,7 +17,7 @@ var ServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/tok
 type Client struct {
 	BaseURL    string
 	HttpClient *http.Client
-	// initErr captures any setup error (e.g. failure to load the TLS CA
+	// initErr captures any setup error (e.g., failure to load the TLS CA
 	// bundle when TLS is enabled). It is surfaced from request methods so
 	// callers see a real error instead of silently dropping back to a
 	// non-functional client.

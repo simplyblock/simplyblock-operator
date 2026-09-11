@@ -68,7 +68,7 @@ type StorageNodeLatencyReconciler struct {
 	// Set to WebAPIBenchmarkProvisioner for test environments that require explicit provisioning.
 	Provisioner BenchmarkProvisioner
 
-	// APIClient queries the SimplyBlock REST API to resolve a storage node's
+	// APIClient queries the simplyblock REST API to resolve a storage node's
 	// data-network IP (the /nics endpoint). Independent of the provisioner.
 	APIClient *webapi.Client
 }
@@ -138,7 +138,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	// One baseline Job per node UUID. On NUMA hosts multiple backend nodes share the
-	// same k8s hostname but have independent NVMe devices and independent latency
+	// same K8s hostname but have independent NVMe devices and independent latency
 	// characteristics, so every node UUID is measured separately.
 	nodesByUUID := map[string]simplyblockv1alpha1.NodeStatus{}
 	for _, n := range snode.Status.Nodes {
@@ -151,7 +151,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	latencyMetrics := r.copyLatencyMetrics(snode.Status.LatencyMetrics)
-	// hostConfigs accumulates per-node configs keyed by k8s hostname so the sidecar
+	// hostConfigs accumulates per-node configs keyed by K8s hostname so the sidecar
 	// (one pod per host) receives a JSON array covering all NUMA nodes on its host.
 	hostConfigs := map[string][]autoplacement.NodeConfig{}
 	changed := false
@@ -220,7 +220,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 		Port: logicalVolumeConnectionPort(node),
 	}
 	// The lvol's NVMe-oF subsystem listens on the node's data NIC, not its management
-	// IP, so targeting node.MgmtIp fails with "connection refused". Resolve the node's
+	// IP, so targeting node.MgmtIp fails with `connection refused`. Resolve the node's
 	// data-network address from the /nics endpoint; fall back to the management address
 	// only when it cannot be resolved.
 	if dataAddr, err := r.nodeDataAddr(ctx, clusterCR.Status.UUID, node.UUID); err != nil {
@@ -452,7 +452,7 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 	return nil, fmt.Errorf("no termination message for job %s", job.Name)
 }
 
-// reconcileConfigMap creates or updates the per-cluster ConfigMap that maps k8s
+// reconcileConfigMap creates or updates the per-cluster ConfigMap that maps K8s
 // node hostname → benchmark volume config JSON consumed by the simplyblock-rebalancer sidecar.
 func (r *StorageNodeLatencyReconciler) reconcileConfigMap(
 	ctx context.Context,

@@ -121,7 +121,9 @@ type Device struct {
 }
 
 // IsNVMe reports whether the device is an NVMe controller.
-func (d Device) IsNVMe() bool { return strings.HasPrefix(d.Class, classNVMePrefix) }
+func (d Device) IsNVMe() bool {
+	return strings.HasPrefix(d.Class, classNVMePrefix)
+}
 
 // BoundToUserspace reports whether a userspace-IO driver owns the device, which
 // on this product's hosts means SPDK has taken it or something left it taken.
@@ -130,7 +132,9 @@ func (d Device) BoundToUserspace() bool {
 }
 
 // HasKernelDriver reports whether any driver owns it at all.
-func (d Device) HasKernelDriver() bool { return d.Driver != "" }
+func (d Device) HasKernelDriver() bool {
+	return d.Driver != ""
+}
 
 // String renders the device for a log line or an event.
 func (d Device) String() string {

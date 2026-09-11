@@ -27,7 +27,9 @@ type session struct {
 }
 
 // Close gives the terminal back.
-func (s *session) Close() error { return s.Reporter.Close() }
+func (s *session) Close() error {
+	return s.Reporter.Close()
+}
 
 // newSession connects, builds the catalog, and returns a runner over the
 // cluster.

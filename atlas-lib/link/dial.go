@@ -13,7 +13,7 @@ import (
 // node's identity to anything on the path. cfg supplies the trust roots for the
 // hub's serving certificate — a nil cfg falls back to the system roots and
 // derives the expected server name from addr, which is right for a
-// publicly-rooted certificate and wrong for the in-cluster CA that normally
+// publicly rooted certificate and wrong for the in-cluster CA that normally
 // signs one.
 func TLSDialer(addr string, cfg *tls.Config) Dialer {
 	dialer := &tls.Dialer{Config: cfg}

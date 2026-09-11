@@ -455,7 +455,7 @@ func TestRemoveAttachment(t *testing.T) {
 }
 
 // Removing by PVC key alone must not drop an entry that shares the name but has
-// a different lvolID (e.g. after a rebind, the new attachment must survive).
+// a different lvolID (e.g., after a rebind, the new attachment must survive).
 func TestRemoveAttachment_DoesNotMatchDifferentLvol(t *testing.T) {
 	slice := []simplyblockv1alpha1.AttachedLvol{
 		lvol("ns", "pvc1", "lvol-new"),

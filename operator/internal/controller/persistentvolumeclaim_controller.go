@@ -58,7 +58,7 @@ const (
 // pinned-volume value differs from the AnnotationPinnedVolumeApplied marker it
 // writes after acting, so its own annotation writes do not re-trigger a
 // migration. A validating admission webhook rejects an unknown storage node at
-// write time; the re-validation here is a defense-in-depth backstop (e.g. for
+// write time; the re-validation here is a defense-in-depth backstop (e.g., for
 // values that predate the webhook, or a node removed after the pin was set).
 type PersistentVolumeClaimReconciler struct {
 	client.Client
@@ -157,7 +157,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	}
 
 	// Serialize per PV: wait for any in-flight pin migration to finish before
-	// requesting another (e.g. when the target changed while one was running).
+	// requesting another (e.g., when the target changed while one was running).
 	active, err := r.hasActiveMigration(ctx, cluster.Namespace, pv.Name)
 	if err != nil {
 		return ctrl.Result{}, err

@@ -158,7 +158,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 
 		// A PVC match is best-effort only: the originating PVC/lvol may no longer
-		// exist (e.g. the source pool was deleted and recreated), but the backend
+		// exist (e.g., the source pool was deleted and recreated), but the backend
 		// backup and its data remain valid and restorable, so it must still be
 		// imported as a CR — otherwise a BackupRestore referencing it can never
 		// find it and gets stuck at Pending/NotFound forever.
@@ -247,7 +247,7 @@ func (r *StorageBackupSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // buildLvolToPVCMap scans all bound PVCs in the given namespace and returns a
-// map from Simplyblock lvol UUID to (pvcName, pvcNamespace).
+// map from simplyblock lvol UUID to (pvcName, pvcNamespace).
 // Only PVCs whose CSI volume handle belongs to the expected cluster are included.
 func (r *StorageBackupSyncReconciler) buildLvolToPVCMap(
 	ctx context.Context,

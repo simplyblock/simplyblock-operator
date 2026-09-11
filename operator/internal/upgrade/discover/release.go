@@ -36,8 +36,12 @@ func HelmRelease() []upgrade.Discoverer {
 
 type helmRelease struct{}
 
-func (helmRelease) ID() upgrade.ID         { return IDHelmRelease }
-func (helmRelease) Requires() []upgrade.ID { return nil }
+func (helmRelease) ID() upgrade.ID {
+	return IDHelmRelease
+}
+func (helmRelease) Requires() []upgrade.ID {
+	return nil
+}
 
 func (helmRelease) Description() string {
 	return "reads the objects the deployed Helm release installed, which §12 hands over before the upgrade prunes them"

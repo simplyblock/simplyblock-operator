@@ -17,7 +17,9 @@ import (
 
 // noEnv is the environment of a probe run by hand, with none of what the Job
 // sets.
-func noEnv(string) string { return "" }
+func noEnv(string) string {
+	return ""
+}
 
 // envOf serves a fixed environment, which is how the Job's field references
 // reach the process.

@@ -72,7 +72,7 @@ func TestNodeSuffix(t *testing.T) {
 // ---- connection conversion ----
 
 // The Job receives these as JSON and passes them to `nvme connect`; a dropped field
-// changes the resulting path's behaviour, so the mapping is asserted whole.
+// changes the resulting path's behavior, so the mapping is asserted whole.
 func TestConnectionsToValidation(t *testing.T) {
 	in := []simplyblockv1alpha1.MigrationConnection{{
 		NQN: "nqn.x", IP: "10.0.0.1", Port: 4420, Transport: "tcp",
@@ -280,7 +280,7 @@ func releaseJobs(t *testing.T, cl client.Client) map[string]batchv1.Job {
 }
 
 // The gap a per-node release cannot close: a node whose own validation passed exits
-// successfully and is never told the migration was cancelled, so the operator has to
+// successfully and is never told the migration was canceled, so the operator has to
 // release for it. Every recorded node is asked, not only the ones that passed.
 func TestReconcileAbort_ReleasesTargetPathsOnEveryNode(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +488,7 @@ func TestCollectAndLogJobPodLogs_NoPods(t *testing.T) {
 
 // Regression test for a validation loop that never converged: each Job was deleted the
 // moment it passed while its status entry stayed, so the next pass read NotFound,
-// called the Job "vanished", dropped the entry and rebuilt it — endlessly. Worse, the
+// called the Job `vanished`, dropped the entry and rebuilt it — endlessly. Worse, the
 // shrinking entry list let the gate declare "all validation jobs succeeded" for a
 // subset, cutting over with an unvalidated node.
 //
@@ -534,7 +534,7 @@ func TestPollValidationJobs_PassedNodeIsNotRevalidated(t *testing.T) {
 	}
 
 	// The passed node's Job is now reaped, as its TTL would do. A second pass must
-	// treat that node as done rather than "vanished", and must not create a new Job.
+	// treat that node as done rather than `vanished`, and must not create a new Job.
 	if err := cl.Delete(context.Background(), passed); err != nil {
 		t.Fatalf("delete the passed job: %v", err)
 	}
@@ -782,6 +782,12 @@ func TestIsIndeterminateCreate(t *testing.T) {
 
 type timeoutError struct{}
 
-func (timeoutError) Error() string   { return "i/o timeout" }
-func (timeoutError) Timeout() bool   { return true }
-func (timeoutError) Temporary() bool { return true }
+func (timeoutError) Error() string {
+	return "i/o timeout"
+}
+func (timeoutError) Timeout() bool {
+	return true
+}
+func (timeoutError) Temporary() bool {
+	return true
+}

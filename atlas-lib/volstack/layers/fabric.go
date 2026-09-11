@@ -52,10 +52,14 @@ type Fabric struct {
 }
 
 // NewFabric returns the fabric layer for one volume.
-func NewFabric(cfg FabricConfig) *Fabric { return &Fabric{cfg: cfg} }
+func NewFabric(cfg FabricConfig) *Fabric {
+	return &Fabric{cfg: cfg}
+}
 
 // Name is what the record calls this layer.
-func (f *Fabric) Name() string { return "fabric" }
+func (f *Fabric) Name() string {
+	return "fabric"
+}
 
 // selector identifies this volume's namespace among everything attached.
 func (f *Fabric) selector() nvme.DeviceSelector {
@@ -174,7 +178,9 @@ func (f *Fabric) Release(ctx context.Context, _ volstack.Artifact) error {
 // Destroy does nothing. The namespace belongs to the control plane and is
 // removed by DeleteVolume, so there is no durable object here for a node to take
 // away.
-func (f *Fabric) Destroy(context.Context, volstack.Artifact) error { return nil }
+func (f *Fabric) Destroy(context.Context, volstack.Artifact) error {
+	return nil
+}
 
 // Healthy reports whether the volume can currently take I/O, which is the read a
 // heal dispatches on.

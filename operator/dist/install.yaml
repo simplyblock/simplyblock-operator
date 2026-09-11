@@ -172,7 +172,7 @@ spec:
           BackupPolicy defines retention and scheduling parameters for simplyblock\nbackups.
           To apply a policy to a PVC, annotate the PVC with:\n\n\tsimplyblock.io/backup-policy:
           <BackupPolicy-name>\n\nThe deprecated simplybk/backup-policy annotation
-          is still honoured for\nbackwards compatibility; when both are set, simplyblock.io/backup-policy\ntakes
+          is still honored for\nbackward compatibility; when both are set, simplyblock.io/backup-policy\ntakes
           precedence.\n\nThe BackupPolicy must be in the same namespace as the annotated
           PVC.\nThe controller attaches and detaches the policy in the simplyblock
           backend\nwhenever the annotation is added or removed."
@@ -205,7 +205,7 @@ spec:
                   rule: self == oldSelf
               maxAge:
                 description: |-
-                  MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
+                  MaxAge is the maximum age of backups to retain (e.g., `7d`, `12h`, `30m`).
                   Backups older than this are merged. Accepts m, h, d, w suffixes.
                 pattern: ^[1-9]\d*[mhdw]$
                 type: string
@@ -223,7 +223,7 @@ spec:
               schedule:
                 description: |-
                   Schedule defines the tiered backup schedule as a space-separated list of
-                  interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
+                  interval,keep_count pairs (e.g., "15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing. Supported units: m, h, d, w.
                 pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string
@@ -641,7 +641,7 @@ spec:
                 description: PVCNamespace is the namespace of the created PVC.
                 type: string
               restoredLvolID:
-                description: RestoredLvolID is the UUID of the newly-created logical
+                description: RestoredLvolID is the UUID of the newly created logical
                   volume.
                 type: string
               sourceClusterUUID:
@@ -1130,7 +1130,7 @@ spec:
               image:
                 description: |-
                   Image is the container image used for all simplyblock control-plane and
-                  storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+                  storage-node workloads (e.g., quay.io/simplyblock-io/simplyblock:26.2.2).
                   StorageNodeSet CRs that omit spec.clusterImage inherit this value.
                   Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
                 pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
@@ -1149,7 +1149,7 @@ spec:
               message:
                 description: |-
                   Message contains a human-readable explanation of the current phase,
-                  for example the FDB error returned by the health endpoint.
+                  for example, the FDB error returned by the health endpoint.
                 type: string
               phase:
                 description: |-
@@ -1602,8 +1602,8 @@ spec:
               action:
                 description: |-
                   Action is the operation to perform. Immutable.
-                  failover:  unplanned — promote target clone, source may be down.
-                  failback:  restore source as primary after a prior failover.
+                  failover: unplanned — promote target clone, source may be down.
+                  failback: restore source as primary after a prior failover.
                   migration: planned cutover — calls replication_commit per volume; both clusters stay up.
                              State progression: replicating → cutover_pending → cutover_done.
                 enum:
@@ -1700,7 +1700,7 @@ spec:
               subphase:
                 description: |-
                   Subphase describes what the operation is currently doing within the phase
-                  (e.g. "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+                  (e.g., `TriggeringFailover`, `UpdatingSlotStatuses`, `ReleasingLock`).
                 type: string
             type: object
         type: object
@@ -1941,7 +1941,7 @@ spec:
               interval:
                 default: 5m
                 description: Interval is how often a replication snapshot is taken
-                  (e.g. "5m", "1h").
+                  (e.g., `5m`, `1h`).
                 type: string
               mode:
                 default: failover
@@ -2782,7 +2782,7 @@ spec:
                 - name
                 type: object
               snapshotName:
-                description: SnapshotName optionally overrides the internally-created
+                description: SnapshotName optionally overrides the internally created
                   snapshot name.
                 type: string
               sourceClusterUUID:
@@ -2824,7 +2824,7 @@ spec:
                 type: string
               fsType:
                 description: |-
-                  FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+                  FSType is the filesystem type of the source PersistentVolume (e.g., `ext4`,
                   "xfs"), captured at backup time so a restore can preserve it regardless of
                   which StorageClass the restored PVC ends up using.
                 type: string
@@ -2870,7 +2870,7 @@ spec:
                 format: int64
                 type: integer
               snapshotID:
-                description: SnapshotID is the internally-created snapshot UUID used
+                description: SnapshotID is the internally created snapshot UUID used
                   for the backup request.
                 type: string
               snapshotName:
@@ -3159,7 +3159,7 @@ spec:
                   rule: self == oldSelf
               nodeRollingRestart:
                 description: |-
-                  NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
+                  NodeRollingRestart configures behavior specific to the node-rolling-restart action.
                   Ignored for all other actions.
                 properties:
                   refreshSNodeAPI:
@@ -4281,7 +4281,7 @@ spec:
                       SystemVolumeFilterRegex is a Go regular expression matched against backend
                       volume names. Matching volumes are treated as system volumes: excluded from
                       drain migration and deleted inline during the Verifying phase.
-                      Defaults to "^sb-fio-baseline-.*".
+                      Defaults to `^sb-fio-baseline-.*`.
                     type: string
                 type: object
               force:
@@ -4647,7 +4647,7 @@ spec:
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
-                      (e.g. ["nvme0n1","nvme1n1"]).
+                      (e.g., ["nvme0n1","nvme1n1"]).
                     items:
                       type: string
                     type: array
@@ -4662,7 +4662,7 @@ spec:
                   expand:
                     description: |-
                       Expand marks this node as a cluster-expansion add. When true the backend
-                      node-add endpoint receives expand=true, triggering rebalancing behaviour
+                      node-add endpoint receives expand=true, triggering rebalancing behavior
                       appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
                     type: boolean
                   failureDomain:
@@ -4714,7 +4714,7 @@ spec:
                     type: boolean
                   spdkImage:
                     description: SpdkImage overrides the SPDK image for this node
-                      (e.g. for phased rollouts).
+                      (e.g., for phased rollouts).
                     type: string
                   spdkProxyImage:
                     description: SpdkProxyImage overrides the SPDK proxy image for
@@ -4723,7 +4723,7 @@ spec:
                   spdkSystemMemory:
                     description: |-
                       SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-                      (e.g. "4G", "512M").
+                      (e.g., `4G`, `512M`).
                     pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                     type: string
                   ubuntuHost:
@@ -4733,7 +4733,7 @@ spec:
                 type: object
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
-                  (e.g. "0", "1"). Immutable.
+                  (e.g., `0`, `1`). Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -4893,7 +4893,7 @@ spec:
                     type: integer
                 type: object
               status:
-                description: Status is the backend-reported node status (e.g. online,
+                description: Status is the backend-reported node status (e.g., online,
                   suspended, offline).
                 type: string
               uptime:
@@ -4991,7 +4991,7 @@ spec:
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
-                  When omitted no limits are enforced, which preserves the previous behaviour.
+                  When omitted no limits are enforced, which preserves the previous behavior.
                 properties:
                   claims:
                     description: |-
@@ -5056,7 +5056,7 @@ spec:
                 type: array
               deviceNames:
                 description: DeviceNames explicitly defines a comma separated list
-                  of nvme namespace names like nvme0n1,nvme1n1...
+                  of NVMe namespace names like nvme0n1,nvme1n1...
                 items:
                   type: string
                 type: array
@@ -5082,7 +5082,7 @@ spec:
                   Expand indicates that storage nodes added from this StorageNodeSet are being
                   added to expand an already-active cluster. When true the backend node-add
                   endpoint receives expand=true, which triggers the appropriate rebalancing
-                  behaviour for in-place cluster growth.
+                  behavior for in-place cluster growth.
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -5205,7 +5205,7 @@ spec:
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
-                        (e.g. ["nvme0n1","nvme1n1"]).
+                        (e.g., ["nvme0n1","nvme1n1"]).
                       items:
                         type: string
                       type: array
@@ -5220,7 +5220,7 @@ spec:
                     expand:
                       description: |-
                         Expand marks this node as a cluster-expansion add. When true the backend
-                        node-add endpoint receives expand=true, triggering rebalancing behaviour
+                        node-add endpoint receives expand=true, triggering rebalancing behavior
                         appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
                       type: boolean
                     failureDomain:
@@ -5273,7 +5273,7 @@ spec:
                       type: boolean
                     spdkImage:
                       description: SpdkImage overrides the SPDK image for this node
-                        (e.g. for phased rollouts).
+                        (e.g., for phased rollouts).
                       type: string
                     spdkProxyImage:
                       description: SpdkProxyImage overrides the SPDK proxy image for
@@ -5282,7 +5282,7 @@ spec:
                     spdkSystemMemory:
                       description: |-
                         SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
-                        (e.g. "4G", "512M").
+                        (e.g., `4G`, `512M`).
                       pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                       type: string
                     ubuntuHost:
@@ -5369,7 +5369,7 @@ spec:
                 type: string
               spdkSystemMemory:
                 description: |-
-                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g., `4G`, `512M`).
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                 type: string
@@ -5442,7 +5442,7 @@ spec:
             properties:
               creatingNodes:
                 description: CreatingNodes is the count of StorageNode CRs with status
-                  "in_creation".
+                  `in_creation`.
                 type: integer
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
@@ -5583,11 +5583,11 @@ spec:
                 type: array
               offlineNodes:
                 description: OfflineNodes is the count of StorageNode CRs with status
-                  "offline".
+                  `offline`.
                 type: integer
               onlineNodes:
                 description: OnlineNodes is the count of StorageNode CRs with status
-                  "online".
+                  `online`.
                 type: integer
               pendingNodeAdds:
                 additionalProperties:
@@ -5602,7 +5602,7 @@ spec:
                 type: object
               removedNodes:
                 description: RemovedNodes is the count of StorageNode CRs with status
-                  "removed".
+                  `removed`.
                 type: integer
               schedulingFailedWorkers:
                 additionalProperties:
@@ -5614,7 +5614,7 @@ spec:
                 type: object
               suspendedNodes:
                 description: SuspendedNodes is the count of StorageNode CRs with status
-                  "suspended".
+                  `suspended`.
                 type: integer
               totalNodes:
                 description: TotalNodes is the total number of owned StorageNode CRs.
@@ -5778,7 +5778,7 @@ spec:
                     type: boolean
                   fabric:
                     default: tcp
-                    description: Fabric is the transport fabric (e.g. tcp).
+                    description: Fabric is the transport fabric (e.g., `tcp`).
                     type: string
                   filesystem:
                     default: xfs
@@ -5819,7 +5819,7 @@ spec:
                       StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
                       no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
                       the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
-                      "0".
+                      `0`.
                     type: string
                 type: object
                 x-kubernetes-validations:
@@ -7120,6 +7120,7 @@ spec:
           name: webhook-certs
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: simplyblock-operator-controller-manager

@@ -53,7 +53,7 @@ type KubeAuthenticator struct {
 	Audiences []string
 
 	// ServiceAccounts, when non-empty, restricts which ServiceAccounts may
-	// register as which kind, as "namespace/name". Without it any
+	// register as which kind, as `namespace/name`. Without it any
 	// authenticated ServiceAccount may register as any kind — its *name* is
 	// still verified, so it cannot impersonate another peer, but a node plugin
 	// could register as the controller and take its place in the registry.

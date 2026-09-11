@@ -51,7 +51,7 @@ func TestHostHasSubsystem(t *testing.T) {
 
 	// The dangerous direction: reporting "not connected" for a host that is in fact
 	// connected would let the migration cut over without switching its paths. An
-	// unreadable or empty sysfs must therefore be an error, never a clean "absent".
+	// unreadable or empty sysfs must therefore be an error, never a clean `absent`.
 	t.Run("sysfs not visible is an error, not absence", func(t *testing.T) {
 		for _, tc := range []struct {
 			name    string

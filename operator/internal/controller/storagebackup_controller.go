@@ -70,7 +70,7 @@ const (
 	eventReasonBackupClusterLookupError = "BackupClusterLookupError"
 
 	// eventReasonBackupSourceResolutionError is emitted when the PVC/PV source
-	// cannot be resolved (e.g. PVC not found, not bound, or missing lvol metadata).
+	// cannot be resolved (e.g., PVC not found, not bound, or missing lvol metadata).
 	eventReasonBackupSourceResolutionError = "BackupSourceResolutionError"
 
 	// eventReasonBackupPoolLookupError is emitted when the storage pool UUID
@@ -205,7 +205,7 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		// Imported backups are managed externally: poll status directly by
 		// BackupID/ClusterUUID instead of resolving a PVC-based source, since the
-		// originating PVC/lvol may no longer exist (e.g. after the source pool was
+		// originating PVC/lvol may no longer exist (e.g., after the source pool was
 		// deleted and recreated) even though the backend backup and its data
 		// remain valid and restorable. Calling resolveBackupSource here would
 		// hard-fail on the missing PVC and overwrite the imported status back to

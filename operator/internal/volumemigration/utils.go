@@ -60,7 +60,7 @@ func StartMigration(
 
 // findPVForVolume returns the PV name backing the given simplyblock logical-volume
 // UUID. simplyblock CSI volume handles have the form
-// "<clusterUUID>:<poolUUID>:<volumeUUID>", so the bare volume UUID is matched
+// `<clusterUUID>:<poolUUID>:<volumeUUID>`, so the bare volume UUID is matched
 // against the final ":"-separated segment. An exact match against the whole
 // handle is also accepted for robustness.
 func findPVForVolume(
@@ -90,7 +90,7 @@ func findPVForVolume(
 // PollMigrationResult is returned by PollMigration.
 type PollMigrationResult struct {
 	// Done is true when the migration has reached a terminal status
-	// (done, failed, or cancelled).
+	// (done, failed, or canceled).
 	Done bool
 	// Succeeded is true when the migration reached the "done" status.
 	Succeeded bool

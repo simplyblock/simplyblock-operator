@@ -47,7 +47,9 @@ func (s *synth) prober(opts ...Option) *Prober {
 	return NewProberWithOpener(func(context.Context, Device) (Reader, error) { return s, nil }, opts...)
 }
 
-func (s *synth) Close() error { return nil }
+func (s *synth) Close() error {
+	return nil
+}
 
 func (s *synth) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	s.reads = append(s.reads, readRecord{off, int64(len(p))})

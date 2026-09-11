@@ -61,7 +61,9 @@ func NewLVMPhysicalVolume(cfg LVMPhysicalVolumeConfig) *LVMPhysicalVolume {
 }
 
 // Name is what the record calls this layer.
-func (l *LVMPhysicalVolume) Name() string { return "lvmPhysicalVolume" }
+func (l *LVMPhysicalVolume) Name() string {
+	return "lvmPhysicalVolume"
+}
 
 // Observe reads the device below and reports what may be done to it.
 //
@@ -227,7 +229,9 @@ func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact)
 // hold: it is on the device wherever the device is, so there is nothing for this
 // host to give up, and an unstage that removed one would be wiping the identity
 // off a volume that is merely between pods.
-func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error { return nil }
+func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error {
+	return nil
+}
 
 // Destroy wipes the label, which is what makes the device blank again for
 // anything that reads its content. Only a deletion path reaches it, and by then

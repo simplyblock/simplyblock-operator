@@ -23,11 +23,15 @@ type sparse struct {
 	bytes map[int64][]byte
 }
 
-func (s sparse) Reader() Reader { return sparseReader{s} }
+func (s sparse) Reader() Reader {
+	return sparseReader{s}
+}
 
 type sparseReader struct{ s sparse }
 
-func (sparseReader) Close() error { return nil }
+func (sparseReader) Close() error {
+	return nil
+}
 
 func (r sparseReader) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if err := ctx.Err(); err != nil {
@@ -79,7 +83,9 @@ func inspectorOver(t *testing.T, contents map[string]sparse, exclusive Exclusive
 }
 
 // blank is a device of the given size whose every byte is zero.
-func blank(size int64) sparse { return sparse{size: size, bytes: map[int64][]byte{}} }
+func blank(size int64) sparse {
+	return sparse{size: size, bytes: map[int64][]byte{}}
+}
 
 // found finds one candidate by kernel name.
 func found(t *testing.T, cands []Candidate, name string) Candidate {

@@ -1,6 +1,6 @@
 # Simplyblock Helm Charts
 
-The official Helm charts for deploying Simplyblock on Kubernetes.
+The official Helm charts for deploying simplyblock on Kubernetes.
 
 ![](../assets/simplyblock-logo.svg)
 
@@ -17,7 +17,7 @@ The official Helm charts for deploying Simplyblock on Kubernetes.
 
 ### Install the Simplyblock Operator
 
-Add the Simplyblock Helm repository and install:
+Add the simplyblock Helm repository and install:
 
 ```bash
 helm repo add simplyblock https://simplyblock.github.io/helm-charts/charts
@@ -28,7 +28,7 @@ helm install simplyblock-operator simplyblock/simplyblock-operator \
   --create-namespace
 ```
 
-After the Helm installation completes, wait for the Simplyblock control plane to be ready before creating custom resources such as `StorageCluster`, `Pool`, or `StorageNode`:
+After the Helm installation completes, wait for the simplyblock control plane to be ready before creating custom resources such as `StorageCluster`, `Pool`, or `StorageNode`:
 
 ```bash
 kubectl -n simplyblock wait controlplane simplyblock \

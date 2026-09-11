@@ -1,0 +1,57 @@
+# revive rules for the Go in this repository, read by MegaLinter's GO_REVIVE.
+#
+# revive's default set is golint's, and golint's central demand is that every
+# package and every exported symbol carry a doc comment. Against this tree that
+# is 713 of 917 findings, almost all of them in internal packages whose readers
+# are the four people who work here. The rules kept below are the ones that
+# catch a mistake rather than a missing sentence.
+#
+# What is deliberately absent, and why:
+#
+#   package-comments   340 findings, plus 26 on the comment's exact wording
+#   exported           347 findings, on symbols in internal packages
+#   unused-parameter   101 findings, most of them on interface implementations
+#                      that must accept an argument they have no use for
+#
+# operator/.golangci.yml and csi-driver/.golangci.yml run revive too, with
+# comment-spacings and import-shadowing. Those two are not repeated here.
+
+ignoreGeneratedHeader = false
+severity = "error"
+confidence = 0.8
+
+# Naming. These are the findings worth having: Id where ID is meant, ALL_CAPS
+# carried over from another language, and package names that shadow the
+# standard library.
+[rule.var-naming]
+[rule.receiver-naming]
+[rule.time-naming]
+[rule.error-naming]
+
+# Correctness and clarity.
+[rule.blank-imports]
+[rule.context-as-argument]
+[rule.context-keys-type]
+[rule.empty-block]
+[rule.error-return]
+[rule.error-strings]
+[rule.errorf]
+[rule.increment-decrement]
+[rule.indent-error-flow]
+[rule.range]
+[rule.superfluous-else]
+[rule.unexported-return]
+[rule.unreachable-code]
+[rule.var-declaration]
+
+# min and max became builtins in Go 1.21, and a package-level helper of either
+# name now shadows one. Ten of those are live in this tree.
+[rule.redefines-builtin-id]
+
+# Ginkgo and Gomega are dot-imported by design: a spec reads as prose only when
+# Describe, It, and Expect are unqualified. Every other dot import is a finding.
+[rule.dot-imports]
+arguments = [{ allowedPackages = [
+  "github.com/onsi/ginkgo/v2",
+  "github.com/onsi/gomega",
+] }]

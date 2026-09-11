@@ -87,7 +87,9 @@ func FilesystemStrategyFor(fsType string) FilesystemLayerStrategy {
 // extStrategy is the ext family.
 type extStrategy struct{ fsType string }
 
-func (e extStrategy) Name() string { return e.fsType }
+func (e extStrategy) Name() string {
+	return e.fsType
+}
 
 // extBlockBytes is the block size mkfs picks for a volume of any size worth
 // striping, and the unit stride and stripe_width are counted in. A filesystem
@@ -139,12 +141,16 @@ func (e extStrategy) GrowCommand(device, _ string) []string {
 // MountFlags adds nothing: ext mounts a volume and its clone side by side
 // without complaint, since it does not refuse a filesystem whose UUID it has
 // already seen.
-func (e extStrategy) MountFlags(flags []string) []string { return flags }
+func (e extStrategy) MountFlags(flags []string) []string {
+	return flags
+}
 
 // xfsStrategy is XFS.
 type xfsStrategy struct{}
 
-func (xfsStrategy) Name() string { return "xfs" }
+func (xfsStrategy) Name() string {
+	return "xfs"
+}
 
 // FormatOptions align the filesystem to the stripes underneath it, so a write
 // that fills one chunk lands on one member rather than across two.
@@ -180,13 +186,21 @@ func (xfsStrategy) GrowCommand(_, mountpoint string) []string {
 // contributes nothing to either question rather than being turned away.
 type plainStrategy struct{ fsType string }
 
-func (p plainStrategy) Name() string { return p.fsType }
+func (p plainStrategy) Name() string {
+	return p.fsType
+}
 
-func (p plainStrategy) FormatOptions(options []string, _ FormatParameters) []string { return options }
+func (p plainStrategy) FormatOptions(options []string, _ FormatParameters) []string {
+	return options
+}
 
-func (p plainStrategy) MountFlags(flags []string) []string { return flags }
+func (p plainStrategy) MountFlags(flags []string) []string {
+	return flags
+}
 
 // GrowCommand is nil. Nothing here knows how to grow a filesystem it knows
 // nothing else about, and guessing at a tool name would run something arbitrary
 // against a volume holding data.
-func (p plainStrategy) GrowCommand(_, _ string) []string { return nil }
+func (p plainStrategy) GrowCommand(_, _ string) []string {
+	return nil
+}

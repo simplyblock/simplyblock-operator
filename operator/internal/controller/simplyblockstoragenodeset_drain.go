@@ -54,7 +54,7 @@ const (
 )
 
 // fetchPoolVolumes fetches all pools and returns (pools, nodeVolumes, err).
-// Callers that need both the pool list (e.g. for cleanup) and the node volumes
+// Callers that need both the pool list (e.g., for cleanup) and the node volumes
 // should call this once and reuse the returned pools, avoiding a second
 // GetStoragePools round-trip within the same reconcile.
 func fetchPoolVolumes(
@@ -88,7 +88,7 @@ func fetchPoolVolumes(
 }
 
 // listNodeVolumes returns volumes on nodeUUID. Use fetchPoolVolumes when the
-// pool list is also needed (e.g. drainVerify cleanup) to avoid a double fetch.
+// pool list is also needed (e.g., drainVerify cleanup) to avoid a double fetch.
 func listNodeVolumes(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -109,7 +109,7 @@ func listNodeVolumes(
 // matchVolumesToPVs classifies each backend volume into pvManaged, pinned, or
 // unmanaged buckets. System volumes matching filterRegex are skipped entirely.
 //
-// Note: if the PVC fetch for a PV-backed volume fails (e.g. API server
+// Note: if the PVC fetch for a PV-backed volume fails (e.g., API server
 // temporarily unavailable), that volume is conservatively placed in the
 // unmanaged bucket. This will block drain with an UnmanagedVolumeBlocking
 // event until the next reconcile succeeds. It is a transient false-positive,

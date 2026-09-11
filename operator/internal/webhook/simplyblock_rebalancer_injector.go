@@ -30,7 +30,7 @@ const (
 // +kubebuilder:webhook:path=/mutate-v1-pod-simplyblock-rebalancer,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=simplyblock-rebalancer-injector.simplyblock.io,admissionReviewVersions=v1
 
 // SimplyblockRebalancerInjector is a mutating admission webhook that injects the simplyblock-rebalancer
-// sidecar into any pod labelled role=simplyblock-storage-node, provided the associated
+// sidecar into any pod labeled role=simplyblock-storage-node, provided the associated
 // StorageCluster has latency benchmarking enabled. failurePolicy=ignore ensures that
 // webhook unavailability never blocks storage node pod creation.
 type SimplyblockRebalancerInjector struct {
@@ -132,7 +132,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 }
 
 // clusterUUIDFromPodName extracts the cluster UUID prefix from the snode-spdk pod
-// name pattern "snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>".
+// name pattern `snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>`.
 func clusterUUIDFromPodName(
 	podName string,
 ) string {

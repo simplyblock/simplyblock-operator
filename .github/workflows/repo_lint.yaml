@@ -37,8 +37,16 @@ jobs:
         with:
           go-version-file: ${{ matrix.component }}/go.mod
 
+      # golangci-lint-action installs the released binary, which does not carry
+      # this repository's onelinefunc linter and rejects a config enabling it.
+      # The binary is built from .custom-gcl.yml instead, against the same
+      # version scripts/tools.manifest pins.
+      - name: Build golangci-lint with this repository's linters
+        run: make custom-gcl
+
+      # Run it directly rather than through `make -C <component> lint`: the
+      # atlas-lib target also runs code generation, which this job does not
+      # provision and the action never did either.
       - name: Run linter
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
-        with:
-          version: v2.11.4
-          working-directory: ${{ matrix.component }}
+        working-directory: ${{ matrix.component }}
+        run: '"${GITHUB_WORKSPACE}/.bin/custom-gcl" run ./...'

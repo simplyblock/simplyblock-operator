@@ -66,9 +66,15 @@ const (
 	Occupied
 )
 
-func (k Kind) ID() upgrade.ID         { return k.RuleID }
-func (k Kind) Description() string    { return k.Summary }
-func (k Kind) Requires() []upgrade.ID { return k.Needs }
+func (k Kind) ID() upgrade.ID {
+	return k.RuleID
+}
+func (k Kind) Description() string {
+	return k.Summary
+}
+func (k Kind) Requires() []upgrade.ID {
+	return k.Needs
+}
 
 // describe says what is about to be read, in the form a report prints while it
 // waits: the kind, and the namespace it is narrowed to.

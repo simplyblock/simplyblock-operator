@@ -1,6 +1,6 @@
 package autoplacement
 
-// NodeConfig is one element of the JSON array the operator writes per k8s hostname to the
+// NodeConfig is one element of the JSON array the operator writes per K8s hostname to the
 // simplyblock-rebalancer ConfigMap. The rebalancer probe (--config) iterates the array to
 // benchmark every NUMA node on its host independently.
 type NodeConfig struct {

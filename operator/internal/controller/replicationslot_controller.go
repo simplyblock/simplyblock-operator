@@ -94,7 +94,7 @@ type ReplicationSlotReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	// apiReader is an uncached reader for consumer-pod lookups; a stale cache
-	// could miss a running pod and skip preconnect on an actively-used volume.
+	// could miss a running pod and skip preconnect on an actively used volume.
 	apiReader client.Reader
 }
 
@@ -280,14 +280,14 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		changed = true
 	case backendStateFailedOver:
 		if !status.IsSource {
-			// Failback completed — IO returned to this volume; treat as replicating/source.
+			// Failback completed — I/O returned to this volume; treat as replicating/source.
 			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
 			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
 			slot.Status.Message = replMsgSlotReplicating
 		} else if slot.Status.Direction == string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
 			// Slot is already on the source side — the source cluster is reporting a
 			// stale failed_over record from before the failback completed. The failback
-			// ANA flip has already moved IO back here; don't revert the slot.
+			// ANA flip has already moved I/O back here; don't revert the slot.
 			log.Info("Source cluster reports stale failed_over; slot already replicating/source — ignoring",
 				"slot", slot.Name)
 			// The cutover_done window on the source cluster is short (~10 s, before the
@@ -327,7 +327,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		case backendStateCutoverDone:
 			// The 30 s cutover_pending window already closed before we polled.
 			// Attempt a late preconnect so the CSI node gets target NVMe paths even
-			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
+			// after the ANA flip — this limits I/O downtime to ctrl_loss_tmo instead
 			// of indefinite path loss.
 			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
 		}
@@ -376,7 +376,7 @@ func (r *ReplicationSlotReconciler) reconcileSyncStatus(
 	case backendStateCutoverDone, backendStateFailedOver:
 		if !status.IsSource {
 			// This volume is the TARGET of a completed failback: it received the
-			// replicated data and the ANA flip moved IO back here. From the slot's
+			// replicated data and the ANA flip moved I/O back here. From the slot's
 			// perspective the volume is live on the source cluster again.
 			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
 			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
@@ -557,7 +557,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// placed in cutover_pending K8s state — spanning the entire shrink phase —
 		// until _prepare_cutover creates the new cutover_pending record. Treating
 		// failed_over as "ANA flip done" here would transition the slot to
-		// replicating/source while IO is still on the target cluster and shrink rounds
+		// replicating/source while I/O is still on the target cluster and shrink rounds
 		// are still running. Return and wait until cutover_pending or cutover_done
 		// actually appears.
 		if proceedClusterID != clusterID && status != nil && status.State == backendStateFailedOver {
@@ -566,7 +566,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// Backend advanced past cutover_pending before the preconnect Job could be
 		// created (safety timer fired, or we missed the window entirely). Attempt a
 		// late preconnect so the CSI node gets source-cluster NVMe paths even after
-		// the ANA flip — limits IO downtime to ctrl_loss_tmo instead of indefinite.
+		// the ANA flip — limits I/O downtime to ctrl_loss_tmo instead of indefinite.
 		if status != nil && status.State == backendStateCutoverDone {
 			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
 		}
@@ -600,7 +600,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	}
 
 	// Job not found — either the signal was already sent and the job was deleted,
-	// or the job was never created yet. If we already signalled, don't create a new
+	// or the job was never created yet. If we already signaled, don't create a new
 	// job: just wait for the backend to advance (a new job can't help at this point).
 	if slot.Annotations[annotCutoverProceedSignaled] == annotCutoverProceedSignaledValue {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -668,11 +668,11 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 // signals the backend to proceed once the Job has completed (pass or fail).
 //
 // We always re-check the job state even when the annotation is set, so that a
-// previously-failed callCutoverProceed is retried rather than silently dropped:
+// previously failed callCutoverProceed is retried rather than silently dropped:
 // the backend waits indefinitely for the proceed signal, so a missed call leaves
 // the slot permanently stuck.
 //
-// The annotation is written before the API call to serialise concurrent reconciles:
+// The annotation is written before the API call to serialize concurrent reconciles:
 // the one whose patch wins becomes the sole caller of callCutoverProceed; the
 // loser's patch fails with a conflict and falls back to the 5 s wait.
 func (r *ReplicationSlotReconciler) handleExistingPreconnectJob(
@@ -711,7 +711,7 @@ func (r *ReplicationSlotReconciler) handleExistingPreconnectJob(
 // reconcilePreconnect creates the preconnect Job that connects target NVMe paths
 // on the consumer node. Called both during cutover_pending and as a fallback when
 // the backend has already flipped to cutover_done (the "late" case — ANA already
-// happened, limiting IO downtime to ctrl_loss_tmo instead of indefinitely).
+// happened, limiting I/O downtime to ctrl_loss_tmo instead of indefinitely).
 // Errors are logged but not returned — the caller still advances slot state.
 //
 // clusterID/volumeID identify the slot's own volume (job naming, consumer node
@@ -729,7 +729,7 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 	log := logf.FromContext(ctx)
 	jobName := replSlotPreconnectJobName(volumeID)
 
-	// Skip if the Job was already created (e.g. by a concurrent reconcile).
+	// Skip if the Job was already created (e.g., by a concurrent reconcile).
 	var existing batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existing); err == nil {
 		return
@@ -824,7 +824,7 @@ func (r *ReplicationSlotReconciler) callCutoverProceed(
 	if err != nil {
 		return err
 	}
-	// 200/204 = signalled; 404 = no cutover_pending record (already advanced).
+	// 200/204 = signaled; 404 = no cutover_pending record (already advanced).
 	// The Flask backend may return 200 OK rather than 204 No Content.
 	if status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound {
 		return nil
@@ -881,7 +881,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
 // applyAdvancedBackendStateForFailback is the failback-aware variant called from
 // reconcileCutoverPending when the slot was initiated by a failback ReplicationOps.
 // We poll the TARGET cluster (where the task runs), so cutover_done/is_source=true
-// means the ANA flip moved IO back to the original source — the slot is done and
+// means the ANA flip moved I/O back to the original source — the slot is done and
 // should return to replicating/source. For non-failback paths (isFailback=false)
 // it delegates to the regular applyAdvancedBackendState.
 func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
@@ -902,7 +902,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 
 	switch status.State {
 	case backendStateCutoverDone:
-		// Failback ANA flip confirmed — IO is back on the original source cluster.
+		// Failback ANA flip confirmed — I/O is back on the original source cluster.
 		// Clear the failback annotations first (metadata patch), then update status.
 		// Doing them in one r.Status().Patch() would silently discard the annotation
 		// changes because the status subresource ignores metadata writes.
@@ -932,7 +932,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 			"slot", slot.Name)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	default:
-		// Still in an intermediate state (e.g. backend not yet cutover_done); wait.
+		// Still in an intermediate state (e.g., backend not yet cutover_done); wait.
 		log.Info("Failback: unexpected backend state while waiting for cutover_done",
 			"slot", slot.Name, "backendState", status.State)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil

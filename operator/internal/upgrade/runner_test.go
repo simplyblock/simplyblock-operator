@@ -46,8 +46,12 @@ type recordingStep struct {
 	verified  []string
 }
 
-func (s *recordingStep) Stage() Stage { return s.stage }
-func (s *recordingStep) Phase() Phase { return s.phase }
+func (s *recordingStep) Stage() Stage {
+	return s.stage
+}
+func (s *recordingStep) Phase() Phase {
+	return s.phase
+}
 
 func (s *recordingStep) Describe(_ context.Context, _ *Scope, subject Subject) (*Action, error) {
 	if !s.responsible(subject) || s.settled(subject) {

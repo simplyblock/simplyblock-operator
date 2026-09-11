@@ -47,7 +47,9 @@ const (
 // subscription's live cache.
 type fakeVolumes struct{ items []subscriptions.VolumeDTO }
 
-func (f fakeVolumes) All() []subscriptions.VolumeDTO { return f.items }
+func (f fakeVolumes) All() []subscriptions.VolumeDTO {
+	return f.items
+}
 
 func (f fakeVolumes) Get(id string) (subscriptions.VolumeDTO, bool) {
 	for _, v := range f.items {

@@ -17,7 +17,7 @@ type MigrationCandidate struct {
 	TargetClusterUUID string
 	// TargetNodeUUID is the chosen migration destination node.
 	TargetNodeUUID string
-	// Volume is the volume to migrate, including its pool association and IO metrics.
+	// Volume is the volume to migrate, including its pool association and I/O metrics.
 	Volume VolumePlacement
 }
 
@@ -153,7 +153,7 @@ func (rb *Rebalancer) SelectMigrations(
 }
 
 // hotNodesAllPinned reports whether any hot node hosts at least one volume and
-// every volume it hosts is pinned — i.e. the node is hot but rebalancing is
+// every volume it hosts is pinned — i.e., the node is hot but rebalancing is
 // blocked purely by pin policy. volumesByNode contains all volumes (pinning is
 // applied downstream), so it is the correct set to test against pinned.
 func hotNodesAllPinned(hotNodes []string, volumesByNode map[string][]VolumePlacement, pinned map[string]bool) bool {

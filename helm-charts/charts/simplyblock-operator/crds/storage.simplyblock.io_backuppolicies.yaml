@@ -40,7 +40,7 @@ spec:
           BackupPolicy defines retention and scheduling parameters for simplyblock\nbackups.
           To apply a policy to a PVC, annotate the PVC with:\n\n\tsimplyblock.io/backup-policy:
           <BackupPolicy-name>\n\nThe deprecated simplybk/backup-policy annotation
-          is still honoured for\nbackwards compatibility; when both are set, simplyblock.io/backup-policy\ntakes
+          is still honored for\nbackward compatibility; when both are set, simplyblock.io/backup-policy\ntakes
           precedence.\n\nThe BackupPolicy must be in the same namespace as the annotated
           PVC.\nThe controller attaches and detaches the policy in the simplyblock
           backend\nwhenever the annotation is added or removed."
@@ -73,7 +73,7 @@ spec:
                   rule: self == oldSelf
               maxAge:
                 description: |-
-                  MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
+                  MaxAge is the maximum age of backups to retain (e.g., `7d`, `12h`, `30m`).
                   Backups older than this are merged. Accepts m, h, d, w suffixes.
                 pattern: ^[1-9]\d*[mhdw]$
                 type: string
@@ -91,7 +91,7 @@ spec:
               schedule:
                 description: |-
                   Schedule defines the tiered backup schedule as a space-separated list of
-                  interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
+                  interval,keep_count pairs (e.g., "15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing. Supported units: m, h, d, w.
                 pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string

@@ -81,7 +81,9 @@ type NUMANodeResources struct {
 // worker choose the same node.
 type MostAvailableNUMANode struct{}
 
-func (MostAvailableNUMANode) Name() string { return "most available NUMA node" }
+func (MostAvailableNUMANode) Name() string {
+	return "most available NUMA node"
+}
 
 func (p MostAvailableNUMANode) Choose(
 	report nodeprobe.Report,
@@ -204,7 +206,9 @@ func describeNode(id int) string {
 // one input.
 type AllDevices struct{}
 
-func (AllDevices) Name() string { return "all devices" }
+func (AllDevices) Name() string {
+	return "all devices"
+}
 
 func (AllDevices) Choose(_ nodeprobe.Report, admitted []nodeprobe.Device) ([]nodeprobe.Device, string) {
 	return admitted, "every unclaimed device was used, without regard to its memory node"

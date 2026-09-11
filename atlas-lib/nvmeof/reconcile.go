@@ -30,14 +30,20 @@ type PathState struct {
 }
 
 // Complete reports whether every published path is live.
-func (s PathState) Complete() bool { return s.Expected > 0 && s.Live >= s.Expected }
+func (s PathState) Complete() bool {
+	return s.Expected > 0 && s.Live >= s.Expected
+}
 
 // Degraded reports whether the volume is usable but short of paths: I/O still
 // flows, with less redundancy than the control plane published.
-func (s PathState) Degraded() bool { return s.Live > 0 && s.Live < s.Expected }
+func (s PathState) Degraded() bool {
+	return s.Live > 0 && s.Live < s.Expected
+}
 
 // Down reports whether no path is live, i.e., the volume cannot serve I/O.
-func (s PathState) Down() bool { return s.Live == 0 }
+func (s PathState) Down() bool {
+	return s.Live == 0
+}
 
 // ReconcilePaths makes the attached fabric paths of a volume match the control
 // plane's current answer, and reports the resulting state.

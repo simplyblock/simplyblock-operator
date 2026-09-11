@@ -134,7 +134,9 @@ func (r *Registry[T]) Get(id ID) (T, bool) {
 }
 
 // Len reports how many rules the registry holds.
-func (r *Registry[T]) Len() int { return len(r.order) }
+func (r *Registry[T]) Len() int {
+	return len(r.order)
+}
 
 // Select returns the rules the predicate accepts, in registration order. It is
 // how a runner narrows a catalog to one stage, and how the command line's skip

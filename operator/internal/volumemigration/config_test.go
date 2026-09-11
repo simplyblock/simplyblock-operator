@@ -16,7 +16,7 @@ func TestDefaultRebalancerImage(t *testing.T) {
 	})
 
 	// The Helm chart sets this to the operator's own tag so the rebalancer image and
-	// the operator stay in lockstep; honouring it is what keeps them from drifting.
+	// the operator stay in lockstep; honoring it is what keeps them from drifting.
 	t.Run("environment override wins", func(t *testing.T) {
 		t.Setenv(RebalancerImageEnvVar, "registry.example.com/rebalancer:v9")
 		if got := defaultRebalancerImage(); got != "registry.example.com/rebalancer:v9" {

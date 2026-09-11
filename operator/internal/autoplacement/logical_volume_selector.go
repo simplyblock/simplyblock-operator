@@ -25,7 +25,7 @@ type VolumePlacement struct {
 	PoolUUID string
 }
 
-// RankedCandidate pairs an eligible VolumePlacement with its computed IO score,
+// RankedCandidate pairs an eligible VolumePlacement with its computed I/O score,
 // used to order migration candidates within a source node (highest score first).
 type RankedCandidate struct {
 	// Vol is the volume and its pool association.
@@ -102,7 +102,7 @@ func (lvs *LogicalVolumeSelector) SelectVolumesForMigration(
 			continue
 		}
 
-		// Rank by IO score descending — highest load migrated first.
+		// Rank by I/O score descending — highest load migrated first.
 		ranked := make([]RankedCandidate, 0, len(eligible))
 		for _, vp := range eligible {
 			score := volumemigration.VolumeIOScore(vp.IOPS, vp.ThroughputBytesPerSec, cfg.IopsWeight, cfg.ThroughputWeight)
@@ -127,7 +127,7 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 
 	// The rebalancer only ever acts on PV/PVC-managed volumes. Resolve the set of
 	// simplyblock CSI-managed volume UUIDs up front and restrict collection to them
-	// so backend-only volumes (e.g. benchmark probes) never enter the candidate pool.
+	// so backend-only volumes (e.g., benchmark probes) never enter the candidate pool.
 	managed, err := lvs.BuildCSIManagedVolumes(ctx, input.ClusterUUID)
 	if err != nil {
 		return nil, fmt.Errorf("build CSI-managed volume set: %w", err)
@@ -293,8 +293,8 @@ type managedVolume struct {
 
 // BuildCSIManagedVolumes returns the simplyblock CSI-managed volumes in the given
 // cluster, derived from the PersistentVolumes. The rebalancer only ever acts on
-// PV/PVC-managed volumes; backend-only volumes (e.g. the per-node benchmark probes
-// "simplyblock-rebalancer-<nodeUUID>", which have no PV) are therefore never
+// PV/PVC-managed volumes; backend-only volumes (e.g., the per-node benchmark probes
+// `simplyblock-rebalancer-<nodeUUID>`, which have no PV) are therefore never
 // candidates. Pass an empty clusterUUID to include all clusters.
 //
 // The List is filtered server-side (via the cache field index) to PVs whose CSI

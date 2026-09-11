@@ -251,4 +251,6 @@ func exportEnv(env map[string]string) string {
 }
 
 // shellValue makes one value safe as a single shell word.
-func shellValue(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+func shellValue(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

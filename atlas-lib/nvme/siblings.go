@@ -115,10 +115,14 @@ func IsCoTenant(d, o Device) bool {
 // IsSibling reports whether o is another block device backing the same volume as
 // d. It is the method form of the package-level IsSibling, for a call site that
 // reads as a question about d. Both are pure, comparing the two snapshots.
-func (d Device) IsSibling(o Device) bool { return IsSibling(d, o) }
+func (d Device) IsSibling(o Device) bool {
+	return IsSibling(d, o)
+}
 
 // IsCoTenant reports whether o is a *different* volume sharing d's subsystem,
 // the relation that forbids disconnecting the subsystem for d alone. It is the
 // method form of the package-level IsCoTenant. Both are pure, comparing the
 // two snapshots.
-func (d Device) IsCoTenant(o Device) bool { return IsCoTenant(d, o) }
+func (d Device) IsCoTenant(o Device) bool {
+	return IsCoTenant(d, o)
+}

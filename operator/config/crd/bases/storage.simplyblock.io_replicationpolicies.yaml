@@ -69,7 +69,7 @@ spec:
               interval:
                 default: 5m
                 description: Interval is how often a replication snapshot is taken
-                  (e.g. "5m", "1h").
+                  (e.g., `5m`, `1h`).
                 type: string
               mode:
                 default: failover

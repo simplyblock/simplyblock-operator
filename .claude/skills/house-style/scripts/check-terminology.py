@@ -144,6 +144,8 @@ TERMS = terms(
     "kubeadm",
     "minikube",
     "Kustomize",
+    "Kubebuilder",
+    term("OLM", ("Operator Lifecycle Manager",)),
     "Karpenter",
     "Istio",
     "Argo CD",

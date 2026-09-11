@@ -200,10 +200,14 @@ func (p *Plan) InPhase(phase Phase) []Task {
 }
 
 // Record appends findings.
-func (p *Plan) Record(findings ...Finding) { p.Findings = append(p.Findings, findings...) }
+func (p *Plan) Record(findings ...Finding) {
+	p.Findings = append(p.Findings, findings...)
+}
 
 // Blocked reports whether the plan's checks refuse the stage.
-func (p *Plan) Blocked() bool { return p.Findings.Blocked() }
+func (p *Plan) Blocked() bool {
+	return p.Findings.Blocked()
+}
 
 // Unimplemented reports the tasks this build describes and cannot perform,
 // which is what stops a stage before it starts.

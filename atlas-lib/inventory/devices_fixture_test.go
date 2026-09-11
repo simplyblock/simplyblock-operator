@@ -98,7 +98,9 @@ func unreadableDisks() *blockdev.Prober {
 // zeroReader serves zeros at every offset.
 type zeroReader struct{}
 
-func (zeroReader) Close() error { return nil }
+func (zeroReader) Close() error {
+	return nil
+}
 
 func (zeroReader) ReadAt(ctx context.Context, p []byte, _ int64) (int, error) {
 	if err := ctx.Err(); err != nil {
@@ -113,4 +115,6 @@ func (zeroReader) ReadAt(ctx context.Context, p []byte, _ int64) (int, error) {
 // handsOverEveryDevice is an exclusive opener whose answer is always that
 // nothing holds the device, so the fixture's mounts and holders are the only
 // thing deciding a device's usage.
-func handsOverEveryDevice(string) error { return nil }
+func handsOverEveryDevice(string) error {
+	return nil
+}
