@@ -169,7 +169,7 @@ func TestDeleteVolumeGroupSnapshot_UnparseableIsSuccess(t *testing.T) {
 		GroupSnapshotId: "not-a-valid-id",
 	})
 	if err != nil {
-		t.Fatalf("delete of an unparseable id should succeed, got %v", err)
+		t.Fatalf("delete of an unparsable id should succeed, got %v", err)
 	}
 }
 

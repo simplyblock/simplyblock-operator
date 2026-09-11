@@ -32,7 +32,8 @@ func strPtr(s string) *string { return &s }
 // three source PVCs, each requesting the "sc1" storage class as its own.
 func groupRestoreFixture() []client.Object {
 	quantity := resource.MustParse("2Gi")
-	objects := []client.Object{
+	objects := make([]client.Object, 0, 8)
+	objects = append(objects,
 		&volumegroupsnapshotv1beta1.VolumeGroupSnapshot{
 			ObjectMeta: metav1.ObjectMeta{Name: "vgs1", Namespace: "default"},
 			Status: &volumegroupsnapshotv1beta1.VolumeGroupSnapshotStatus{
@@ -48,7 +49,7 @@ func groupRestoreFixture() []client.Object {
 				},
 			},
 		},
-	}
+	)
 	for _, name := range []string{"pvc-a", "pvc-b", "pvc-c"} {
 		objects = append(objects,
 			&snapshotv1.VolumeSnapshot{

@@ -79,7 +79,8 @@ func (cs *Server) handleSnapshotSource(
 	}
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
-	volumeID, err := sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
+	volumeID, err := sbclient.CloneSnapshot(
+		ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning snapshot: %v", err)
@@ -94,7 +95,8 @@ func (cs *Server) handleSnapshotSource(
 			vol.VolumeId = fmt.Sprintf("%s:%s:%s", sbclient.ClusterID(), sbclient.PoolID(), existingUUID)
 			return vol, nil
 		}
-		volumeID, err = sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
+		volumeID, err = sbclient.CloneSnapshot(
+			ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 		if err != nil {
 			klog.Errorf("error re-cloning snapshot after cleanup: %v", err)
 			return nil, err

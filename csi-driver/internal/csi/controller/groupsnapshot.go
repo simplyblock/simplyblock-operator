@@ -156,7 +156,7 @@ func (cs *Server) DeleteVolumeGroupSnapshot(
 	}
 	parsed, err := parseGroupSnapshotID(gsID)
 	if err != nil {
-		// An unparseable id names nothing to delete; treat as already gone.
+		// An unparsable id names nothing to delete; treat as already gone.
 		klog.Warningf("DeleteVolumeGroupSnapshot: %v, treating as deleted", err)
 		return &csi.DeleteVolumeGroupSnapshotResponse{}, nil
 	}
