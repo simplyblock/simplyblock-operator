@@ -1,6 +1,6 @@
 # Design Document: Consistency Groups
 
-**Status:** Draft  
+**Status:** Implementation  
 **Author:** Israel Geoffrey (geoffrey1330)  
 **Date:** 2026-09-09 (last updated 2026-09-11)  
 **Test Plan:** [`tests/test-plan-consistency-groups.md`](../tests/test-plan-consistency-groups.md)
@@ -9,11 +9,11 @@
 
 ## Phasing Overview
 
-| Phase       | Status  | Scope                                                                                                                                                                                            | Sections           |
-|-------------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| **Phase 1** | Planned | A standalone consistency group in the control plane: membership at provisioning, a group snapshot as one crash-consistent generation, and a listing that shows which snapshots belong to a group | §4, §5, §6, §7, §8 |
-| **Phase 2** | Planned | The Kubernetes-native surface: a `VolumeGroupSnapshot` snapshots the group through the CSI GroupController service                                                                               | §5.3, §9, §10      |
-| **Phase 3** | Planned | Single-operation group restore: a `VolumeGroupSnapshotOps` with `action: Restore` restores every member of one generation in one apply                                                           | §7.4, Appendix A   |
+| Phase       | Status      | Scope                                                                                                                                                                                            | Sections           |
+|-------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| **Phase 1** | Implemented | A standalone consistency group in the control plane: membership at provisioning, a group snapshot as one crash-consistent generation, and a listing that shows which snapshots belong to a group | §4, §5, §6, §7, §8 |
+| **Phase 2** | Implemented | The Kubernetes-native surface: a `VolumeGroupSnapshot` snapshots the group through the CSI GroupController service                                                                               | §5.3, §9, §10      |
+| **Phase 3** | Implemented | Single-operation group restore: a `VolumeGroupSnapshotOps` with `action: Restore` restores every member of one generation in one apply                                                           | §7.4, Appendix A   |
 
 Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Phase 3 adds the one-apply restore on top of Phase 2's materialized member snapshots. Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
 
@@ -21,12 +21,12 @@ Phase 1 stands alone: it decouples the consistency group from the replication po
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                      | Kind                    | Blocks             | Status                                                                                                         |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|--------------------|----------------------------------------------------------------------------------------------------------------|
-| P0-1 | `bdev_lvol_snapshot_group`: one frozen SPDK call that snapshots every member of a logical volume store at a single point in time                                                                                  | Storage plane (SPDK)    | Phase 1            | Shipped (verified 2026-09-07)                                                                                  |
-| P0-2 | A standalone consistency-group backend: a group that exists without a replication policy, with create, member-remove, snapshot take, snapshot delete, and a group-aware snapshot listing, all scoped to a cluster | Control plane (`sbcli`) | Phase 1            | Partial: a policy-coupled group exists on the `replication-features` branch (§1); the standalone form does not |
-| P0-3 | Volume-create accepts a `consistency_group` field and, inside one atomic create, ensures the group, joins the volume, and enforces placement                                                                      | Control plane (`sbcli`) | Phase 1 membership | Not shipped as a standalone path                                                                               |
-| P0-4 | external-snapshotter `VolumeGroupSnapshot` CRDs (`v1beta1`) installed, and the `CSIVolumeGroupSnapshot` feature gate enabled on both the `snapshot-controller` and the `csi-snapshotter` sidecar                  | Ecosystem / Kubernetes  | Phase 2            | Images at `v8.2.0` support it, but the CRDs and the gate are not enabled today                                 |
+| #    | Prerequisite                                                                                                                                                                                                      | Kind                    | Blocks             | Status                                                                       |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|--------------------|------------------------------------------------------------------------------|
+| P0-1 | `bdev_lvol_snapshot_group`: one frozen SPDK call that snapshots every member of a logical volume store at a single point in time                                                                                  | Storage plane (SPDK)    | Phase 1            | Shipped (verified 2026-09-07)                                                |
+| P0-2 | A standalone consistency-group backend: a group that exists without a replication policy, with create, member-remove, snapshot take, snapshot delete, and a group-aware snapshot listing, all scoped to a cluster | Control plane (`sbcli`) | Phase 1            | Shipped: the standalone group, its REST surface, and the `sbctl cg` commands |
+| P0-3 | Volume-create accepts a `consistency_group` field and, inside one atomic create, ensures the group, joins the volume, and enforces placement                                                                      | Control plane (`sbcli`) | Phase 1 membership | Shipped, on both the create and the clone paths (§7.2)                       |
+| P0-4 | external-snapshotter `VolumeGroupSnapshot` CRDs (`v1beta1`) installed, and the `CSIVolumeGroupSnapshot` feature gate enabled on both the `snapshot-controller` and the `csi-snapshotter` sidecar                  | Ecosystem / Kubernetes  | Phase 2            | Shipped: the chart installs the CRDs and enables the gate                    |
 
 P0-1 is the one primitive the whole design rests on, and it is live. P0-2 and P0-3 are the backend work that turns the existing policy-coupled group into a standalone object and lets a volume join a group at creation. Without P0-4 the Phase 2 CSI GroupController has no Kubernetes objects to reconcile, so Phase 1 (the backend group plus `sbctl`) is the whole feature until the gate is turned on.
 
@@ -304,7 +304,7 @@ spec:
 
 **The restore composes §7.1, and adds nothing beneath it.** The controller resolves the target `VolumeGroupSnapshot`, enumerates the member `VolumeSnapshot` objects backref'd to it (§5.3), and creates one PersistentVolumeClaim per member, each with that member's snapshot as its `dataSource`. It then waits for every claim to bind and reports the outcome. There is no new CSI verb and no new backend endpoint: the backend sees N ordinary per-member clones, and the restored set is crash-consistent for the §7.1 reason, because the source generation was one frozen cut.
 
-**Claim naming is derived, not enumerated.** Each restored claim is named `<namePrefix>-<source PVC name>`, with the source name read from the member snapshot's `spec.source.persistentVolumeClaimName`. `namePrefix` defaults to the operation's own name. A derived name that collides with an existing claim fails the operation, naming the claim, and leaves the claims already created in place: claims are user-visible objects, and a half-restore the user can see and delete is better than one silently retried into a different shape.
+**Claim naming is derived, not enumerated.** Each restored claim is named `<namePrefix>-<source PVC name>`, with the source name read from the member snapshot's `spec.source.persistentVolumeClaimName`. `namePrefix` defaults to the operation's own name. Every restored claim carries `storage.simplyblock.io/volume-group-snapshot-ops: <operation name>`: the ownership mark is what distinguishes an idempotent re-create on a later pass from a collision with a claim the operation does not own, and it is the key the controller's claim watch maps bind events back through. A derived name that collides with a foreign claim fails the operation, naming the claim, and leaves the claims already created in place: claims are user-visible objects, and a half-restore the user can see and delete is better than one silently retried into a different shape.
 
 **Group formation stays a separate decision (§7.2).** When `spec.restore.consistencyGroup` is set, every restored claim carries `storage.simplyblock.io/consistency-group: <value>`, so the clones birth a new group at provisioning under the mandatory placement rule. When it is empty, the clones are independent, mutually consistent volumes. The field changes only the labels the controller stamps on the claims it creates. The group mechanics are §4.1's, unchanged.
 
@@ -729,5 +729,6 @@ func init() {
 	SchemeBuilder.Register(&VolumeGroupSnapshotOps{}, &VolumeGroupSnapshotOpsList{})
 }
 ```
+
 
 

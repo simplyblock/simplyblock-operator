@@ -7,7 +7,7 @@ Scope is the CSI driver and the Kubernetes surface this repository builds. The c
 
 Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster, pure functions, a fake `client.Client`, a mock HTTP backend), `I-` is integration (full reconcile or sidecar loop against `envtest` and a mock backend), `E-` is end-to-end (a live cluster and the real data path), and `M-` is manual (needs failure injection or orchestration not automated yet). Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §7 with its reason.
 
-The plan is the target coverage, and the `Test` columns fill in as the work lands. The `VolumeGroupSnapshotOps` unit rows (U-25 … U-33) are implemented; every other row is still `—`.
+The plan is the target coverage, and the `Test` columns fill in as the work lands. The unit rows are implemented except U-03 and U-08. The integration, E2E, and manual rows are still `—`.
 
 ---
 
@@ -17,55 +17,55 @@ Pure functions and single calls against a fake client, with the control plane re
 
 ### Provisioner Label Handling (§4.1)
 
-File: `csi-driver/internal/csi/controller/controller_unit_test.go`
+File: `csi-driver/internal/csi/controller/provision_cg_test.go`
 
-| #    | Scenario                                                                                      | Type     | Test |
-|------|-----------------------------------------------------------------------------------------------|----------|------|
-| U-01 | PVC carries the consistency-group label: `consistency_group` is set on the volume-create body | Positive | —    |
-| U-02 | PVC has no label: `consistency_group` is absent, create is unchanged                          | Negative | —    |
-| U-03 | Label present but empty value: rejected as an invalid group name, create fails cleanly        | Boundary | —    |
+| #    | Scenario                                                                                      | Type     | Test                                            |
+|------|-----------------------------------------------------------------------------------------------|----------|-------------------------------------------------|
+| U-01 | PVC carries the consistency-group label: `consistency_group` is set on the volume-create body | Positive | `TestCreateVolume_SendsConsistencyGroupLabel`   |
+| U-02 | PVC has no label: `consistency_group` is absent, create is unchanged                          | Negative | `TestCreateVolume_NoLabelOmitsConsistencyGroup` |
+| U-03 | Label present but empty value: rejected as an invalid group name, create fails cleanly        | Boundary | —                                               |
 
 ### CSI GroupController (§9)
 
-File: `csi-driver/internal/csi/controller/groupsnapshot_unit_test.go`
+File: `csi-driver/internal/csi/controller/groupsnapshot_test.go`
 
-| #    | Scenario                                                                                                                                                  | Type     | Test |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-04 | Handle set equals the group membership: the take-generation call is made, `group_snapshot_id` is `{gid}:{seq}`                                            | Positive | —    |
-| U-05 | Handle set differs from the membership (extra handle): `FAILED_PRECONDITION`, no backend take call                                                        | Negative | —    |
-| U-06 | Handle set differs from the membership (missing handle): `FAILED_PRECONDITION`, no backend take call                                                      | Negative | —    |
-| U-07 | Handles resolve to two different groups: `FAILED_PRECONDITION`                                                                                            | Negative | —    |
-| U-08 | `CreateVolumeGroupSnapshot` retried with the same external name: returns the existing generation, no second take                                          | Boundary | —    |
-| U-09 | `DeleteVolumeGroupSnapshot` for a group that no longer exists: returns success                                                                            | Boundary | —    |
-| U-10 | `GetVolumeGroupSnapshot` maps to the group-scoped generation read and returns per-member handles                                                          | Positive | —    |
-| U-11 | Advertised capabilities include `GROUP_CONTROLLER_SERVICE` and `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT`                                                  | Positive | —    |
-| U-20 | Backend take-generation returns a member-unhealthy precondition error: the `VolumeGroupSnapshot` is surfaced not-ready with the message, no partial state | Negative | —    |
+| #    | Scenario                                                                                                                                                  | Type     | Test                                                     |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------|
+| U-04 | Handle set equals the group membership: the take-generation call is made, `group_snapshot_id` is `{gid}:{seq}`                                            | Positive | `TestCreateVolumeGroupSnapshot_HandlesEqualMembership`   |
+| U-05 | Handle set differs from the membership (extra handle): `FAILED_PRECONDITION`, no backend take call                                                        | Negative | `TestCreateVolumeGroupSnapshot_ExtraHandleIsRefused`     |
+| U-06 | Handle set differs from the membership (missing handle): `FAILED_PRECONDITION`, no backend take call                                                      | Negative | `TestCreateVolumeGroupSnapshot_MissingHandleIsRefused`   |
+| U-07 | Handles resolve to two different groups: `FAILED_PRECONDITION`                                                                                            | Negative | `TestCreateVolumeGroupSnapshot_TwoGroupsRefused`         |
+| U-08 | `CreateVolumeGroupSnapshot` retried with the same external name: returns the existing generation, no second take                                          | Boundary | —                                                        |
+| U-09 | `DeleteVolumeGroupSnapshot` for a group that no longer exists: returns success                                                                            | Boundary | `TestDeleteVolumeGroupSnapshot_MissingIsSuccess`         |
+| U-10 | `GetVolumeGroupSnapshot` maps to the group-scoped generation read and returns per-member handles                                                          | Positive | `TestGetVolumeGroupSnapshot_ReadsGeneration`             |
+| U-11 | Advertised capabilities include `GROUP_CONTROLLER_SERVICE` and `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT`                                                  | Positive | `TestGroupControllerGetCapabilities`                     |
+| U-20 | Backend take-generation returns a member-unhealthy precondition error: the `VolumeGroupSnapshot` is surfaced not-ready with the message, no partial state | Negative | `TestCreateVolumeGroupSnapshot_BackendTakeErrorSurfaces` |
 
 ### VolumeGroupSnapshot Admission Webhook (§9.4)
 
-File: `operator/internal/webhook/volumegroupsnapshot_webhook_unit_test.go`
+File: `operator/internal/webhook/volumegroupsnapshot_validator_test.go`
 
-| #    | Scenario                                                                                                                                    | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-12 | Label check: selector resolves to PVCs that all carry the same consistency-group label, and the set equals the backend membership: admitted | Positive | —    |
-| U-13 | Label check: selector resolves to PVCs across two different group labels: rejected (fail-closed), message names the offending PVCs          | Negative | —    |
-| U-14 | Label check: selector matches a PVC with no consistency-group label: rejected (fail-closed)                                                 | Negative | —    |
-| U-15 | Label check: selector matches nothing: rejected                                                                                             | Boundary | —    |
-| U-16 | Membership check: selected set is missing a current member: rejected at admission                                                           | Negative | —    |
-| U-17 | Membership check: selected set includes a PVC labeled after creation (not a backend member): rejected at admission                          | Negative | —    |
-| U-18 | Membership check: backend unreachable: admitted (fail-open), GroupController backstops                                                      | Boundary | —    |
-| U-19 | Membership check: a selected PVC is not yet bound so its lvol is unknown: admitted (fail-open)                                              | Boundary | —    |
+| #    | Scenario                                                                                                                                    | Type     | Test                               |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------|
+| U-12 | Label check: selector resolves to PVCs that all carry the same consistency-group label, and the set equals the backend membership: admitted | Positive | `TestVolumeGroupSnapshotValidator` |
+| U-13 | Label check: selector resolves to PVCs across two different group labels: rejected (fail-closed), message names the offending PVCs          | Negative | `TestVolumeGroupSnapshotValidator` |
+| U-14 | Label check: selector matches a PVC with no consistency-group label: rejected (fail-closed)                                                 | Negative | `TestVolumeGroupSnapshotValidator` |
+| U-15 | Label check: selector matches nothing: rejected                                                                                             | Boundary | `TestVolumeGroupSnapshotValidator` |
+| U-16 | Membership check: selected set is missing a current member: rejected at admission                                                           | Negative | `TestVolumeGroupSnapshotValidator` |
+| U-17 | Membership check: selected set includes a PVC labeled after creation (not a backend member): rejected at admission                          | Negative | `TestVolumeGroupSnapshotValidator` |
+| U-18 | Membership check: backend unreachable: admitted (fail-open), GroupController backstops                                                      | Boundary | `TestVolumeGroupSnapshotValidator` |
+| U-19 | Membership check: a selected PVC is not yet bound so its lvol is unknown: admitted (fail-open)                                              | Boundary | `TestVolumeGroupSnapshotValidator` |
 
 ### VolumeMigration Admission Webhook (§9.5)
 
-File: `operator/internal/webhook/volumemigration_webhook_unit_test.go`
+File: `operator/internal/webhook/volumemigration_validator_test.go`
 
-| #    | Scenario                                                                                                                         | Type     | Test |
-|------|----------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-21 | Target PV backs a consistency-group member: the create is rejected (fail-closed), the message names the volume and its group     | Negative | —    |
-| U-22 | Target PV backs a non-member volume: the create is admitted, migration proceeds                                                  | Positive | —    |
-| U-23 | Target PV backs a sibling in the same subsystem as a group member: the create is rejected, because the subsystem migrates as one | Negative | —    |
-| U-24 | Backend unreachable so membership cannot be determined: the create is admitted (fail-open), the backend refusal backstops        | Boundary | —    |
+| #    | Scenario                                                                                                                         | Type     | Test                           |
+|------|----------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------|
+| U-21 | Target PV backs a consistency-group member: the create is rejected (fail-closed), the message names the volume and its group     | Negative | `TestVolumeMigrationValidator` |
+| U-22 | Target PV backs a non-member volume: the create is admitted, migration proceeds                                                  | Positive | `TestVolumeMigrationValidator` |
+| U-23 | Target PV backs a sibling in the same subsystem as a group member: the create is rejected, because the subsystem migrates as one | Negative | `TestVolumeMigrationValidator` |
+| U-24 | Backend unreachable so membership cannot be determined: the create is admitted (fail-open), the backend refusal backstops        | Boundary | `TestVolumeMigrationValidator` |
 
 ### VolumeGroupSnapshotOps: Restore (design §7.4)
 
@@ -119,7 +119,7 @@ File: `operator/internal/controller/volumegroupsnapshotops_controller_test.go`
 
 ## 3. E2E Tests
 
-Against a live simplyblock cluster with real fio workloads. The cross-volume correctness rows assert data coherence with hashes, not merely that I/O continued.
+Against a live simplyblock cluster with real fio workloads. The cross-volume correctness rows assert data coherence with hashes, not merely that I/O continued. The live rows are currently exercised by the external `regression_test/19` and `regression_test/20` scripts, which live outside this repository, so the `Test` column stays `—` until they move in.
 
 ### Group Membership and Placement (§4.1, §4.2)
 
@@ -209,7 +209,7 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 33        | 9       | U-01 … U-24 |
+| Unit        | 33        | 31      | U-03, U-08  |
 | Integration | 12        | 0       | I-01 … I-12 |
 | E2E         | 14        | 0       | E-01 … E-14 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -222,7 +222,7 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 
 | #                                    | Gap                                                                                                          | Reason                                                                                                         |
 |--------------------------------------|--------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| U-01 … U-24                          | Provisioner label handling, the CSI GroupController, and the admission webhook                               | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
+| U-01 … U-24                          | Provisioner label handling, the CSI GroupController, and the admission webhook                               | `TestCreateVolume_SendsConsistencyGroupLabel`                                                                  |
 | I-01 … I-08                          | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                                    | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
 | E-01 … E-12                          | Membership, placement, cross-volume consistency, clone, representation, and health-precheck live             | Depends on the standalone backend group (P0-2, P0-3), which is not shipped                                     |
 | U-25 … U-33, I-09 … I-12, E-13, E-14 | The `VolumeGroupSnapshotOps` restore: claim derivation, admission, lifecycle, and the live one-apply restore | `TestGroupRestore_CreatesOneClaimPerMember`                                                                    |
@@ -230,5 +230,6 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 | M-01                                 | Deleting a member preserves its group snapshots                                                              | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
 | M-02                                 | A member migrated off the pinned store                                                                       | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |
 | —                                    | Asymmetric node sizes, very large groups, listing under many generations                                     | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                    |
+
 
 
