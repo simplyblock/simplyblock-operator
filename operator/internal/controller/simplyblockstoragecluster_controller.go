@@ -268,6 +268,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		EnableFailureDomain:    ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains),
 		InlineChecksum:         ptr.BoolFromOrFalse(clusterCR.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(clusterCR.Spec.EnableAtomic4kWrites),
+		DeviceMode:             clusterCR.Spec.DeviceMode,
 	}
 
 	endpoint = "/api/v2/clusters/"

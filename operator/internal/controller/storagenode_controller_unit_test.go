@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -452,6 +453,34 @@ func TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval(t *testing.T) {
 	for _, f := range updated.Finalizers {
 		if f == storageNodeFinalizer {
 			t.Error("finalizer should have been removed once the remove ops succeeded")
+		}
+	}
+}
+
+// TestReconcile_FinalizesWhenParentStorageNodeSetGone verifies a StorageNode
+// being deleted still clears its finalizer once its parent StorageNodeSet is
+// already gone, instead of looping forever on "parent not found, requeuing."
+func TestReconcile_FinalizesWhenParentStorageNodeSetGone(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns-already-deleted", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	now := metav1.Now()
+	sn.DeletionTimestamp = &now
+	r := newSNReconciler(t, sn)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "sn-1", Namespace: snTestNS},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	getErr := r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	if getErr == nil {
+		for _, f := range updated.Finalizers {
+			if f == storageNodeFinalizer {
+				t.Error("finalizer should have been removed even though parent StorageNodeSet is gone")
+			}
 		}
 	}
 }

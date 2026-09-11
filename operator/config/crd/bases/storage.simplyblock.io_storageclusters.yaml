@@ -102,6 +102,21 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              deviceMode:
+                default: nvme
+                description: |-
+                  DeviceMode selects how storage devices are attached for every node in this
+                  cluster: "nvme" (default) auto-discovers NVMe PCIe devices, "lblk" wraps
+                  arbitrary Linux block devices in SPDK AIO bdevs instead, selected per node via
+                  the StorageNodeSet/StorageNode block-device fields. Set at cluster-create time
+                  and immutable after. Requires sbcli with lblk support (simplyblock/sbcli#1224).
+                enum:
+                - nvme
+                - lblk
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableAtomic4kWrites:
                 default: false
                 description: |-
@@ -426,6 +441,8 @@ spec:
               rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
             - message: field enableAtomic4kWrites is immutable once set
               rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
+            - message: field deviceMode is immutable once set
+              rule: '!has(oldSelf.deviceMode) || has(self.deviceMode)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
