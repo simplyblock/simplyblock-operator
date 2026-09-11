@@ -1,0 +1,20 @@
+# The CRDs whose kinds declare more than one version and are therefore served
+# through the conversion webhook. One CRD name per line; blank lines and lines
+# opening with a hash are ignored.
+#
+# This file is the single source of truth for three consumers that must agree, or
+# a kind is served without being trusted and every read of it fails:
+#
+#   - hack/apply-conversion-webhook.sh writes the conversion stanza into each of
+#     these CRD manifests after controller-gen regenerates them.
+#   - internal/webhook/conversion.go registers the conversion webhook for the
+#     matching hub types. TestConvertedKindsMatchTheManifestList asserts the two
+#     lists are the same.
+#   - internal/webhook/cert.go injects the serving CA into each of these CRDs.
+#
+# Adding a kind to the migration means adding it here and in conversion.go.
+
+controlplanes.storage.simplyblock.io
+storagebackups.storage.simplyblock.io
+storageclusterops.storage.simplyblock.io
+storagenodeops.storage.simplyblock.io

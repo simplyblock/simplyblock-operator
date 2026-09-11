@@ -23,21 +23,34 @@ import (
 	restclient "k8s.io/client-go/rest"
 	basecompatibility "k8s.io/component-base/compatibility"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 )
 
+// Every kind the group serves, at the version it is served at. A kind registered
+// under the wrong version is a 404 on the route a client was told to use, which
+// nothing else in this package would catch.
 func TestSchemeKnowsTheServedKinds(t *testing.T) {
-	for _, obj := range []runtime.Object{
-		&metricsv1alpha1.LogicalVolumeMetrics{},
-		&metricsv1alpha1.LogicalVolumeMetricsList{},
+	for _, object := range []runtime.Object{
+		&metricsv1alpha2.LogicalVolumeMetrics{},
+		&metricsv1alpha2.LogicalVolumeMetricsList{},
+		&metricsv1alpha2.StorageDeviceMetrics{},
+		&metricsv1alpha2.StorageDeviceMetricsList{},
 	} {
-		kinds, _, err := Scheme.ObjectKinds(obj)
+		kinds, _, err := Scheme.ObjectKinds(object)
 		if err != nil {
-			t.Errorf("ObjectKinds(%T): %v", obj, err)
+			t.Errorf("ObjectKinds(%T): %v", object, err)
 			continue
 		}
-		if len(kinds) == 0 || kinds[0].Group != metricsv1alpha1.GroupName {
-			t.Errorf("%T registered as %v, want group %s", obj, kinds, metricsv1alpha1.GroupName)
+		found := false
+		for _, kind := range kinds {
+			if kind.GroupVersion() == metricsv1alpha2.GroupVersion {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%T registered as %v, want %s", object, kinds, metricsv1alpha2.GroupVersion)
 		}
 	}
 }
@@ -55,20 +68,20 @@ func TestSchemeCanEncodeAStatus(t *testing.T) {
 }
 
 func TestCodecRoundTripsAReading(t *testing.T) {
-	want := &metricsv1alpha1.LogicalVolumeMetrics{
+	want := &metricsv1alpha2.LogicalVolumeMetrics{
 		ObjectMeta:       metav1.ObjectMeta{Name: "postgres-data", Namespace: "team-a"},
 		Timestamp:        metav1.Unix(1756713600, 0),
 		VolumeHandle:     "c:p:v",
 		PersistentVolume: "pv-a",
 		PoolName:         "pool-a",
-		Capacity: metricsv1alpha1.LogicalVolumeCapacity{
+		Capacity: metricsv1alpha2.LogicalVolumeCapacity{
 			Provisioned:        *resource.NewQuantity(107374182400, resource.BinarySI),
 			Used:               *resource.NewQuantity(38654705664, resource.BinarySI),
 			UtilizationPercent: 36,
 		},
 	}
 
-	codec := Codecs.LegacyCodec(metricsv1alpha1.GroupVersion)
+	codec := Codecs.LegacyCodec(metricsv1alpha2.GroupVersion)
 	encoded, err := runtime.Encode(codec, want)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -82,7 +95,7 @@ func TestCodecRoundTripsAReading(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	got, ok := decoded.(*metricsv1alpha1.LogicalVolumeMetrics)
+	got, ok := decoded.(*metricsv1alpha2.LogicalVolumeMetrics)
 	if !ok {
 		t.Fatalf("decoded %T, want *LogicalVolumeMetrics", decoded)
 	}
@@ -92,8 +105,8 @@ func TestCodecRoundTripsAReading(t *testing.T) {
 }
 
 // InstallAPIGroup is where a resource that does not implement what the installer
-// demands is rejected. Running it without a listener proves the registration is
-// well-formed.
+// demands is rejected, and where a kind whose OpenAPI definition is missing shows
+// up. Running it without a listener proves both registrations are well-formed.
 func TestAPIGroupInstalls(t *testing.T) {
 	config := genericapiserver.NewRecommendedConfig(Codecs)
 	config.EffectiveVersion = basecompatibility.NewEffectiveVersionFromString(operatorAPIVersion, "", "")
@@ -102,19 +115,107 @@ func TestAPIGroupInstalls(t *testing.T) {
 	// listener, and New refuses to build without one.
 	config.LoopbackClientConfig = &restclient.Config{Host: "https://" + config.ExternalAddress}
 	namer := openapinamer.NewDefinitionNamer(Scheme)
-	config.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(metricsv1alpha1.GetOpenAPIDefinitions, namer)
-	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(metricsv1alpha1.GetOpenAPIDefinitions, namer)
+	config.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(openAPIDefinitions, namer)
+	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(openAPIDefinitions, namer)
 
 	server, err := config.Complete().New("test-apiserver", genericapiserver.NewEmptyDelegate())
 	if err != nil {
 		t.Fatalf("build a bare api server: %v", err)
 	}
 
-	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha1.GroupName, Scheme, ParameterCodec, Codecs)
-	group.VersionedResourcesStorageMap[metricsv1alpha1.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName: NewStorage(fakeVolumes{}, nil, nil),
+	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha2.GroupName, Scheme, ParameterCodec, Codecs)
+	group.VersionedResourcesStorageMap[metricsv1alpha2.GroupVersion.Version] = map[string]rest.Storage{
+		ResourceName:       NewStorage(fakeVolumes{}, nil, nil),
+		DeviceResourceName: NewDeviceStorage(nil, nil),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		t.Fatalf("InstallAPIGroup: %v", err)
+	}
+}
+
+// One served version, and it is v1alpha2. The count is the assertion: a second
+// version would make the internal version a real conversion hub and would need an
+// APIService object of its own, so it is a change to notice rather than to
+// discover from a 404.
+func TestTheGroupServesOneVersion(t *testing.T) {
+	versions := Scheme.PrioritizedVersionsForGroup(metricsv1alpha2.GroupName)
+	if len(versions) != 1 {
+		t.Fatalf("prioritized versions = %v, want v1alpha2 alone", versions)
+	}
+	if versions[0] != metricsv1alpha2.GroupVersion {
+		t.Errorf("served version = %s, want %s", versions[0], metricsv1alpha2.GroupVersion)
+	}
+}
+
+func TestCodecRoundTripsADeviceReading(t *testing.T) {
+	want := &metricsv1alpha2.StorageDeviceMetrics{
+		ObjectMeta:  metav1.ObjectMeta{Name: "production-7f3a9c-5e0000a1", Namespace: "sb"},
+		Timestamp:   metav1.Unix(1756713600, 0),
+		DeviceID:    "5e0000a1-3b2c-4d5e-9f01-2a3b4c5d6e7f",
+		StorageNode: "production-7f3a9c",
+		Capacity: metricsv1alpha2.StorageDeviceCapacity{
+			Total:              *resource.NewQuantity(3840755982336, resource.BinarySI),
+			Used:               *resource.NewQuantity(1920377991168, resource.BinarySI),
+			UtilizationPercent: 50,
+		},
+	}
+
+	codec := Codecs.LegacyCodec(metricsv1alpha2.GroupVersion)
+	encoded, err := runtime.Encode(codec, want)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(string(encoded), "\"kind\":\"StorageDeviceMetrics\"") {
+		t.Errorf("encoded object carries no kind: %s", encoded)
+	}
+
+	decoded, err := runtime.Decode(codec, encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, ok := decoded.(*metricsv1alpha2.StorageDeviceMetrics)
+	if !ok {
+		t.Fatalf("decoded %T, want *StorageDeviceMetrics", decoded)
+	}
+	if got.Name != want.Name || got.Capacity.Used.Value() != want.Capacity.Used.Value() {
+		t.Errorf("round trip lost data: %+v", got)
+	}
+}
+
+// The definitions have to carry every served kind. A kind with no definition
+// makes InstallAPIGroup fail on the field-management type converter, and leaves
+// `kubectl explain` empty.
+func TestOpenAPIDefinitionsCoverEveryServedKind(t *testing.T) {
+	definitions := openAPIDefinitions(func(string) spec.Ref { return spec.Ref{} })
+	const pkg = "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2."
+	for _, kind := range []string{"LogicalVolumeMetrics", "StorageDeviceMetrics"} {
+		if _, ok := definitions[pkg+kind]; !ok {
+			t.Errorf("no OpenAPI definition for %s", pkg+kind)
+		}
+	}
+}
+
+// Every served version needs its own APIService object, and the CA bundle has to
+// be injected into each: the kube-apiserver trusts the listener per APIService,
+// so a version whose object carries no bundle is Available=False and answers
+// nothing. Deriving the list from the scheme is what stops a version being added
+// to one and forgotten in the other.
+func TestEveryServedVersionGetsItsCABundle(t *testing.T) {
+	served := Scheme.PrioritizedVersionsForGroup(metricsv1alpha2.GroupName)
+	injected := metricsAPIServiceObjects()
+	if len(injected) != len(served) {
+		t.Fatalf("%d APIService objects for %d served versions", len(injected), len(served))
+	}
+	for _, version := range served {
+		want := version.Version + "." + version.Group
+		found := false
+		for _, name := range injected {
+			if name == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no CA bundle injection for %s, want the APIService %q", version, want)
+		}
 	}
 }

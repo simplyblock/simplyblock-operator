@@ -34,12 +34,6 @@ const (
 	// StorageNodeSet in the cluster.
 	LabelSimplyblockCluster = "simplyblock-cluster"
 
-	// LabelNodeType marks a worker Node as part of a cluster's storage plane.
-	// Its value is NodeTypeStoragePlaneValue(clusterName). It is cluster-scoped,
-	// so do not use it to select a single StorageNodeSet's workers. Use
-	// LabelStorageNodeSet for that.
-	LabelNodeType = "io.simplyblock.node-type"
-
 	// LabelStorageNodeSet scopes a worker Node, pod, and DaemonSet to a single
 	// StorageNodeSet (value = the StorageNodeSet name). It is the storage-node
 	// DaemonSet's node selector, letting multiple StorageNodeSets coexist in one
@@ -47,10 +41,9 @@ const (
 	LabelStorageNodeSet = "io.simplyblock.storagenodeset"
 )
 
-// NodeTypeStoragePlaneValue is the LabelNodeType value marking a worker as part
-// of the given cluster's storage plane.
-func NodeTypeStoragePlaneValue(clusterName string) string {
-	return "simplyblock-storage-plane-" + clusterName
+// PoolNodeLabelKey is the label key identifying one storage pool.
+func PoolNodeLabelKey(poolUUID string) string {
+	return LabelPoolPrefix + poolUUID
 }
 
 // StorageNodeSetDaemonSetName is the name of the storage-node DaemonSet owned by
@@ -98,10 +91,33 @@ const (
 // Labels, annotations, and finalizers atlas-managed objects carry.
 const (
 	// LabelVolumeHandle lets selectors find the K8s objects for a logical
-	// volume.
+	// volume. Nothing writes it, and nothing can: a handle is 110 bytes
+	// normalized and a label value stops at 63, so AnnoVolumeHandle carries
+	// this instead.
 	LabelVolumeHandle = "simplyblock.io/volume-handle"
+
+	// AnnoVolumeHandle records a volume's handle with its pool segment
+	// normalized to a UUID, on the PersistentVolume and the
+	// VolumeSnapshotContent whose own field cannot be changed.
+	//
+	// A handle provisioned before the v2 API migration encodes the pool's
+	// name rather than its id, and the field it lives in is immutable:
+	// ValidatePersistentVolumeUpdate rejects any change to
+	// spec.persistentVolumeSource. Metadata is writable where spec is not, so
+	// the field keeps the spelling it was provisioned with and this carries
+	// the identity every reader wants.
+	//
+	// A reader takes it when it is present and consistent with the field, and
+	// the field otherwise. Consistency is exact: the cluster and volume
+	// segments must match, and only the pool segment may differ, so a
+	// hand-edited annotation cannot redirect a volume to another cluster.
+	AnnoVolumeHandle = "storage.simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
 	AnnoPool = "simplyblock.io/pool"
+	// LabelPoolPrefix opens the per-pool label the operator puts on every node in
+	// a StoragePool's AllowedNodes
+	LabelPoolPrefix  = "storage.simplyblock.io/storage-pool."
+	LabelPoolAllowed = "allowed"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads

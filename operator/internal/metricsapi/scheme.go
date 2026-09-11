@@ -7,7 +7,7 @@
 // apart is what stops a type registered for a controller's convenience from
 // silently appearing in the aggregated API's discovery document.
 //
-// The kinds are registered twice: once under v1alpha1, and once under the
+// The kinds are registered twice: once under v1alpha2, and once under the
 // group's internal version. That looks redundant with one external version, and
 // it is not optional: the codec's decode side targets the internal version of
 // whatever group it is decoding, and a group with no internal version registered
@@ -27,7 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	"k8s.io/kube-openapi/pkg/common"
+
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 )
 
 var (
@@ -44,12 +46,14 @@ func init() {
 }
 
 func addToScheme(scheme *runtime.Scheme) error {
-	gv := metricsv1alpha1.GroupVersion
-	internal := schema.GroupVersion{Group: metricsv1alpha1.GroupName, Version: runtime.APIVersionInternal}
+	gv := metricsv1alpha2.GroupVersion
+	internal := schema.GroupVersion{Group: metricsv1alpha2.GroupName, Version: runtime.APIVersionInternal}
 	for _, version := range []schema.GroupVersion{gv, internal} {
 		scheme.AddKnownTypes(version,
-			&metricsv1alpha1.LogicalVolumeMetrics{},
-			&metricsv1alpha1.LogicalVolumeMetricsList{},
+			&metricsv1alpha2.LogicalVolumeMetrics{},
+			&metricsv1alpha2.LogicalVolumeMetricsList{},
+			&metricsv1alpha2.StorageDeviceMetrics{},
+			&metricsv1alpha2.StorageDeviceMetricsList{},
 		)
 	}
 	// The meta kinds are registered twice as well, and for a reason that is not
@@ -75,4 +79,12 @@ func addToScheme(scheme *runtime.Scheme) error {
 	)
 
 	return scheme.SetVersionPriority(gv)
+}
+
+// openAPIDefinitions is the generated definitions of the served version. The
+// aggregated API server takes one function and refuses a group whose kinds it
+// cannot find a definition for, and openapi-gen writes one function per package,
+// so a second version of this group would make this a merge of two maps.
+func openAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
+	return metricsv1alpha2.GetOpenAPIDefinitions(ref)
 }

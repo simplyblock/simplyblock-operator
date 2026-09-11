@@ -29,6 +29,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -87,13 +88,13 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// separate map of imported CRs whose status patch previously failed (BackupID
 	// still empty). These will have their status patch retried below rather than
 	// triggering a duplicate Create call.
-	var existingCRs simplyblockv1alpha1.StorageBackupList
+	var existingCRs simplyblockv1alpha2.StorageBackupList
 	if err := r.List(ctx, &existingCRs, client.InNamespace(clusterCR.Namespace)); err != nil {
 		log.Error(err, "Failed to list existing StorageBackup CRs")
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 	trackedIDs := make(map[string]struct{}, len(existingCRs.Items))
-	pendingStatusCRs := make(map[string]*simplyblockv1alpha1.StorageBackup)
+	pendingStatusCRs := make(map[string]*simplyblockv1alpha2.StorageBackup)
 	for i := range existingCRs.Items {
 		cr := &existingCRs.Items[i]
 		if cr.Status.BackupID != "" {
@@ -129,7 +130,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				pendingPVCNamespace = pending.Spec.PVCRef.Namespace
 			}
 			patch := client.MergeFrom(pending.DeepCopy())
-			pending.Status = simplyblockv1alpha1.StorageBackupStatus{
+			pending.Status = simplyblockv1alpha2.StorageBackupStatus{
 				Phase:        backupPhaseFromAPIStatus(bp.Status),
 				APIStatus:    bp.Status,
 				Message:      "Imported from storage cluster",
@@ -170,7 +171,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				"backupID", bp.ID, "lvolID", bp.LvolID)
 		}
 
-		imported := &simplyblockv1alpha1.StorageBackup{
+		imported := &simplyblockv1alpha2.StorageBackup{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      bp.ID,
 				Namespace: clusterCR.Namespace,
@@ -178,13 +179,13 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					backupSyncImportedLabel: backupSyncImportedLabelValue,
 				},
 			},
-			Spec: simplyblockv1alpha1.StorageBackupSpec{
-				ClusterName:  clusterCR.Name,
+			Spec: simplyblockv1alpha2.StorageBackupSpec{
+				ClusterRef:   clusterCR.Name,
 				SnapshotName: bp.SnapshotName,
 			},
 		}
 		if found {
-			imported.Spec.PVCRef = &simplyblockv1alpha1.PersistentVolumeClaimRef{
+			imported.Spec.PVCRef = &simplyblockv1alpha2.PersistentVolumeClaimRef{
 				Name:      pvcName,
 				Namespace: pvcNamespace,
 			}
@@ -201,7 +202,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Pre-populate status so the StorageBackupReconciler knows this backup
 		// already exists in the backend and skips creating a new snapshot/backup.
 		patch := client.MergeFrom(imported.DeepCopy())
-		imported.Status = simplyblockv1alpha1.StorageBackupStatus{
+		imported.Status = simplyblockv1alpha2.StorageBackupStatus{
 			Phase:        backupPhaseFromAPIStatus(bp.Status),
 			APIStatus:    bp.Status,
 			Message:      "Imported from storage cluster",

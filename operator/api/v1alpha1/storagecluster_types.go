@@ -69,7 +69,7 @@ type DataRealignmentSettings struct {
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 	// Interval is how often the operator checks whether a realignment is pending
-	// (i.e. at least one volume has moved since the last successful realignment) and,
+	// (i.e., at least one volume has moved since the last successful realignment) and,
 	// if so, triggers it. Explicit triggers (see the
 	// simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
 	// 10m.
@@ -132,7 +132,7 @@ const (
 )
 
 // BaselineColdStartPolicy selects what happens for a node that has fewer than
-// BaselineMinSamples samples in the rolling window (e.g. a freshly onboarded node, or
+// BaselineMinSamples samples in the rolling window (e.g., a freshly onboarded node, or
 // shortly after the probe sidecar starts).
 // +kubebuilder:validation:Enum=defer;partialWindow
 type BaselineColdStartPolicy string
@@ -148,7 +148,7 @@ const (
 )
 
 // VolumeAutoPlacementSettings controls the automatic, latency-driven volume rebalancing
-// behaviour. It is configured under StorageClusterSpec.VolumeAutoPlacement.
+// behavior. It is configured under StorageClusterSpec.VolumeAutoPlacement.
 type VolumeAutoPlacementSettings struct {
 	// Enabled activates automatic rebalancing for this cluster. Defaults to false.
 	// +optional
@@ -168,7 +168,7 @@ type VolumeAutoPlacementSettings struct {
 	ImbalanceThreshold *int32 `json:"imbalanceThreshold,omitempty"`
 	// MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
 	// that a candidate target node must be below the hot source node before a migration is
-	// performed. Prevents migrating between near-equally-loaded nodes. Defaults to 20.
+	// performed. Prevents migrating between near-equally loaded nodes. Defaults to 20.
 	// +optional
 	MinHotColdDifferencePct *int32 `json:"minHotColdDifferencePct,omitempty"`
 	// DefaultCoolDownSeconds is the cool-down period (seconds) applied to a volume after
@@ -182,10 +182,10 @@ type VolumeAutoPlacementSettings struct {
 	// find the best migration source. Defaults to 3.
 	// +optional
 	StorageNodeCandidateCount *int32 `json:"storageNodeCandidateCount,omitempty"`
-	// MetricsBackend selects the data source for I/O metrics. Defaults to "prometheus".
+	// MetricsBackend selects the data source for I/O metrics. Defaults to `prometheus`.
 	// +optional
 	MetricsBackend *MetricsBackend `json:"metricsBackend,omitempty"`
-	// PrometheusURL is required when MetricsBackend is "prometheus".
+	// PrometheusURL is required when MetricsBackend is `prometheus`.
 	// +optional
 	PrometheusURL *string `json:"prometheusURL,omitempty"`
 	// LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
@@ -219,11 +219,11 @@ type VolumeAutoPlacementSettings struct {
 	// Defaults to 3.0.
 	// +optional
 	BaselineOutlierK *float64 `json:"baselineOutlierK,omitempty"`
-	// IOPSWeight is the weight applied to per-volume IOPS in the volume IO score. Defaults to 1.0.
+	// IOPSWeight is the weight applied to per-volume IOPS in the volume I/O score. Defaults to 1.0.
 	// +optional
 	IOPSWeight *float64 `json:"iopsWeight,omitempty"`
 	// ThroughputWeight is the weight applied to per-volume throughput (MB/s) in the volume
-	// IO score. Defaults to 0.1.
+	// I/O score. Defaults to 0.1.
 	// +optional
 	ThroughputWeight *float64 `json:"throughputWeight,omitempty"`
 }
@@ -251,7 +251,7 @@ type RebalancingMetrics struct {
 }
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// NOTE: JSON tags are required. Any new fields you add must have JSON tags for the fields to be serialized.
 
 type BackupCredentialsSecretRef struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Credentials Secret"
@@ -263,7 +263,7 @@ type BackupCredentialsSecretRef struct {
 type HashicorpVaultSettings struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Vault Base URL"
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
-	// BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+	// BaseURL is the HashiCorp Vault endpoint (e.g., https://vault.example.com:8200).
 	BaseURL string `json:"baseURL,omitempty"`
 }
 
@@ -289,6 +289,7 @@ type BackupSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomic4kWrites requires enableChecksumValidation to be true"
 type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
@@ -342,7 +343,7 @@ type StorageClusterSpec struct {
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Huge Pages Size"
 	// MaxHugePagesSize is the maximum allocatable size of huge pages on each
-	// storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+	// storage node, for example, `100G` or `1T`. A bare number is interpreted as GB. It is
 	// a floor, not a cap: the effective huge-page allocation is the larger of this
 	// value and the minimum the node's device and subsystem count requires. When
 	// omitted the computed minimum is used.
@@ -375,7 +376,7 @@ type StorageClusterSpec struct {
 	VolumeMigrationSettings *VolumeMigrationSettings `json:"volumeMigrationSettings,omitempty"`
 
 	// VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
-	// nil/disabled the operator performs only manually-triggered VolumeMigrations.
+	// nil/disabled the operator performs only manually triggered VolumeMigrations.
 	// +optional
 	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
 
@@ -387,6 +388,27 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Checksum Validation"
+	// EnableChecksumValidation enables inline CRC checksum validation on every I/O for
+	// silent-data-error protection. Immutable once set: the backend bakes the checksum method
+	// into each device's bdev_alceml_create call at cluster-create time and never re-applies
+	// it.
+	// +k8s:immutable
+	// +optional
+	// +kubebuilder:default=false
+	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable 4K Atomic Writes"
+	// EnableAtomic4kWrites declares that devices guarantee 4K write atomicity even with a
+	// <4K logical block size (e.g., AWS NVMe is 512B but atomic at 4K), letting checksum
+	// fallback mode run on them despite the data plane's normal >=4K block-size requirement.
+	// Only meaningful when EnableChecksumValidation is true. Cannot be changed after cluster
+	// creation.
+	// +k8s:immutable
+	// +optional
+	// +kubebuilder:default=false
+	EnableAtomic4kWrites *bool `json:"enableAtomic4kWrites,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.
@@ -436,7 +458,7 @@ type StorageClusterStatus struct {
 	// avoid re-running at the end of an interval when nothing is pending.
 	// +optional
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
-	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
+	// ErasureCodingScheme is the active erasure-coding layout, for example, `2x1`.
 	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
 	// LastUpdated is the last backend update timestamp.
 	// FIXME: Unused for now (API update required?)

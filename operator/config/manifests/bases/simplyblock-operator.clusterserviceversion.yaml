@@ -280,11 +280,12 @@ spec:
       - description: MaxFaultTolerance defines the maximum tolerated concurrent faults.
         displayName: Max Fault Tolerance
         path: maxFaultTolerance
-      - description: MaxHugePagesSize is the maximum allocatable size of huge pages
-          on each storage node (e.g. "100G", "1T"; a bare number is interpreted as
-          GB). It is a floor, not a cap: the effective huge-page allocation is the
-          larger of this value and the minimum the node's device and subsystem count
-          requires. When omitted the computed minimum is used.
+      - description: >-
+          MaxHugePagesSize is the maximum allocatable size of huge pages on each
+          storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It
+          is a floor, not a cap: the effective huge-page allocation is the larger of
+          this value and the minimum the node's device and subsystem count requires.
+          When omitted the computed minimum is used.
         displayName: Max Huge Pages Size
         path: maxHugePagesSize
       - description: MaxQueueSize defines the maximum backend queue size.

@@ -83,6 +83,14 @@ spec:
             # moved it since.
             - name: SB_NODEPROBE_IMAGE
               value: "{{ .Values.image.operator.repository }}:{{ .Values.image.operator.tag }}"
+            # The operator's own image, which a SimplyblockDriver that names no
+            # image defaults from: the same registry and tag, with the CSI
+            # driver's repository in place of the operator's. So a driver
+            # follows the operator reconciling it, which is the pairing the
+            # release was tested as. The operator cannot read this off its own
+            # pod for the reason above.
+            - name: SB_OPERATOR_IMAGE
+              value: "{{ .Values.image.operator.repository }}:{{ .Values.image.operator.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:

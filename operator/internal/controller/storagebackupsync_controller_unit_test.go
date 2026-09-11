@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -101,7 +102,7 @@ func newSyncTestReconciler(t *testing.T, apiURL string, objects ...client.Object
 	)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageCluster{},
-		&simplyblockv1alpha1.StorageBackup{},
+		&simplyblockv1alpha2.StorageBackup{},
 	}, objects...)
 
 	return &StorageBackupSyncReconciler{
@@ -145,7 +146,7 @@ func TestStorageBackupSyncImportsBackup(t *testing.T) {
 	}
 
 	// StorageBackup CR must have been created.
-	created := &simplyblockv1alpha1.StorageBackup{}
+	created := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(context.Background(), client.ObjectKey{
 		Name:      syncTestBackupID,
 		Namespace: syncTestNamespace,
@@ -193,7 +194,7 @@ func TestStorageBackupSyncImportsWhenNoPVCMatches(t *testing.T) {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
 
-	list := &simplyblockv1alpha1.StorageBackupList{}
+	list := &simplyblockv1alpha2.StorageBackupList{}
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}
@@ -219,13 +220,13 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 	srv := syncTestBackupServer(t)
 	defer srv.Close()
 
-	existing := &simplyblockv1alpha1.StorageBackup{
+	existing := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "already-tracked",
 			Namespace: syncTestNamespace,
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{},
-		Status: simplyblockv1alpha1.StorageBackupStatus{
+		Spec: simplyblockv1alpha2.StorageBackupSpec{},
+		Status: simplyblockv1alpha2.StorageBackupStatus{
 			BackupID: syncTestBackupID,
 		},
 	}
@@ -242,7 +243,7 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
 
-	list := &simplyblockv1alpha1.StorageBackupList{}
+	list := &simplyblockv1alpha2.StorageBackupList{}
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}
@@ -263,15 +264,15 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCR(t *testing.T) {
 	defer srv.Close()
 
 	// An imported CR whose status patch previously failed — BackupID is empty.
-	orphaned := &simplyblockv1alpha1.StorageBackup{
+	orphaned := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      syncTestBackupID, // Name == backend backup ID (by convention)
 			Namespace: syncTestNamespace,
 			Labels:    map[string]string{backupSyncImportedLabel: "true"},
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName: syncTestClusterName,
-			PVCRef: &simplyblockv1alpha1.PersistentVolumeClaimRef{
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: syncTestClusterName,
+			PVCRef: &simplyblockv1alpha2.PersistentVolumeClaimRef{
 				Name:      syncTestPVCName,
 				Namespace: syncTestNamespace,
 			},
@@ -294,7 +295,7 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCR(t *testing.T) {
 	}
 
 	// Status should now be populated via the retry path.
-	updated := &simplyblockv1alpha1.StorageBackup{}
+	updated := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(context.Background(), client.ObjectKey{
 		Name:      syncTestBackupID,
 		Namespace: syncTestNamespace,
@@ -309,7 +310,7 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCR(t *testing.T) {
 	}
 
 	// Exactly one CR must exist — no duplicate was created.
-	list := &simplyblockv1alpha1.StorageBackupList{}
+	list := &simplyblockv1alpha2.StorageBackupList{}
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}
@@ -327,14 +328,14 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCRWithoutPVCRef(t *testin
 
 	// An imported CR whose status patch previously failed and which has no
 	// PVCRef at all (the originating lvol had no matching PVC at import time).
-	orphaned := &simplyblockv1alpha1.StorageBackup{
+	orphaned := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      syncTestBackupID,
 			Namespace: syncTestNamespace,
 			Labels:    map[string]string{backupSyncImportedLabel: "true"},
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName: syncTestClusterName,
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: syncTestClusterName,
 		},
 	}
 
@@ -351,7 +352,7 @@ func TestStorageBackupSyncRetriesStatusPatchForOrphanedCRWithoutPVCRef(t *testin
 		t.Fatalf("expected periodic requeue, got zero RequeueAfter")
 	}
 
-	updated := &simplyblockv1alpha1.StorageBackup{}
+	updated := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(context.Background(), client.ObjectKey{
 		Name:      syncTestBackupID,
 		Namespace: syncTestNamespace,
@@ -387,7 +388,7 @@ func TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch(t *testing.T)
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
 
-	list := &simplyblockv1alpha1.StorageBackupList{}
+	list := &simplyblockv1alpha2.StorageBackupList{}
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}

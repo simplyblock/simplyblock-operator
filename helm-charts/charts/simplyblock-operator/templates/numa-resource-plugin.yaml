@@ -58,8 +58,12 @@ spec:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
+            # The operator labels every storage-plane worker it enrolls with the
+            # StorageNodeSet the worker belongs to, so the key's presence marks
+            # the storage plane. It replaced io.simplyblock.node-type, which
+            # marked exactly the same nodes.
             - matchExpressions:
-              - key: io.simplyblock.node-type
+              - key: io.simplyblock.storagenodeset
                 operator: Exists
       {{- end }}
       tolerations:

@@ -15,6 +15,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -707,7 +709,7 @@ func TestPoolStorageClassShape(t *testing.T) {
 			}
 			wantLabel := ""
 			if tc.wantGated {
-				wantLabel = poolNodeLabelKey(dhchapTestNamespace, dhchapTestClusterName, tc.pool.Name)
+				wantLabel = kube.PoolNodeLabelKey(tc.pool.Status.UUID)
 			}
 			if got := sc.Parameters[dhchapNodeSelectorParam]; got != wantLabel {
 				t.Errorf("%s = %q, want %q", dhchapNodeSelectorParam, got, wantLabel)

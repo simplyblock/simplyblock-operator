@@ -75,25 +75,49 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	@# controller-gen has no marker for spec.conversion, so the stanza is written
+	@# back after every regeneration. It runs before crd-embed so that the copy the
+	@# upgrade tool carries is the one with the stanza in it.
+	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
+	$(MAKE) crd-embed
+
+# The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and
+# carries them in its binary, so that the CRDs a run installs are the ones the
+# conversion code in the same binary was built against. go:embed cannot reach
+# outside the directory its source file is in, so the generated CRDs are copied
+# next to the package that embeds them. The copy is committed and regenerated
+# here, which is the same arrangement helm-sync uses for the chart's copy.
+.PHONY: crd-embed
+crd-embed: ## Copy the generated CRDs next to the package that embeds them.
+	rm -f internal/upgrade/crds/manifests/*.yaml
+	cp config/crd/bases/*.yaml internal/upgrade/crds/manifests/
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+# The versions of the metrics group that openapi-gen runs over. There is one
+# today, and the loop is what a second one would need: the generator writes one
+# file per output package, and the aggregated API server merges the definitions
+# of every version it serves.
+METRICS_API_VERSIONS ?= v1alpha2
+
 .PHONY: openapi
 openapi: openapi-gen ## Generate the OpenAPI v3 definitions the aggregated metrics API server serves.
-	"$(OPENAPI_GEN)" \
-		--output-file zz_generated.openapi.go \
-		--output-dir ./api/metrics/v1alpha1 \
-		--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1 \
-		--go-header-file hack/boilerplate.go.txt \
-		k8s.io/apimachinery/pkg/apis/meta/v1 \
-		k8s.io/apimachinery/pkg/api/resource \
-		k8s.io/apimachinery/pkg/runtime \
-		k8s.io/apimachinery/pkg/version \
-		github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1
+	for version in $(METRICS_API_VERSIONS); do \
+		"$(OPENAPI_GEN)" \
+			--output-file zz_generated.openapi.go \
+			--output-dir ./api/metrics/$$version \
+			--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/$$version \
+			--go-header-file hack/boilerplate.go.txt \
+			k8s.io/apimachinery/pkg/apis/meta/v1 \
+			k8s.io/apimachinery/pkg/api/resource \
+			k8s.io/apimachinery/pkg/runtime \
+			k8s.io/apimachinery/pkg/version \
+			github.com/simplyblock/simplyblock-operator/api/metrics/$$version || exit 1; \
+	done
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -158,6 +182,27 @@ build: manifests generate fmt vet ## Build manager binary.
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
+
+# The API upgrade tool, built on its own and not in the operator image: it is a
+# prerequisite for running the new operator, so shipping it inside that
+# operator's image would put it behind the pull it precedes.
+#
+# The platform is a variable, and the output name carries it, so that CI can
+# build every combination from one runner and collect the results side by side.
+#
+# CGO is off. The tool reaches the Kubernetes API with the caller's credentials
+# and does no crypto of its own, and a static binary is copyable to the host it
+# is run from.
+UPGRADE_GOOS   ?= $(shell go env GOOS)
+UPGRADE_GOARCH ?= $(shell go env GOARCH)
+UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
+
+.PHONY: build-upgrade
+build-upgrade: ## Build simplyblock-upgrade for UPGRADE_GOOS/UPGRADE_GOARCH.
+	mkdir -p $(dir $(UPGRADE_BIN))
+	CGO_ENABLED=0 GOOS=$(UPGRADE_GOOS) GOARCH=$(UPGRADE_GOARCH) \
+		go build -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
+	@echo "built $(UPGRADE_BIN)"
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
@@ -240,8 +285,27 @@ endif
 
 MANIFEST_ACCEPT := application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json
 
+.PHONY: verify-config-yaml
+verify-config-yaml: yq ## Check that every manifest under config/ parses as YAML.
+	@set -e; \
+	bad=0; \
+	for f in $$(find config -name '*.yaml' | sort); do \
+	  if ! "$(YQ)" e 'true' "$$f" >/dev/null 2>&1; then \
+	    echo "ERROR: $$f is not valid YAML:"; \
+	    "$(YQ)" e 'true' "$$f" 2>&1 | sed 's/^/  /' || true; \
+	    bad=1; \
+	  fi; \
+	done; \
+	if [ "$$bad" != 0 ]; then \
+	  echo "operator-sdk reports a ClusterServiceVersion base it cannot parse as"; \
+	  echo "a missing manifest rather than a syntax error, so an invalid file"; \
+	  echo "here surfaces only when a release runs 'make bundle'."; \
+	  exit 1; \
+	fi; \
+	echo "config/: every manifest parses"
+
 .PHONY: bundle
-bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+bundle: yq verify-config-yaml ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
 	operator-sdk generate kustomize manifests -q; \
 	OPERATOR_DIGEST=$$(curl -sI \

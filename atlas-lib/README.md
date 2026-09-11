@@ -94,7 +94,8 @@ atlas/
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
 ├── kube/                   lvol ↔ PV / PVC / VolumeAttachment mapping
-│   ├── names.go            driver name, param/context/label/annotation/finalizer keys
+│   ├── names.go            driver name, param/context/label/annotation/finalizer keys, pool label key
+│   ├── derived.go          Formula: bounded, deterministic derived names and labels
 │   ├── identity.go         VolumeHandle↔PV, VolumeContext, pin annotations
 │   ├── binding.go          Binding: resolved PV+PVC+Node view of an lvol
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
@@ -516,6 +517,32 @@ if kube.IsPinnedVolume(pvc.Annotations) {
 
 _Today:_ `operator/internal/controller/persistentvolumeclaim_controller.go`,
 `simplyblockstoragenodeset_drain.go`, the rebalancer, and the placement webhook.
+
+#### Gate a pool's volumes to its allowed nodes
+
+A DHCHAP-gated pool restricts its volumes to the nodes in its `allowedNodes`,
+through one label per pool on each of them. Three call sites have to agree on
+that label, which is why its key is built here.
+
+```go
+// The operator, labeling a node it is allowing.
+node.Labels[kube.PoolNodeLabelKey(pool.Status.UUID)] = kube.LabelPoolAllowed
+
+// The CSI node service, reporting what this node is allowed for. Prefix, not
+// whole key, because a node may be in several pools at once.
+if strings.HasPrefix(label, kube.LabelPoolPrefix) && value == kube.LabelPoolAllowed {
+    segments[label] = value
+}
+```
+
+Deciding one volume's affinity is the other way round: match the whole key the
+pool's StorageClass names, since prefix-matching a node in two pools would AND
+both pools' labels together.
+
+_Today:_ `operator/internal/controller/simplyblockstoragepool_controller.go`
+writes the labels and the StorageClass parameter;
+`csi-driver/internal/csi/node/topology.go` scans for them, and
+`csi-driver/internal/csi/controller/params.go` matches the whole key.
 
 #### Name generated objects
 

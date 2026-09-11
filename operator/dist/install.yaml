@@ -1066,6 +1066,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: controlplanes.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: ControlPlane
@@ -1148,6 +1158,97 @@ spec:
                 enum:
                 - Initializing
                 - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: Initializing while FDB is not ready; Available once the control
+        plane is operational
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: Human-readable status detail
+      jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ControlPlane is a singleton resource (one per namespace, named "simplyblock")
+          that reflects the readiness of the simplyblock control plane. It is created
+          automatically by the Helm chart and should not be created or deleted manually.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ControlPlaneSpec holds configuration for the singleton ControlPlane
+              resource.
+            properties:
+              source:
+                description: |-
+                  Source says where the control plane comes from. It replaces the top-level
+                  image field of v1alpha1, which conflated the control plane's own image with
+                  the default every StorageNodeSet inherited.
+                properties:
+                  managed:
+                    description: Managed is the control plane the operator installs
+                      and owns.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the container image used for the simplyblock control-plane
+                          workloads (e.g., quay.io/simplyblock-io/simplyblock:26.2.2).
+                          Must reference one of the trusted registries (`quay.io/simplyblock-io`, `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning (@sha256:...) is recommended.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                    type: object
+                type: object
+            type: object
+          status:
+            description: |-
+              ControlPlaneStatus reflects the observed readiness of the simplyblock
+              control plane (FDB + management API).
+            properties:
+              lastChecked:
+                description: LastChecked is the timestamp of the most recent FDB health
+                  probe.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message contains a human-readable explanation of the current phase,
+                  for example, the FDB error returned by the health endpoint.
+                type: string
+              phase:
+                description: |-
+                  Phase is Initializing while the control plane is not yet healthy,
+                  and Available once the FDB health check passes.
+                enum:
+                - Initializing
+                - Available
                 type: string
             type: object
         type: object
@@ -2145,8 +2246,471 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: simplyblockdrivers.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: SimplyblockDriver
+    listKind: SimplyblockDriverList
+    plural: simplyblockdrivers
+    shortNames:
+    - sbd
+    singular: simplyblockdriver
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.version
+      name: Version
+      type: string
+    - jsonPath: .status.nodesReady
+      name: NodesReady
+      type: integer
+    - jsonPath: .status.nodesTotal
+      name: NodesTotal
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SimplyblockDriver is the deployment of simplyblock's CSI driver: the node
+          plugin, the controller plugin, their RBAC, and the core CSIDriver registration
+          they produce. It is named for the brand rather than the interface because
+          CSIDriver is already a kind in core storage.k8s.io/v1, and the two are not the
+          same object: the core kind is the cluster's registration record, and this one
+          is the deployment that produces it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
+              controller plugin, their RBAC, and the CSIDriver registration they produce.
+            properties:
+              controllerNodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ControllerNodeSelector and ControllerTolerations place the controller
+                  plugin. The unprefixed pair above is the node plugin's, because that
+                  placement decides which workers can attach a volume, and this pair is
+                  ordinary pod placement for the one workload that provisions them.
+                type: object
+              controllerReplicas:
+                default: 1
+                description: ControllerReplicas is the number of controller-plugin
+                  instances.
+                format: int32
+                minimum: 1
+                type: integer
+              controllerResources:
+                description: |-
+                  ControllerResources and NodeResources set requests and limits for the two
+                  plugins. Unset enforces no limits.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              controllerTolerations:
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+              driverName:
+                default: csi.simplyblock.io
+                description: |-
+                  DriverName is the CSI driver name a StorageClass provisions with. Every
+                  PersistentVolume the driver created records it in spec.csi.driver and
+                  every VolumeAttachment records it too, so changing it orphans every volume
+                  in the namespace rather than renaming anything.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableServiceAccountAuth:
+                default: false
+                description: |-
+                  EnableServiceAccountAuth makes both plugins authenticate to the management
+                  API with their pod's Kubernetes service-account token instead of the
+                  static cluster secret. The control plane has to list those accounts in
+                  SB_K8S_ADMIN_SERVICE_ACCOUNTS for it to work, which is why this is a
+                  deployment-wide switch rather than a per-plugin one.
+                type: boolean
+              enableVolumeSnapshots:
+                default: true
+                description: |-
+                  EnableVolumeSnapshots decides whether snapshot support is part of this
+                  deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
+                  controller where the cluster serves neither. False applies none of them.
+                type: boolean
+              image:
+                description: |-
+                  Image is the CSI driver image, used by both plugins. Unset takes the
+                  operator's own registry and tag with the CSI driver's repository, so a
+                  deployment that states nothing runs the driver belonging to the operator
+                  reconciling it, which is the pairing the release was tested as.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                type: string
+              imagePullPolicy:
+                default: Always
+                description: |-
+                  ImagePullPolicy controls when that image is pulled. It defaults to Always
+                  because the default Image is a moving tag: it follows the operator's own,
+                  and a development build's tag is rebuilt in place. IfNotPresent against a
+                  tag that moved leaves the workers that already pulled it running the old
+                  plugin and the workers that had not running the new one, which is the
+                  skew of §5 inside one deployment and invisible from the object.
+                enum:
+                - Always
+                - Never
+                - IfNotPresent
+                type: string
+              nodeResources:
+                description: ResourceRequirements describes the compute resource requirements.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector restricts which workers run the node plugin. Empty means
+                  every schedulable worker, which is the usual case: a node that cannot
+                  attach a volume cannot run a workload that needs one.
+                type: object
+              sidecarImages:
+                description: |-
+                  SidecarImages overrides the six CSI sidecars, one field each. Unset takes
+                  the version this operator release ships.
+                properties:
+                  attacher:
+                    description: Attacher is csi-attacher, on the controller plugin.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  healthMonitor:
+                    description: |-
+                      HealthMonitor is csi-external-health-monitor-controller, on the
+                      controller plugin.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  nodeDriverRegistrar:
+                    description: NodeDriverRegistrar is node-driver-registrar, on
+                      the node plugin.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  provisioner:
+                    description: Provisioner is csi-provisioner, on the controller
+                      plugin.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  resizer:
+                    description: Resizer is csi-resizer, on the controller plugin.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  snapshotter:
+                    description: |-
+                      Snapshotter is csi-snapshotter, on the controller plugin. It is this
+                      driver's sidecar and not the cluster's snapshot-controller, whose image
+                      is not overridable here because that component belongs to the cluster.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                type: object
+              tolerations:
+                description: |-
+                  Tolerations are applied to the node plugin, which usually needs to run
+                  where workloads run rather than where the operator does.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+            type: object
+            x-kubernetes-validations:
+            - message: field driverName is immutable once set
+              rule: '!has(oldSelf.driverName) || has(self.driverName)'
+          status:
+            description: SimplyblockDriverStatus is the observed state of the CSI
+              driver deployment.
+            properties:
+              controllerReady:
+                description: ControllerReady is whether the controller plugin is serving.
+                type: boolean
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the deployment moves, and never a log.
+                type: string
+              nodesReady:
+                description: |-
+                  NodesReady is how many workers run a ready node plugin, and NodesTotal how
+                  many are expected to. Neither takes omitempty: zero ready plugins is the
+                  condition worth seeing.
+                format: int32
+                minimum: 0
+                type: integer
+              nodesTotal:
+                format: int32
+                minimum: 0
+                type: integer
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              origin:
+                description: |-
+                  Origin is whether the first reconcile created this deployment's objects
+                  or met ones it did not create. It is decided once and never revised,
+                  because what it records is where the running deployment came from rather
+                  than what the controller did most recently.
+                enum:
+                - Created
+                - Adopted
+                type: string
+              phase:
+                description: Phase is the operator's own view of the deployment.
+                enum:
+                - Installing
+                - Ready
+                - Degraded
+                - Unavailable
+                type: string
+              snapshotSupport:
+                description: |-
+                  SnapshotSupport is whether the cluster already had snapshot support or the
+                  operator installed it, which is what says whether other drivers depend on
+                  what this one applied.
+                enum:
+                - Detected
+                - Installed
+                type: string
+              version:
+                description: |-
+                  Version is the version the deployed driver reports, published so that a
+                  skew against ControlPlane.status.version is visible on one screen.
+                type: string
+            required:
+            - nodesReady
+            - nodesTotal
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagebackups.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageBackup
@@ -2324,6 +2888,179 @@ spec:
         - spec
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.pvcRef.name
+      name: PVC
+      type: string
+    - jsonPath: .status.backupID
+      name: BackupID
+      type: string
+    - jsonPath: .status.snapshotName
+      name: Snapshot
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: StorageBackup is the Schema for the storagebackups API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StorageBackup
+            properties:
+              clusterRef:
+                description: ClusterRef names the StorageCluster this backup belongs
+                  to.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              pvcRef:
+                description: |-
+                  PVCRef identifies the PVC whose backing simplyblock volume should be snapshotted and backed up.
+                  Not required when SourceClusterUUID is set (imported backup).
+                properties:
+                  name:
+                    description: Name is the PVC name.
+                    type: string
+                  namespace:
+                    description: Namespace overrides the backup resource namespace
+                      for the PVC lookup.
+                    type: string
+                required:
+                - name
+                type: object
+              snapshotName:
+                description: SnapshotName optionally overrides the internally created
+                  snapshot name.
+                type: string
+              sourceClusterUUID:
+                description: |-
+                  SourceClusterUUID, when non-empty, marks this StorageBackup as imported from another cluster.
+                  The StorageBackup controller will not create snapshots or backups for imported resources.
+                  Set by the BackupImport controller; do not set manually.
+                type: string
+            required:
+            - clusterRef
+            type: object
+          status:
+            description: status defines the observed state of StorageBackup
+            properties:
+              allowedHosts:
+                description: AllowedHosts contains the allowed host metadata returned
+                  by the backup API.
+                items:
+                  additionalProperties:
+                    type: string
+                  type: object
+                type: array
+              apiStatus:
+                description: APIStatus is the raw status returned by the backup API.
+                type: string
+              backupID:
+                description: BackupID is the backend backup UUID.
+                type: string
+              clusterUUID:
+                description: ClusterUUID is the backend cluster UUID.
+                type: string
+              completedAt:
+                description: CompletedAt is when the backup completed.
+                format: date-time
+                type: string
+              createdAt:
+                description: CreatedAt is when the backup was created.
+                format: date-time
+                type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the source PersistentVolume (e.g., `ext4`,
+                  `xfs`), captured at backup time so a restore can preserve it regardless of
+                  which StorageClass the restored PVC ends up using.
+                type: string
+              lvolID:
+                description: LvolID is the simplyblock volume UUID.
+                type: string
+              lvolName:
+                description: LvolName is the backend logical volume name.
+                type: string
+              message:
+                description: Message contains the latest reconciliation detail or
+                  error.
+                type: string
+              nodeID:
+                description: NodeID is the source storage node UUID.
+                type: string
+              phase:
+                description: Phase is the high-level backup lifecycle shown in kubectl
+                  output.
+                type: string
+              poolName:
+                description: PoolName is the simplyblock pool name derived from the
+                  CSI volume handle.
+                type: string
+              poolUUID:
+                description: PoolUUID is the backend pool UUID.
+                type: string
+              prevBackupID:
+                description: PrevBackupID links the previous backup in the chain.
+                type: string
+              pvName:
+                description: PVName is the bound PV name.
+                type: string
+              pvcNamespace:
+                description: PVCNamespace is the resolved PVC namespace.
+                type: string
+              s3ID:
+                description: S3ID is the backend S3 object identifier.
+                format: int64
+                type: integer
+              size:
+                description: Size is the backup size in bytes.
+                format: int64
+                type: integer
+              snapshotID:
+                description: SnapshotID is the internally created snapshot UUID used
+                  for the backup request.
+                type: string
+              snapshotName:
+                description: SnapshotName is the snapshot name used for the backup
+                  request.
+                type: string
+              sourceClusterUUID:
+                description: |-
+                  SourceClusterUUID is set for imported backups; identifies the cluster that originally
+                  created the backup. When non-empty and different from the restore target cluster UUID,
+                  BackupRestore will automatically perform source-switch operations around the restore.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}
@@ -2335,6 +3072,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusterops.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageClusterOps
@@ -2485,6 +3232,149 @@ spec:
             type: object
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageClusterOps is a one-shot operational CR targeting a single StorageCluster.
+          Analogous to a Kubernetes Job — it drives a cluster-level operation (Activate, Expand,
+          Shutdown, Restart, RollingRestart) to completion and records the result. Only one
+          StorageClusterOps can be active per cluster at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - Activate
+                - Expand
+                - Shutdown
+                - Start
+                - Restart
+                - RollingRestart
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              clusterRef:
+                description: ClusterRef is the name of the target StorageCluster.
+                  Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              rollingRestart:
+                description: |-
+                  RollingRestart configures behavior specific to the RollingRestart action.
+                  Ignored for all other actions.
+                properties:
+                  refreshSNodeAPI:
+                    description: |-
+                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
+                    type: boolean
+                type: object
+            required:
+            - action
+            - clusterRef
+            type: object
+          status:
+            description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              rollingRestart:
+                description: |-
+                  RollingRestart tracks per-node progress for the RollingRestart action.
+                  Nil for all other actions.
+                properties:
+                  nodePhase:
+                    description: |-
+                      NodePhase is the current step for the node being restarted:
+                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+                    type: string
+                  pendingNodes:
+                    description: PendingNodes is the ordered list of node UUIDs still
+                      to be restarted.
+                    items:
+                      type: string
+                    type: array
+                  phaseTriggered:
+                    description: PhaseTriggered indicates the API call for the current
+                      NodePhase was already sent.
+                    type: boolean
+                  processedNodes:
+                    description: ProcessedNodes is the list of node UUIDs already
+                      restarted.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend POST has been sent for this operation.
+                  Guards against duplicate backend calls on retry.
+                type: boolean
+            type: object
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}
@@ -2592,6 +3482,29 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              enableAtomic4kWrites:
+                default: false
+                description: |-
+                  EnableAtomic4kWrites declares that devices guarantee 4K write atomicity even with a
+                  <4K logical block size (e.g., AWS NVMe is 512B but atomic at 4K), letting checksum
+                  fallback mode run on them despite the data plane's normal >=4K block-size requirement.
+                  Only meaningful when EnableChecksumValidation is true. Cannot be changed after cluster
+                  creation.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableChecksumValidation:
+                default: false
+                description: |-
+                  EnableChecksumValidation enables inline CRC checksum validation on every I/O for
+                  silent-data-error protection. Immutable once set: the backend bakes the checksum method
+                  into each device's bdev_alceml_create call at cluster-create time and never re-applies
+                  it.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableFailureDomains:
                 description: |-
                   EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
@@ -2617,7 +3530,7 @@ spec:
                   used by the cluster for key storage.
                 properties:
                   baseURL:
-                    description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+                    description: BaseURL is the HashiCorp Vault endpoint (e.g., https://vault.example.com:8200).
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
@@ -2633,7 +3546,7 @@ spec:
               maxHugePagesSize:
                 description: |-
                   MaxHugePagesSize is the maximum allocatable size of huge pages on each
-                  storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+                  storage node, for example, `100G` or `1T`. A bare number is interpreted as GB. It is
                   a floor, not a cap: the effective huge-page allocation is the larger of this
                   value and the minimum the node's device and subsystem count requires. When
                   omitted the computed minimum is used.
@@ -2687,7 +3600,7 @@ spec:
               volumeAutoPlacement:
                 description: |-
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
-                  nil/disabled the operator performs only manually-triggered VolumeMigrations.
+                  nil/disabled the operator performs only manually triggered VolumeMigrations.
                 properties:
                   baselineColdStart:
                     description: |-
@@ -2745,7 +3658,7 @@ spec:
                     type: integer
                   iopsWeight:
                     description: IOPSWeight is the weight applied to per-volume IOPS
-                      in the volume IO score. Defaults to 1.0.
+                      in the volume I/O score. Defaults to 1.0.
                     type: number
                   latencyBenchmarkEnabled:
                     description: |-
@@ -2765,7 +3678,7 @@ spec:
                     type: integer
                   metricsBackend:
                     description: MetricsBackend selects the data source for I/O metrics.
-                      Defaults to "prometheus".
+                      Defaults to `prometheus`.
                     enum:
                     - controlplane
                     - prometheus
@@ -2782,12 +3695,12 @@ spec:
                     description: |-
                       MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
                       that a candidate target node must be below the hot source node before a migration is
-                      performed. Prevents migrating between near-equally-loaded nodes. Defaults to 20.
+                      performed. Prevents migrating between near-equally loaded nodes. Defaults to 20.
                     format: int32
                     type: integer
                   prometheusURL:
                     description: PrometheusURL is required when MetricsBackend is
-                      "prometheus".
+                      `prometheus`.
                     type: string
                   storageNodeCandidateCount:
                     description: |-
@@ -2798,7 +3711,7 @@ spec:
                   throughputWeight:
                     description: |-
                       ThroughputWeight is the weight applied to per-volume throughput (MB/s) in the volume
-                      IO score. Defaults to 0.1.
+                      I/O score. Defaults to 0.1.
                     type: number
                 type: object
               volumeMigrationSettings:
@@ -2822,7 +3735,7 @@ spec:
                       interval:
                         description: |-
                           Interval is how often the operator checks whether a realignment is pending
-                          (i.e. at least one volume has moved since the last successful realignment) and,
+                          (i.e., at least one volume has moved since the last successful realignment) and,
                           if so, triggers it. Explicit triggers (see the
                           simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
                           10m.
@@ -2889,6 +3802,10 @@ spec:
               rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field enableChecksumValidation is immutable once set
+              rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
+            - message: field enableAtomic4kWrites is immutable once set
+              rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
@@ -2902,6 +3819,10 @@ spec:
               rule: '!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort'
             - message: snodeApiPort is immutable once set
               rule: '!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort'
+            - message: enableAtomic4kWrites requires enableChecksumValidation to be
+                true
+              rule: '!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites)
+                || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
           status:
             description: status defines the observed state of StorageCluster
             properties:
@@ -2924,7 +3845,7 @@ spec:
                 type: string
               erasureCodingScheme:
                 description: ErasureCodingScheme is the active erasure-coding layout,
-                  for example "2x1".
+                  for example, `2x1`.
                 type: string
               lastDataRealignmentAt:
                 description: |-
@@ -3103,9 +4024,6 @@ spec:
     - jsonPath: .status.capacity.totalBytes
       name: Total
       type: integer
-    - jsonPath: .status.capacity.usedBytes
-      name: Used
-      type: integer
     - jsonPath: .status.hardware.pciAddress
       name: PCI
       priority: 1
@@ -3117,7 +4035,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-
@@ -3172,16 +4090,24 @@ spec:
           status:
             description: status defines the observed state of the device
             properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the StorageDeviceOps currently allowed to act on this
+                  device, and is empty when none is. It is the operation lock every entity
+                  of this group carries, and until StorageDeviceOps exists nothing takes it,
+                  so the field is present and always empty. Declaring it now is what lets a
+                  reader tell "no operation is running" from "this kind cannot say," and it
+                  keeps the lock out of the change that introduces the operations.
+                type: string
               capacity:
-                description: Capacity is how big the device is and how much it holds.
+                description: |-
+                  Capacity is how big the device is. What it holds is served as
+                  StorageDeviceMetrics instead.
                 properties:
                   totalBytes:
-                    description: TotalBytes is the device's usable size.
-                    format: int64
-                    minimum: 0
-                    type: integer
-                  usedBytes:
-                    description: UsedBytes is what it currently holds.
+                    description: |-
+                      TotalBytes is the device's usable size, as the control plane reports it
+                      with the device.
                     format: int64
                     minimum: 0
                     type: integer
@@ -3265,6 +4191,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodeops.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageNodeOps
@@ -3422,6 +4358,177 @@ spec:
                 type: string
               subPhase:
                 description: SubPhase tracks the active drain step when action=remove
+                  and phase=Running.
+                enum:
+                - Validating
+                - Suspending
+                - Migrating
+                - Verifying
+                - Removing
+                - Preparing
+                - Restarting
+                - Promoting
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend action POST has been sent (used during
+                  Suspending to avoid duplicate POSTs across reconcile iterations).
+                type: boolean
+              volumesMigrated:
+                description: VolumesMigrated is the count of volumes successfully
+                  migrated (drain only).
+                type: integer
+              volumesPending:
+                description: VolumesPending is the count of volumes awaiting migration
+                  (drain only).
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeRef
+      name: Node
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.subPhase
+      name: SubPhase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageNodeOps is a one-shot operational CR targeting a single StorageNode.
+          Analogous to a Kubernetes Job — it drives an action (Shutdown, Restart, Suspend,
+          Resume, Remove, Migrate) to completion and records the result. Only one
+          StorageNodeOps can be active per StorageNode at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageNodeOpsSpec defines the desired state of a StorageNodeOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - Shutdown
+                - Restart
+                - Suspend
+                - Resume
+                - Remove
+                - Migrate
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              force:
+                description: Force enables forced execution where the backend supports
+                  it.
+                type: boolean
+              migrate:
+                description: Migrate parameterizes action Migrate and is ignored by
+                  the others.
+                properties:
+                  newSsdPcie:
+                    description: |-
+                      NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                      during a migration. Passed through to the control-plane restart as
+                      new_ssd_pcie.
+                    items:
+                      type: string
+                    type: array
+                  targetWorkerNode:
+                    description: |-
+                      TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                      relocated onto.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - targetWorkerNode
+                type: object
+              nodeRef:
+                description: NodeRef is the name of the target StorageNode. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              reattachVolume:
+                description: |-
+                  ReattachVolume reattaches volumes during the node restart.
+                  Applicable when action=Restart or action=Migrate.
+                type: boolean
+              remove:
+                description: Remove parameterizes action Remove and is ignored by
+                  the others.
+                properties:
+                  systemVolumeFilterRegex:
+                    description: |-
+                      SystemVolumeFilterRegex is a Go regular expression matched against backend
+                      volume names. Matching volumes are treated as system volumes: excluded from
+                      drain migration and deleted inline during the Verifying phase.
+                      Defaults to `^sb-fio-baseline-.*`.
+                    type: string
+                type: object
+            required:
+            - action
+            - nodeRef
+            type: object
+          status:
+            description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              subPhase:
+                description: SubPhase tracks the active drain step when action=Remove
                   and phase=Running.
                 enum:
                 - Validating
@@ -5424,10 +6531,15 @@ rules:
   - ""
   resources:
   - configmaps
+  - secrets
+  - serviceaccounts
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -5488,20 +6600,6 @@ rules:
   verbs:
   - get
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  - serviceaccounts
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
@@ -5512,6 +6610,26 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - controlplanes.storage.simplyblock.io
+  - storagebackups.storage.simplyblock.io
+  - storageclusterops.storage.simplyblock.io
+  - storagenodeops.storage.simplyblock.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - apiregistration.k8s.io
   resources:
@@ -5526,6 +6644,7 @@ rules:
   - apps
   resources:
   - daemonsets
+  - statefulsets
   verbs:
   - create
   - delete
@@ -5608,6 +6727,32 @@ rules:
   - clusterrolebindings
   - clusterroles
   verbs:
+  - bind
+  - create
+  - delete
+  - escalate
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csidrivers
+  verbs:
   - create
   - delete
   - get
@@ -5645,6 +6790,7 @@ rules:
   - replicationpairs
   - replicationpolicies
   - replicationslots
+  - simplyblockdrivers
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -5674,6 +6820,7 @@ rules:
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
   - replicationslots/finalizers
+  - simplyblockdrivers/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -5698,6 +6845,7 @@ rules:
   - replicationpairs/status
   - replicationpolicies/status
   - replicationslots/status
+  - simplyblockdrivers/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
@@ -5826,6 +6974,7 @@ rules:
   - metrics.simplyblock.io
   resources:
   - logicalvolumemetrics
+  - storagedevicemetrics
   verbs:
   - get
   - list
@@ -6246,7 +7395,7 @@ spec:
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
-  name: v1alpha1.metrics.simplyblock.io
+  name: v1alpha2.metrics.simplyblock.io
 spec:
   group: metrics.simplyblock.io
   groupPriorityMinimum: 100
@@ -6254,7 +7403,7 @@ spec:
     name: simplyblock-operator-metrics-apiserver
     namespace: simplyblock-operator-system
     port: 443
-  version: v1alpha1
+  version: v1alpha2
   versionPriority: 100
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -6387,6 +7536,44 @@ webhooks:
     - CREATE
     resources:
     - replicationops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-simplyblockdriver
+  failurePolicy: Fail
+  name: vsimplyblockdriver.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - simplyblockdrivers
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagedevice
+  failurePolicy: Ignore
+  name: vstoragedevice.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storagedevices
   sideEffects: None
 - admissionReviewVersions:
   - v1

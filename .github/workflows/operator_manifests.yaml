@@ -28,6 +28,9 @@ jobs:
         with:
           go-version-file: operator/go.mod
 
+      - name: Check every manifest under config/ parses as YAML
+        run: make verify-config-yaml
+
       - name: Install kubeconform
         run: |
           KUBECONFORM_VERSION="v0.7.0"

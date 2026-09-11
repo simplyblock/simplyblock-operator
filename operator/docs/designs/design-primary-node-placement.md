@@ -272,7 +272,7 @@ node driver, sourced from labels on the k8s `Node` object
 
 - `topology.kubernetes.io/zone` / `.../region` — for multi-cluster
   zone/region-mapped StorageClasses.
-- `simplyblock.io/pool.<name>: allowed` — one segment per pool a node is
+- `storage.simplyblock.io/storage-pool.<pool UUID>: allowed` — one segment per pool a node is
   allowed to serve, for DHCHAP-restricted pools.
 - **`simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal>: <uuid>`
   — new, added by this feature** (see below).
@@ -292,9 +292,9 @@ as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
    `StorageNodeSetReconciler.labelWorkerNodes`
    (`operator/internal/controller/simplyblockstoragenodeset_controller.go`)
    labels each worker with
-   `io.simplyblock.node-type: simplyblock-storage-plane-<clusterName>` — a
-   cluster-level "this worker hosts the storage plane" label, not a per-node
-   one — and, alongside it, one label per co-located storage-node instance:
+   `io.simplyblock.storagenodeset: <storageNodeSetName>` — a set-level "this
+   worker hosts the storage plane" label, not a per-node one — and, alongside
+   it, one label per co-located storage-node instance:
 
    ```
    simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal> = <storage-node UUID>
@@ -758,7 +758,7 @@ the `simplyblock.io/pod-affinity` annotation.
 
 `labelWorkerNodes`
 (`operator/internal/controller/simplyblockstoragenodeset_controller.go`)
-labels each worker with `io.simplyblock.node-type` and, unconditionally (no
+labels each worker with `io.simplyblock.storagenodeset` and, unconditionally (no
 `StorageCluster.Spec.EnableNodeAffinity` check — see §4), with
 `simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal> = <uuid>` for
 every co-located storage-node instance — reconciling additions, value updates
