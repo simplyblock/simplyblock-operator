@@ -188,7 +188,7 @@ func (a *AuthZ) Scopes(w http.ResponseWriter, _ *http.Request) {
 			"kind":      kind,
 			"namespace": name,
 		}
-		for _, k := range []string{labManagedCluster, labStorageCluster, labStoragePool} {
+		for _, k := range []string{labTenant, labManagedCluster, labStorageCluster} {
 			if v, ok := labels[k].(string); ok {
 				scope[strings.TrimPrefix(k, "simplyblock.io/")] = v
 			}

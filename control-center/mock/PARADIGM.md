@@ -18,26 +18,30 @@ The section numbers below reference the RBAC design doc.
 
 ## What the mock reproduces faithfully
 
-### Namespace layout & hierarchy labels (§2.1, §2.2)
-The world is generated into the hub namespace plan, not a flat namespace:
+### Namespace layout & tenants (§2.1, §2.2)
+The world is **tenant-centric**: a tenant is a namespace, and it holds one or
+more whole clusters plus that tenant's DR-policies and DR-applications. Global
+admins create and manage the tenant namespaces; a tenant-admin provisions
+objects into them.
 
 | Namespace | Holds | scope-kind label |
 |---|---|---|
 | `simplyblock-system` (the `--namespace` value) | control plane, Helm release Secret, operator/agent pods | `system` |
 | `sb-mc-<managed>` | ManagedCluster transport: the **projected** StorageCluster, the deployment config | `managed-cluster` |
-| `sb-sc-<cluster>` | StorageCluster, StorageNode, StorageDevice, StoragePool, backups, ops, replication | `storage-cluster` |
-| `sb-dr-system` | DR scope (RBAC target) | `dr` |
-| `<application>` | app workloads the recipe editor discovers | `application` |
+| `sb-<tenant>` | the tenant / RBAC target — the StorageCluster + nodes/devices/pools/backups/ops, the DR-policy (replication) chain, and the DR-applications | `tenant` |
+| `<application>` | k8s app workloads the recipe editor discovers | `application` |
 
-Hierarchy is in labels (`simplyblock.io/managed-cluster` / `-storage-cluster` /
-`-storage-pool` / `-scope-kind`), never in names — the scope-projection API
-reads exactly these.
+Extra tenants (e.g. `sb-tenant-b` in `large-scale`/`chaos`) are generated
+**empty** with only a tenant-admin grant — a namespace a global admin has
+created and handed to a team, ready to provision into. Hierarchy is in labels
+(`simplyblock.io/tenant` / `-managed-cluster` / `-storage-cluster` /
+`-scope-kind`), never in names — the scope-projection API reads exactly these.
 
 ### Hub → agent projection & drift (§1.3, and design-crd-model §7.9)
-- The StorageCluster exists twice: the user-facing object in `sb-sc-*` and a
-  **projection** in `sb-mc-*` (same kind, not a wrapper) carrying
-  `simplyblock.io/managed-by: hub` and a hub-owned spec subset
-  (`nodePoolAllocationRef`).
+- The StorageCluster exists twice: the user-facing object in the tenant
+  namespace `sb-<tenant>` and a **projection** in `sb-mc-*` (same kind, not a
+  wrapper) carrying `simplyblock.io/managed-by: hub` and a hub-owned spec
+  subset (`nodePoolAllocationRef`).
 - The projection's **status is agent-authored**: `lastSyncTime`,
   `agentConnected`, and `Applied`/`AgentConnected` conditions. The simulator
   plays the agent — it advances `lastSyncTime` each tick and heals drift.
@@ -55,15 +59,32 @@ Every hub-authored simplyblock object is stamped with the actor annotations a
 mutating webhook would write: `simplyblock.io/actor-username`, `-uid`,
 `-groups`, `-timestamp`.
 
-### RBAC vocabulary & grants (§2.3, §4.2)
-- The eight aggregated `sb:*` ClusterRoles are generated, each with a
-  rules-carrying child role labelled `simplyblock.io/aggregate-to-<role>`.
+### Role model & grants (§2.3, §4.2)
+The role model is **product-facing**, not the uploaded design's eight
+infra-roles (see the deviation note below). It is:
+
+| Role | Bound at | What it grants |
+|---|---|---|
+| `sb:infra-admin` | cluster (global) | create/manage tenant namespaces, do the bindings (namespaces, accessgrants, clusterroles, rolebindings, nodepoolallocations, managedclusters, storageclusterclasses) |
+| `sb:tenant-admin` | tenant namespace | **full CRUD** on every object in the tenant — the provisioning role that creates clusters, DR-policies and DR-applications |
+| `sb:cluster-reader` | tenant namespace | **read-only** on the cluster main object + its sub-objects (nodes, devices, pools, backups, ops) |
+| `sb:dr-policy-reader` | tenant namespace | **read-only** on the DR-policy main object + its sub-objects (replication pairs/policies/slots/ops) |
+| `sb:dr-application-reader` | tenant namespace | **read-only** on the DR-application main object + its sub-objects (protected applications, application failovers) |
+
+One full-admin (CRUD) role plus one read-only role per main object — for now
+the three main objects are **cluster**, **DR-policy** and **DR-application**,
+each reader covering that object and its sub-objects. Adding a fourth main
+object is one entry in `sbRoles()` (tenancy.go).
+
+- Each role is generated as an aggregated `sb:*` ClusterRole with a
+  rules-carrying child labelled `simplyblock.io/aggregate-to-<role>`.
 - Grants are real RoleBindings (and a ClusterRoleBinding for `sb:infra-admin`)
-  labelled `simplyblock.io/managed-by: control-center` and `scope-kind`, plus an
-  `AccessGrant` CR — so a grant "made in the UI" and one made with kubectl are
-  the same object, as the design requires.
-- The privileged-op envelope object, `NodePoolAllocation`, and
-  `StorageClusterClass` and `ManagedCluster` are generated (cluster-scoped).
+  labelled `simplyblock.io/managed-by: control-center` and `scope-kind: tenant`,
+  plus an `AccessGrant` CR — so a grant "made in the UI" and one made with
+  kubectl are the same object. Every tenant gets a tenant-admin binding; the
+  primary tenant also gets the three reader bindings.
+- The privileged-op envelope object `NodePoolAllocation`, plus
+  `StorageClusterClass` and `ManagedCluster`, are generated (cluster-scoped).
 
 ### Authorization queries (§5)
 The mock answers the console's read/write-path queries:
@@ -128,24 +149,38 @@ mock. Each is a deliberate, documented stand-in.
    console (and this mock) talk to. The mock stamps the actor annotations that
    *feed* that chain, but implements none of the token exchange.
 
-7. **DR kinds mapping.** The design places `DRPolicy`/`DRCluster` in
-   `sb-dr-system` under `storage.simplyblock.io`. The console actually consumes
-   **Ramen** kinds (`ramendr.openshift.io`, cluster-scoped) for DR, so the mock
-   keeps generating those (unchanged) and models `sb-dr-system` only as the DR
-   **RBAC scope** namespace. If the operator later introduces first-class
-   simplyblock DR kinds, they'd be added here.
+7. **Role model simplified from the uploaded design (deliberate, per the
+   product owner).** The uploaded RBAC design (and `control-center/RBAC-DESIGN.md`)
+   specifies **eight** infra-oriented roles (`sb:cluster-admin`, `sb:pool-admin`,
+   `sb:dr-admin`, `sb:app-admin` and their readers, scoped by `sb-sc-*` /
+   `sb-sp-*` / `sb-dr-system`). This mock instead implements the refined
+   **product-facing** model the owner asked for: one **full-admin (CRUD)** role
+   per tenant plus **one read-only role per main object** (cluster, DR-policy,
+   DR-application), all bound in the single tenant namespace, with a global
+   `sb:infra-admin` managing the tenants. When the design and the model
+   conflict, the product owner's model wins here. **The console side
+   (`control-center/*.jsx` and `RBAC-DESIGN.md`) still describes the old
+   eight-role model** — those are re-exported from Claude Design, so aligning
+   them is a design-export change, not a mock change. The mock now serves the
+   role set the UI should converge on.
 
-8. **Pool tenant namespaces (`sb-sp-*`).** The mock uses the design's *default*
-   flat model — pools live in the storage-cluster namespace. The `sb-sp-*`
-   naming helper exists but no pool is split into its own tenant namespace; the
-   §7 open question ("flat vs per-pool") is left at flat.
+8. **DR kinds mapping.** DR-policy's sub-objects are the simplyblock replication
+   kinds (`replicationpairs/policies/slots/ops`); DR-application is
+   `protectedapplications` + `applicationfailovers`. The mock also still
+   generates the **Ramen** kinds (`ramendr.openshift.io`) the console consumes
+   for the actual DR mechanism. There is no separate `sb-dr-system` namespace
+   any more — DR objects live in the tenant, per the tenant-centric model.
 
-9. **Namespace name.** The design names the control-plane namespace
+9. **Pool tenant namespaces (`sb-sp-*`) not used.** Pools live in the tenant
+   namespace (the flat default); the mock does not split a pool into its own
+   `sb-sp-*` namespace.
+
+10. **Namespace name.** The design names the control-plane namespace
    `simplyblock-system`; the mock uses the `--namespace` value (the chart
    installs into `simplyblock`). Pass `--namespace=simplyblock-system` to match
    the doc exactly.
 
-10. **Everything is still a mock (unchanged from the base README).** Writes
+11. **Everything is still a mock (unchanged from the base README).** Writes
     persist in memory and fire watch events but perform no real action; the
     simulator advances phases; no data path exists.
 

@@ -77,7 +77,7 @@ func TestListAndGetGenerated(t *testing.T) {
 		Kind  string           `json:"kind"`
 		Items []map[string]any `json:"items"`
 	}
-	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-sc-cluster1/storagenodes", &list)
+	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodes", &list)
 	if list.Kind != "StorageNodeList" || len(list.Items) != 3 {
 		t.Fatalf("want StorageNodeList with 3 items, got %s with %d", list.Kind, len(list.Items))
 	}
@@ -90,7 +90,7 @@ func TestListAndGetGenerated(t *testing.T) {
 	}
 	for _, d := range devs.Items {
 		nodeRef := getStr(d, "spec.nodeRef")
-		resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-sc-cluster1/storagenodes/"+nodeRef, nil)
+		resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodes/"+nodeRef, nil)
 		if resp.StatusCode != 200 {
 			t.Errorf("device %s references missing node %s", getStr(d, "metadata.name"), nodeRef)
 		}
@@ -112,7 +112,7 @@ func TestListAndGetGenerated(t *testing.T) {
 
 func TestCreatePatchDeleteRoundtrip(t *testing.T) {
 	_, ts := newTestServer(t, "small-healthy")
-	base := ts.URL + "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-sc-cluster1/storagenodeops"
+	base := ts.URL + "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodeops"
 
 	body := `{"metadata":{"name":"restart-sn-01"},"spec":{"action":"restart","storageNodeRef":"sn-01"}}`
 	resp, err := http.Post(base, "application/json", strings.NewReader(body))
@@ -157,7 +157,7 @@ func TestCreatePatchDeleteRoundtrip(t *testing.T) {
 
 func TestWatchStream(t *testing.T) {
 	_, ts := newTestServer(t, "small-healthy")
-	base := "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-sc-cluster1/storageclusterops"
+	base := "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storageclusterops"
 
 	resp, err := http.Get(ts.URL + base + "?watch=true")
 	if err != nil {

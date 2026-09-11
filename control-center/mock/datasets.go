@@ -16,6 +16,7 @@ type Scenario struct {
 	Pools          int
 	Volumes        int // PVC/PV pairs spread over the app namespaces
 	AppNamespaces  []string
+	Tenants        []string // sb-<tenant> namespaces; [0] holds the cluster+DR, extras are empty
 
 	OfflineNodes    int // nodes reported offline/unhealthy
 	DegradedDevices int
@@ -32,9 +33,10 @@ func scenarios() []Scenario {
 	return []Scenario{
 		{
 			Name:        "small-healthy",
-			Description: "3-node lab cluster, everything green",
+			Description: "3-node lab cluster in one tenant, everything green",
 			Workers:     3, MgmtNodes: 1, DevicesPerNode: 2, Pools: 1, Volumes: 8,
 			AppNamespaces: []string{"demo"},
+			Tenants:       []string{"tenant-a"},
 			Snapshots:     3, Backups: 2,
 		},
 		{
@@ -47,9 +49,10 @@ func scenarios() []Scenario {
 		},
 		{
 			Name:        "large-scale",
-			Description: "32 nodes, four pools, wide volume spread",
+			Description: "32 nodes, four pools, two tenants (one empty, ready to provision)",
 			Workers:     32, MgmtNodes: 3, DevicesPerNode: 4, Pools: 4, Volumes: 120,
 			AppNamespaces: []string{"prod-db", "prod-queue", "analytics", "ci"},
+			Tenants:       []string{"tenant-a", "tenant-b"},
 			OfflineNodes:  0, RunningOps: true, FailedOps: 1,
 			Snapshots: 24, Backups: 12,
 		},
@@ -63,9 +66,10 @@ func scenarios() []Scenario {
 		},
 		{
 			Name:        "chaos",
-			Description: "everything at once: failures, storms, DR, migrations",
+			Description: "everything at once: failures, storms, DR, migrations, two tenants",
 			Workers:     10, MgmtNodes: 3, DevicesPerNode: 3, Pools: 3, Volumes: 40,
 			AppNamespaces: []string{"prod-db", "prod-queue", "prod-web", "batch"},
+			Tenants:       []string{"tenant-a", "tenant-b"},
 			OfflineNodes:  2, DegradedDevices: 4, WithDR: true, RunningOps: true,
 			FailedOps: 5, EventStorm: true,
 			Snapshots: 12, Backups: 8,

@@ -17,8 +17,8 @@ func labelOf(obj map[string]any, key string) string {
 	return s
 }
 
-// The hub tenancy layout: storage objects in sb-sc-*, a projected copy in
-// sb-mc-*, and the RBAC vocabulary present.
+// The hub tenancy layout: the tenant namespace holds the cluster, a projected
+// copy lives in sb-mc-*, and the RBAC vocabulary is present.
 func TestTenancyLayout(t *testing.T) {
 	st := NewStore(5)
 	st.Register(allResourceDefs()...)
@@ -27,7 +27,7 @@ func TestTenancyLayout(t *testing.T) {
 
 	nsDef, _ := st.Lookup("", "v1", "namespaces")
 	nss, _ := st.List(nsDef, "", "", "")
-	want := map[string]bool{"simplyblock-system": false, "sb-sc-cluster1": false, "sb-mc-prod-fra1-1": false, "sb-dr-system": false}
+	want := map[string]bool{"simplyblock-system": false, "sb-tenant-a": false}
 	kinds := map[string]string{}
 	for _, ns := range nss {
 		name := getStr(ns, "metadata.name")
@@ -38,14 +38,13 @@ func TestTenancyLayout(t *testing.T) {
 			kinds[name] = k
 		}
 	}
-	// sb-mc name depends on the seeded site; assert the sc/dr/system ones which are fixed
-	for _, n := range []string{"simplyblock-system", "sb-sc-cluster1", "sb-dr-system"} {
+	for _, n := range []string{"simplyblock-system", "sb-tenant-a"} {
 		if !want[n] {
 			t.Errorf("expected namespace %s to exist", n)
 		}
 	}
-	if kinds["sb-sc-cluster1"] != scopeStorageCluster {
-		t.Errorf("sb-sc-cluster1 scope-kind = %q, want %q", kinds["sb-sc-cluster1"], scopeStorageCluster)
+	if kinds["sb-tenant-a"] != scopeTenant {
+		t.Errorf("sb-tenant-a scope-kind = %q, want %q", kinds["sb-tenant-a"], scopeTenant)
 	}
 
 	// StorageCluster exists both user-facing (sb-sc-*) and as a transport projection (sb-mc-*)
@@ -55,7 +54,7 @@ func TestTenancyLayout(t *testing.T) {
 	for _, c := range all {
 		ns := getStr(c, "metadata.namespace")
 		switch {
-		case strings.HasPrefix(ns, "sb-sc-"):
+		case ns == "sb-tenant-a":
 			userFacing++
 		case strings.HasPrefix(ns, "sb-mc-"):
 			projected++
@@ -149,7 +148,7 @@ func TestAuthZViewer(t *testing.T) {
 			Allowed bool `json:"allowed"`
 		} `json:"status"`
 	}
-	body := `{"spec":{"resourceAttributes":{"namespace":"sb-sc-cluster1","verb":"create","resource":"storageclusters"}}}`
+	body := `{"spec":{"resourceAttributes":{"namespace":"sb-tenant-a","verb":"create","resource":"storageclusters"}}}`
 	resp, err := http.Post(ts.URL+"/apis/authorization.k8s.io/v1/subjectaccessreviews", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -170,17 +169,81 @@ func TestAuthZViewer(t *testing.T) {
 	}
 }
 
+// The product-facing role model: one global admin, one full-admin per tenant,
+// and one read-only role per main object covering its sub-objects.
+func TestRoleModel(t *testing.T) {
+	names := map[string]sbRole{}
+	for _, r := range sbRoles() {
+		names[r.Name] = r
+	}
+	for _, want := range []string{"sb:infra-admin", "sb:tenant-admin", "sb:cluster-reader", "sb:dr-policy-reader", "sb:dr-application-reader"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("role %s missing", want)
+		}
+	}
+	// full admin is the only tenant-scoped writer and spans all three trees
+	ta := names["sb:tenant-admin"]
+	if !ta.Write {
+		t.Error("sb:tenant-admin must be a writer (CRUD)")
+	}
+	for _, res := range []string{"storageclusters", "replicationpolicies", "protectedapplications"} {
+		found := false
+		for _, r := range ta.Resources {
+			if r == res {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("sb:tenant-admin missing %s", res)
+		}
+	}
+	// readers are read-only and each is scoped to its main object's tree
+	for _, name := range []string{"sb:cluster-reader", "sb:dr-policy-reader", "sb:dr-application-reader"} {
+		if names[name].Write {
+			t.Errorf("%s must be read-only", name)
+		}
+	}
+	// the DR-policy reader must NOT see cluster objects and vice-versa
+	az := &AuthZ{viewer: Viewer{Grants: []ViewerGrant{{Role: "sb:dr-policy-reader", Namespace: "sb-tenant-a"}}}}
+	if az.allow("sb-tenant-a", "get", "storageclusters") {
+		t.Error("dr-policy-reader must not read storageclusters")
+	}
+	if !az.allow("sb-tenant-a", "get", "replicationpolicies") {
+		t.Error("dr-policy-reader must read replicationpolicies")
+	}
+	if az.allow("sb-tenant-a", "create", "replicationpolicies") {
+		t.Error("dr-policy-reader must not create (read-only)")
+	}
+
+	// per-tenant grants generated
+	st := NewStore(11)
+	st.Register(allResourceDefs()...)
+	scn, _ := scenarioByName("large-scale") // two tenants
+	Generate(st, scn, 11, "simplyblock-system")
+	rbDef, _ := st.Lookup(rbacGroup, "v1", "rolebindings")
+	byNs := map[string]int{}
+	for _, rb := range mustList(st, rbDef) {
+		byNs[getStr(rb, "metadata.namespace")]++
+	}
+	if byNs["sb-tenant-a"] < 4 { // admin + 3 readers
+		t.Errorf("primary tenant should have >=4 rolebindings, got %d", byNs["sb-tenant-a"])
+	}
+	if byNs["sb-tenant-b"] < 1 { // empty tenant still gets an admin
+		t.Errorf("empty tenant should have an admin binding, got %d", byNs["sb-tenant-b"])
+	}
+}
+
 // A scoped viewer denies outside its grant.
 func TestAuthZScopedDeny(t *testing.T) {
 	sc, _ := scenarioByName("small-healthy")
-	srv := newServer(sc, 1, "simplyblock-system", "", "sb:cluster-admin@sb-sc-cluster1")
-	if srv.authz.allow("sb-sc-cluster1", "create", "storageclusters") != true {
-		t.Fatal("cluster-admin should create storageclusters in its own namespace")
+	srv := newServer(sc, 1, "simplyblock-system", "", "sb:tenant-admin@sb-tenant-a")
+	if srv.authz.allow("sb-tenant-a", "create", "storageclusters") != true {
+		t.Fatal("tenant-admin should create storageclusters in its own namespace")
 	}
 	if srv.authz.allow("sb-sc-other", "create", "storageclusters") != false {
-		t.Fatal("cluster-admin must NOT act in another storage cluster's namespace")
+		t.Fatal("tenant-admin must NOT act in another storage cluster's namespace")
 	}
-	if srv.authz.allow("sb-sc-cluster1", "get", "secrets") != false {
-		t.Fatal("cluster-admin role does not include secrets")
+	if srv.authz.allow("sb-tenant-a", "get", "secrets") != false {
+		t.Fatal("tenant-admin role does not include secrets")
 	}
 }

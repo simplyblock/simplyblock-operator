@@ -25,10 +25,12 @@ type genCtx struct {
 	// The hub namespace layout (tenancy.go). ns is the storage-cluster
 	// namespace (sb-sc-<cluster>) — the RBAC target that most storage objects
 	// live in — so the existing generators need no per-call change.
-	ns     string // sb-sc-<cluster>  (user-facing storage-cluster namespace)
-	sysNs  string // simplyblock-system (control plane)
-	mcNs   string // sb-mc-<managed>   (transport: projected intent + status)
-	mcName string // managed cluster name
+	ns      string   // sb-<tenant>  (primary tenant namespace = RBAC target)
+	sysNs   string   // simplyblock-system (control plane)
+	mcNs    string   // sb-mc-<managed>   (transport: projected intent + status)
+	mcName  string   // managed cluster name
+	tenant  string   // primary tenant (holds the generated cluster + DR)
+	tenants []string // all tenants (extras are provisioned-but-empty)
 
 	workerNames []string
 	nodeUUIDs   []string
@@ -57,7 +59,12 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g.mcName = fmt.Sprintf("prod-%s-1", g.site)
 	g.sysNs = systemNs
 	g.mcNs = nsManagedCluster(g.mcName)
-	g.ns = nsStorageCluster(g.clusterName)
+	g.tenants = sc.Tenants
+	if len(g.tenants) == 0 {
+		g.tenants = []string{"tenant-a"}
+	}
+	g.tenant = g.tenants[0]
+	g.ns = nsTenant(g.tenant)
 
 	g.namespaces()
 	g.k8sNodes()
@@ -73,6 +80,7 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g.opsHistory()
 	if sc.WithDR {
 		g.replicationChain()
+		g.drApplications()
 		g.ramen()
 	}
 	g.workloads()
@@ -217,14 +225,19 @@ func (g *genCtx) namespaces() {
 	mk(g.mcNs, map[string]any{
 		labScopeKind: scopeManagedCluster, labManagedCluster: g.mcName,
 	})
-	// storage cluster (user-facing / RBAC target)
-	mk(g.ns, map[string]any{
-		labScopeKind: scopeStorageCluster, labManagedCluster: g.mcName,
-		labStorageCluster: g.clusterName,
-	})
-	// DR system
-	mk(drSystemNs, map[string]any{labScopeKind: scopeDR})
-	// application namespaces (scope tree leaves)
+	// tenant namespaces (the RBAC target). A tenant holds one or more whole
+	// clusters plus its DR-policies and DR-applications; global admins create
+	// and manage these. The primary tenant carries the generated cluster + DR;
+	// extra tenants are provisioned-but-empty, ready for a tenant-admin to fill.
+	for i, t := range g.tenants {
+		labels := map[string]any{labScopeKind: scopeTenant, labTenant: t}
+		if i == 0 {
+			labels[labManagedCluster] = g.mcName
+			labels[labStorageCluster] = g.clusterName
+		}
+		mk(nsTenant(t), labels)
+	}
+	// application namespaces (k8s workloads the recipe editor discovers)
 	for _, n := range g.sc.AppNamespaces {
 		mk(n, map[string]any{labScopeKind: scopeApplication})
 	}
@@ -1058,7 +1071,7 @@ func (g *genCtx) projectStorageCluster() {
 				labManagedBy:      "hub",
 				labManagedCluster: g.mcName,
 				labStorageCluster: g.clusterName,
-				labScopeKind:      scopeStorageCluster,
+				labTenant:         g.tenant,
 			},
 			"annotations": map[string]any{
 				"simplyblock.io/projection-of": g.ns + "/" + g.clusterName,
@@ -1090,9 +1103,55 @@ func (g *genCtx) projectStorageCluster() {
 	}
 }
 
-// accessControl creates the RBAC vocabulary and a few grants (§2.3, §4.2): the
-// eight aggregated sb:* ClusterRoles (each with a rules-carrying child role),
-// RoleBindings for the grants, and AccessGrant CRs. The hub API server is the
+// drApplications creates the DR-application main object (one per app namespace)
+// in the tenant namespace, plus a completed ApplicationFailover for the app
+// caught mid-failover. This is the third main object the role model gates
+// (sb:dr-application-reader covers it and its sub-objects).
+func (g *genCtx) drApplications() {
+	for i, appNs := range g.sc.AppNamespaces {
+		var pvcs []any
+		for _, p := range g.pvcRefs {
+			if p.Namespace == appNs {
+				pvcs = append(pvcs, map[string]any{"name": p.Name, "namespace": appNs})
+			}
+		}
+		phase := "Protected"
+		if g.sc.DRFailoverIn && i == 0 {
+			phase = "FailingOver"
+		}
+		g.add(sbGroup, "protectedapplications", g.ns, appNs,
+			map[string]any{
+				"applicationNamespace": appNs,
+				"drPolicyRef":          "policy-prod",
+				"clusters":             []any{g.clusterName, g.drCluster},
+				"pvcSelector":          map[string]any{"matchLabels": map[string]any{}},
+			},
+			map[string]any{
+				"phase": phase, "protectedPVCs": pvcs,
+				"currentCluster": g.clusterName,
+				"lastBackupTime": g.recent(15),
+			}, nil)
+
+		if g.sc.DRFailoverIn && i == 0 {
+			g.add(sbGroup, "applicationfailovers", g.ns, appNs+"-failover",
+				map[string]any{
+					"applicationRef": appNs,
+					"targetCluster":  g.drCluster,
+				},
+				map[string]any{
+					"phase": "Running", "startedAt": g.recent(5),
+					"message": "promoting replicas on " + g.drCluster,
+				}, nil)
+		}
+	}
+}
+
+// accessControl creates the RBAC vocabulary and the grants. The role model is
+// product-facing: a global sb:infra-admin (who creates/manages tenant
+// namespaces and does the bindings), and per tenant a full-admin sb:tenant-admin
+// (the provisioning role — CRUD on every object) plus one read-only role per
+// main object (sb:cluster-reader / sb:dr-policy-reader / sb:dr-application-reader),
+// each covering that object and its sub-objects. The hub API server is the
 // single policy decision point, so a grant here and one made with kubectl are
 // the same object.
 func (g *genCtx) accessControl() {
@@ -1105,6 +1164,11 @@ func (g *genCtx) accessControl() {
 		for i, res := range r.Resources {
 			resources[i] = res
 		}
+		// non-simplyblock resources sb:infra-admin needs live in other groups
+		apiGroups := []any{sbGroup}
+		if r.Name == "sb:infra-admin" {
+			apiGroups = []any{sbGroup, "", rbacGroup}
+		}
 		// aggregated role (rules filled by the controller from labelled children)
 		g.add(rbacGroup, "clusterroles", "", r.Name, nil, nil, map[string]any{
 			"aggregationRule": map[string]any{
@@ -1116,28 +1180,35 @@ func (g *genCtx) accessControl() {
 		g.add(rbacGroup, "clusterroles", "", r.Name+"-rules", nil, nil, map[string]any{
 			"labels": map[string]any{r.AggLabel: "true"},
 			"rules": []any{map[string]any{
-				"apiGroups": []any{sbGroup}, "resources": resources, "verbs": verbs,
+				"apiGroups": apiGroups, "resources": resources, "verbs": verbs,
 			}},
 		})
 	}
 
-	// Grants: infra-admin cluster-wide, cluster-admin + pool-admin on the
-	// storage cluster, dr-admin on sb-dr-system. Bindings carry the same
-	// managed-by/scope labels the controller writes (§4.2).
+	// The global admin, cluster-wide.
 	g.clusterRoleBinding("sb-infra-admins", "sb:infra-admin")
-	g.grant("sb-cluster1-admins", "sb:cluster-admin", g.ns, scopeStorageCluster)
-	g.grant("team-a-pool-admins", "sb:pool-admin", g.ns, scopeStoragePool)
-	if g.sc.WithDR {
-		g.grant("sb-dr-admins", "sb:dr-admin", drSystemNs, scopeDR)
+
+	// Per tenant: a full-admin grant and the three read-only grants. The
+	// primary tenant gets a full spread; extra (empty) tenants get just an
+	// admin so a tenant-admin can provision into them.
+	for i, t := range g.tenants {
+		ns := nsTenant(t)
+		g.grant(t+"-admins", "sb:tenant-admin", ns)
+		if i == 0 {
+			g.grant(t+"-cluster-viewers", "sb:cluster-reader", ns)
+			g.grant(t+"-dr-operators", "sb:dr-policy-reader", ns)
+			g.grant(t+"-app-viewers", "sb:dr-application-reader", ns)
+		}
 	}
 
-	// An AccessGrant CR (the thin CR that adds expiry/reason/DR fan-out, §4.3).
-	g.add(sbGroup, "accessgrants", g.ns, "cluster1-admins",
+	// An AccessGrant CR (the thin CR that adds expiry/reason/DR fan-out, §4.3),
+	// scoped to the primary tenant.
+	g.add(sbGroup, "accessgrants", g.ns, g.tenant+"-admins",
 		map[string]any{
-			"subject": map[string]any{"kind": "Group", "name": "sb-cluster1-admins"},
-			"role":    "sb:cluster-admin",
-			"scope":   map[string]any{"kind": scopeStorageCluster, "storageCluster": g.clusterName},
-			"reason":  "OPS-4821 cluster ownership",
+			"subject": map[string]any{"kind": "Group", "name": g.tenant + "-admins"},
+			"role":    "sb:tenant-admin",
+			"scope":   map[string]any{"kind": scopeTenant, "tenant": g.tenant},
+			"reason":  "OPS-4821 tenant ownership",
 		},
 		map[string]any{
 			"phase": "Reconciled", "boundNamespaces": []any{g.ns},
@@ -1145,10 +1216,10 @@ func (g *genCtx) accessControl() {
 		}, nil)
 }
 
-func (g *genCtx) grant(group, role, ns, scopeKind string) {
+func (g *genCtx) grant(group, role, ns string) {
 	g.add(rbacGroup, "rolebindings", ns, fmt.Sprintf("%s-%s", role[3:], group),
 		nil, nil, map[string]any{
-			"labels":  map[string]any{labManagedBy: "control-center", labScopeKind: scopeKind},
+			"labels":  map[string]any{labManagedBy: "control-center", labScopeKind: scopeTenant},
 			"roleRef": map[string]any{"apiGroup": rbacGroup, "kind": "ClusterRole", "name": role},
 			"subjects": []any{map[string]any{
 				"kind": "Group", "name": group, "apiGroup": rbacGroup,

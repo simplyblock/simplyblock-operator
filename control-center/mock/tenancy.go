@@ -1,31 +1,26 @@
 package main
 
-import "fmt"
-
 // tenancy.go models the hub-side namespace layout, hierarchy labels, scope
-// model and RBAC role vocabulary from the multi-cluster RBAC design
-// (uploads/simplyblock-multicluster-rbac-design.md, §2). None of this is
-// implemented on main; PARADIGM.md records what is faithful and what is a
-// stand-in.
+// model and RBAC role vocabulary. None of this is implemented on main;
+// PARADIGM.md records what is faithful and what is a stand-in.
 //
-// Namespace plan (§2.1):
-//   simplyblock-system     control-plane workloads
-//   sb-mc-<managed>        ManagedCluster artifacts, projected intent + status (transport)
-//   sb-sc-<cluster>        StorageCluster, StorageNode, StorageDevice (RBAC target, user-facing)
-//   sb-sp-<pool>-<hash>    StoragePool + volumes/snapshots/backups (only when a tenant boundary)
-//   sb-dr-system           DRPolicy, DRCluster
-//   <application>          ProtectedApplication, ApplicationFailover
+// Namespace plan (tenant-centric, per the "namespaces reflect tenants" model):
+//   simplyblock-system   control-plane workloads
+//   sb-mc-<managed>      ManagedCluster transport: projected intent + status
+//   sb-<tenant>          the RBAC target — holds one or more whole clusters plus
+//                        the tenant's DR-policies and DR-applications. Global
+//                        admins create and manage these; a tenant-admin
+//                        provisions objects into them.
+//   <application>        k8s workload namespace (recipe editor discovery)
 
 const (
-	drSystemNs = "sb-dr-system"
-
 	// Label keys — hierarchy is encoded in labels, not names (§2.2), because
 	// namespace names are DNS labels (no dots). These drive RoleBinding
 	// propagation, the scope tree, and admission bindings.
 	labScopeKind      = "simplyblock.io/scope-kind"
+	labTenant         = "simplyblock.io/tenant"
 	labManagedCluster = "simplyblock.io/managed-cluster"
 	labStorageCluster = "simplyblock.io/storage-cluster"
-	labStoragePool    = "simplyblock.io/storage-pool"
 	labManagedBy      = "simplyblock.io/managed-by"
 
 	// Actor-stamp annotations (§3.2) — written by a mutating webhook on the
@@ -38,42 +33,70 @@ const (
 )
 
 func nsManagedCluster(mc string) string { return "sb-mc-" + mc }
-func nsStorageCluster(sc string) string { return "sb-sc-" + sc }
-func nsStoragePool(pool, hash string) string {
-	return fmt.Sprintf("sb-sp-%s-%s", pool, hash)
-}
+func nsTenant(tenant string) string     { return "sb-" + tenant }
 
 // scopeKind values on namespaces (and the scope tree the UI renders).
 const (
 	scopeManagedCluster = "managed-cluster"
-	scopeStorageCluster = "storage-cluster"
-	scopeStoragePool    = "storage-pool"
-	scopeDR             = "dr"
-	scopeApplication    = "application"
-	scopeCluster        = "cluster" // sb:infra-admin, no namespace
+	scopeTenant         = "tenant"      // sb-<tenant>: the RBAC target, holds clusters + DR
+	scopeApplication    = "application" // k8s workload namespace (recipe editor discovery)
+	scopeCluster        = "cluster"     // sb:infra-admin, no namespace (global)
 )
 
-// sbRole is one of the eight aggregated ClusterRoles (§2.3). boundNs is where
-// a grant of the role lives; verbs/resources are what the aggregated role
-// grants (used by the mock's SelfSubjectRulesReview/SubjectAccessReview).
+// The three "main objects" a tenant contains, each with its sub-objects. The
+// role model is one full-admin (CRUD across all of them) plus one read-only
+// role per main object — covering that object AND its sub-objects.
+var (
+	clusterTree = []string{
+		"storageclusters", "storagenodes", "storagedevices", "storagenodesets",
+		"storagepools", "storagebackups", "backuppolicies", "backuprestores", "backupimports",
+		"storageclusterops", "storagenodeops", "storagedeviceops", "storagepoolops", "storagebackupops",
+		"volumemigrations", "tasks",
+	}
+	drPolicyTree = []string{
+		"replicationpairs", "replicationpolicies", "replicationslots", "replicationops",
+	}
+	drAppTree = []string{
+		"protectedapplications", "applicationfailovers",
+	}
+)
+
+func tenantAdminResources() []string {
+	out := append([]string{}, clusterTree...)
+	out = append(out, drPolicyTree...)
+	out = append(out, drAppTree...)
+	return out
+}
+
+// sbRole is a role the console can grant. Scope is where a grant of it binds:
+// `cluster` (global, sb:infra-admin) or `tenant` (a RoleBinding in the tenant
+// namespace). Write=true is the full-admin (CRUD) role; the readers are
+// read-only. Verbs/resources drive the mock's SelfSubjectRulesReview /
+// SubjectAccessReview.
 type sbRole struct {
 	Name      string
 	Scope     string
 	Resources []string
-	Write     bool // admin (write verbs) vs reader (read-only)
+	Write     bool
 	AggLabel  string
 }
 
+// sbRoles is the product-facing role model:
+//   - sb:infra-admin        global admin — creates/manages tenant namespaces and does the bindings
+//   - sb:tenant-admin       full CRUD on every object in a tenant (the provisioning role)
+//   - sb:cluster-reader          read-only: cluster main object + its sub-objects
+//   - sb:dr-policy-reader         read-only: DR-policy main object + its sub-objects
+//   - sb:dr-application-reader    read-only: DR-application main object + its sub-objects
 func sbRoles() []sbRole {
 	return []sbRole{
-		{"sb:infra-admin", scopeCluster, []string{"nodepoolallocations", "managedclusters", "storageclusterclasses", "accessgrants"}, true, "simplyblock.io/aggregate-to-infra-admin"},
-		{"sb:cluster-admin", scopeStorageCluster, []string{"storageclusters", "storagenodes", "storagedevices", "storageclusterops", "storagenodeops", "storagedeviceops"}, true, "simplyblock.io/aggregate-to-cluster-admin"},
-		{"sb:cluster-reader", scopeStorageCluster, []string{"storageclusters", "storagenodes", "storagedevices"}, false, "simplyblock.io/aggregate-to-cluster-reader"},
-		{"sb:pool-admin", scopeStoragePool, []string{"storagepools", "storagebackups", "backuppolicies", "backuprestores", "storagepoolops", "storagebackupops"}, true, "simplyblock.io/aggregate-to-pool-admin"},
-		{"sb:pool-reader", scopeStoragePool, []string{"storagepools", "storagebackups", "backuppolicies"}, false, "simplyblock.io/aggregate-to-pool-reader"},
-		{"sb:dr-admin", scopeDR, []string{"replicationpairs", "replicationpolicies", "replicationslots", "replicationops"}, true, "simplyblock.io/aggregate-to-dr-admin"},
-		{"sb:dr-reader", scopeDR, []string{"replicationpairs", "replicationpolicies", "replicationslots"}, false, "simplyblock.io/aggregate-to-dr-reader"},
-		{"sb:app-admin", scopeApplication, []string{"protectedapplications", "applicationfailovers"}, true, "simplyblock.io/aggregate-to-app-admin"},
+		{"sb:infra-admin", scopeCluster, []string{
+			"namespaces", "nodepoolallocations", "managedclusters", "storageclusterclasses",
+			"accessgrants", "clusterroles", "rolebindings",
+		}, true, "simplyblock.io/aggregate-to-infra-admin"},
+		{"sb:tenant-admin", scopeTenant, tenantAdminResources(), true, "simplyblock.io/aggregate-to-tenant-admin"},
+		{"sb:cluster-reader", scopeTenant, clusterTree, false, "simplyblock.io/aggregate-to-cluster-reader"},
+		{"sb:dr-policy-reader", scopeTenant, drPolicyTree, false, "simplyblock.io/aggregate-to-dr-policy-reader"},
+		{"sb:dr-application-reader", scopeTenant, drAppTree, false, "simplyblock.io/aggregate-to-dr-application-reader"},
 	}
 }
 
