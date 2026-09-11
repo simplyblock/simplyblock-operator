@@ -358,3 +358,55 @@ func TestVolume_NotFound(t *testing.T) {
 		t.Fatal("Volume succeeded for a volume that was never registered")
 	}
 }
+
+// The control plane serves `watch=true` on its read endpoints as Server-Sent
+// Events. The simulator holds a state nothing mutates behind the caller's back,
+// so it cannot produce a second event and a stream from it would hang. It says
+// 501 instead. Without watch the same endpoint answers normally, which is what
+// separates "the simulator does not stream" from "the simulator broke."
+func TestWatch_Answers501AndOnlyWhenAsked(t *testing.T) {
+	f := newFixture(t, "eth0", 1)
+	node := f.addNode("worker-1", "10.10.0.1")
+
+	for _, path := range []string{
+		fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", f.cluster),
+		fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/", f.cluster, f.pool),
+		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", f.cluster),
+		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/", f.cluster, node),
+		fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/", f.cluster, f.pool),
+	} {
+		for _, tc := range []struct {
+			query string
+			want  int
+		}{
+			{"", http.StatusOK},
+			{"?watch=false", http.StatusOK},
+			{"?watch=true", http.StatusNotImplemented},
+		} {
+			t.Run(path+tc.query, func(t *testing.T) {
+				if got := f.status(t, path+tc.query); got != tc.want {
+					t.Errorf("GET %s%s = %d, want %d", path, tc.query, got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// status is the response code of an authorized GET against the simulator.
+func (f *fixture) status(t *testing.T, path string) int {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, f.sim.URL()+path, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return resp.StatusCode
+}
