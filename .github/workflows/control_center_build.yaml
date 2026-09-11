@@ -1,0 +1,162 @@
+name: "Control Center: Docker Build"
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "control-center/**"
+      - ".github/workflows/control_center_build.yaml"
+  workflow_call:
+    inputs:
+      version:
+        description: "Image tag to publish (defaults to the branch ref)"
+        required: false
+        type: string
+
+jobs:
+  test-mock:
+    name: "Test mock backend"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: control-center/mock
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: control-center/mock/go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  build-and-push-mock:
+    name: "Build and push (mock)"
+    needs: test-mock
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419 # v2
+        with:
+          registry-type: public
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Compute image tag
+        id: image_tag
+        run: |
+          version="${{ inputs.version || github.ref_name }}"
+          echo "tag=${version//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch control-center-mock image (DockerHub + ECR)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: control-center/mock
+          file: control-center/mock/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            simplyblock/control-center-mock:${{ steps.image_tag.outputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/simply-block/control-center-mock:${{ steps.image_tag.outputs.tag }}
+          cache-from: type=gha,scope=control-center-mock
+          cache-to: type=gha,mode=max,scope=control-center-mock
+
+  build-and-push:
+    name: "Build and push"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # The image build strips the fixture backend out of index.html and ships
+      # only the files it references. Until the console sources are committed
+      # (index.html and the .jsx files at control-center/), there is nothing to
+      # build — succeed with a notice instead of failing every push.
+      - name: Check for console sources
+        id: sources
+        run: |
+          if [ -f control-center/index.html ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::control-center/index.html not present yet — skipping the image build"
+          fi
+
+      - name: Log in to DockerHub
+        if: steps.sources.outputs.present == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS Credentials
+        if: steps.sources.outputs.present == 'true'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        if: steps.sources.outputs.present == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419 # v2
+        with:
+          registry-type: public
+
+      - name: Set up Docker Buildx
+        if: steps.sources.outputs.present == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Compute image tag
+        if: steps.sources.outputs.present == 'true'
+        id: image_tag
+        # Docker tags cannot contain "/", but branch names (e.g. feature/foo) can —
+        # sanitize before using the ref name as a tag.
+        run: |
+          version="${{ inputs.version || github.ref_name }}"
+          echo "tag=${version//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch control-center image (DockerHub + ECR)
+        if: steps.sources.outputs.present == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: control-center
+          file: control-center/deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            simplyblock/control-center:${{ steps.image_tag.outputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/simply-block/control-center:${{ steps.image_tag.outputs.tag }}
+          cache-from: type=gha,scope=control-center
+          cache-to: type=gha,mode=max,scope=control-center

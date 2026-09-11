@@ -1,0 +1,281 @@
+{{/*
+  Ramen hub operator — the management-cluster half of RamenDR: reconciles
+  DRPolicy, DRPlacementControl and DRCluster and drives placement through
+  Open Cluster Management (the cluster needs the OCM hub — RHACM or
+  standalone OCM — or the manager fails on the missing OCM kinds).
+
+  Vendored from RamenDR/ramen v0.1.0-rc1 config/hub; names and labels are
+  exactly what upstream's kustomize produces (namePrefix ramen-hub-,
+  namespace ramen-system). The RBAC rules below are config/hub/rbac/role.yaml
+  verbatim.
+*/}}
+{{- if .Values.ramen.hub.enabled }}
+{{- $ramen := .Values.ramen }}
+{{- include "sbramen.operator" (dict "root" $ "role" "hub" "vals" $ramen.hub) }}
+---
+{{ include "sbramen.leaderElection" (dict "root" $ "role" "hub") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ramen-hub-operator-role
+  labels:
+    {{- include "sbramen.labels" (dict "app" "ramen-hub") | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - addon.open-cluster-management.io
+  resources:
+  - managedclusteraddons
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.open-cluster-management.io
+  resources:
+  - placementrules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.open-cluster-management.io
+  resources:
+  - placementrules/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apps.open-cluster-management.io
+  resources:
+  - placementrules/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - argoproj.io
+  resources:
+  - applicationsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - managedclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - placementdecisions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - placementdecisions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - placements
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - placements/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - policy.open-cluster-management.io
+  resources:
+  - placementbindings
+  - policies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ramendr.openshift.io
+  resources:
+  - drclusters
+  - drplacementcontrols
+  - drpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ramendr.openshift.io
+  resources:
+  - drclusters/finalizers
+  - drplacementcontrols/finalizers
+  - drpolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ramendr.openshift.io
+  resources:
+  - drclusters/status
+  - drplacementcontrols/status
+  - drpolicies/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - view.open-cluster-management.io
+  resources:
+  - managedclusterviews
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - work.open-cluster-management.io
+  resources:
+  - manifestworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ramen-hub-operator-rolebinding
+  labels:
+    {{- include "sbramen.labels" (dict "app" "ramen-hub") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ramen-hub-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: ramen-hub-operator
+    namespace: {{ $ramen.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ramen-hub-operator-role
+  namespace: {{ $ramen.namespace }}
+  labels:
+    {{- include "sbramen.labels" (dict "app" "ramen-hub") | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - policy.open-cluster-management.io
+  resources:
+  - placementbindings
+  - policies
+  verbs:
+  - create
+  - delete
+  - get
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ramen-hub-operator-rolebinding
+  namespace: {{ $ramen.namespace }}
+  labels:
+    {{- include "sbramen.labels" (dict "app" "ramen-hub") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ramen-hub-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: ramen-hub-operator
+    namespace: {{ $ramen.namespace }}
+{{- end }}

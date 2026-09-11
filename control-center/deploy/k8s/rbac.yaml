@@ -1,0 +1,160 @@
+# RBAC for the Control Center.
+#
+# The console's authority IS this role: in serviceaccount mode every request the
+# browser makes is executed with this token, so anyone who can reach the pod can
+# do what is granted here. Two consequences worth stating plainly:
+#
+#   * Put authentication in front of the Service. The Ingress in this directory
+#     ships with an auth annotation placeholder and it is not optional.
+#   * Nothing here grants delete on an entity. The console never deletes a
+#     StorageCluster, node, device, pool or volume — those are Ops-kind
+#     operations, which is why only the Ops kinds and the replication resources
+#     are creatable.
+#
+# Narrowing: everything except nodes, persistentvolumes and storageclasses is
+# namespaced. If the console only ever manages one namespace, replace the
+# ClusterRoleBinding for the namespaced rules with a RoleBinding.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-control-center
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+rules:
+  # ---- simplyblock entities: read ----
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusters
+      - storagenodes
+      - storagenodesets
+      - storagedevices
+      - storagepools
+      - storagebackups
+      - backuppolicies
+      - backuprestores
+      - backupimports
+      - controlplanes
+      - replicationpairs
+      - replicationpolicies
+      - replicationslots
+      - volumemigrations
+      - tasks
+      - simplyblockdrivers
+      - clusterdeploymentconfigs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusters/status
+      - storagenodes/status
+      - storagepools/status
+      - replicationpolicies/status
+      - replicationslots/status
+    verbs: ["get"]
+
+  # ---- day-2 operations ----
+  # An action is not a verb against an entity: it is an Ops object the operator
+  # reconciles. So the console creates these, reads their phase, and patches
+  # spec.abort to unwind one. It deletes an Ops object only to abort it.
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusterops
+      - storagenodeops
+      - storagedeviceops
+      - storagepoolops
+      - storagebackupops
+      - controlplaneops
+      - persistentvolumeops
+      - operatorops
+      - replicationops
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+
+  # ---- resources the console authors directly ----
+  # Replication pairs and policies are configuration, not operations. Deletion
+  # is refused by the operator while a policy or slot still references them.
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["replicationpairs", "replicationpolicies"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["storagebackups", "backuppolicies", "backuprestores", "backupimports", "volumemigrations"]
+    verbs: ["create", "update", "patch", "delete"]
+  # Cluster and pool spec edits: thresholds, QoS, migration settings, KMS.
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["storageclusters", "storagepools", "storagenodesets"]
+    verbs: ["update", "patch"]
+
+  # ---- core Kubernetes: read ----
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes", "persistentvolumeclaims", "pods", "events", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # A PVC annotation is the entire membership model for replication and for
+  # backup policies, so patching one is how the console attaches a volume.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+
+  # ---- workloads, read only, for the Ramen recipe editor ----
+  # The recipe editor discovers what is actually deployed in a namespace so a
+  # boot sequence can be built from real object kinds rather than typed by hand.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list"]
+
+  # ---- Ramen: instances only, never the CRDs ----
+  # Redefining ramendr.openshift.io CRDs breaks a supported RHACM install, so
+  # these are consumed as instances. Recipes are authored by the console; the
+  # rest are read, and DRPC actions are writes to an existing object.
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["drpolicies", "drclusters", "drclusterconfigs", "volumereplicationgroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["drplacementcontrols"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["recipes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list"]
+
+  # ---- Helm release view ----
+  # Helm stores releases as Secrets of type helm.sh/release.v1. This is the one
+  # place the console needs a Secret, and it is read-only; no other Secret is
+  # granted, so a backup credentialsSecretRef is only ever shown by name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-control-center
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-control-center
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-control-center
+    namespace: simplyblock

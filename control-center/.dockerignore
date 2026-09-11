@@ -1,0 +1,10 @@
+# Build context for deploy/Dockerfile is control-center/. The prepare stage
+# copies everything and prepare.mjs then emits only the files index.html
+# references, so these never reach the image — excluding them just keeps the
+# context small and the build fast.
+mock/
+screenshots/
+uploads/
+*.md
+.thumbnail
+.git

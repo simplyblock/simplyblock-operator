@@ -632,6 +632,213 @@ prometheus:
       registry: "quay.io/simplyblock-io"
       image: defaultbackend-amd64
       tag: "1.5"
+# The Control Center — the simplyblock web console (control-center/ in the
+# monorepo). Off by default: it proxies the Kubernetes API with the pod's
+# ServiceAccount token, so enabling it is a deliberate decision about who may
+# reach the Service. See control-center/README.md, "Who can do what".
+controlCenter:
+  enabled: false
+
+  # Naming. The console templates are self-contained and do not borrow the
+  # chart's helpers, so these control its object names. Default object name:
+  # <release>-control-center.
+  nameOverride: ""
+  fullnameOverride: ""
+
+  image:
+    # defaults to quay.io when unset
+    registry: ""
+    repository: simplyblock-io/control-center
+    # inherits .Chart.AppVersion when unset. This chart's appVersion is a
+    # floating tag, so pin a released console tag here for production.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # Stateless — location lives in the browser — so two replicas cost little and
+  # keep the console up through a node loss, which is when it matters most.
+  replicas: 2
+
+  # serviceaccount | passthrough
+  #
+  # serviceaccount: this pod attaches its own token to proxied requests. The
+  #   browser holds no credential. The console's authority is the ClusterRole,
+  #   shared by everyone who can reach it, so put authentication in front.
+  #
+  # passthrough: the browser supplies the bearer token and Kubernetes enforces
+  #   that user's own RBAC. Per-user authority and a real audit trail, at the
+  #   cost of needing an auth proxy that injects the token. If you use this,
+  #   set rbac.create=false — the pod needs no permissions of its own.
+  authMode: serviceaccount
+  tokenRefreshSeconds: 600
+
+  kubernetesApi: https://kubernetes.default.svc
+  # SNI and Host presented to the API server. Must be a name on its
+  # certificate — change this only together with kubernetesApi.
+  kubernetesApiHost: kubernetes.default.svc
+  kubernetesApiCaFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  # Empty defaults resolve to this chart's own services: the operator API on
+  # http://simplyblock-operator:8080 and Prometheus per
+  # prometheus.simplyblock.prometheusURL/prometheusPORT.
+  operatorUrl: ""
+  helmUrl: ""
+  prometheusUrl: ""
+
+  rbac:
+    # Required in serviceaccount mode: the proxied token needs these rules or
+    # every request returns 403 and the console renders empty. Set false only
+    # with authMode: passthrough, where each user's own RBAC applies instead.
+    create: true
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false
+    className: nginx
+    host: ""
+    annotations:
+      # Authentication is not optional in serviceaccount mode. Replace this with
+      # your OIDC/OAuth2 proxy annotations, or keep basic auth as a stop-gap.
+      nginx.ingress.kubernetes.io/auth-type: basic
+      nginx.ingress.kubernetes.io/auth-secret: simplyblock-control-center-auth
+      nginx.ingress.kubernetes.io/auth-realm: simplyblock Control Center
+      nginx.ingress.kubernetes.io/proxy-body-size: 2m
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    tls: []
+
+  networkPolicy:
+    # Caps the console's egress to its three upstreams plus DNS. Off by default
+    # because the API-server CIDRs below are cluster-specific: narrow them to
+    # your API server endpoint (`kubectl get endpoints kubernetes -n default`)
+    # or your service CIDR before enabling.
+    enabled: false
+    apiServerCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+    # Namespaces allowed to reach the console, in addition to the release
+    # namespace itself — add your ingress controller's namespace when the
+    # Ingress is enabled, e.g. [ingress-nginx].
+    ingressFromNamespaces: []
+
+  # Deploys sb-mock (control-center/mock) next to the console and points the
+  # console's proxy at it instead of the real cluster: the Kubernetes API,
+  # operator API and Prometheus are all impersonated, reads come from a
+  # generated dataset, and writes persist without performing any change. For
+  # testing the UI and demo installs only — never enable in production.
+  mock:
+    enabled: false
+    image:
+      # defaults to quay.io when unset
+      registry: ""
+      repository: simplyblock-io/control-center-mock
+      # inherits .Chart.AppVersion when unset
+      tag: ""
+      pullPolicy: IfNotPresent
+    # small-healthy | medium-degraded | large-scale | dr-failover | chaos,
+    # or auto for a seeded random pick
+    dataset: auto
+    # 0 picks a random seed; a fixed value makes the world reproducible
+    seed: 0
+    # simulator tick (Ops phase progression); "0" disables the simulator so
+    # e2e suites can drive it deterministically via POST /mockctl/advance
+    simInterval: 4s
+    # probability a simulated operation ends Failed
+    failRate: 0.1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 48Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+  nodeSelector: {}
+  tolerations: []
+  podAnnotations: {}
+
+# Upstream Ramen (RamenDR) — optional, both halves off by default.
+#
+# Ramen splits across the two cluster roles, and so does this chart:
+#   * management cluster ("hub"):   --set ramen.hub.enabled=true
+#     runs the hub operator that reconciles DRPolicy, DRPlacementControl and
+#     DRCluster. It drives placement through Open Cluster Management, so the
+#     cluster needs the OCM hub (RHACM or standalone OCM) installed.
+#   * managed clusters:             --set ramen.drCluster.enabled=true
+#     runs the dr-cluster operator that executes the protection: it reconciles
+#     VolumeReplicationGroups on the cluster where the volumes live. Enable it
+#     in the same install that deploys the local simplyblock operator.
+#
+# Manifests are vendored verbatim from RamenDR/ramen v0.1.0-rc1 (config/hub,
+# config/dr-cluster, config/crd/bases) and only parameterized for namespace,
+# image and resources. Object names are kept upstream (ramen-hub-operator,
+# ramen-dr-cluster-operator) because Ramen refers to its own names at runtime.
+ramen:
+  image:
+    repository: quay.io/ramendr/ramen-operator
+    tag: v0.1.0-rc1
+    pullPolicy: IfNotPresent
+
+  # All Ramen objects land in their upstream namespace, not the release
+  # namespace. createNamespace can be disabled if it already exists.
+  namespace: ramen-system
+  createNamespace: true
+
+  # The Ramen CRDs ship as templates (never in crds/) so they stay optional:
+  # on a cluster where Ramen already exists — RHACM/ODF installs it — they
+  # MUST NOT be redefined; set installCRDs=false there. The vendored CRDs
+  # carry helm.sh/resource-policy: keep, so an uninstall leaves them (and all
+  # DR state) in place. Only the CRDs for the enabled halves are installed.
+  installCRDs: true
+
+  # S3 store profiles shared by both operators — Ramen persists cluster data
+  # to S3 for failover. Entries follow upstream RamenConfig s3StoreProfiles:
+  #   - s3ProfileName: east
+  #     s3Bucket: ramen-metadata
+  #     s3CompatibleEndpoint: https://s3.example.com
+  #     s3Region: us-east-1
+  #     s3SecretRef: {name: ramen-s3-secret}
+  s3StoreProfiles: []
+
+  hub:
+    enabled: false
+    replicas: 1
+    # merged over the upstream RamenConfig defaults (deep merge, this wins)
+    config: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 200Mi
+      limits:
+        cpu: 100m
+        memory: 300Mi
+
+  drCluster:
+    enabled: false
+    replicas: 1
+    # merged over the upstream RamenConfig defaults (deep merge, this wins)
+    config: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 200Mi
+      limits:
+        cpu: 100m
+        memory: 300Mi
+
+  nodeSelector: {}
+  tolerations: []
+
 tls:
   enabled: false
 

@@ -1,0 +1,27 @@
+{{/*
+  Ramen CRDs, vendored verbatim from RamenDR/ramen v0.1.0-rc1
+  (config/crd/bases) into ramen/crds/, split the way upstream's kustomize
+  overlays split them: config/hub/crd installs the hub kinds, config/
+  dr-cluster/crd the execution kinds. Only the halves that are enabled get
+  their CRDs.
+
+  Deliberately templates, NOT the chart's crds/ directory: crds/ installs
+  unconditionally, and on a cluster where Ramen already exists (RHACM/ODF)
+  these must not be touched — set ramen.installCRDs=false there. Each vendored
+  file carries helm.sh/resource-policy: keep, so uninstalling the release
+  leaves the CRDs and every DR object behind.
+*/}}
+{{- if and .Values.ramen.installCRDs (or .Values.ramen.hub.enabled .Values.ramen.drCluster.enabled) }}
+{{- if .Values.ramen.hub.enabled }}
+{{- range $path, $_ := .Files.Glob "ramen/crds/hub/*.yaml" }}
+---
+{{ $.Files.Get $path }}
+{{- end }}
+{{- end }}
+{{- if .Values.ramen.drCluster.enabled }}
+{{- range $path, $_ := .Files.Glob "ramen/crds/dr-cluster/*.yaml" }}
+---
+{{ $.Files.Get $path }}
+{{- end }}
+{{- end }}
+{{- end }}

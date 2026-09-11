@@ -1,0 +1,125 @@
+# Rendered by the nginx image's envsubst at startup (/etc/nginx/templates).
+# NGINX_ENVSUBST_FILTER=SB_ limits substitution to the SB_* variables, so
+# nginx's own $uri, $host and $proxy_add_x_forwarded_for are left alone.
+#
+# Two jobs:
+#   1. serve the static document
+#   2. reverse-proxy the three APIs the console is allowed to talk to, so the
+#      browser makes same-origin requests and never holds a cluster credential
+#
+# Everything else is refused. The console has exactly three upstreams by design:
+# the Kubernetes API, the operator API, and Prometheus.
+
+server {
+  listen ${SB_LISTEN_PORT};
+  listen [::]:${SB_LISTEN_PORT};
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Same-origin only: no framing, no sniffing, and no external origin — React
+  # is vendored and the JSX precompiled. Declared in a snippet and re-included in every
+  # location that sets its own add_header, because nginx drops inherited
+  # headers the moment a level declares one of its own.
+  include /etc/nginx/snippets/security-headers.conf;
+
+  # Liveness and readiness. Deliberately not proxied, so a probe reports on this
+  # container rather than on the health of the cluster behind it.
+  location = /healthz {
+    access_log off;
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  # config.js is generated per pod into the writable scratch mount, and must
+  # never be cached: it carries the namespace and the auth mode.
+  location = /config.js {
+    alias /tmp/nginx/config.js;
+    default_type application/javascript;
+    include /etc/nginx/snippets/security-headers.conf;
+    add_header Cache-Control "no-store, must-revalidate" always;
+    expires -1;
+  }
+
+  # dist/*.js is the precompiled console, immutable per image tag; index.html
+  # must not be cached or a rolling update would leave a stale shell loading
+  # new sources.
+  location = /index.html {
+    include /etc/nginx/snippets/security-headers.conf;
+    add_header Cache-Control "no-store, must-revalidate" always;
+    expires -1;
+  }
+  location ~* \.(jsx|js|css|svg|woff2?)$ {
+    include /etc/nginx/snippets/security-headers.conf;
+    add_header Cache-Control "public, max-age=3600" always;
+    try_files $uri =404;
+  }
+
+  # ---- Kubernetes API ------------------------------------------------------
+  # In serviceaccount mode token.conf sets the Authorization header from the
+  # pod's projected token, replacing whatever the browser sent. In passthrough
+  # mode the file is empty and the browser's own header is forwarded.
+  location /k8s/ {
+    include /tmp/nginx/token.conf;
+
+    # SB_K8S_HOST is the name used for SNI and in the Host header, and it must
+    # appear on the API server's certificate. It defaults to
+    # kubernetes.default.svc; if SB_K8S_API points at an external endpoint,
+    # this and SB_K8S_CA_FILE have to move with it.
+    proxy_pass ${SB_K8S_API}/;
+    proxy_ssl_verify              on;
+    proxy_ssl_trusted_certificate ${SB_K8S_CA_FILE};
+    proxy_ssl_name                ${SB_K8S_HOST};
+    proxy_ssl_server_name         on;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              ${SB_K8S_HOST};
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header Accept-Encoding   "";
+    # watch requests stream, so no buffering and no read timeout
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+
+    # Blocks the verbs the console has no use for at all. It does NOT express
+    # which resources may be deleted — DELETE is needed for replication pairs,
+    # policies and aborting an Ops object. RBAC is the real control there, and
+    # it grants delete on nothing else.
+    limit_except GET POST PATCH PUT DELETE { deny all; }
+  }
+
+  # ---- operator API --------------------------------------------------------
+  # The kinds v1alpha1 does not model yet (/proposed/*), the Helm release view,
+  # and the observability reads that are not in any API: SPDK logs, SPDK thread
+  # utilisation, control-plane container allocation, FoundationDB backups.
+  location /operator/v1/ {
+    proxy_pass ${SB_OPERATOR_URL}/v1/;
+    proxy_http_version 1.1;
+    proxy_set_header Host            $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+  }
+
+  location /helm/v1/ {
+    proxy_pass ${SB_HELM_URL}/v1/;
+    proxy_http_version 1.1;
+    proxy_set_header Host            $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  # ---- Prometheus ----------------------------------------------------------
+  # Read-only: the console queries, it never writes or administers.
+  location /prometheus/api/v1/ {
+    proxy_pass ${SB_PROMETHEUS_URL}/api/v1/;
+    proxy_http_version 1.1;
+    proxy_set_header Host            $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    limit_except GET POST { deny all; }
+  }
+
+  # Single-page document: any unknown path renders the shell, which restores its
+  # own location from localStorage.
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
