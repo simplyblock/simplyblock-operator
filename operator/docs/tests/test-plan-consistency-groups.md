@@ -67,6 +67,22 @@ File: `operator/internal/webhook/volumemigration_webhook_unit_test.go`
 | U-23 | Target PV backs a sibling in the same subsystem as a group member: the create is rejected, because the subsystem migrates as one | Negative | —    |
 | U-24 | Backend unreachable so membership cannot be determined: the create is admitted (fail-open), the backend refusal backstops        | Boundary | —    |
 
+### VolumeGroupSnapshotOps: Restore (design §7.4)
+
+Files: `operator/internal/controller/volumegroupsnapshotops_controller_unit_test.go` and `operator/internal/webhook/volumegroupsnapshotops_validator_unit_test.go`
+
+| #    | Scenario                                                                                                                                               | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-25 | Ready target with N member snapshots: one claim per member is created, each `dataSource` its member snapshot, named `<prefix>-<source PVC>`            | Positive | —    |
+| U-26 | `namePrefix` empty: restored claims are prefixed with the operation's own name                                                                         | Boundary | —    |
+| U-27 | `restore.consistencyGroup` set: every restored claim carries the membership label with that value                                                      | Positive | —    |
+| U-28 | `restore.consistencyGroup` empty: restored claims carry no membership label                                                                            | Negative | —    |
+| U-29 | Incomplete generation with `enablePartialRestore` off: the operation fails naming the missing members, and no claim is created                         | Negative | —    |
+| U-30 | Incomplete generation with `enablePartialRestore` on: the present members are restored, and `membersExpected` against `membersBound` reports the gap   | Boundary | —    |
+| U-31 | A derived claim name collides with an existing claim: the operation fails naming the claim, and claims already created are left in place               | Negative | —    |
+| U-32 | Target exists but is not `ReadyToUse`: the operation holds in `Pending` with a `RestoreBlocked` event, creates no claim, and proceeds once it is ready | Boundary | —    |
+| U-33 | Admission: a `volumeGroupSnapshotRef` that resolves is admitted, and one naming no `VolumeGroupSnapshot` in the namespace is rejected at create        | Negative | —    |
+
 ---
 
 ## 2. Integration Tests
@@ -87,6 +103,17 @@ File: `csi-driver/internal/csi/controller/groupsnapshot_test.go`
 | I-06 | Backend 5xx during the take: the `VolumeGroupSnapshot` reports not-ready, recovers when the backend returns                                                                            | Negative | —    |
 | I-07 | The admission webhook (registered in envtest) rejects a `VolumeGroupSnapshot` whose selector spans two groups at create, and admits a single-group one                                 | Negative | —    |
 | I-08 | The admission webhook (registered in envtest) rejects a `VolumeMigration` whose target PV backs a consistency-group member at create, and admits one for a non-member volume           | Negative | —    |
+
+### VolumeGroupSnapshotOps Lifecycle (design §7.4)
+
+File: `operator/internal/controller/volumegroupsnapshotops_controller_test.go`
+
+| #    | Scenario                                                                                                                                                                                           | Type     | Test |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| I-09 | Full reconcile over a ready target: every claim is created and binds, the phase reaches `Succeeded`, `membersBound` equals `membersExpected`, and `observedGeneration` matches the spec generation | Positive | —    |
+| I-10 | Mutating `volumeGroupSnapshotRef`, `action`, or the restore parameters after create is rejected by the API server (CEL immutability)                                                               | Negative | —    |
+| I-11 | Operator restart mid-restore: `status.step` restores the machine's position and no duplicate claim is created                                                                                      | Boundary | —    |
+| I-12 | Deleting a `Succeeded` operation leaves the restored claims in place                                                                                                                               | Boundary | —    |
 
 ---
 
@@ -121,11 +148,18 @@ Against a live simplyblock cluster with real fio workloads. The cross-volume cor
 | E-11 | Delete the last member: the group and its remaining generations are removed, and a backend event records the widening                                                                         | Positive | —    |
 | E-12 | A member is offline at snapshot time: the group snapshot is refused naming the member, no generation is taken, no I/O is frozen on the healthy members, and a retry succeeds once it recovers | Negative | —    |
 
+### Single-Operation Restore (design §7.4)
+
+| #    | Scenario                                                                                                                                                                 | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-13 | One applied `VolumeGroupSnapshotOps` restores a generation: every claim binds and the restored set is hash-verified crash-consistent (the one-apply counterpart of E-04) | Positive | —    |
+| E-14 | A restore with `consistencyGroup` set: the clones form a new group pinned on one node (the one-apply counterpart of E-06)                                                | Positive | —    |
+
 ---
 
 ## 4. E2E — Phase 2 gating
 
-The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot` path) are testable only once P0-4 enables the `CSIVolumeGroupSnapshot` feature gate and the CSI GroupController ships. Until then, E-01 … E-03 and the membership rows are exercisable through the backend group and `sbctl`.
+The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot` path) are testable only once P0-4 enables the `CSIVolumeGroupSnapshot` feature gate and the CSI GroupController ships. Until then, E-01 … E-03 and the membership rows are exercisable through the backend group and `sbctl`. The Phase 3 rows (U-25 … U-33, I-09 … I-12, E-13, E-14) additionally depend on the `VolumeGroupSnapshotOps` kind, its webhook, and its controller, since the restore consumes Phase 2's materialized member snapshots.
 
 ---
 
@@ -158,15 +192,16 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 ## 6. Axis Coverage
 
-| Axis                       | Values covered                                                         | IDs                                                     | Not covered                          |
-|----------------------------|------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
-| Cluster topology           | 1 node, multi-node with a pinned group                                 | E-01, E-02                                              | asymmetric node sizes                |
-| Group size                 | 1 member, 3+ members, the 20-member cap boundary (sbcli unit)          | E-01, E-04                                              | very large groups (subsystem slots)  |
-| Membership change          | join at create, one-way detach, death with last member                 | E-01, E-03, E-08, E-11                                  | re-establish via a labeled clone     |
-| Selector versus membership | equal, extra handle, missing handle, two groups                        | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
-| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                      | U-04 … U-10, I-04, I-05                                 | —                                    |
-| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation | E-09, E-10                                              | listing under very many generations  |
-| Data correctness           | consistent clone, negative control, delete-preserves                   | E-04, E-05, M-01                                        | migration mid-snapshot (M-02 manual) |
+| Axis                       | Values covered                                                                  | IDs                                                     | Not covered                          |
+|----------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
+| Cluster topology           | 1 node, multi-node with a pinned group                                          | E-01, E-02                                              | asymmetric node sizes                |
+| Group size                 | 1 member, 3+ members, the 20-member cap boundary (sbcli unit)                   | E-01, E-04                                              | very large groups (subsystem slots)  |
+| Membership change          | join at create, one-way detach, death with last member                          | E-01, E-03, E-08, E-11                                  | re-establish via a labeled clone     |
+| Selector versus membership | equal, extra handle, missing handle, two groups                                 | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
+| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                               | U-04 … U-10, I-04, I-05                                 | —                                    |
+| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation          | E-09, E-10                                              | listing under very many generations  |
+| Data correctness           | consistent clone, negative control, delete-preserves                            | E-04, E-05, M-01                                        | migration mid-snapshot (M-02 manual) |
+| Restore path               | per-member `dataSource`, one-apply Ops, partial generation, new-group formation | E-04 … E-07, U-25 … U-33, I-09 … I-12, E-13, E-14       | restore into another namespace       |
 
 ---
 
@@ -174,9 +209,9 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 20        | 0       | U-01 … U-24 |
-| Integration | 7         | 0       | I-01 … I-08 |
-| E2E         | 12        | 0       | E-01 … E-12 |
+| Unit        | 33        | 0       | U-01 … U-33 |
+| Integration | 12        | 0       | I-01 … I-12 |
+| E2E         | 14        | 0       | E-01 … E-14 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
 Every scenario is uncovered because the feature is Draft. The counts are the target, and each `Test` column fills in as the work lands.
@@ -185,11 +220,15 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 
 ## 8. What Is Not Yet Covered
 
-| #           | Gap                                                                                              | Reason                                                                                                         |
-|-------------|--------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| U-01 … U-24 | Provisioner label handling, the CSI GroupController, and the admission webhook                   | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
-| I-01 … I-08 | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                        | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
-| E-01 … E-12 | Membership, placement, cross-volume consistency, clone, representation, and health-precheck live | Depends on the standalone backend group (P0-2, P0-3), which is not shipped                                     |
-| M-01        | Deleting a member preserves its group snapshots                                                  | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
-| M-02        | A member migrated off the pinned store                                                           | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |
-| —           | Asymmetric node sizes, very large groups, listing under many generations                         | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                    |
+| #                                    | Gap                                                                                                          | Reason                                                                                                         |
+|--------------------------------------|--------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| U-01 … U-24                          | Provisioner label handling, the CSI GroupController, and the admission webhook                               | Phase 1 and Phase 2 not implemented: the provisioner field and the group service do not exist yet              |
+| I-01 … I-08                          | The `VolumeGroupSnapshot` lifecycle and admission webhook under `envtest`                                    | Depends on the CSI GroupController and the `CSIVolumeGroupSnapshot` feature gate (P0-4)                        |
+| E-01 … E-12                          | Membership, placement, cross-volume consistency, clone, representation, and health-precheck live             | Depends on the standalone backend group (P0-2, P0-3), which is not shipped                                     |
+| U-25 … U-33, I-09 … I-12, E-13, E-14 | The `VolumeGroupSnapshotOps` restore: claim derivation, admission, lifecycle, and the live one-apply restore | Phase 3 not implemented: the kind, its webhook, and its controller do not exist yet (design §7.4)              |
+| —                                    | Restore into another namespace                                                                               | The Ops kind is namespaced and restores into its own namespace, and a cross-namespace restore is not designed  |
+| M-01                                 | Deleting a member preserves its group snapshots                                                              | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
+| M-02                                 | A member migrated off the pinned store                                                                       | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |
+| —                                    | Asymmetric node sizes, very large groups, listing under many generations                                     | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                    |
+
+

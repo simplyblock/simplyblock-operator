@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Israel Geoffrey (geoffrey1330)  
-**Date:** 2026-09-09  
+**Date:** 2026-09-09 (last updated 2026-09-11)  
 **Test Plan:** [`tests/test-plan-consistency-groups.md`](../tests/test-plan-consistency-groups.md)
 
 ---
@@ -13,8 +13,9 @@
 |-------------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
 | **Phase 1** | Planned | A standalone consistency group in the control plane: membership at provisioning, a group snapshot as one crash-consistent generation, and a listing that shows which snapshots belong to a group | §4, §5, §6, §7, §8 |
 | **Phase 2** | Planned | The Kubernetes-native surface: a `VolumeGroupSnapshot` snapshots the group through the CSI GroupController service                                                                               | §5.3, §9, §10      |
+| **Phase 3** | Planned | Single-operation group restore: a `VolumeGroupSnapshotOps` with `action: Restore` restores every member of one generation in one apply                                                           | §7.4, Appendix A   |
 
-Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
+Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Phase 3 adds the one-apply restore on top of Phase 2's materialized member snapshots. Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
 
 ---
 
@@ -49,6 +50,7 @@ P0-1 is the one primitive the whole design rests on, and it is live. P0-2 and P0
 14. [Testing Strategy](#14-testing-strategy)
 15. [Migration Strategy](#15-migration-strategy)
 16. [Open Questions](#16-open-questions)
+17. [Appendix A: `volumegroupsnapshotops_types.go`](#appendix-a-volumegroupsnapshotops_typesgo)
 
 ---
 
@@ -64,6 +66,7 @@ This design makes the consistency group a first-class concept in its own right. 
 | Group placement  | First member's node and logical volume store             | Volume creation, immutable for the group |
 | A group snapshot | `VolumeGroupSnapshot` (Kubernetes) or `sbctl` (headless) | On demand                                |
 | One generation   | `group_seq` on every member snapshot of that snapshot    | At snapshot time                         |
+| A group restore  | `VolumeGroupSnapshotOps` (Kubernetes) or `sbctl` clone   | On demand                                |
 
 Replication and backup of a consistency group are deliberately not part of this design (§2). A reader who stops here has the model: a persistent group defined by a label, snapshotted as a `VolumeGroupSnapshot`, with each snapshot a generation the control plane represents by its membership.
 
@@ -104,7 +107,7 @@ But it also carries `policy_id`, and the group is created, snapshotted, and dele
 - **Replication of a consistency group.** Cross-cluster replication and fail-over of a group are future work. This design leaves the `ConsistencyGroup` record independent of any replication policy so that work can attach later without re-shaping the group.
 - **Backup of a consistency group.** S3 or object backup of a group's generations is future work, on the same independent record.
 - **Per-member snapshot policies.** A generation is a property of the whole group, not of any single member.
-- **Group-wide restore as a single Kubernetes operation.** The CSI specification has no group-restore verb, so restore is per member (§7). A single-call restore exists only on the headless `sbctl` path, and only as a convenience.
+- **A group-restore verb in the CSI driver.** The CSI specification has no group-restore verb, so the driver restores per member (§7.1). The single-operation restore is Kubernetes-native instead: a `VolumeGroupSnapshotOps` the operator reconciles into per-member restores (§7.4).
 - **Ad-hoc groups over arbitrary volumes.** A group's members must share one logical volume store, so a label applied to volumes scattered across nodes cannot form a group. Placement is decided at provisioning (§4.2).
 - **A simplyblock ConsistencyGroup CRD.** The group's Kubernetes identity is the label, and its lifecycle is driven by volume creation and deletion. A CRD would add a second source of truth for membership that the label already owns.
 
@@ -149,7 +152,7 @@ But it also carries `policy_id`, and the group is created, snapshotted, and dele
 
 **The label is the only membership source of truth.** The CSI provisioner reads it and passes it to the backend, which decides the group. Nothing in Kubernetes stores group membership separately, so there is no second source of truth to disagree with the backend.
 
-**The operator does not reconcile in this design, and it serves two validating webhooks.** Membership is set by the provisioner at volume creation, and snapshots are taken by the CSI GroupController driven by the csi-snapshotter sidecar. The operator's only role is admission. One webhook on `VolumeGroupSnapshot` (§9.4) rejects, at admission, a selector which does not resolve to exactly one group's current membership. One webhook on `VolumeMigration` (§9.5) rejects, at admission, an attempt to migrate a consistency-group member, so the operator never starts a migration that would break a group's placement pin. It reconciles nothing and is not in the snapshot data path.
+**The operator serves two validating webhooks and reconciles one kind.** Membership is set by the provisioner at volume creation, and snapshots are taken by the CSI GroupController driven by the csi-snapshotter sidecar. One webhook on `VolumeGroupSnapshot` (§9.4) rejects, at admission, a selector which does not resolve to exactly one group's current membership. One webhook on `VolumeMigration` (§9.5) rejects, at admission, an attempt to migrate a consistency-group member off the group's pinned store, which the frozen group snapshot requires every member to share. The one kind the operator reconciles is `VolumeGroupSnapshotOps` (§7.4, Phase 3), which composes per-member restores into one apply. It creates PersistentVolumeClaims and is not in the snapshot data path.
 
 **The persistent group versus the ephemeral VolumeGroupSnapshot.** Upstream Kubernetes has no persistent group: a `VolumeGroupSnapshot` selects PVCs by label at snapshot time, and the "group" is whatever the selector matched. simplyblock needs a *persistent* backend group, because `bdev_lvol_snapshot_group` requires every member on one logical volume store, and that placement must be arranged at provisioning, not discovered at snapshot time. So a `VolumeGroupSnapshot` in this design snapshots an *existing* backend group, and its selector must resolve to exactly the group's current membership (§9). This is the one place the design departs from the upstream model, and §11 plays the consequence through.
 
@@ -267,7 +270,7 @@ On the Kubernetes side, one generation is one `VolumeGroupSnapshot`, and `status
 
 ### 7.1 Restore is per member
 
-The CSI specification has no group-restore verb. A `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member (§5.3), and each is an ordinary `dataSource` for a new PVC. Cloning a group is therefore N per-member clones, one for each member snapshot of one generation. Restoring a group's members individually is what the CSI specification defines, and it is the only path the Kubernetes API offers today. Whether to add a single-operation restore through an Ops-pattern CRD, for convenience, is Open Question 4.
+The CSI specification has no group-restore verb. A `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member (§5.3), and each is an ordinary `dataSource` for a new PVC. Cloning a group is therefore N per-member clones, one for each member snapshot of one generation. Restoring a group's members individually is what the CSI specification defines, and it is the primitive every other restore path composes. The single-operation form is `VolumeGroupSnapshotOps` (§7.4), which drives exactly these per-member restores from one applied object.
 
 The restored set is crash-consistent without any group machinery, because the source generation was one frozen cut. The clones do not need to be a group to be mutually consistent. They need to be a group only if the user intends to keep snapshotting them together going forward.
 
@@ -279,7 +282,37 @@ A subtlety the user must know: a *new* group must satisfy the mandatory placemen
 
 ### 7.3 The headless convenience
 
-Because the group is a first-class control-plane object, `sbctl` offers a single-call group clone that Kubernetes cannot: `sbctl consistency-group clone <gid> <seq> --into <new-name>` loops over the generation's member snapshots, clones each into a new volume, and optionally forms a new group from the clones. This is offered rather than leaving group clone to N per-member clones. It is a `sbctl`-only path, because the CSI API has no group-clone verb to expose it through, so the Kubernetes path stays per-member.
+Because the group is a first-class control-plane object, `sbctl` offers a single-call group clone: `sbctl consistency-group clone <gid> <seq> --into <new-name>` loops over the generation's member snapshots, clones each into a new volume, and optionally forms a new group from the clones. It operates on backend volumes directly, with no Kubernetes objects involved. Its Kubernetes counterpart is the `VolumeGroupSnapshotOps` restore (§7.4), which produces PersistentVolumeClaims instead.
+
+### 7.4 Single-operation restore: `VolumeGroupSnapshotOps` (Phase 3)
+
+`VolumeGroupSnapshotOps` is the Ops kind for a `VolumeGroupSnapshot`: a one-shot, namespaced operation that names one group snapshot in its own namespace and an action to perform on it. The one action this design defines is `Restore`. The operator reconciles the object to completion and records the result, after which the object is inert, in the way of every other `Ops` kind in this API group. The full type is Appendix A. The fields the mechanism turns on are:
+
+```yaml
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: VolumeGroupSnapshotOps
+metadata:
+  name: restore-db-gen4
+  namespace: prod
+spec:
+  volumeGroupSnapshotRef: db-group-gen4
+  action: Restore
+  restore:
+    namePrefix: restored
+    consistencyGroup: db-group-restored
+```
+
+**The restore composes §7.1, and adds nothing beneath it.** The controller resolves the target `VolumeGroupSnapshot`, enumerates the member `VolumeSnapshot` objects backref'd to it (§5.3), and creates one PersistentVolumeClaim per member, each with that member's snapshot as its `dataSource`. It then waits for every claim to bind and reports the outcome. There is no new CSI verb and no new backend endpoint: the backend sees N ordinary per-member clones, and the restored set is crash-consistent for the §7.1 reason, because the source generation was one frozen cut.
+
+**Claim naming is derived, not enumerated.** Each restored claim is named `<namePrefix>-<source PVC name>`, with the source name read from the member snapshot's `spec.source.persistentVolumeClaimName`. `namePrefix` defaults to the operation's own name. A derived name that collides with an existing claim fails the operation, naming the claim, and leaves the claims already created in place: claims are user-visible objects, and a half-restore the user can see and delete is better than one silently retried into a different shape.
+
+**Group formation stays a separate decision (§7.2).** When `spec.restore.consistencyGroup` is set, every restored claim carries `storage.simplyblock.io/consistency-group: <value>`, so the clones birth a new group at provisioning under the mandatory placement rule. When it is empty, the clones are independent, mutually consistent volumes. The field changes only the labels the controller stamps on the claims it creates. The group mechanics are §4.1's, unchanged.
+
+**An incomplete generation fails the restore by default.** The controller compares the member snapshots it found against the generation's expected count (§6.3, read through the group-scoped listing) and fails the operation naming the missing members, because a partial set restored silently is the failure §8.3 exists to prevent. Setting `spec.restore.enablePartialRestore` restores the members the generation still has, and the status reports how many of the expected members were produced.
+
+**Existence is admission's, readiness is the controller's.** A validating webhook on create resolves `volumeGroupSnapshotRef` and rejects the object when no such `VolumeGroupSnapshot` exists in the namespace, since the reference is immutable and an unresolvable one would park the object in a terminal error for its whole life. A target that exists but is not yet `ReadyToUse` is admitted, and the controller holds in `Pending` with an event until it becomes ready.
+
+**The spec is immutable in its entirety**, target, action, and parameters, enforced by CEL rather than by comment: the object is a request, and a request that can be rewritten while it runs is a different request. The target is an external kind, so the `activeOpsRef` lock the entity-paired `Ops` kinds use has no status to live in. Two concurrent restores of one generation are independent by construction, since clones share nothing, and a claim-name collision fails the later operation.
 
 ---
 
@@ -430,20 +463,28 @@ Every path degrades to a defined state: a failed create leaves a Pending PVC, a 
 
 ## 13. Observability
 
-**Baseline.** Group snapshots are a control-plane operation, and the observability is the backend's. There is no operator reconciler in this design, so there are no operator events or conditions to add. The metrics below are the backend's to export.
+**Baseline.** Group snapshots are a control-plane operation, and the group metrics below are the backend's to export. The one operator reconciler in this design is the `VolumeGroupSnapshotOps` controller (§7.4), whose events and metric follow.
 
 ### Kubernetes Events
 
-The Kubernetes-visible object is the `VolumeGroupSnapshot`, and the snapshot-controller and csi-snapshotter already emit the standard snapshot events on it (creating, ready, error). This design adds no operator events. The one event worth ensuring the driver surfaces is the selector-mismatch refusal, so a `FAILED_PRECONDITION` is legible on the `VolumeGroupSnapshot` rather than only in the sidecar log.
+The Kubernetes-visible object of a snapshot is the `VolumeGroupSnapshot`, and the snapshot-controller and csi-snapshotter already emit the standard snapshot events on it (creating, ready, error). The one event worth ensuring the driver surfaces is the selector-mismatch refusal, so a `FAILED_PRECONDITION` is legible on the `VolumeGroupSnapshot` rather than only in the sidecar log.
+
+The restore controller's events land on the `VolumeGroupSnapshotOps` object, one reason per condition, with the message naming the specifics:
+
+| Event             | Type    | Emitted when                                                                                                                                            |
+|-------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `RestoreBlocked`  | Warning | The restore cannot proceed and the reason is actionable: the target is not `ReadyToUse`, the generation is incomplete, or a derived claim name collides |
+| `RestoreComplete` | Normal  | Every restored claim is bound and the phase is `Succeeded`                                                                                              |
 
 ### Prometheus Metrics
 
-| Metric                                                 | Labels              | Description                                                                                        |
-|--------------------------------------------------------|---------------------|----------------------------------------------------------------------------------------------------|
-| `simplyblock_consistency_group_members`                | `cluster`, `group`  | Gauge of current member count per group.                                                           |
-| `simplyblock_consistency_group_generation`             | `cluster`, `group`  | Gauge of the latest `group_seq` per group.                                                         |
-| `simplyblock_consistency_group_snapshot_total`         | `cluster`, `result` | Counter of group snapshot outcomes, `result` one of `taken`, `precondition_failed`, `rolled_back`. |
-| `simplyblock_consistency_group_incomplete_generations` | `cluster`, `group`  | Gauge of generations whose present member count is below their expected count.                     |
+| Metric                                                 | Labels              | Description                                                                                                                                                               |
+|--------------------------------------------------------|---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `simplyblock_consistency_group_members`                | `cluster`, `group`  | Gauge of current member count per group.                                                                                                                                  |
+| `simplyblock_consistency_group_generation`             | `cluster`, `group`  | Gauge of the latest `group_seq` per group.                                                                                                                                |
+| `simplyblock_consistency_group_snapshot_total`         | `cluster`, `result` | Counter of group snapshot outcomes, `result` one of `taken`, `precondition_failed`, `rolled_back`.                                                                        |
+| `simplyblock_consistency_group_incomplete_generations` | `cluster`, `group`  | Gauge of generations whose present member count is below their expected count.                                                                                            |
+| `simplyblock_operator_group_restore_total`             | `result`            | Counter of `VolumeGroupSnapshotOps` restore outcomes, `result` one of `succeeded`, `failed`. Operator-exported (§7.4). Every other metric in this table is the backend's. |
 
 `simplyblock_consistency_group_incomplete_generations` is the load-bearing one: a value above zero is a generation that will restore short, which is the silent failure §8 exists to prevent, so it is the alert. The `precondition_failed` result on the snapshot counter is the second signal, catching selector drift and migration hazards before a user notices a refused snapshot.
 
@@ -453,7 +494,7 @@ The Kubernetes-visible object is the `VolumeGroupSnapshot`, and the snapshot-con
 
 Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-plan-consistency-groups.md`](../tests/test-plan-consistency-groups.md)
 
-- **Unit:** the membership epoch math (`included_in_seq` over join and remove at various generations), the group-scoped listing's expected-versus-present computation, and the GroupController's selector-equals-membership check, all without a cluster.
+- **Unit:** the membership epoch math (`included_in_seq` over join and remove at various generations), the group-scoped listing's expected-versus-present computation, the GroupController's selector-equals-membership check, and the `VolumeGroupSnapshotOps` controller's claim derivation (naming, labels, and the incomplete-generation gate) against a fake client, all without a cluster.
 - **Integration:** the CSI GroupController against a mock backend and the snapshot-controller under `envtest`, asserting a `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member and that a drifted selector is refused.
 - **E2E:** the cross-volume consistency claim, which only a live cluster proves: provision labeled members, run a hashed round-robin writer across them, take generations, restore every member from one generation, and assert the group prefix property and a passing negative control against a mixed-generation restore. This mirrors the existing consistency-group regression script and is where the crash-consistency guarantee is actually verified.
 - **Load / long-running:** group snapshot cadence under sustained write load, asserting the generation counter advances and no member's snapshot diverges by more than one write from the others.
@@ -475,9 +516,218 @@ The backend work (P0-2, P0-3) makes `policy_id` optional on the group record, ad
 
 ## 16. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Owner                         |
-|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
-| 1   | **Selector versus fixed membership.** The handling is two-layer: the admission webhook validates membership at creation (label check fail-closed, membership check fail-open, §9.4), and the GroupController re-checks authoritatively at snapshot time for the fail-open window and for membership that changed after admission (§9.2). Confirm this split and the webhook fail-open disposition, rather than snapshotting the selector's set or failing closed on a backend blip.                                    | CSI / Operator / Backend team |
-| 2   | ~~**Migration of a group member.**~~ **Resolved for now:** consistency-group members are excluded from volume migration, so a group's placement stays fixed (§8.4). Open for later: whether to support migrating a whole group as a unit, moving the shared pin together, rather than refusing migration outright.                                                                                                                                                                                                     | Backend team                  |
-| 3   | **Deleting a member volume with group snapshots.** §8.2 requires a volume delete to preserve the member's group snapshots. Confirm the backend delete path preserves them rather than cascading, since this is the one data-loss path in the design.                                                                                                                                                                                                                                                                   | Backend team                  |
-| 4   | **Single-operation group restore.** §7.1 restores a group per member, because the CSI specification has no group-restore verb, which is inconvenient. A single Kubernetes-native operation may be worth offering through the Ops pattern: either a `StoragePoolOps` action targeted at a `VolumeGroupSnapshot`, or a dedicated `VolumeGroupSnapshotOps` kind, that clones every member of a generation into a new set (optionally a new group) in one apply. Whether to build this, and which shape it takes, is open. | Operator team                 |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Owner                         |
+|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
+| 1   | **Selector versus fixed membership.** The handling is two-layer: the admission webhook validates membership at creation (label check fail-closed, membership check fail-open, §9.4), and the GroupController re-checks authoritatively at snapshot time for the fail-open window and for membership that changed after admission (§9.2). Confirm this split and the webhook fail-open disposition, rather than snapshotting the selector's set or failing closed on a backend blip. | CSI / Operator / Backend team |
+| 2   | ~~**Migration of a group member.**~~ **Resolved for now:** consistency-group members are excluded from volume migration, so a group's placement stays fixed (§8.4). Open for later: whether to support migrating a whole group as a unit, moving the shared pin together, rather than refusing migration outright.                                                                                                                                                                  | Backend team                  |
+| 3   | **Deleting a member volume with group snapshots.** §8.2 requires a volume delete to preserve the member's group snapshots. Confirm the backend delete path preserves them rather than cascading, since this is the one data-loss path in the design.                                                                                                                                                                                                                                | Backend team                  |
+| 4   | ~~**Single-operation group restore.**~~ **Resolved:** a dedicated `VolumeGroupSnapshotOps` kind with `action: Restore` (§7.4, Appendix A, Phase 3). It composes the per-member restores of §7.1 into one apply and optionally forms a new group from the clones. The CSI driver and the backend are unchanged.                                                                                                                                                                      | Operator team                 |
+
+---
+
+## Appendix A: `volumegroupsnapshotops_types.go`
+
+The `VolumeGroupSnapshotOps` kind as it is to be written, in file order. The argument for each field is §7.4. The file carries only what the type reader needs.
+
+```go
+// volumegroupsnapshotops_types.go declares VolumeGroupSnapshotOps, the one-shot
+// operation on a VolumeGroupSnapshot (design-consistency-groups.md §7.4). Its one
+// action, Restore, creates one PersistentVolumeClaim per member snapshot of the
+// target's generation and waits for every claim to bind.
+
+package v1alpha1
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// VolumeGroupSnapshotOpsAction is the operation to perform on the target.
+// +kubebuilder:validation:Enum=Restore
+type VolumeGroupSnapshotOpsAction string
+
+const (
+	// VolumeGroupSnapshotOpsActionRestore restores every member of the target's
+	// generation into a new PersistentVolumeClaim.
+	VolumeGroupSnapshotOpsActionRestore VolumeGroupSnapshotOpsAction = "Restore"
+)
+
+// VolumeGroupSnapshotOpsPhase is the lifecycle phase of the operation.
+// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed
+type VolumeGroupSnapshotOpsPhase string
+
+const (
+	VolumeGroupSnapshotOpsPhasePending   VolumeGroupSnapshotOpsPhase = "Pending"
+	VolumeGroupSnapshotOpsPhaseRunning   VolumeGroupSnapshotOpsPhase = "Running"
+	VolumeGroupSnapshotOpsPhaseSucceeded VolumeGroupSnapshotOpsPhase = "Succeeded"
+	VolumeGroupSnapshotOpsPhaseFailed    VolumeGroupSnapshotOpsPhase = "Failed"
+)
+
+// VolumeGroupSnapshotOpsStep is one step of a running operation. The enum is the
+// union of every action's steps; which steps belong to which action is declared
+// by the action's state-machine graph rather than by this type.
+// +kubebuilder:validation:Enum=Validating;CreatingClaims;WaitingForBind
+type VolumeGroupSnapshotOpsStep string
+
+const (
+	VolumeGroupSnapshotOpsStepValidating     VolumeGroupSnapshotOpsStep = "Validating"
+	VolumeGroupSnapshotOpsStepCreatingClaims VolumeGroupSnapshotOpsStep = "CreatingClaims"
+	VolumeGroupSnapshotOpsStepWaitingForBind VolumeGroupSnapshotOpsStep = "WaitingForBind"
+)
+
+// VolumeGroupSnapshotOpsStepSnapshot is the durable position of the action's
+// state machine: the step and the deadline it expires at.
+type VolumeGroupSnapshotOpsStepSnapshot struct {
+	// +optional
+	State VolumeGroupSnapshotOpsStep `json:"state,omitempty"`
+	// +optional
+	Deadline *metav1.Time `json:"deadline,omitempty"`
+}
+
+// RestoreOpsSpec carries the parameters of the Restore action.
+type RestoreOpsSpec struct {
+	// NamePrefix prefixes every restored claim's name:
+	// <namePrefix>-<source PVC name>, the source name read from the member
+	// snapshot's spec.source.persistentVolumeClaimName. Defaults to the
+	// operation's own name.
+	// +k8s:immutable
+	// +optional
+	NamePrefix string `json:"namePrefix,omitempty"`
+
+	// StorageClassName is the class every restored claim requests. When empty,
+	// each claim inherits the class of its member snapshot's source claim, and
+	// the restore fails for a member whose source claim no longer exists.
+	// +k8s:immutable
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// ConsistencyGroup labels every restored claim with
+	// storage.simplyblock.io/consistency-group: <value>, so the clones form a
+	// new group at provisioning under the mandatory placement rule. Empty
+	// leaves the clones as independent, mutually consistent volumes.
+	// +k8s:immutable
+	// +optional
+	ConsistencyGroup string `json:"consistencyGroup,omitempty"`
+
+	// EnablePartialRestore restores the members an incomplete generation still
+	// has instead of failing the operation. Off by default: an incomplete
+	// generation fails, naming the missing members.
+	// +k8s:immutable
+	// +optional
+	EnablePartialRestore bool `json:"enablePartialRestore,omitempty"`
+}
+
+// VolumeGroupSnapshotOpsSpec defines the requested operation. The whole spec is
+// immutable: the object is a request.
+type VolumeGroupSnapshotOpsSpec struct {
+	// VolumeGroupSnapshotRef names the VolumeGroupSnapshot, in this namespace,
+	// the operation acts on. Resolved at admission: a create naming a
+	// VolumeGroupSnapshot that does not exist is rejected.
+	// +k8s:immutable
+	// +kubebuilder:validation:Required
+	VolumeGroupSnapshotRef string `json:"volumeGroupSnapshotRef"`
+
+	// Action is the operation to perform.
+	// +k8s:immutable
+	// +kubebuilder:validation:Required
+	Action VolumeGroupSnapshotOpsAction `json:"action"`
+
+	// Restore carries the parameters of the Restore action. Ignored for any
+	// other action.
+	// +k8s:immutable
+	// +optional
+	Restore *RestoreOpsSpec `json:"restore,omitempty"`
+}
+
+// RestoredMemberStatus records one member snapshot and the claim restored
+// from it.
+type RestoredMemberStatus struct {
+	// VolumeSnapshotName is the member VolumeSnapshot the claim restores from.
+	VolumeSnapshotName string `json:"volumeSnapshotName"`
+
+	// PersistentVolumeClaimName is the restored claim.
+	PersistentVolumeClaimName string `json:"persistentVolumeClaimName"`
+
+	// Bound reports whether the restored claim has bound.
+	// +optional
+	Bound bool `json:"bound,omitempty"`
+}
+
+// VolumeGroupSnapshotOpsStatus holds the observed state of the operation.
+type VolumeGroupSnapshotOpsStatus struct {
+	// Phase is the high-level lifecycle phase.
+	// +optional
+	Phase VolumeGroupSnapshotOpsPhase `json:"phase,omitempty"`
+
+	// Step is the durable position of the action's state machine.
+	// +optional
+	Step VolumeGroupSnapshotOpsStepSnapshot `json:"step,omitempty"`
+
+	// Message is the reason the phase is what it is: one sentence, replaced as
+	// the phase moves.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// ObservedGeneration is the spec generation this status was computed from.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// MembersExpected is the member count of the target generation.
+	// +optional
+	MembersExpected int `json:"membersExpected,omitempty"`
+
+	// MembersBound is how many restored claims have bound.
+	// +optional
+	MembersBound int `json:"membersBound,omitempty"`
+
+	// Members records each member snapshot and its restored claim.
+	// +optional
+	Members []RestoredMemberStatus `json:"members,omitempty"`
+
+	// StartedAt is when the operation began.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when the operation finished, successfully or not.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,shortName=vgsops
+// +kubebuilder:printcolumn:name="GroupSnapshot",type=string,JSONPath=".spec.volumeGroupSnapshotRef"
+// +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
+// +kubebuilder:printcolumn:name="Bound",type=integer,JSONPath=".status.membersBound"
+// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+
+// VolumeGroupSnapshotOps is a one-shot operation on a VolumeGroupSnapshot,
+// analogous to a Kubernetes Job: it drives its action to completion, records
+// the result, and is then inert. The Restore action creates one
+// PersistentVolumeClaim per member snapshot of the target's generation and
+// waits for every claim to bind.
+type VolumeGroupSnapshotOps struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   VolumeGroupSnapshotOpsSpec   `json:"spec,omitempty"`
+	Status VolumeGroupSnapshotOpsStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// VolumeGroupSnapshotOpsList contains a list of VolumeGroupSnapshotOps.
+type VolumeGroupSnapshotOpsList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []VolumeGroupSnapshotOps `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&VolumeGroupSnapshotOps{}, &VolumeGroupSnapshotOpsList{})
+}
+```
+
+
