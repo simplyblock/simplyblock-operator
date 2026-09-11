@@ -1,0 +1,18 @@
+# Builds a golangci-lint with this repository's own linter compiled in.
+#
+# The version must match the one scripts/tools.manifest pins, because the
+# plugin is compiled against golangci-lint's own module: a mismatch fails the
+# build rather than producing a binary that misbehaves.
+#
+# `golangci-lint custom` writes the result to destination/name. scripts/tools.mk
+# exposes it as $(GOLANGCI_LINT_CUSTOM) and the component Makefiles run that
+# instead of the downloaded binary, because the downloaded one does not know the
+# onelinefunc linter and refuses a config that enables it.
+---
+version: v2.11.4
+name: custom-gcl
+destination: .bin
+
+plugins:
+  - module: github.com/simplyblock/golangci-onelinefunc
+    path: ./hack/golangci-onelinefunc

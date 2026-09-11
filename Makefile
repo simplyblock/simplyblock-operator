@@ -62,6 +62,11 @@ test: atlas-test csi-test operator-test ## Test every component.
 
 lint: atlas-lint csi-lint operator-lint ## Lint every component.
 
+# Every component's lint target needs this binary, and building it three times
+# over would clone and compile golangci-lint three times. It is built once here.
+custom-gcl: ## Build golangci-lint with this repository's linters compiled in.
+	$(MAKE) -C $(OPERATOR_DIR) custom-gcl
+
 fmt: atlas-fmt csi-fmt operator-fmt ## Format every component.
 
 vet: atlas-vet csi-vet operator-vet ## Vet every component.

@@ -149,16 +149,16 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
-	"$(GOLANGCI_LINT)" run
+lint: custom-gcl ## Run golangci-lint linter
+	"$(CUSTOM_GCL)" run
 
 .PHONY: lint-fix
-lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	"$(GOLANGCI_LINT)" run --fix
+lint-fix: custom-gcl ## Run golangci-lint linter and perform fixes
+	"$(CUSTOM_GCL)" run --fix
 
 .PHONY: lint-config
-lint-config: golangci-lint ## Verify golangci-lint linter configuration
-	"$(GOLANGCI_LINT)" config verify
+lint-config: custom-gcl ## Verify golangci-lint linter configuration
+	"$(CUSTOM_GCL)" config verify
 
 ##@ Build
 

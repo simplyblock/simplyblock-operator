@@ -24,6 +24,11 @@ TOOLS_SH  := $(REPO_ROOT)/scripts/tools.sh
 
 # ── Tool binaries (stable symlinks maintained by scripts/tools.sh) ───────────
 GOLANGCI_LINT  ?= $(BIN_DIR)/golangci-lint
+# The same linter with this repository's own rule compiled in, built by
+# `golangci-lint custom` from .custom-gcl.yml. The downloaded binary does not
+# know the onelinefunc linter and rejects a config that enables it, so this is
+# what `make lint` runs.
+CUSTOM_GCL     ?= $(BIN_DIR)/custom-gcl
 KUSTOMIZE      ?= $(BIN_DIR)/kustomize
 CONTROLLER_GEN ?= $(BIN_DIR)/controller-gen
 ENVTEST        ?= $(BIN_DIR)/setup-envtest
@@ -39,6 +44,16 @@ BUF            ?= $(BIN_DIR)/buf
 .PHONY: golangci-lint
 golangci-lint: ## Install golangci-lint (manifest-pinned) into .bin.
 	@"$(TOOLS_SH)" install golangci-lint
+
+# Rebuilt whenever the plugin's sources or .custom-gcl.yml change, and not
+# otherwise: the build clones golangci-lint and compiles it, which takes a
+# minute or two.
+$(CUSTOM_GCL): $(REPO_ROOT)/.custom-gcl.yml $(wildcard $(REPO_ROOT)/hack/golangci-onelinefunc/*.go) $(REPO_ROOT)/hack/golangci-onelinefunc/go.mod | golangci-lint
+	@echo ">> building custom-gcl (golangci-lint + hack/golangci-onelinefunc)"
+	@cd "$(REPO_ROOT)" && "$(GOLANGCI_LINT)" custom
+
+.PHONY: custom-gcl
+custom-gcl: $(CUSTOM_GCL) ## Build golangci-lint with this repository's linters compiled in.
 
 .PHONY: kustomize
 kustomize: ## Install kustomize (manifest-pinned) into .bin.

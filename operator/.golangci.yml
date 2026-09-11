@@ -21,7 +21,13 @@ linters:
     - unconvert
     - unparam
     - unused
+    - onelinefunc
   settings:
+    custom:
+      onelinefunc:
+        type: module
+        description: A function declaration's body does not share a line with its signature.
+        original-url: hack/golangci-onelinefunc
     revive:
       rules:
         - name: comment-spacings

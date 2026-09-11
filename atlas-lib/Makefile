@@ -57,8 +57,8 @@ build: $(GENERATED) ## Build all packages.
 test: vet ## Run go vet and the unit tests (race + coverage).
 	go test -race -coverprofile=coverage.out ./...
 
-lint: golangci-lint $(GENERATED) ## Run golangci-lint (pinned version, matches CI).
-	"$(GOLANGCI_LINT)" run ./...
+lint: custom-gcl $(GENERATED) ## Run golangci-lint (pinned version, matches CI).
+	"$(CUSTOM_GCL)" run ./...
 
 lint-proto: | buf ## Lint the protocol definitions.
 	@for dir in $(PROTO_DIRS); do \
