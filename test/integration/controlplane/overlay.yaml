@@ -17,23 +17,3 @@ actions:
         type: array
         items:
           $ref: '#/components/schemas/NvmeConnectEntry'
-
-  # The volume-scoped migrations-list GET declares only cluster_id as a path
-  # parameter while its URL has three, so oapi-codegen rejects the spec outright
-  # — even generating models only, because it builds operation definitions first.
-  # Same fixup as atlas-lib/internal/cpapi/overlay.yaml; belongs upstream in
-  # FastAPI.
-  - target: "$.paths['/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/'].get.parameters"
-    update:
-      - name: pool_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: volume_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
