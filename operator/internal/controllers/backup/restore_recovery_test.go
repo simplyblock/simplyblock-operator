@@ -259,7 +259,7 @@ func TestAClaimCreatedDuringBindingIsRefusedRatherThanAdopted(t *testing.T) {
 	r := opsReconciler(t, api,
 		testClusterObject(), testPoolObject(), heldBackup(), binding, somebodyElses)
 
-	ops := reconcileUntilSettled(t, r, testOpsName, 10)
+	ops := reconcileUntilSettled(t, r)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed rather than binding to somebody else's claim",
 			ops.Status.Phase)

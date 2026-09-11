@@ -123,8 +123,14 @@ func opsRequest(name string) ctrl.Request {
 // at most one step, deliberately, so driving a whole restore means driving the
 // loop the manager would.
 func reconcileUntilSettled(
-	t *testing.T, r *StorageBackupOpsReconciler, name string, budget int,
+	t *testing.T, r *StorageBackupOpsReconciler,
 ) *simplyblockv1alpha2.StorageBackupOps {
+	// One reconcile advances at most one step, deliberately, so a whole restore
+	// takes a handful. The bound is what turns a machine that stopped moving
+	// into a failed test rather than a hang.
+	const budget = 10
+
+	name := testOpsName
 	t.Helper()
 	for range budget {
 		result, err := r.Reconcile(context.Background(), opsRequest(name))
@@ -154,7 +160,7 @@ func TestRestoreRefusesAClaimThatAlreadyExists(t *testing.T) {
 	r := opsReconciler(t, api,
 		testClusterObject(), testPoolObject(), availableBackup(), restoreOps(testOpsName), occupied)
 
-	ops := reconcileUntilSettled(t, r, testOpsName, 10)
+	ops := reconcileUntilSettled(t, r)
 
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
@@ -200,7 +206,7 @@ func TestRestoreRunsTheWholeGraphAndProducesAClaim(t *testing.T) {
 		}
 	}
 
-	ops := reconcileUntilSettled(t, r, testOpsName, 10)
+	ops := reconcileUntilSettled(t, r)
 
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded {
 		t.Fatalf("phase = %q (%s), want Succeeded", ops.Status.Phase, ops.Status.Message)
@@ -382,7 +388,7 @@ func TestRestoreFailsAgainstAFailedBackup(t *testing.T) {
 	r := opsReconciler(t, &fakeControlPlane{},
 		testClusterObject(), testPoolObject(), broken, restoreOps(testOpsName))
 
-	ops := reconcileUntilSettled(t, r, testOpsName, 10)
+	ops := reconcileUntilSettled(t, r)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
 		t.Errorf("phase = %q, want Failed against a backup with no copy", ops.Status.Phase)
 	}

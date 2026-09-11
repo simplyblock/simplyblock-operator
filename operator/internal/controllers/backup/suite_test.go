@@ -31,14 +31,15 @@ import (
 )
 
 const (
-	testNamespace = "sb"
-	testClusterCR = "production"
-	testClusterID = "11111111-1111-1111-1111-111111111111"
-	testPoolCR    = "pool-a"
-	testPoolID    = "22222222-2222-2222-2222-222222222222"
-	testLvolID    = "33333333-3333-3333-3333-333333333333"
-	testBackupID  = "44444444-4444-4444-4444-444444444444"
-	testRestoreID = "55555555-5555-5555-5555-555555555555"
+	testNamespace    = "sb"
+	testClusterCR    = "production"
+	testClusterID    = "11111111-1111-1111-1111-111111111111"
+	testPoolCR       = "pool-a"
+	testPoolID       = "22222222-2222-2222-2222-222222222222"
+	testLvolID       = "33333333-3333-3333-3333-333333333333"
+	testBackupID     = "44444444-4444-4444-4444-444444444444"
+	testRestoreID    = "55555555-5555-5555-5555-555555555555"
+	testStorageClass = "simplyblock-production-pool-a"
 )
 
 func testScope() cpinformer.Scope { return cpinformer.Scope{testClusterID} }
@@ -90,11 +91,18 @@ func testClusterObject() *simplyblockv1alpha1.StorageCluster {
 	}
 }
 
-func testPoolObject() *simplyblockv1alpha1.StoragePool {
-	return &simplyblockv1alpha1.StoragePool{
+// testPoolObject is the pool a restore lands in. It carries a default class,
+// because a pool may have any number of them and a restore has to name one
+// (design-storagepool.md §5).
+func testPoolObject() *simplyblockv1alpha2.StoragePool {
+	return &simplyblockv1alpha2.StoragePool{
 		ObjectMeta: objectMeta(testPoolCR),
-		Spec:       simplyblockv1alpha1.StoragePoolSpec{ClusterName: testClusterCR},
-		Status:     simplyblockv1alpha1.StoragePoolStatus{UUID: testPoolID},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: testClusterCR},
+		Status: simplyblockv1alpha2.StoragePoolStatus{
+			UUID:                    testPoolID,
+			StorageClassNames:       []string{testStorageClass},
+			DefaultStorageClassName: testStorageClass,
+		},
 	}
 }
 
