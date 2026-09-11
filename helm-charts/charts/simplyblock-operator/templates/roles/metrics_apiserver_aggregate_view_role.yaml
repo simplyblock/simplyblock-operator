@@ -1,11 +1,19 @@
-# Aggregates read access to LogicalVolumeMetrics into the built-in Kubernetes
+# Aggregates read access to this group's readings into the built-in Kubernetes
 # "view" ClusterRole, so that anyone already bound to "view" in a namespace can
-# see the capacity of the volumes behind their own claims and nothing else.
+# see the capacity of what that namespace holds and nothing else.
 #
-# This is the point of serving the readings as a namespaced API resource rather
+# This is the point of serving the readings as namespaced API resources rather
 # than as metrics alone: the confinement is the cluster's own RBAC, enforced by
 # the kube-apiserver before the operator is reached, and it needs no per-tenant
 # dashboard or query rewriting to hold.
+#
+# The two resources are confined by the same mechanism and to different
+# audiences, because their objects live in different namespaces. A
+# LogicalVolumeMetrics is named after a PersistentVolumeClaim and lives in the
+# tenant's namespace, so a tenant sees their own volumes. A StorageDeviceMetrics
+# lives beside the StorageNode that owns the device, which is the namespace the
+# storage cluster's own CRs are in, so it reaches whoever administers that
+# namespace rather than a tenant.
 #
 # There are no write verbs because there is nothing to write. The resource is
 # computed on demand and the aggregated API server registers no mutating verbs at
@@ -23,6 +31,7 @@ rules:
   - metrics.simplyblock.io
   resources:
   - logicalvolumemetrics
+  - storagedevicemetrics
   verbs:
   - get
   - list

@@ -87,21 +87,21 @@ const (
 	// WebhookCertDir is where the serving cert (tls.crt/tls.key) is written and
 	// watched. This is the default location controller-runtime's webhook server
 	// (sigs.k8s.io/controller-runtime/pkg/webhook) reads from when CertDir is
-	// unset: filepath.Join(os.TempDir(), "k8s-webhook-server", "serving-certs").
+	// unset: `filepath.Join(os.TempDir(), "k8s-webhook-server", "serving-certs")`.
 	// We keep the same path (rather than a bespoke one) so both the cert-controller
 	// rotator and the webhook-server certwatcher agree without extra flags, and so
 	// the config/default/manager_webhook_patch.yaml emptyDir mount lines up.
 	WebhookCertDir = "/tmp/k8s-webhook-server/serving-certs"
 
-	// Aggregated metrics API wiring. MetricsAPIServiceName and
-	// MetricsAPIServiceObject carry the Kustomize namePrefix
-	// (simplyblock-operator-) applied in config/default, except that an APIService
-	// object's name is fixed by Kubernetes as <version>.<group> and takes no
-	// prefix. The serving certificate is provisioned into
-	// metricsapi.CertDir at runtime by the same cert-controller rotator the
-	// webhook uses, which also injects the CA bundle into the APIService.
+	// Aggregated metrics API wiring. MetricsAPIServiceName carries the Kustomize
+	// namePrefix (simplyblock-operator-) applied in config/default. The
+	// APIService objects are not named here: their names are fixed by Kubernetes
+	// as <version>.<group> and there is one per served version, so the metricsapi
+	// package derives them from its own scheme. The serving certificate is
+	// provisioned into metricsapi.CertDir at runtime by the same cert-controller
+	// rotator the webhook uses, which also injects the CA bundle into each of
+	// those objects.
 	MetricsAPIServiceName    = "simplyblock-operator-metrics-apiserver"
-	MetricsAPIServiceObject  = "v1alpha1.metrics.simplyblock.io"
 	MetricsAPIServerCertName = "metrics-apiserver-cert"
 
 	// DefaultPrometheusURL is where the chart deploys Prometheus. Two things

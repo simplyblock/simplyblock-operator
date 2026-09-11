@@ -1,13 +1,18 @@
 # Design Document: The StorageDevice and Its Operations
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30 (last updated 2026-09-08)  
+**Date:** 2026-08-30 (last updated 2026-09-10)  
 **Test Plan:** [`tests/test-plan-storagedevice.md`](../../tests/test-plan-storagedevice.md)
 
-Both kinds are new. Nothing in this document exists, and §10 is what it replaces
-rather than a migration. It also fills in the far side of the `StorageNode` owns
-`StorageDevice` edge that [`design-crd-model.md`](design-crd-model.md) §9.3 draws.
+Both kinds are new, so §10 is what they replace rather than a migration. The
+document also fills in the far side of the `StorageNode` owns `StorageDevice`
+edge that [`design-crd-model.md`](design-crd-model.md) §9.3 draws.
+
+`StorageDevice` and its mirror exist (§4, §5), along with the readings of §4.4
+and the observability of §8. `StorageDeviceOps` does not: §6 and Appendix B
+specify it and nothing implements them, and each of the two says so where it
+starts.
 
 ---
 
@@ -29,6 +34,7 @@ Appendices:
 
 - [Appendix A: `storagedevice_types.go`](#appendix-a-storagedevice_typesgo)
 - [Appendix B: `storagedeviceops_types.go`](#appendix-b-storagedeviceops_typesgo)
+- [Appendix C: `storagedevicemetrics_types.go`](#appendix-c-storagedevicemetrics_typesgo)
 
 ---
 
@@ -141,8 +147,15 @@ this kind needs no retention policy while the `Ops` kinds do
 
 ## 4. StorageDevice: API
 
-Declared in `operator/api/v1alpha1/storagedevice_types.go`, short name `sd`. The
+Declared in `operator/api/v1alpha2/storagedevice_types.go`, short name `sd`. The
 type is Appendix A.
+
+**Both kinds are declared at `v1alpha2` because both are new.** Nothing ever
+served a `v1alpha1` spelling of either, so there is no older representation to
+convert from and no spoke to write: the kinds start at the group's current
+version, which is where
+[`design-api-upgrade.md`](design-api-upgrade.md) leaves a kind that has no
+history to carry.
 
 ### 4.1 Identity
 
@@ -185,39 +198,39 @@ for.** A degraded device is serving and should not be: it is testing, resyncing,
 or reporting errors. A failed device is not serving, and the cluster is operating
 with less redundancy than it thinks it has until it is replaced.
 
-**`Failed` is terminal.** A device does not leave it, whether it arrived there on the
-control plane's judgment or on somebody's (§6). `Degraded` is the phase a device
-recovers from and `Failed` is the phase it is replaced from, and keeping the two distinct
-is what stops a suspect device rejoining the layout on the strength of one good
-reconcile.
+**`Failed` is terminal, and the control plane is what makes it so.** A device it
+has failed is not reported as serving again, so the phase is terminal without the
+operator latching anything: `devicePhase` is a function of the current report, and
+the report does not go back. `Degraded` is the phase a device recovers from and
+`Failed` is the phase it is replaced from, and the two stay distinct because the
+control plane distinguishes them.
 
-`status.capacity` groups the size, the used bytes, the derived ratio, and the time
-the reading was taken.
+`status.capacity` carries the device's size and nothing else.
 
-**A device's occupancy is a measurement, and it is in status because a device
-satisfies every condition the model puts on one.** The rule is
-[`design-crd-model.md`](design-crd-model.md) §7.13: a measured number stays in a
-status when the object count is the fleet's rather than the workload's, when
-something in Kubernetes reads it, and when it is written with hysteresis. All
-three hold here. There is one object per drive, the alarm at §8.1 and the print
-columns of Appendix A read the number, and the controller writes a fresh sample
-only when the used size has moved by at least one percent of the device's own
-total or when the total itself changed, which is what a device being replaced
-looks like. `sampledAt` carries what the object otherwise cannot say, because a
-reading that stopped being taken is not the same as a device that stopped filling
-up. A volume's occupancy holds none of the three and is served from
-`metrics.simplyblock.io`.
+**A device's size is immutable, which is what puts it in the status and keeps the
+moving number out.** A `StorageDevice` is a physical device: it cannot be resized,
+so the number is written when the device is discovered and nothing rewrites it,
+and a device reporting a different size is a different device arriving as its own
+object. That is a property no volume has, and it is why
+[`design-crd-model.md`](design-crd-model.md) §7.13's hysteresis question does not
+arise: there is no stream of samples to damp.
 
-`status.hardware` groups what the device is: its type, its serial number, its model,
-the path the host sees it at, and its PCI address where it has one. Those are what
-identify the part somebody has to walk into a datacenter and replace, and none of them
-is recoverable from the control plane's device ID alone.
+**What the device holds is served as `StorageDeviceMetrics` (§4.4).** It moves
+continuously, and a status carries each sample at the price of an etcd write and a
+wake-up of every watcher of the kind, for a reading nothing reconciles toward. The
+readings are computed per request from the control plane's exported metrics and
+never stored, which is the same trade `metrics.k8s.io` makes for `PodMetrics`.
+
+`status.hardware` groups what the device is: its serial number, its model, the
+NVMe controller it is served through, and its PCI address where it has one. Those
+are what identify the part somebody has to walk into a datacenter and replace, and
+none of them is recoverable from the control plane's device ID alone.
 
 **Every field in the group is optional, and which ones are populated is what says how
-the device is attached.** An NVMe drive reports a PCI address and a path such as
-`/dev/nvme0n1`. A logical block device reports a path such as `/dev/sdb` and no PCI
-address, because the address belongs to the controller it hangs off rather than to the
-device. The control plane reports no device type, so the presence of `pciAddress` is the
+the device is attached.** An NVMe drive reports a PCI address and the controller it
+hangs off. A logical block device reports neither, because the address belongs to
+the controller rather than to the device and there is no NVMe controller to name.
+The control plane reports no device type, so the presence of `pciAddress` is the
 distinction, and this design adds no type field to restate what one field's presence
 already says.
 
@@ -228,28 +241,45 @@ already says.
 disagrees with it is a control-plane report worth reading twice rather than a
 device this kind has to accommodate.
 
-**No role is restricted by how a device is attached.** A journal, a storage slice, or
-both are what `status.role` reports, and nothing ties those to the transport. Whether a
+**No role is restricted by how a device is attached.** A journal or a storage slice
+is what `status.role` reports, and nothing ties either to the transport. Whether a
 journal on a spinning disk is a placement anybody wants is a question for whoever
 configures the node rather than a constraint this kind enforces.
 
-**`devicePath` is the host path rather than an NVMe namespace.** The value is
-`/dev/nvme0n1` for an NVMe namespace and `/dev/sdb` for a logical block device, and the
-field is named for what it holds in both cases: the path a person types into `smartctl`
-or `dd`. Naming it for the NVMe spelling would make the field read as inapplicable on
-half the devices it describes.
+**There is no host path, because the control plane reports none.** What it reports
+for an NVMe device is the controller it is served through, and `nvmeController`
+carries that in the control plane's own spelling for the reason
+[`design-crd-model.md`](design-crd-model.md) §7.8 gives. The path a person types
+into `smartctl` or `dd` is a host fact rather than a control-plane one, so this
+kind has nothing to put in such a field.
 
-`status.role` says whether the device carries a journal, a storage slice, or
-both, which is what `enableJournalDevice` decided at node creation and what makes
-one device's failure worse than another's.
+`status.role` says whether the device carries a journal or a storage slice, which
+is what `enableJournalDevice` decided at node creation and what makes one device's
+failure worse than another's. **The control plane reports the role through the
+device's status rather than through a field of its own**, as `JM_DEV` against
+everything else, so the two values are what it can distinguish and a device
+carrying both a journal partition and a storage slice reports as storage.
+
+`status.clusterID` and `status.nodeID` are the backend ids of the stream the
+device was last seen on. **They are in the status because the object outlives its
+device, and §5.2 turns on which control-plane scope stopped reporting it.** The
+spec names Kubernetes objects, and no Kubernetes name answers that question.
 
 `status.activeOpsRef` is the operation lock
-([`design-crd-model.md`](design-crd-model.md) §3.2).
+([`design-crd-model.md`](design-crd-model.md) §3.2). **It is declared and always
+empty**, because the operations that take it are §6 and §6 is not implemented.
+Declaring it now is what lets a reader tell "no operation is running" from "this
+kind cannot say," and it keeps the lock out of the change that introduces the
+operations.
+
+`status.message` is the reason the phase is what it is, in terms of what the
+control plane reported: which of the three signals makes a serving device
+degraded, or the status string the operator does not recognize, quoted back.
 
 ### 4.3 Example
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageDevice
 metadata:
   name: production-7f3a9c-5e0000
@@ -270,15 +300,16 @@ status:
   phase: Online
   deviceStatus: online
   role: Storage
+  message: the control plane reports the device online
   capacity:
     totalBytes: 3840755982336
-    usedBytes: 1920377991168
-    sampledAt: "2026-09-08T09:14:02Z"
   hardware:
     pciAddress: "0000:5e:00.0"
     serialNumber: S4J9NX0R500123
     model: SAMSUNG MZQL23T8HCLS-00A07
-    devicePath: /dev/nvme0n1
+    nvmeController: nvme0
+  clusterID: 7f3a9c00-1111-4222-8333-444455556666
+  nodeID: 44444444-4444-4444-4444-444444444444
   observedGeneration: 1
 ```
 
@@ -290,17 +321,18 @@ status:
   phase: Online
   deviceStatus: online
   role: Storage
+  message: the control plane reports the device online
   capacity:
     totalBytes: 16000900661248
-    sampledAt: "2026-09-08T09:14:02Z"
   hardware:
     serialNumber: WD-WMC4N0D9AXYZ
     model: WDC WUH721816ALE6L4
-    devicePath: /dev/sdb
+  clusterID: 7f3a9c00-1111-4222-8333-444455556666
+  nodeID: 44444444-4444-4444-4444-444444444444
   observedGeneration: 1
 ```
 
-**No PCI address, a different path, and everything above `hardware` unchanged.** The
+**No PCI address, no controller, and everything above `hardware` unchanged.** The
 phase, the role, the capacity, the lock, and the operations all mean the same thing on
 a spinning disk as on a drive, which is why the transport lives in one group rather
 than in the kind's shape.
@@ -308,36 +340,97 @@ than in the kind's shape.
 **The worker label is what makes the kind usable in an incident.**
 `kubectl get sd -l storage.simplyblock.io/worker=worker-3` is how somebody with a
 failed drive in their hand finds what it was, and it is the reason the label
-duplicates something already reachable through the node.
+duplicates something already reachable through the node. The cluster label is the
+`StorageCluster`'s object name, which is reachable only through the node's
+`StorageNodeSet`, so the mirror resolves it there rather than deriving it from
+`status.clusterID`.
+
+### 4.4 StorageDeviceMetrics
+
+Declared in `operator/api/metrics/v1alpha2/storagedevicemetrics_types.go`, short
+name `sdm`, and served by the operator's aggregated API server rather than stored
+as a custom resource. The type is Appendix C.
+
+```
+$ kubectl get sdm -n simplyblock
+NAME                        NODE               TOTAL   USED    USED%   SAMPLED
+production-7f3a9c-5e0000a1  production-7f3a9c  3.5Ti   1.7Ti   50%     34s
+```
+
+**A reading is named after the `StorageDevice` it measures and lives in that
+object's namespace.** Somebody who has the device's name needs to learn nothing
+else to ask for it, ordinary namespaced RBAC confines a reader to the namespaces
+they already have, and a device with no object is not served at all: the object is
+the identity, and a reading under a name nothing else in the cluster knows is a
+reading nobody can correlate.
+
+**The numbers come from the control plane's exported metrics, per request.** The
+`DeviceDTO` carries a capacity block that its watch stream never updates, so an
+object fed from the stream would hold whatever the last snapshot said. The current
+figures are the `device_size_total`, `device_size_used`, `device_size_free`,
+`device_size_prov`, and `device_util` gauges the same service exports, keyed by a
+`device` label and read through `atlas-lib/prometheus`. One query answers for
+every device of a cluster, so a list is one request per cluster rather than one
+per device.
+
+**A device with no sample is not served, and neither is anything at all where no
+Prometheus is reachable.** Every field of the reading is a measurement, unlike a
+volume's, whose provisioned size is known without measuring
+([`design-persistentvolumeops.md`](design-persistentvolumeops.md) §11 covers that
+kind). A zero is the reading of an empty device and not the absence of a reading,
+so absence is what is reported.
+
+**The metrics group serves `v1alpha2` alone, and `LogicalVolumeMetrics` is there
+too.** Both kinds are new, so neither has an older spelling to convert from, and
+nothing in the group is stored, which leaves an earlier version nothing to be
+compatible with. One version is also what keeps the aggregated API's internal
+version an alias rather than a conversion hub. One `APIService` object registers
+it, and the operator derives that object's name from its own scheme when it
+injects the CA bundle, so a second version cannot be served without one.
 
 ---
 
 ## 5. StorageDevice: Controller
 
 `StorageDeviceReconciler`, in
-`operator/internal/controllers/node/storagedevice_controller.go`.
+`operator/internal/controller/storagedevice_controller.go`, and the collector
+beside it in `storagedevice_collector.go` (§8.2).
 
 ### 5.1 Devices are discovered
 
 Nothing declares a device, which is unusual for a custom resource and is the whole
-of this kind's creation path: the node's reconciler lists the control plane's devices
-for the node and reconciles the objects to match.
+of this kind's creation path: the device stream reports what a node has, and the
+mirror reconciles one object per device to match.
+
+**The mirror is a reconciler of its own, driven per object.** The subscription
+decodes each event into a cache and enqueues the `StorageDevice` object it names,
+so a device event is a reconcile of one object rather than a pass over a node's
+whole list. The reconciler reads its desired state from that cache instead of from
+the control-plane API, and its writes go through a workqueue, so stream progress is
+independent of API latency and of a write that fails.
 
 ```
-  StorageNode reconcile, or a device stream event
+  A device event, or the object itself (drift and startup)
     │
     ▼
-  List the node's devices
+  Look the object's device up in the subscription cache
     │
-    ▼
-  For each device with no object   → create one, owned by the node
-  For each object with a live device → update its status
-  For each object with no device     → §5.2
+    ├── reported          → create or update, owned by the node
+    └── not reported      → §5.2
 ```
 
-**The device stream is scoped per cluster**, so one subscription serves every
-device of every node in it ([`design-crd-model.md`](design-crd-model.md) §7.7),
-which is what keeps eight hundred objects affordable.
+**The stream is scoped per storage node**, so one subscription is opened per node
+of a cluster rather than one per cluster: the control plane offers no cluster-wide
+device stream. Each stream carries only the devices of its node, which is what
+keeps the cache small enough to answer a reconcile without an API call
+([`design-crd-model.md`](design-crd-model.md) §7.7 covers the stream machinery).
+
+**A device on a node whose object does not exist yet is not mirrored.** The object
+is named after its `StorageNode` and holds a controller reference to it, so
+creating one first would name a node that is not there and would outlive the node
+it belongs to. The mirror waits, which is also what makes the node's namespace the
+device's: a namespaced owner in another namespace is one the garbage collector
+reads as absent.
 
 ### 5.2 A device that stops being reported
 
@@ -346,13 +439,18 @@ happens when somebody pulls it or when a `StorageDeviceOps` removes it.
 
 **The object is deleted, and the event goes on the node.** A device object with
 no device is a record of hardware that is no longer there, and unlike a backup or
-a task it is not a record of anything that happened. `DeviceRemoved` is emitted on
-the `StorageNode`, which is the object that still exists and the one an
-administrator has open.
+a task it is not a record of anything that happened. The event is emitted on the
+`StorageNode`, which is the object that still exists and the one an administrator
+has open.
 
-**A device that stops being reported without an operation having removed it is a
-warning.** That is a drive that was pulled, or a node that lost sight of one, and
-`DeviceDisappeared` says so rather than silently deleting the object.
+**Which of the two events it gets is what says whether anybody asked for it.** A
+device the control plane last reported as `removed` left because something asked
+it to, and `DeviceRemoved` records an orderly departure. A device that was serving
+until it vanished is a drive somebody pulled, and `DeviceDisappeared` is a warning.
+The last observed `deviceStatus` is what separates them, so the distinction is
+between an orderly departure and an abrupt one and not between one operation and
+another: naming the operation that removed a device needs a control-plane field
+that does not exist (§11 Q3).
 
 **A device on a node that cannot be reached is `Unknown`, and its object stays.** An
 offline node reports no devices, which is not the same statement as a node reporting
@@ -363,10 +461,21 @@ they take whatever the node reports when it returns. Deleting and rebuilding the
 churn one object per device on every node restart and discard the identity §5.3 exists
 to protect.
 
-**A device already in a terminal phase keeps it.** `Failed` does not become `Unknown`
-when the node goes away, because that phase records a judgment an unreachable node does
-not revoke (§6). `Unknown` replaces `Online` and `Degraded`, which are observations of a
-device that was serving.
+**Which node states make silence informative is a list, and an unrecognized state
+is not on it.** A node the control plane reports as `online`, `suspended`, or
+`removed` is one it is talking to or has finished with, so a device missing from
+its list is a device that is gone. Everything else, `offline`, `unreachable`,
+`timeout`, `in_restart`, `in_shutdown`, `in_creation`, and any status this operator
+does not know, is an absence of information, the same way an unrecognized device
+status maps to `Unknown` rather than to a verdict. The restart is the case that
+makes the rule worth having, because it is the one that happens on purpose.
+
+**A device already in a terminal phase keeps it, and keeps its reason.** `Failed`
+does not become `Unknown` when the node goes away, because that phase records a
+judgment an unreachable node does not revoke, and `Removed` records a departure
+that has already happened. Neither the phase nor the `status.message` explaining it
+is rewritten, so nothing is written at all for those two. `Unknown` replaces
+`Online` and `Degraded`, which are observations of a device that was serving.
 
 ### 5.3 Deletion is the operator's
 
@@ -403,16 +512,30 @@ the operator: a webhook that refuses them leaves the namespace in `Terminating` 
 So the rejection is conditional on the namespace not itself being terminating, which the
 webhook establishes by reading it. Refusing a user's `kubectl delete sd` and refusing
 the namespace controller's teardown look identical to a naive rule, and only one of them
-is wanted.
+is wanted. A namespace whose state cannot be read is not evidence that it is
+terminating, so that case is refused: admitting it would open the guard for as long
+as the read keeps failing.
+
+**The guard fails open, which is the opposite of the node validator's choice, and
+the difference is the verb.** A `DELETE` webhook that fails closed blocks the
+namespace controller along with a user, so an operator that is down leaves every
+namespace holding a device stuck in `Terminating` with no way out but removing the
+webhook by hand. Failing open costs a record somebody may delete while the operator
+is down, and the mirror rebuilds it from the control plane on the next sync. Only
+one of the two outcomes recovers without an administrator.
 
 ---
 
 ## 6. StorageDeviceOps
 
-Declared in `operator/api/v1alpha1/storagedeviceops_types.go`, short name
+Declared in `operator/api/v1alpha2/storagedeviceops_types.go`, short name
 `sdops`, and reconciled by `StorageDeviceOpsReconciler` in
-`operator/internal/controllers/node/storagedeviceops_controller.go`, which is the
-node's package for the reason §5.1 gives. The type is Appendix B.
+`operator/internal/controller/storagedeviceops_controller.go`. The type is
+Appendix B.
+
+**Nothing in this section is implemented.** The device's own lock is declared and
+empty (§4.2), the two operation metrics of §8.2 have no source, and §11 Q1 is the
+open question the actions wait on.
 
 ```go
 // +kubebuilder:validation:Enum=Restart;SelfTest;Fail;Replace;Migrate
@@ -628,8 +751,7 @@ a call is a verb those steps already need.
 
 | Method | Endpoint                                                                     | Notes                                                                            |
 |--------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| `GET`  | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices`                    | The device list the objects are built from                                       |
-| `GET`  | `/api/v2/clusters/{cluster}/devices/?watch=true`                             | The device stream. Scoped per cluster (§5.1)                                     |
+| `GET`  | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/`                   | The device stream the objects are built from, one per node (§5.1)                |
 | `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/restart`   | The `Restart` action                                                             |
 | `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/remove`    | `Replace`'s and `Migrate`'s removal step                                         |
 | `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/self-test` | The `SelfTest` action, with the mode in the body                                 |
@@ -637,10 +759,11 @@ a call is a verb those steps already need.
 | `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/{device}/detach`    | `Migrate`'s `Detaching` step                                                     |
 | `POST` | `/api/v2/clusters/{cluster}/storage-nodes/{node}/devices/adopt`              | `Replace`'s `Adding` and `Migrate`'s `Attaching`, which name the arriving device |
 
-**The `?watch=true` row is a Server-Sent-Events subscription rather than a request
-that returns**, and it arrives with the control plane's SSE work rather than with
-this design ([`design-crd-model.md`](design-crd-model.md) §7.7). Until that lands it
-is the one external dependency this design cannot satisfy on its own.
+**The first row is a Server-Sent-Events subscription rather than a request that
+returns**, delivered by the control plane's SSE work
+([`design-crd-model.md`](design-crd-model.md) §7.7). It is scoped per storage node
+because that is the only device stream the control plane offers, so a cluster of a
+hundred nodes is a hundred streams rather than one.
 
 **`Migrate` needs one capability nothing here can substitute for.** `Attaching` asks
 the control plane to accept a device as a different node's *with its contents*, so the
@@ -655,31 +778,43 @@ than degrading it.
 `Adding` step is the adopt call, and its `Rebuilding` step is a wait on the device
 stream. The action is a graph over calls the other actions already need.
 
-**The device list and the hardware fields are confirmed, and the per-action verbs are
-what remain.** The control plane exposes devices and reports a PCI address, a serial
-number, and a model for each, so §5.1 has something to build objects from and
-`status.hardware` has something to publish. What is not yet confirmed is one verb per
-action: `self-test`, `fail`, `detach`, and the adopt call. Each is a request rather than
-an observation, so a missing one removes an action and leaves the rest of the kind
+**The device stream and the hardware fields are in use, and the per-action verbs are
+what remain.** The stream reports a PCI address, a serial number, a model, an NVMe
+controller, a status, the health signals of §4.2, and a size for each device, which
+is everything §5.1 builds an object from and everything `status.hardware` and
+`status.capacity` publish. What is not yet confirmed is one verb per action:
+`self-test`, `fail`, `detach`, and the adopt call. Each is a request rather than an
+observation, so a missing one removes an action and leaves the rest of the kind
 standing.
 
-**`status.capacity` is read from the control plane's exported metrics rather than
-from the device list.** The `DeviceDTO` does populate a capacity block, and the
-watch stream sends no event when the numbers in it move, so an object fed from the
-stream holds whatever the last snapshot said. The current numbers are the
-`device_size_total`, `device_size_used`, and `device_date` gauges the same service
-exports, keyed by a `device` label and read through `atlas-lib/prometheus`. A
-deployment with no reachable Prometheus therefore publishes a device with no
-`status.capacity` at all, because a device whose occupancy is momentarily unknown
-is worth publishing and a zero is the reading of an empty drive rather than the
-absence of a reading.
+**What a device holds comes from the exported metrics and not from the stream.** The
+`DeviceDTO` carries a capacity block whose numbers the stream never updates, so an
+object fed from it would hold whatever the last snapshot said. The current figures
+are the `device_size_total`, `device_size_used`, `device_size_free`,
+`device_size_prov`, and `device_util` gauges the same service exports, keyed by a
+`device` label and read through `atlas-lib/prometheus`. They reach a reader as
+`StorageDeviceMetrics` (§4.4) and a scrape as the gauges of §8.2, and nothing
+writes them to an object.
+
+| Metric              | Read by                  | Absent when                |
+|---------------------|--------------------------|----------------------------|
+| `device_size_total` | §4.4, §8.2               | No Prometheus is reachable |
+| `device_size_used`  | §4.4, §8.2, §8.1's alarm | No Prometheus is reachable |
+| `device_size_free`  | §4.4                     | No Prometheus is reachable |
+| `device_size_prov`  | §4.4                     | No Prometheus is reachable |
+| `device_util`       | §4.4                     | No Prometheus is reachable |
+
+**A deployment with no Prometheus keeps every device object and loses every
+reading.** The size in `status.capacity` comes from the stream, so the objects, the
+phases, the hardware, and the events of §8.1 are unaffected. What goes is §4.4
+entirely and the occupancy half of §8.2.
 
 ---
 
 ## 8. Observability
 
-Both kinds are new. The metrics are the more valuable half here, because a device
-is the level at which capacity and failure are actually located.
+The metrics are the more valuable half here, because a device is the level at
+which capacity and failure are actually located.
 
 ### 8.1 Kubernetes events
 
@@ -688,11 +823,17 @@ device appearing or disappearing go on the `StorageNode`, because at that moment
 the device object is being created or deleted and an event on either is an event
 nobody reads.
 
+**A device event is emitted on a change and not on a reconcile.** The mirror
+compares the phase it is about to publish with the one the object holds, so a pass
+that finds the device where it left it says nothing: an event per reconcile would
+make the stream a record of how often the operator looked. Discovery is the one
+exception, and it is a different event on a different object.
+
 | Event                                                         | Type      | Reason                   | On                 |
 |---------------------------------------------------------------|-----------|--------------------------|--------------------|
 | A device was found and an object created                      | `Normal`  | `DeviceDiscovered`       | `StorageNode`      |
-| A device was removed by an operation                          | `Normal`  | `DeviceRemoved`          | `StorageNode`      |
-| A device stopped being reported with no operation having run  | `Warning` | `DeviceDisappeared`      | `StorageNode`      |
+| A device last reported as removed stops being reported        | `Normal`  | `DeviceRemoved`          | `StorageNode`      |
+| A device that was serving stops being reported                | `Warning` | `DeviceDisappeared`      | `StorageNode`      |
 | The device failed                                             | `Warning` | `DeviceFailed`           | `StorageDevice`    |
 | The device is degraded and still serving                      | `Warning` | `DeviceDegraded`         | `StorageDevice`    |
 | The device recovered                                          | `Normal`  | `DeviceOnline`           | `StorageDevice`    |
@@ -704,16 +845,24 @@ nobody reads.
 | The operation failed                                          | `Warning` | `OperationFailed`        | `StorageDeviceOps` |
 | The operation was aborted and its unwind finished             | `Normal`  | `OperationAborted`       | `StorageDeviceOps` |
 | A step's deadline expired                                     | `Warning` | `StepDeadlineExceeded`   | `StorageDeviceOps` |
-| An action was refused because redundancy would not survive it | `Warning` | `InsufficientRedundancy` |                    |
-| A self-test finished and the device reported a failure        | `Warning` | `SelfTestFailed`         |                    |
-| The operation is waiting for somebody to swap or move a drive | `Normal`  | `AwaitingPhysicalAction` |                    |
-| Two unknown devices appeared, so the replacement is ambiguous | `Warning` | `ReplacementAmbiguous`   |                    |
-| The replacement was adopted and the rebuild started           | `Normal`  | `ReplacementAdopted`     |                    |
+| An action was refused because redundancy would not survive it | `Warning` | `InsufficientRedundancy` | `StorageDeviceOps` |
+| A self-test finished and the device reported a failure        | `Warning` | `SelfTestFailed`         | `StorageDeviceOps` |
+| The operation is waiting for somebody to swap or move a drive | `Normal`  | `AwaitingPhysicalAction` | `StorageDeviceOps` |
+| Two unknown devices appeared, so the replacement is ambiguous | `Warning` | `ReplacementAmbiguous`   | `StorageDeviceOps` |
+| The replacement was adopted and the rebuild started           | `Normal`  | `ReplacementAdopted`     | `StorageDeviceOps` |
 | The device was accepted by its target node                    | `Normal`  | `DeviceMoved`            | `StorageDeviceOps` |
 
-**`DeviceDisappeared` is the one worth building first.** A drive pulled from a
-running node is a real event with no current expression anywhere in Kubernetes:
-the node's count drops from `4/4` to `4/3` and nothing says why or which.
+The first eight are emitted, and every row whose object is a `StorageDeviceOps`
+waits on §6.
+
+**`DeviceDisappeared` is the one the section exists for.** A drive pulled from a
+running node had no expression anywhere in Kubernetes: the node's count dropped
+from `4/4` to `3/4` and nothing said why or which.
+
+**`DeviceOnline` is a recovery and not a discovery.** It is emitted only when the
+device was in some other phase first, so a device that was `Online` the first time
+anybody looked does not produce it. `DeviceDiscovered` covers that moment, on the
+node.
 
 ### 8.2 Prometheus metrics
 
@@ -727,16 +876,44 @@ the node's count drops from `4/4` to `4/3` and nothing says why or which.
 | `simplyblock_storagedevice_operations_total`           | `cluster`, `action`, `result`        | Operations reaching a terminal phase                                       |
 | `simplyblock_storagedevice_operation_duration_seconds` | `cluster`, `action`                  | Histogram of operation durations                                           |
 
+The first five are published. The two operation metrics wait on §6: an action and
+a result exist once an operation does.
+
+**A device is labeled by its object name rather than by the control plane's
+device id.** These gauges exist so that a Kubernetes-side dashboard can name what
+it is showing, and the occupancy they carry is published here rather than joined
+from the control plane's own exporter, so nothing needs the backend id to line the
+two up.
+
 **`used_bytes` per device is the metric this kind adds that nothing else can.**
 Cluster capacity is reported as a total, and a cluster at seventy per cent with
 one device at ninety-eight is a cluster about to have a problem that its own
 thresholds cannot see. Capacity is not evenly distributed and the aggregate hides
 that.
 
-**`device_failed` per node is the redundancy alert.** Erasure coding survives a
-bounded number of simultaneous losses, and the count of failed devices is the
-input to whether the next loss is survivable. It is what `Replace`'s validation
-reads (§6) and it is worth graphing whether or not anybody removes anything.
+**`devices_failed_count` per node is the redundancy alert.** Erasure coding
+survives a bounded number of simultaneous losses, and the count of failed devices
+is the input to whether the next loss is survivable. It is what `Replace`'s
+validation reads (§6) and it is worth graphing whether or not anybody removes
+anything.
+
+**The gauges are rebuilt whole on each pass.** Every pass lists the device
+objects, resets the series, and repopulates them, so a device that went away stops
+being reported. A gauge nobody updates any more keeps its last value forever, and
+a failed drive that a dashboard says is fine is worse than no dashboard, so
+deletion is what has to be automatic rather than remembered.
+
+**The pass runs on the leader.** These are per-cluster facts and the alarm below is
+written to the API, so a follower publishing both would double every event and make
+a scrape depend on which replica it reached.
+
+**`DeviceNearlyFull` is emitted by the same pass, at the threshold the device's own
+cluster declares.** `StorageCluster.spec.warningThreshold.capacity` is that
+number, and a cluster that declares none falls back to eighty per cent, because a
+full device is worth saying whether or not anybody configured a figure. The event
+is emitted once per crossing: a device that stays full is one event rather than one
+per tick, and a device that empties and fills again is a second crossing and a
+second event.
 
 ---
 
@@ -746,11 +923,16 @@ Scenarios live in
 [`tests/test-plan-storagedevice.md`](../../tests/test-plan-storagedevice.md) and only
 there.
 
-The projection of §5.1 is a pure function and is unit-testable in full: a device
-list in, a set of objects out, including the create, the update, and the delete
-paths. So is the mapping from a control-plane device status to a typed phase, and
-so is the redundancy check, which is arithmetic over the cluster's reported
-fault tolerance and the count of failed devices.
+The projection of §5.1 is unit-testable in full against a fake client and a static
+cache: the create, the update, and the delete paths, the labels, the message, and
+the events each of them owes. So is the mapping from a control-plane device status
+to a typed phase, the node states that make silence informative (§5.2), the
+readings of §4.4 against a fake capacity source, and the redundancy check of §6,
+which is arithmetic over the cluster's reported fault tolerance and the count of
+failed devices.
+
+The delete guard of §5.3 is testable as a handler: an admission request carries
+the identity and the namespace, so the four cases it separates are four calls.
 
 The risk unit tests do not reach is the operations, and it is not evenly
 distributed. `Restart` is testable against a mock and verifiable on a live cluster
@@ -764,13 +946,14 @@ run.
 
 ## 10. What This Replaces
 
-Nothing is migrated, because neither kind exists.
+Nothing is migrated, because both kinds are new.
 
-| Today                                           | After                                                                    |
+| Before                                          | After                                                                    |
 |-------------------------------------------------|--------------------------------------------------------------------------|
 | `StorageNode.status.resources.devices`, a count | Kept, and joined by one object per device (§3)                           |
 | No per-device identity                          | `StorageDevice`, named for its node and device (§4.1)                    |
-| No per-device capacity anywhere                 | `status.capacity` and two metrics (§4.2, §8.2)                           |
+| No per-device size anywhere                     | `status.capacity` and a gauge (§4.2, §8.2)                               |
+| No per-device occupancy anywhere                | `StorageDeviceMetrics` and a gauge (§4.4, §8.2)                          |
 | No way to tell which device failed              | `status.phase` per device, and `DeviceFailed` naming it (§8.1)           |
 | Restarting a device means restarting its node   | `StorageDeviceOps` with `action: Restart` (§6)                           |
 | A pulled drive is a count changing              | `DeviceDisappeared` on the node (§5.2)                                   |
@@ -784,12 +967,12 @@ Nothing is migrated, because neither kind exists.
 
 ## 11. Open Questions
 
-**Q1: Which of the four per-action verbs the control plane offers.** §7 confirms the
-device list and the hardware fields and leaves `self-test`, `fail`, `detach`, and the
-adopt call unconfirmed. Each is one action's whole content, so a missing verb removes an
-action and leaves the rest of the kind standing. The exception is the adopt call, which
-`Migrate` needs in its stronger form: accepting a device as another node's with its
-contents, rather than as an empty one.
+**Q1: Which of the four per-action verbs the control plane offers.** §7 accounts
+for the device stream and the hardware fields and leaves `self-test`, `fail`,
+`detach`, and the adopt call unconfirmed. Each is one action's whole content, so a
+missing verb removes an action and leaves the rest of the kind standing. The
+exception is the adopt call, which `Migrate` needs in its stronger form: accepting
+a device as another node's with its contents, rather than as an empty one.
 
 **Q2: Whether an operation may target a device in `Unknown`.** §5.2 keeps the objects of
 an unreachable node and moves them to `Unknown`, so an operation can name a device whose
@@ -799,14 +982,62 @@ somebody wants to restart one. Admitting it means issuing a call about a device 
 control plane may not reach either. The redundancy check has the same problem in smaller
 form, being arithmetic over numbers that stopped being refreshed.
 
+**Q3: Whether the control plane can say which operation removed a device.** §5.2
+separates an orderly departure from an abrupt one by the last status the device was
+reported in, which is as far as the stream goes. Naming the operation behind a
+removal needs a field the `DeviceDTO` does not carry, and until one exists a
+`Replace` and a `Fail` followed by somebody pulling the drive leave the same two
+events on the node.
+
 ---
 
 ## Appendix A: `storagedevice_types.go`
 
-The type as it is to be written. Everything the sections above show in Go is an
-excerpt of this appendix, and this is the only place any type appears whole.
+The type, in `operator/api/v1alpha2/`. Everything the sections above show in Go is
+an excerpt of this appendix, and this is the only place any type appears whole.
 
 ```go
+// StorageDeviceShortIDLength is how much of the control-plane device UUID goes
+// into an object's name: the first hyphen-delimited group, which is short enough
+// to keep the name readable and wide enough that two devices on one node cannot
+// collide in practice.
+const StorageDeviceShortIDLength = 8
+
+// StorageDeviceName returns the object name mirroring one control-plane device:
+// the owning StorageNode's name and the device's short id. Naming a device after
+// its node keeps the two sorted together in a listing, which is what somebody
+// scanning for a node's devices actually does.
+func StorageDeviceName(nodeName, deviceID string) string {
+	short := deviceID
+	if len(short) > StorageDeviceShortIDLength {
+		short = short[:StorageDeviceShortIDLength]
+	}
+	return nodeName + "-" + short
+}
+
+// The labels every StorageDevice object carries. They duplicate what is already
+// reachable by following the object's owner, and they are what make the kind
+// usable in an incident: somebody holding a failed drive knows which machine
+// they pulled it from and nothing else, so `kubectl get sd -l
+// storage.simplyblock.io/worker=worker-3` has to be the question they can ask.
+//
+// The keys are the ones the rest of the API group already uses for the same
+// three things, so a selector written for one kind selects the same scope on
+// this one.
+const (
+	// DeviceLabelCluster is the StorageCluster the device's node belongs to,
+	// named by its Kubernetes object rather than by the backend id in
+	// status.clusterID.
+	DeviceLabelCluster = "storage.simplyblock.io/cluster"
+	// DeviceLabelNode is the owning StorageNode's object name. It is also the
+	// first half of the object's own name, and a label as well because a name
+	// prefix is not something a selector can match.
+	DeviceLabelNode = "storage.simplyblock.io/node"
+	// DeviceLabelWorker is the Kubernetes node the device is physically in,
+	// copied from the StorageNode's own label of the same name.
+	DeviceLabelWorker = "storage.simplyblock.io/worker"
+)
+
 // StorageDevicePhase is the operator's own view of a device. Degraded and Failed
 // are deliberately distinct: a degraded device is serving and should not be,
 // while a failed one is not serving and the cluster is running with less
@@ -817,59 +1048,52 @@ type StorageDevicePhase string
 const (
 	StorageDevicePhaseOnline   StorageDevicePhase = "Online"
 	StorageDevicePhaseDegraded StorageDevicePhase = "Degraded"
-	// Unknown is a device whose node cannot be reached, so its state is not
-	// observable rather than bad. A terminal phase is not overwritten by it.
+	// StorageDevicePhaseUnknown is a device whose node cannot be reached, so its
+	// state is not observable rather than bad. A terminal phase is not
+	// overwritten by it.
 	StorageDevicePhaseUnknown StorageDevicePhase = "Unknown"
-	StorageDevicePhaseRemoved  StorageDevicePhase = "Removed"
-	StorageDevicePhaseFailed   StorageDevicePhase = "Failed"
+	StorageDevicePhaseRemoved StorageDevicePhase = "Removed"
+	StorageDevicePhaseFailed  StorageDevicePhase = "Failed"
 )
 
 // StorageDeviceRole is what the device carries. It is decided when the node is
 // created, by spec.storageNodes.enableJournalDevice, and it is what makes one
 // device's failure worse than another's.
-// +kubebuilder:validation:Enum=Storage;Journal;Both
+// +kubebuilder:validation:Enum=Storage;Journal
 type StorageDeviceRole string
 
 const (
 	StorageDeviceRoleStorage StorageDeviceRole = "Storage"
 	StorageDeviceRoleJournal StorageDeviceRole = "Journal"
-	StorageDeviceRoleBoth    StorageDeviceRole = "Both"
 )
 
-// DeviceCapacity is how big the device is and how much of it is used. Cluster
-// capacity is the sum of these, and a cluster at seventy per cent with one
-// device at ninety-eight is a cluster whose own thresholds cannot see the
-// problem.
+// DeviceCapacity is how big the device is. It carries no used size and no
+// sample time, because a physical device cannot be resized: the number is a
+// property of the hardware, it is written when the device is discovered, and
+// nothing rewrites it. A device reporting a different size is a different
+// device, which arrives as its own object.
 //
-// It is a measurement rather than a declaration, so it is absent until something
-// has measured it and it is written only when the reading has moved materially. A
-// sample that changed by a few blocks is not worth an etcd write, and writing
-// every sample would make the reconciler retrigger itself on its own status
-// update.
+// What the device holds is the number that moves, and it is served from
+// metrics.simplyblock.io as StorageDeviceMetrics rather than published here. A
+// reading that changes continuously is not desired state, and keeping it in a
+// status would write etcd on every sample and wake every watcher of the kind
+// for it.
 type DeviceCapacity struct {
-	// TotalBytes is the device's usable size.
+	// TotalBytes is the device's usable size, as the control plane reports it
+	// with the device.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TotalBytes *int64 `json:"totalBytes,omitempty"`
-
-	// UsedBytes is what it currently holds.
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	UsedBytes *int64 `json:"usedBytes,omitempty"`
-
-	// SampledAt is when the reading was taken. It is not when the object was
-	// written, and it may be considerably older if metrics collection has
-	// stopped.
-	// +optional
-	SampledAt *metav1.Time `json:"sampledAt,omitempty"`
 }
 
 // DeviceHardware identifies the part. These are what somebody walking into a
 // datacenter with a failed drive needs, and none of them is recoverable from the
-// control plane's device ID alone. Every field is optional, because which ones a
-// device has depends on how it is attached: an NVMe drive has a PCI address and a
-// logical block device does not, which is the only signal of the difference the
-// control plane reports.
+// control plane's device id alone. Every field is optional, because which ones a
+// device has depends on how it is attached.
+//
+// The design's devicePath is absent: the control plane reports no host path for
+// a device, only the NVMe controller it hangs off, so the field would never be
+// populated. NVMeController carries what is actually reported.
 type DeviceHardware struct {
 	// PCIAddress is the device's address on the host ("0000:5e:00.0"), where it
 	// has one. A logical block device may not: the address can belong to the
@@ -885,11 +1109,10 @@ type DeviceHardware struct {
 	// +optional
 	Model string `json:"model,omitempty"`
 
-	// DevicePath is where the host sees the device: "/dev/nvme0n1" for an NVMe
-	// namespace, "/dev/sdb" for a logical block device. It is named for what it
-	// holds rather than for the NVMe spelling, since it applies to both.
+	// NVMeController is the controller the device is served through, in the
+	// control plane's spelling.
 	// +optional
-	DevicePath string `json:"devicePath,omitempty"`
+	NVMeController string `json:"nvmeController,omitempty"`
 }
 
 // StorageDeviceSpec identifies the device this object reports on, and carries
@@ -924,17 +1147,31 @@ type StorageDeviceStatus struct {
 	// +optional
 	Role StorageDeviceRole `json:"role,omitempty"`
 
-	// Capacity is how big the device is and how much it holds.
+	// Capacity is how big the device is. What it holds is served as
+	// StorageDeviceMetrics instead.
 	// +optional
 	Capacity *DeviceCapacity `json:"capacity,omitempty"`
 
-	// Hardware identifies the part. Which of its fields are set is what says how
-	// the device is attached: only an NVMe device has a PCI address.
+	// Hardware identifies the part.
 	// +optional
 	Hardware *DeviceHardware `json:"hardware,omitempty"`
 
+	// ClusterID and NodeID are the backend ids of the stream this device was
+	// last observed on. They are recorded because an object outliving its device
+	// has to say which scope's absence would be authoritative before the mirror
+	// may delete it; the object's own spec names Kubernetes objects rather than
+	// backend ones, so it cannot answer that on its own.
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
+	// +optional
+	NodeID string `json:"nodeID,omitempty"`
+
 	// ActiveOpsRef names the StorageDeviceOps currently allowed to act on this
-	// device. Empty when none is running.
+	// device, and is empty when none is. It is the operation lock every entity
+	// of this group carries, and until StorageDeviceOps exists nothing takes it,
+	// so the field is present and always empty. Declaring it now is what lets a
+	// reader tell "no operation is running" from "this kind cannot say," and it
+	// keeps the lock out of the change that introduces the operations.
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
@@ -956,26 +1193,34 @@ type StorageDeviceStatus struct {
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=".spec.nodeRef"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Role",type=string,JSONPath=".status.role"
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.deviceStatus"
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.capacity.totalBytes"
-// +kubebuilder:printcolumn:name="Used",type=integer,JSONPath=".status.capacity.usedBytes"
 // +kubebuilder:printcolumn:name="PCI",type=string,JSONPath=".status.hardware.pciAddress",priority=1
 // +kubebuilder:printcolumn:name="Serial",type=string,JSONPath=".status.hardware.serialNumber",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Device"
 
-// StorageDevice is one storage backend device belonging to one storage node,
-// whatever transport it sits behind: an NVMe drive, or from 26.4 a logical block
-// device such as a spinning disk. It is the
-// bottom of the ownership spine and the narrowest thing an operation can target.
+// StorageDevice is one storage backend device belonging to one storage node. It
+// is the bottom of the ownership spine and the narrowest thing an operation can
+// target.
 //
 // Objects are created by the operator from what the control plane reports and
 // are never written by a user: the device's existence follows from the node
 // having it, and which devices a node uses is decided in the node's own spec.
 type StorageDevice struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.TypeMeta `json:",inline"`
 
-	Spec   StorageDeviceSpec   `json:"spec,omitempty"`
-	Status StorageDeviceStatus `json:"status,omitempty"`
+	// metadata is a standard object metadata
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitzero"`
+
+	// spec identifies the mirrored control-plane device
+	// +required
+	Spec StorageDeviceSpec `json:"spec"`
+
+	// status defines the observed state of the device
+	// +optional
+	Status StorageDeviceStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -983,7 +1228,7 @@ type StorageDevice struct {
 // StorageDeviceList contains a list of StorageDevice.
 type StorageDeviceList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []StorageDevice `json:"items"`
 }
 ```
@@ -991,6 +1236,9 @@ type StorageDeviceList struct {
 ---
 
 ## Appendix B: `storagedeviceops_types.go`
+
+The type as it is to be written, in `operator/api/v1alpha2/`. Nothing in this
+appendix exists yet (§6).
 
 ```go
 // StorageDeviceOpsAction is the operation a StorageDeviceOps performs. There is no
@@ -1087,7 +1335,7 @@ type SelfTestSpec struct {
 // MigrateDeviceSpec parameterizes the Migrate action.
 type MigrateDeviceSpec struct {
 	// TargetNodeRef names the StorageNode the device is being moved to, in this
-	// namespace. It is resolved at admission (§6.4).
+	// namespace. It is resolved at admission (§6.3).
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	TargetNodeRef string `json:"targetNodeRef"`
@@ -1147,6 +1395,14 @@ type StorageDeviceOpsStatus struct {
 	// +optional
 	FaultToleranceBefore *int32 `json:"faultToleranceBefore,omitempty"`
 
+	// ResultingDeviceRef names the StorageDevice a Migrate produced on the
+	// target node, which is what makes the move traceable from the operation
+	// after both objects have moved on. Identity here is (nodeRef, deviceID) and
+	// a move changes one half of it, so the device cannot keep its object and
+	// the operation is the only thing that can join the two (§6.2).
+	// +optional
+	ResultingDeviceRef string `json:"resultingDeviceRef,omitempty"`
+
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.
 	// +optional
@@ -1195,5 +1451,104 @@ type StorageDeviceOpsList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []StorageDeviceOps `json:"items"`
+}
+```
+
+---
+
+## Appendix C: `storagedevicemetrics_types.go`
+
+The type, in `operator/api/metrics/v1alpha2/`. It is a different API group from
+the rest of this document's types and is served rather than stored (§4.4), which
+is why it carries no `+kubebuilder:subresource:status`, no print columns, and no
+short-name marker: the aggregated API server decides its columns in Go, and
+`+kubebuilder:skip` on the package keeps the CRD generator out of it.
+
+```go
+// StorageDeviceCapacity is what one device holds. Every size is in bytes and is
+// quoted as a resource.Quantity so that kubectl prints it the way it prints a
+// PersistentVolumeClaim's capacity.
+//
+// Used against Total is the pair the type exists for: cluster capacity is the
+// sum of its devices, and a cluster at seventy per cent with one device at
+// ninety-eight is a cluster about to have a problem that its own thresholds
+// cannot see.
+//
+// +k8s:openapi-gen=true
+type StorageDeviceCapacity struct {
+	// Total is the space the device can hold, as the exporter measured it. It is
+	// the same number the device object's status.capacity carries, reported
+	// again here so that a reading is complete without a second lookup.
+	Total resource.Quantity `json:"total"`
+	// Used is the space the device currently holds.
+	Used resource.Quantity `json:"used"`
+	// Free is the device's unallocated remainder as the control plane accounts
+	// for it. It is reported rather than derived, so it need not equal Total
+	// minus Used.
+	Free resource.Quantity `json:"free"`
+	// Provisioned is the space promised out of the device, which on a
+	// thin-provisioned pool may exceed Total.
+	Provisioned resource.Quantity `json:"provisioned"`
+	// UtilizationPercent is the control plane's own utilization figure, from 0
+	// to 100. It is taken verbatim rather than recomputed from Used and Total,
+	// so that it agrees with what the control plane's own interfaces report.
+	UtilizationPercent int32 `json:"utilizationPercent"`
+}
+
+// +kubebuilder:object:root=true
+
+// StorageDeviceMetrics is one storage device's capacity reading.
+//
+// The object is named after the StorageDevice it measures and lives in that
+// object's namespace, so somebody who has the device's name needs to learn
+// nothing else to ask for it, and ordinary namespaced RBAC confines a reader to
+// the namespaces they already have. A device with no StorageDevice object is
+// therefore not listed: it has no name in this API and no namespace to be
+// authorized against.
+//
+// +k8s:openapi-gen=true
+type StorageDeviceMetrics struct {
+	metav1.TypeMeta `json:",inline"`
+
+	// metadata is standard object metadata. Name and namespace are the
+	// StorageDevice's; creationTimestamp is the device object's, not the
+	// reading's.
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitzero"`
+
+	// Timestamp is when the control plane sampled these values, which is older
+	// than the moment the request was served and may be considerably older if
+	// its exporter has stopped being scraped. It is the zero time when the
+	// device has never been sampled, so that "never measured" does not read as
+	// "measured in 1970."
+	Timestamp metav1.Time `json:"timestamp"`
+
+	// DeviceID is the control plane's identifier for the device. It is the join
+	// key back to the control plane's own exporter and to its API.
+	DeviceID string `json:"deviceID"`
+
+	// StorageNode is the name of the StorageNode object the device belongs to,
+	// so a reading says which machine it is about without a second lookup.
+	StorageNode string `json:"storageNode"`
+
+	// Capacity is the reading itself.
+	Capacity StorageDeviceCapacity `json:"capacity"`
+}
+
+// +kubebuilder:object:root=true
+
+// StorageDeviceMetricsList is a list of readings. It carries no continue token:
+// the whole set is served from memory in one pass, so there is nothing to page
+// through.
+//
+// +k8s:openapi-gen=true
+type StorageDeviceMetricsList struct {
+	metav1.TypeMeta `json:",inline"`
+	// The tag is omitempty rather than the omitzero the CRD kinds in this
+	// repository use, because openapi-gen enforces the streaming-list convention
+	// on a type it generates definitions for and that convention names
+	// omitempty.
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []StorageDeviceMetrics `json:"items"`
 }
 ```

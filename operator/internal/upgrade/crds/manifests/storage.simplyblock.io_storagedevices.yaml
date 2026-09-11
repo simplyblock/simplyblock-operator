@@ -32,9 +32,6 @@ spec:
     - jsonPath: .status.capacity.totalBytes
       name: Total
       type: integer
-    - jsonPath: .status.capacity.usedBytes
-      name: Used
-      type: integer
     - jsonPath: .status.hardware.pciAddress
       name: PCI
       priority: 1
@@ -46,7 +43,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1alpha2
     schema:
       openAPIV3Schema:
         description: |-
@@ -101,16 +98,24 @@ spec:
           status:
             description: status defines the observed state of the device
             properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the StorageDeviceOps currently allowed to act on this
+                  device, and is empty when none is. It is the operation lock every entity
+                  of this group carries, and until StorageDeviceOps exists nothing takes it,
+                  so the field is present and always empty. Declaring it now is what lets a
+                  reader tell "no operation is running" from "this kind cannot say," and it
+                  keeps the lock out of the change that introduces the operations.
+                type: string
               capacity:
-                description: Capacity is how big the device is and how much it holds.
+                description: |-
+                  Capacity is how big the device is. What it holds is served as
+                  StorageDeviceMetrics instead.
                 properties:
                   totalBytes:
-                    description: TotalBytes is the device's usable size.
-                    format: int64
-                    minimum: 0
-                    type: integer
-                  usedBytes:
-                    description: UsedBytes is what it currently holds.
+                    description: |-
+                      TotalBytes is the device's usable size, as the control plane reports it
+                      with the device.
                     format: int64
                     minimum: 0
                     type: integer

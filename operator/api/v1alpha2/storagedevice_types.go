@@ -2,14 +2,18 @@
 // expressed as a Kubernetes resource. Objects are discovered rather than
 // declared: the operator creates them from what the control plane reports on the
 // per-node device stream, and a user never writes one. The kind is the bottom of
-// the ownership spine, so this file lives beside the StorageNode types that own
-// it.
+// the ownership spine.
+//
+// The kind is declared here rather than in v1alpha1 because it is new: nothing
+// ever shipped a v1alpha1 spelling of it, so there is no older representation to
+// convert from and it starts at the group's current version. That is why this
+// file carries no conversion and why the type implements no hub interface.
 //
 // The type follows design-storagedevice.md Appendix A. Where it departs from the
 // appendix, the reason is that the control plane does not report the field, and
 // each departure is commented at the field.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +36,29 @@ func StorageDeviceName(nodeName, deviceID string) string {
 	}
 	return nodeName + "-" + short
 }
+
+// The labels every StorageDevice object carries. They duplicate what is already
+// reachable by following the object's owner, and they are what make the kind
+// usable in an incident: somebody holding a failed drive knows which machine
+// they pulled it from and nothing else, so `kubectl get sd -l
+// storage.simplyblock.io/worker=worker-3` has to be the question they can ask.
+//
+// The keys are the ones the rest of the API group already uses for the same
+// three things, so a selector written for one kind selects the same scope on
+// this one.
+const (
+	// DeviceLabelCluster is the StorageCluster the device's node belongs to,
+	// named by its Kubernetes object rather than by the backend id in
+	// status.clusterID.
+	DeviceLabelCluster = "storage.simplyblock.io/cluster"
+	// DeviceLabelNode is the owning StorageNode's object name. It is also the
+	// first half of the object's own name, and a label as well because a name
+	// prefix is not something a selector can match.
+	DeviceLabelNode = "storage.simplyblock.io/node"
+	// DeviceLabelWorker is the Kubernetes node the device is physically in,
+	// copied from the StorageNode's own label of the same name.
+	DeviceLabelWorker = "storage.simplyblock.io/worker"
+)
 
 // StorageDevicePhase is the operator's own view of a device. Degraded and Failed
 // are deliberately distinct: a degraded device is serving and should not be,
@@ -62,20 +89,23 @@ const (
 	StorageDeviceRoleJournal StorageDeviceRole = "Journal"
 )
 
-// DeviceCapacity is how big the device is and how much of it is used. Cluster
-// capacity is the sum of these, and a cluster at seventy per cent with one
-// device at ninety-eight is a cluster whose own thresholds cannot see the
-// problem.
+// DeviceCapacity is how big the device is. It carries no used size and no
+// sample time, because a physical device cannot be resized: the number is a
+// property of the hardware, it is written when the device is discovered, and
+// nothing rewrites it. A device reporting a different size is a different
+// device, which arrives as its own object.
+//
+// What the device holds is the number that moves, and it is served from
+// metrics.simplyblock.io as StorageDeviceMetrics rather than published here. A
+// reading that changes continuously is not desired state, and keeping it in a
+// status would write etcd on every sample and wake every watcher of the kind
+// for it.
 type DeviceCapacity struct {
-	// TotalBytes is the device's usable size.
+	// TotalBytes is the device's usable size, as the control plane reports it
+	// with the device.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TotalBytes *int64 `json:"totalBytes,omitempty"`
-
-	// UsedBytes is what it currently holds.
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	UsedBytes *int64 `json:"usedBytes,omitempty"`
 }
 
 // DeviceHardware identifies the part. These are what somebody walking into a
@@ -139,7 +169,8 @@ type StorageDeviceStatus struct {
 	// +optional
 	Role StorageDeviceRole `json:"role,omitempty"`
 
-	// Capacity is how big the device is and how much it holds.
+	// Capacity is how big the device is. What it holds is served as
+	// StorageDeviceMetrics instead.
 	// +optional
 	Capacity *DeviceCapacity `json:"capacity,omitempty"`
 
@@ -156,6 +187,15 @@ type StorageDeviceStatus struct {
 	ClusterID string `json:"clusterID,omitempty"`
 	// +optional
 	NodeID string `json:"nodeID,omitempty"`
+
+	// ActiveOpsRef names the StorageDeviceOps currently allowed to act on this
+	// device, and is empty when none is. It is the operation lock every entity
+	// of this group carries, and until StorageDeviceOps exists nothing takes it,
+	// so the field is present and always empty. Declaring it now is what lets a
+	// reader tell "no operation is running" from "this kind cannot say," and it
+	// keeps the lock out of the change that introduces the operations.
+	// +optional
+	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the device moves, and never a log.
@@ -177,7 +217,6 @@ type StorageDeviceStatus struct {
 // +kubebuilder:printcolumn:name="Role",type=string,JSONPath=".status.role"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.deviceStatus"
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.capacity.totalBytes"
-// +kubebuilder:printcolumn:name="Used",type=integer,JSONPath=".status.capacity.usedBytes"
 // +kubebuilder:printcolumn:name="PCI",type=string,JSONPath=".status.hardware.pciAddress",priority=1
 // +kubebuilder:printcolumn:name="Serial",type=string,JSONPath=".status.hardware.serialNumber",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
