@@ -18,7 +18,9 @@
 // an annotation rather than dropped, which is what design-api-upgrade.md §6.2
 // requires of any conversion: an object is read and written back by clients of
 // both versions, and a field with nowhere to go is truncated on the round trip
-// unless something carries it. conversion_stash.go is the mechanism.
+// unless something carries it. The stash and unstash helpers in
+// storagepool_conversion.go are the mechanism, shared with the kind that needed
+// them first.
 //
 // Two of them are the hub's and are stashed going down. status.activeOpsRef is
 // the lock a StorageBackupOps holds on its target, and this version has no field
@@ -58,14 +60,14 @@ import (
 // than derived: the control plane's merging and deleting states are lifecycle
 // detail the hub keeps in status.apiStatus, and folding them into Creating says
 // the copy is not stably restorable without claiming it failed.
-// The fields this kind stashes, named for the JSON path each value came from so
-// that an annotation on a live object says what it is standing in for.
+// The annotations this kind stashes into, keyed by the JSON path each value came
+// from so that one on a live object says what it is standing in for.
 const (
-	stashActiveOpsRef       = "status.activeOpsRef"
-	stashObservedGeneration = "status.observedGeneration"
-	stashAllowedHosts       = "status.allowedHosts"
-	stashSnapshotRequest    = "spec.snapshotName"
-	stashSourceRequest      = "spec.sourceClusterUUID"
+	annoBackupActiveOpsRef       = "storage.simplyblock.io/conversion-status.activeOpsRef"
+	annoBackupObservedGeneration = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoBackupAllowedHosts       = "storage.simplyblock.io/conversion-status.allowedHosts"
+	annoBackupSnapshotRequest    = "storage.simplyblock.io/conversion-spec.snapshotName"
+	annoBackupSourceRequest      = "storage.simplyblock.io/conversion-spec.sourceClusterUUID"
 )
 
 var storageBackupPhaseToHub = map[string]string{
@@ -113,15 +115,28 @@ func (src *StorageBackup) ConvertTo(dstRaw conversion.Hub) error {
 		// Taken back out of the stash this object was stored with, and removed
 		// from it: the field is where the value lives, and leaving the
 		// annotation behind would state the same fact twice.
-		ActiveOpsRef:       takeString(&dst.ObjectMeta, stashActiveOpsRef),
-		ObservedGeneration: takeInt64(&dst.ObjectMeta, stashObservedGeneration),
+	}
+	if err := unstash(&dst.ObjectMeta, annoBackupActiveOpsRef, &dst.Status.ActiveOpsRef); err != nil {
+		return err
+	}
+	if err := unstash(&dst.ObjectMeta, annoBackupObservedGeneration, &dst.Status.ObservedGeneration); err != nil {
+		return err
 	}
 
 	// Put this version's own unrepresentable fields where the trip back down can
 	// find them.
-	stashJSON(&dst.ObjectMeta, stashAllowedHosts, src.Status.AllowedHosts)
-	stashString(&dst.ObjectMeta, stashSnapshotRequest, src.Spec.SnapshotName)
-	stashString(&dst.ObjectMeta, stashSourceRequest, src.Spec.SourceClusterUUID)
+	for _, stashed := range []struct {
+		key   string
+		value any
+	}{
+		{annoBackupAllowedHosts, src.Status.AllowedHosts},
+		{annoBackupSnapshotRequest, src.Spec.SnapshotName},
+		{annoBackupSourceRequest, src.Spec.SourceClusterUUID},
+	} {
+		if err := stash(&dst.ObjectMeta, stashed.key, stashed.value); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -196,16 +211,28 @@ func (dst *StorageBackup) ConvertFrom(srcRaw conversion.Hub) error {
 	}
 
 	// This version's own fields, taken back out of the stash the hub carried
-	// them in.
-	if err := takeJSON(&dst.ObjectMeta, stashAllowedHosts, &dst.Status.AllowedHosts); err != nil {
-		return err
+	// them in. Each is removed as it is restored: the field is where the value
+	// lives, and leaving the annotation behind would state the same fact twice.
+	for _, restored := range []struct {
+		key    string
+		target any
+	}{
+		{annoBackupAllowedHosts, &dst.Status.AllowedHosts},
+		{annoBackupSnapshotRequest, &dst.Spec.SnapshotName},
+		{annoBackupSourceRequest, &dst.Spec.SourceClusterUUID},
+	} {
+		if err := unstash(&dst.ObjectMeta, restored.key, restored.target); err != nil {
+			return err
+		}
 	}
-	dst.Spec.SnapshotName = takeString(&dst.ObjectMeta, stashSnapshotRequest)
-	dst.Spec.SourceClusterUUID = takeString(&dst.ObjectMeta, stashSourceRequest)
 
 	// The hub's own fields, put where the trip back up can find them.
-	stashString(&dst.ObjectMeta, stashActiveOpsRef, src.Status.ActiveOpsRef)
-	stashInt64(&dst.ObjectMeta, stashObservedGeneration, src.Status.ObservedGeneration)
+	if err := stash(&dst.ObjectMeta, annoBackupActiveOpsRef, src.Status.ActiveOpsRef); err != nil {
+		return err
+	}
+	if err := stash(&dst.ObjectMeta, annoBackupObservedGeneration, src.Status.ObservedGeneration); err != nil {
+		return err
+	}
 
 	if backup := src.Status.Backup; backup != nil {
 		// spec.backupID and status.backup.backupID are the same identifier by
