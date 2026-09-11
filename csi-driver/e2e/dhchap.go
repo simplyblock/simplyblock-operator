@@ -356,6 +356,14 @@ func sbctlPoolIDByName(f *framework.Framework, name string) string {
 // backend's authorization decision for an arbitrary host NQN without going
 // through the Go CSI client or the Kubernetes scheduler. Returns the HTTP
 // status code and response body.
+//
+// secret.json's cluster_endpoint is always recorded as a plain "http://" URL:
+// the chart's simplyblock.controlPlaneAddr renders it that way regardless of
+// tls.enabled. Whether the connection is actually TLS is a transport decision
+// made from this pod's own SB_TLS_* environment, the same environment
+// pkg/util/nvmf.go's NewConnection reads. This script mirrors that rewrite so
+// the request reaches the control plane the way the driver itself would,
+// instead of a plaintext request a TLS-only listener drops mid-handshake.
 func connectAsHost(
 	f *framework.Framework,
 	pluginPod, pluginContainer, clusterID, poolID, lvolID, hostNQN string,
@@ -367,6 +375,7 @@ func connectAsHost(
 	script := env + ` python3 - <<'PYEOF'
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -386,9 +395,26 @@ if token_path:
     except OSError:
         pass
 
+endpoint = cluster["cluster_endpoint"].rstrip("/")
+# Mirrors NewConnection's TLS handling in pkg/util/nvmf.go:
+# SB_TLS_CONNECT of "disabled" (the default) leaves the endpoint as recorded;
+# anything else means the control plane is TLS-only, so the scheme is
+# rewritten and the CA (and, for "authenticated", the client keypair) this
+# same pod already mounts for the node plugin's own connections are used.
+ssl_context = None
+tls_mode = os.environ.get("SB_TLS_CONNECT", "disabled")
+if tls_mode != "disabled":
+    endpoint = endpoint.replace("http://", "https://", 1)
+    ca_file = os.environ.get("SB_TLS_CERTIFICATE_AUTHORITY", "/etc/simplyblock/tls/ca.crt")
+    ssl_context = ssl.create_default_context(cafile=ca_file)
+    if tls_mode == "authenticated":
+        cert_file = os.environ.get("SB_TLS_CERTIFICATE", "/etc/simplyblock/tls/tls.crt")
+        key_file = os.environ.get("SB_TLS_KEY", "/etc/simplyblock/tls/tls.key")
+        ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+
 query = urllib.parse.urlencode({"host_nqn": os.environ["HOST_NQN"]})
 url = (
-    cluster["cluster_endpoint"].rstrip("/")
+    endpoint
     + "/api/v2/clusters/" + os.environ["CLUSTER_ID"]
     + "/storage-pools/" + os.environ["POOL_ID"]
     + "/volumes/" + os.environ["LVOL_ID"]
@@ -396,7 +422,7 @@ url = (
 )
 req = urllib.request.Request(url, headers={"Authorization": "Bearer " + credential})
 try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10, context=ssl_context) as resp:
         print(resp.status)
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
