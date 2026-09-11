@@ -270,9 +270,9 @@ func (c *ClusterClient) ListSnapshots(ctx context.Context) ([]*SnapshotResp, err
 // CloneSnapshot clones a snapshot to a new volume
 func (c *ClusterClient) CloneSnapshot(
 	ctx context.Context,
-	snapshotID, cloneName, newSize, pvcName string,
+	snapshotID, cloneName, newSize, pvcName, consistencyGroup string,
 ) (string, error) {
-	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName)
+	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName, consistencyGroup)
 	if err != nil {
 		return "", err
 	}
