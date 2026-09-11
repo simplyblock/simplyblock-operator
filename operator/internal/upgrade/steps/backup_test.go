@@ -10,7 +10,16 @@
 package steps
 
 import (
+	"encoding/json"
 	"testing"
+
+	admissionv1 "k8s.io/api/admission/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/simplyblock/simplyblock-operator/internal/webhook"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -220,6 +229,71 @@ func TestAbsorbBackupRestoresRefusesOneStillRunning(t *testing.T) {
 	if err := (absorbBackupRestores{}).Validate(t.Context(), scope, subject); err == nil {
 		t.Error("a running restore was admitted for absorption")
 	}
+}
+
+// The absorbed record has to survive the admission its own kind imposes, and the
+// fake client in these tests does not run it. That gap is exactly how this was
+// missed: a successful legacy restore has already produced the claim the
+// operation names, which StorageBackupOpsValidator reads as the adoption it
+// refuses, so the migration could not have absorbed a single terminal record on
+// a live cluster.
+//
+// The validator is driven directly here rather than through a client, which is
+// the only way to assert admission from a package that does not deploy it.
+func TestAnAbsorbedRestorePassesTheAdmissionItsOwnKindImposes(t *testing.T) {
+	scope := migration(t, finishedRestore(simplyblockv1alpha1.RestorePhaseDone))
+	if err := runMigrate(t, scope); err != nil {
+		t.Fatalf("ApplyAll: %v", err)
+	}
+
+	var absorbed simplyblockv1alpha2.StorageBackupOps
+	if err := scope.Client.Get(t.Context(),
+		client.ObjectKey{Name: "restore-1", Namespace: "simplyblock"}, &absorbed); err != nil {
+		t.Fatal(err)
+	}
+
+	if !simplyblockv1alpha2.IsHistoricalRecord(&absorbed) {
+		t.Fatal("the absorbed record carries no historical-record marker, so admission would refuse " +
+			"it and the controller would run the restore a second time")
+	}
+
+	raw, err := json.Marshal(&absorbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator := &webhook.StorageBackupOpsValidator{
+		// Deliberately empty: the record names a backup, a pool, and a cluster
+		// that a migrated installation may no longer have, and it still has to
+		// be admitted.
+		Client: fake.NewClientBuilder().WithScheme(absorbedScheme(t)).Build(),
+	}
+	resp := validator.Handle(t.Context(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			Operation: admissionv1.Create,
+			Namespace: "simplyblock",
+			Object:    runtime.RawExtension{Raw: raw},
+		},
+	})
+	if !resp.Allowed {
+		t.Errorf("admission refused the absorbed record: %s", resp.Result.Message)
+	}
+}
+
+// absorbedScheme is the scheme the validator's client needs, which is only the
+// kinds it reads.
+func absorbedScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		simplyblockv1alpha1.AddToScheme,
+		simplyblockv1alpha2.AddToScheme,
+	} {
+		if err := add(s); err != nil {
+			t.Fatalf("build the scheme: %v", err)
+		}
+	}
+	return s
 }
 
 var _ client.Object = (*simplyblockv1alpha2.StorageBackupOps)(nil)

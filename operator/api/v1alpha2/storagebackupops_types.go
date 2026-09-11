@@ -23,6 +23,35 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 )
 
+// HistoricalRecordAnnotation marks an operation that records work already done
+// rather than work to perform.
+//
+// It exists for one caller: the upgrade's absorption of a finished BackupRestore
+// into this kind (design-storagebackup.md §13). That object is an audit record
+// of a restore that ran under the old kind, and it is born into a world where
+// everything the admission checks look for is already true — the claim exists,
+// because the restore it records produced it, and the backup it names may have
+// been pruned years ago. Checking a record of the past against the present
+// rejects every object the absorption exists to preserve.
+//
+// Two things read it, and both have to, or the marker would be worse than
+// nothing. The validator skips the reference checks, because the references
+// describe what was rather than what will be. The controller never advances the
+// operation, because running a restore that already ran would create a second
+// volume and try to bind a claim that exists.
+//
+// A user can set it, and what that buys them is an inert object with references
+// nothing resolves — a false line in an audit log, which somebody able to create
+// this kind can write in a dozen other ways. It buys them no action, which is
+// the property that matters: the controller refuses to run a marked operation
+// whoever wrote it.
+const HistoricalRecordAnnotation = "storage.simplyblock.io/historical-record"
+
+// IsHistoricalRecord reports an operation that records work already done.
+func IsHistoricalRecord(ops *StorageBackupOps) bool {
+	return ops.Annotations[HistoricalRecordAnnotation] == "true"
+}
+
 // StorageBackupOpsAction is the operation a StorageBackupOps performs. Restore
 // acts on a StorageBackup, which is every backup in the cluster's store.
 // +kubebuilder:validation:Enum=Restore
@@ -94,8 +123,15 @@ type RestoreSpec struct {
 	// ClaimLabels and ClaimAnnotations are applied to the created claim, so that
 	// a restored volume can be selected by a policy or an application the same
 	// way its original was.
+	//
+	// Immutable with the rest of the block. The claim is written at the last
+	// step, so a value edited while the operation waited for its volume would
+	// produce a claim built from inputs the admitted and audited operation never
+	// carried, which is the audit record disagreeing with what happened.
+	// +k8s:immutable
 	// +optional
 	ClaimLabels map[string]string `json:"claimLabels,omitempty"`
+	// +k8s:immutable
 	// +optional
 	ClaimAnnotations map[string]string `json:"claimAnnotations,omitempty"`
 }

@@ -47,6 +47,19 @@ import (
 // The webhook is the stronger of the two guards, because it also catches the
 // `--force --grace-period=0` that a finalizer alone does not.
 var undeletableSteps = map[simplyblockv1alpha2.StorageBackupOpsStep]string{
+	// Restoring is here although the design's §6 names only the two below, and
+	// the reason is a window the design does not model: the step asks the control
+	// plane for a volume before the identifier it answers with can be written
+	// down. An operation sitting at Restoring may therefore already have a volume
+	// whose id nothing recorded, and the object is the only thing that can find
+	// it again — by the deterministic name it was asked for. Admitting the delete
+	// would discard exactly that.
+	//
+	// The operation's own finalizer discards the volume before letting the object
+	// go, so this is not the only guard. It is the stronger one, because it also
+	// catches the --force --grace-period=0 that skips the finalizer entirely.
+	simplyblockv1alpha2.StorageBackupOpsStepRestoring: "the control plane may already have " +
+		"accepted the restore, and this object is the only record of the volume it produced",
 	simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolume: "the control plane is still filling the " +
 		"restored volume",
 	simplyblockv1alpha2.StorageBackupOpsStepBinding: "the restored volume is being bound to its claim",
@@ -80,6 +93,15 @@ func (v *StorageBackupOpsValidator) admitCreate(
 	var ops simplyblockv1alpha2.StorageBackupOps
 	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// A record of work already done is not checked against the present. Its
+	// claim exists because the restore it records produced it, and the backup it
+	// names may have been pruned long ago, so every check below would reject the
+	// objects the upgrade's absorption exists to preserve. The controller never
+	// runs one, which is what makes admitting it safe.
+	if simplyblockv1alpha2.IsHistoricalRecord(&ops) {
+		return admission.Allowed("a record of work already done")
 	}
 
 	if denied := clusterMustExist(ctx, v.Client, ops.Namespace, ops.Spec.ClusterRef); denied != nil {

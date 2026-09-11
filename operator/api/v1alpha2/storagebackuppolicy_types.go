@@ -52,22 +52,35 @@ type StorageBackupPolicySpec struct {
 	// space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7").
 	// Intervals must be strictly increasing, and the supported units are m, h,
 	// d, and w.
+	//
+	// Immutable, and that is a property of the control plane rather than a
+	// choice. design-storagebackup.md §10 lists a PUT that applies a changed
+	// schedule, and the v2 API offers no such endpoint: it creates, deletes,
+	// attaches, and detaches a policy and nothing else. A mutable field the
+	// operator cannot reconcile would leave the declaration and the backups
+	// actually being taken permanently disagreeing, with the object still
+	// reporting Active, so the schedule is fixed at creation until the endpoint
+	// exists. Changing one means replacing the policy.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
 	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
+	// +k8s:immutable
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
 
 	// MaxVersions is how many backups of one claim to keep. Zero means no limit
-	// by count.
+	// by count. Immutable, for the reason Schedule is.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Versions"
 	// +kubebuilder:validation:Minimum=0
+	// +k8s:immutable
 	// +optional
 	MaxVersions *int32 `json:"maxVersions,omitempty"`
 
 	// MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
-	// by age. Retention is enforced by the control plane, not here.
+	// by age. Retention is enforced by the control plane, not here. Immutable,
+	// for the reason Schedule is.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
 	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
+	// +k8s:immutable
 	// +optional
 	MaxAge string `json:"maxAge,omitempty"`
 }

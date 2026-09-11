@@ -27,6 +27,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
+// The namespace read the teardown exemption below depends on. Without it the
+// manager's role grants no access to a Namespace, the Get fails Forbidden, the
+// handler denies the namespace controller's delete, and every namespace holding
+// one of these records stays in Terminating with no way out but removing the
+// webhook by hand.
+//
+// The rule is the whole of what these validators need on the kind: one Get, of
+// one cluster-scoped object, to answer whether the caller is the teardown. The
+// StorageDevice validator next door makes the same read and was relying on a
+// grant that was never written, so this repairs both.
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get
+
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagebackup,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=storagebackups,verbs=create;delete,versions=v1alpha2,name=vstoragebackup.simplyblock.io,admissionReviewVersions=v1
 
 // StorageBackupValidator refuses a StorageBackup write that is not the

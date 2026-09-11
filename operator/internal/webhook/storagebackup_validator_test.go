@@ -272,6 +272,10 @@ func TestDeletingARestorePastThePointOfNoReturnIsRefused(t *testing.T) {
 	v := opsValidator(t)
 
 	for _, step := range []simplyblockv1alpha2.StorageBackupOpsStep{
+		// Restoring is included because the request that creates the volume is
+		// made before the identifier can be persisted, so an operation here may
+		// already have one and this object is the only thing that can find it.
+		simplyblockv1alpha2.StorageBackupOpsStepRestoring,
 		simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolume,
 		simplyblockv1alpha2.StorageBackupOpsStepBinding,
 	} {
@@ -296,6 +300,8 @@ func TestDeletingARestorePastThePointOfNoReturnIsRefused(t *testing.T) {
 func TestDeletingARestoreThatCreatedNothingIsAdmitted(t *testing.T) {
 	v := opsValidator(t)
 
+	// Validating has resolved names and created nothing, so there is nothing the
+	// record is the only account of.
 	early := restoreOpsObject()
 	early.Status.Phase = simplyblockv1alpha2.StorageBackupOpsPhaseRunning
 	early.Status.Step.State = string(simplyblockv1alpha2.StorageBackupOpsStepValidating)

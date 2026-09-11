@@ -115,6 +115,9 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   claimLabels:
                     additionalProperties:
                       type: string
@@ -122,7 +125,15 @@ spec:
                       ClaimLabels and ClaimAnnotations are applied to the created claim, so that
                       a restored volume can be selected by a policy or an application the same
                       way its original was.
+
+                      Immutable with the rest of the block. The claim is written at the last
+                      step, so a value edited while the operation waited for its volume would
+                      produce a claim built from inputs the admitted and audited operation never
+                      carried, which is the audit record disagreeing with what happened.
                     type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   claimName:
                     description: |-
                       ClaimName is the PersistentVolumeClaim to create. It must not already
@@ -147,6 +158,11 @@ spec:
                 - claimName
                 - targetPool
                 type: object
+                x-kubernetes-validations:
+                - message: field claimLabels is immutable once set
+                  rule: '!has(oldSelf.claimLabels) || has(self.claimLabels)'
+                - message: field claimAnnotations is immutable once set
+                  rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
             required:
             - action
             - backupRef

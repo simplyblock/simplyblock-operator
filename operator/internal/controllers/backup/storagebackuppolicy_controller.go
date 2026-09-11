@@ -26,11 +26,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -290,16 +289,14 @@ func (r *StorageBackupPolicyReconciler) selectedClaims(
 	if policy.Spec.ClaimSelector == nil {
 		return nil, nil
 	}
+	// An explicitly empty selector means every claim in the namespace, which is
+	// what it means in every other Kubernetes API and what somebody who wrote two
+	// empty braces asked for. The default this kind guards is the absent selector
+	// handled above: omitting a field and writing it empty are different
+	// statements, and only the first is the one whose cost is silent.
 	selector, err := metav1.LabelSelectorAsSelector(policy.Spec.ClaimSelector)
 	if err != nil {
 		return nil, fmt.Errorf("the claimSelector is not a valid selector: %w", err)
-	}
-	// An empty selector reaches here only where the author wrote an explicit
-	// empty object, which does mean everything in the namespace: the default
-	// this guards is an absent selector, and the two are different statements.
-	if selector.Empty() && len(policy.Spec.ClaimSelector.MatchLabels) == 0 &&
-		len(policy.Spec.ClaimSelector.MatchExpressions) == 0 {
-		selector = labels.Nothing()
 	}
 
 	var claims corev1.PersistentVolumeClaimList
@@ -505,26 +502,34 @@ func (r *StorageBackupPolicyReconciler) writeStatus(
 	policy *simplyblockv1alpha2.StorageBackupPolicy,
 	mutate func(*simplyblockv1alpha2.StorageBackupPolicyStatus),
 ) error {
-	desired := *policy.Status.DeepCopy()
-	mutate(&desired)
-	desired.ObservedGeneration = policy.Generation
+	// Retried rather than swallowed. A caller that reads nil takes the write for
+	// done, and the attachment set this records is what the next pass diffs
+	// against: a dropped status would make it detach and reattach every claim.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh simplyblockv1alpha2.StorageBackupPolicy
+		if err := r.Get(ctx, client.ObjectKeyFromObject(policy), &fresh); err != nil {
+			return err
+		}
 
-	if reflect.DeepEqual(policy.Status, desired) {
-		return nil
-	}
-	patch := client.MergeFromWithOptions(policy.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	policy.Status = desired
-	if err := r.Status().Patch(ctx, policy, patch); err != nil {
-		if apierrors.IsConflict(err) {
-			// The object moved while this pass ran, so the status computed from
-			// what was read is already stale. Reconciling again is what produces
-			// a current one; overwriting would record a generation this status
-			// was not computed from.
+		desired := *fresh.Status.DeepCopy()
+		mutate(&desired)
+		desired.ObservedGeneration = fresh.Generation
+
+		if reflect.DeepEqual(fresh.Status, desired) {
+			policy.Status = desired
+			policy.ResourceVersion = fresh.ResourceVersion
 			return nil
 		}
-		return err
-	}
-	return nil
+
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		fresh.Status = desired
+		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
+			return err
+		}
+		policy.Status = fresh.Status
+		policy.ResourceVersion = fresh.ResourceVersion
+		return nil
+	})
 }
 
 // containsAttachment reports whether the set covers this claim, matched on the

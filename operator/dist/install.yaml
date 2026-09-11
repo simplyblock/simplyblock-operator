@@ -2810,6 +2810,9 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   claimLabels:
                     additionalProperties:
                       type: string
@@ -2817,7 +2820,15 @@ spec:
                       ClaimLabels and ClaimAnnotations are applied to the created claim, so that
                       a restored volume can be selected by a policy or an application the same
                       way its original was.
+
+                      Immutable with the rest of the block. The claim is written at the last
+                      step, so a value edited while the operation waited for its volume would
+                      produce a claim built from inputs the admitted and audited operation never
+                      carried, which is the audit record disagreeing with what happened.
                     type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                   claimName:
                     description: |-
                       ClaimName is the PersistentVolumeClaim to create. It must not already
@@ -2842,6 +2853,11 @@ spec:
                 - claimName
                 - targetPool
                 type: object
+                x-kubernetes-validations:
+                - message: field claimLabels is immutable once set
+                  rule: '!has(oldSelf.claimLabels) || has(self.claimLabels)'
+                - message: field claimAnnotations is immutable once set
+                  rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
             required:
             - action
             - backupRef
@@ -3071,27 +3087,53 @@ spec:
               maxAge:
                 description: |-
                   MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
-                  by age. Retention is enforced by the control plane, not here.
+                  by age. Retention is enforced by the control plane, not here. Immutable,
+                  for the reason Schedule is.
                 pattern: ^[1-9]\d*[mhdw]$
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               maxVersions:
                 description: |-
                   MaxVersions is how many backups of one claim to keep. Zero means no limit
-                  by count.
+                  by count. Immutable, for the reason Schedule is.
                 format: int32
                 minimum: 0
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               schedule:
                 description: |-
                   Schedule is the tiered schedule the control plane runs the policy on, as a
                   space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing, and the supported units are m, h,
                   d, and w.
+
+                  Immutable, and that is a property of the control plane rather than a
+                  choice. design-storagebackup.md §10 lists a PUT that applies a changed
+                  schedule, and the v2 API offers no such endpoint: it creates, deletes,
+                  attaches, and detaches a policy and nothing else. A mutable field the
+                  operator cannot reconcile would leave the declaration and the backups
+                  actually being taken permanently disagreeing, with the object still
+                  reporting Active, so the schedule is fixed at creation until the endpoint
+                  exists. Changing one means replacing the policy.
                 pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - clusterRef
             type: object
+            x-kubernetes-validations:
+            - message: field schedule is immutable once set
+              rule: '!has(oldSelf.schedule) || has(self.schedule)'
+            - message: field maxVersions is immutable once set
+              rule: '!has(oldSelf.maxVersions) || has(self.maxVersions)'
+            - message: field maxAge is immutable once set
+              rule: '!has(oldSelf.maxAge) || has(self.maxAge)'
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:
@@ -7345,6 +7387,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - nodes
   verbs:
   - get
@@ -7383,12 +7432,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/log
-  verbs:
-  - get
 - apiGroups:
   - admissionregistration.k8s.io
   resources:

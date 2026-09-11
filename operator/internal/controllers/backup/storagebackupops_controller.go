@@ -153,6 +153,18 @@ func (r *StorageBackupOpsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.teardown(ctx, &ops)
 	}
 
+	// A record of work already done is never run. The upgrade absorbs a finished
+	// BackupRestore into one of these, and it is created before its terminal
+	// status can be written, so without this the controller would pick it up as
+	// Pending and perform a restore that already happened: a second volume, and
+	// a claim that exists.
+	//
+	// No finalizer either. There is nothing to unwind and nothing holding a lock,
+	// and one would only keep the object from being deleted.
+	if simplyblockv1alpha2.IsHistoricalRecord(&ops) {
+		return ctrl.Result{}, nil
+	}
+
 	if !controllerutil.ContainsFinalizer(&ops, opsFinalizer) {
 		controllerutil.AddFinalizer(&ops, opsFinalizer)
 		return ctrl.Result{}, r.Update(ctx, &ops)

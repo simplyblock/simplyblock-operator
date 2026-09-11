@@ -424,7 +424,26 @@ func observeBackupCost(clusterName, policy string, dto subscriptions.BackupDTO) 
 func (r *StorageBackupReconciler) unreported(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
 ) (ctrl.Result, error) {
-	if sb.Status.ClusterID == "" || !r.Backups.Synced(cpinformer.Scope{sb.Status.ClusterID}) {
+	// An object the mirror has never written carries no backend cluster, and the
+	// scope it would be judged against has to come from its spec instead. That is
+	// how a record written by hand is reconciled away rather than left forever:
+	// the write guard fails open, deliberately, so a webhook outage cannot
+	// deadlock a namespace teardown, and this is what makes that trade safe.
+	clusterID := sb.Status.ClusterID
+	if clusterID == "" {
+		resolved, err := r.clusterIDFor(ctx, sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if resolved == "" {
+			// The spec names a cluster this namespace does not have, so nothing
+			// can ever report the backup and the record describes nothing.
+			return ctrl.Result{}, r.discardUnbacked(ctx, sb)
+		}
+		clusterID = resolved
+	}
+
+	if !r.Backups.Synced(cpinformer.Scope{clusterID}) {
 		return ctrl.Result{RequeueAfter: backupRetry}, nil
 	}
 
@@ -432,13 +451,46 @@ func (r *StorageBackupReconciler) unreported(
 		return ctrl.Result{}, err
 	}
 
-	cluster, err := r.clusterFor(ctx, sb.Namespace, sb.Status.ClusterID)
+	cluster, err := r.clusterFor(ctx, sb.Namespace, clusterID)
 	if err != nil || cluster == nil {
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, ReasonBackupGone, ReasonBackupGone,
 		"Backup %s left the store, so StorageBackup %s was removed", sb.Spec.BackupID, sb.Name)
 	return ctrl.Result{}, nil
+}
+
+// clusterIDFor is the backend cluster a backup object's spec names, and the
+// empty string when this namespace has no such cluster or it has no id yet.
+func (r *StorageBackupReconciler) clusterIDFor(
+	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
+) (string, error) {
+	var clusters simplyblockv1alpha1.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(sb.Namespace)); err != nil {
+		return "", err
+	}
+	for i := range clusters.Items {
+		if clusters.Items[i].Name == sb.Spec.ClusterRef {
+			return clusters.Items[i].Status.UUID, nil
+		}
+	}
+	return "", nil
+}
+
+// discardUnbacked removes a record naming a cluster that does not exist.
+//
+// Only a hand-written object reaches this. The mirror names the cluster it
+// discovered the backup on, so an object it created always resolves, and one
+// that does not is a record of a copy no store in this namespace can hold.
+func (r *StorageBackupReconciler) discardUnbacked(
+	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
+) error {
+	logf.FromContext(ctx).Info("removing a backup record naming a cluster that does not exist",
+		"backup", sb.Name, "clusterRef", sb.Spec.ClusterRef)
+	if err := r.Delete(ctx, sb); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // clusterFor returns the StorageCluster in this namespace whose backend id is

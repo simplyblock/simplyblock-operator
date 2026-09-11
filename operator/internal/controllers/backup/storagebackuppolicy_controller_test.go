@@ -244,3 +244,23 @@ func TestDeletingAPolicyDetachesBeforeItRemovesThePolicy(t *testing.T) {
 		t.Errorf("the control-plane policy was deleted %d times, want once", api.deletes)
 	}
 }
+
+// An explicitly empty selector is a different statement from an absent one, and
+// it means what it means everywhere else in Kubernetes: everything. Somebody who
+// wrote two empty braces asked for the whole namespace, and reading that as
+// nothing would make the field impossible to use for what it plainly says.
+func TestAnExplicitlyEmptySelectorCoversTheWholeNamespace(t *testing.T) {
+	api := &fakeControlPlane{createdID: testPolicyID}
+	objs := make([]client.Object, 0, 4)
+	objs = append(objs, testClusterObject(), policyObject(&metav1.LabelSelector{}))
+	objs = append(objs, coveredClaim("unlabeled", testLvolID, nil)...)
+
+	r := policyReconciler(t, api, objs...)
+	if _, err := r.Reconcile(context.Background(), policyRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if !slices.Equal(api.attaches, []string{testLvolID}) {
+		t.Errorf("attached %v, want the namespace's claim", api.attaches)
+	}
+}

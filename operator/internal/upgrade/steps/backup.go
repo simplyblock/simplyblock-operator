@@ -338,10 +338,12 @@ func (absorbBackupRestores) Validate(
 
 // Apply writes the operation the restore becomes.
 //
-// The new object is an audit record of work that has already happened, so it is
-// created with its terminal phase and its step already at Binding. Creating it
-// in Pending would hand a finished restore to a controller that would try to run
-// it again, which is a second volume and a claim that already exists.
+// The new object is an audit record of work that has already happened, and two
+// things follow from that. It carries the historical-record marker, which is what
+// gets it past an admission check that would otherwise read its existing claim as
+// the adoption it refuses, and what stops the controller running a restore that
+// already ran. And its status is written terminal straight afterward, so the
+// record reads as what it is rather than as an operation nobody started.
 func (absorbBackupRestores) Apply(
 	ctx context.Context, s *upgrade.Scope, subject upgrade.Subject,
 ) error {
@@ -351,7 +353,17 @@ func (absorbBackupRestores) Apply(
 	}
 
 	absorbed := &simplyblockv1alpha2.StorageBackupOps{
-		ObjectMeta: metav1.ObjectMeta{Name: restore.Name, Namespace: restore.Namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      restore.Name,
+			Namespace: restore.Namespace,
+			// Without this the object is rejected and, if it were admitted, run.
+			// A finished restore's claim already exists, which the admission
+			// check reads as the adoption it refuses, and the controller would
+			// read the object's empty status as an operation to perform.
+			Annotations: map[string]string{
+				simplyblockv1alpha2.HistoricalRecordAnnotation: "true",
+			},
+		},
 		Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
 			ClusterRef: restore.Spec.ClusterName,
 			BackupRef:  restore.Spec.BackupRef.Name,

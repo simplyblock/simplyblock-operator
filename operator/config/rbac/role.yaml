@@ -32,6 +32,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - nodes
   verbs:
   - get
@@ -70,12 +77,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/log
-  verbs:
-  - get
 - apiGroups:
   - admissionregistration.k8s.io
   resources:
