@@ -352,12 +352,11 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	// Label the target so the storage-node DaemonSet schedules a storage-node-api
 	// pod there and the StorageNodeSet reconcile publishes its per-pod DNS name
 	// in the EndpointSlice. Reuse the canonical StorageNodeSet labeler so the
-	// migration target receives the exact DaemonSet node-selector labels
-	// (io.simplyblock.node-type AND io.simplyblock.storagenodeset) — the target is
-	// not yet in sns.Spec.WorkerNodes (that swap happens in the Promoting phase),
-	// so it is injected via extraWorkers.
-	if node.Labels[kube.LabelNodeType] != kube.NodeTypeStoragePlaneValue(sns.Spec.ClusterName) ||
-		node.Labels[kube.LabelStorageNodeSet] != sns.Name {
+	// migration target receives the exact DaemonSet node-selector label
+	// (io.simplyblock.storagenodeset) — the target is not yet in
+	// sns.Spec.WorkerNodes (that swap happens in the Promoting phase), so it is
+	// injected via extraWorkers.
+	if node.Labels[kube.LabelStorageNodeSet] != sns.Name {
 		if err := labelWorkerNodes(ctx, r.Client, r.Recorder, sns, clusterUUID, target); err != nil {
 			log.Error(err, "migrate: failed to label target worker", "worker", target)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -786,8 +785,8 @@ func (r *StorageNodeOpsReconciler) pruneMigratedSourceStatus(
 // removeSourceWorkerLabels removes storage-plane K8s Node labels from the source
 // worker after a successful migration. It removes:
 //   - the UUID slot label whose value matches migratedUUID (identifies this node's slot)
-//   - io.simplyblock.node-type and io.simplyblock.storagenodeset if no other
-//     StorageNode CRs in the namespace still target this worker (multi-socket guard)
+//   - io.simplyblock.storagenodeset if no other StorageNode CRs in the namespace
+//     still target this worker (multi-socket guard)
 //
 // Best-effort: errors are logged but do not block the migration result.
 func (r *StorageNodeOpsReconciler) removeSourceWorkerLabels(
@@ -830,11 +829,9 @@ func (r *StorageNodeOpsReconciler) removeSourceWorkerLabels(
 
 	// Remove cluster-level labels only when no sibling storage nodes remain on this host.
 	if !hasOtherSNs {
-		for _, lk := range []string{kube.LabelNodeType, kube.LabelStorageNodeSet} {
-			if _, ok := node.Labels[lk]; ok {
-				delete(node.Labels, lk)
-				changed = true
-			}
+		if _, ok := node.Labels[kube.LabelStorageNodeSet]; ok {
+			delete(node.Labels, kube.LabelStorageNodeSet)
+			changed = true
 		}
 	}
 

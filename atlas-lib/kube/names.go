@@ -34,24 +34,12 @@ const (
 	// StorageNodeSet in the cluster.
 	LabelSimplyblockCluster = "simplyblock-cluster"
 
-	// LabelNodeType marks a worker Node as part of a cluster's storage plane.
-	// Its value is NodeTypeStoragePlaneValue(clusterName). It is cluster-scoped,
-	// so do not use it to select a single StorageNodeSet's workers. Use
-	// LabelStorageNodeSet for that.
-	LabelNodeType = "io.simplyblock.node-type"
-
 	// LabelStorageNodeSet scopes a worker Node, pod, and DaemonSet to a single
 	// StorageNodeSet (value = the StorageNodeSet name). It is the storage-node
 	// DaemonSet's node selector, letting multiple StorageNodeSets coexist in one
 	// cluster.
 	LabelStorageNodeSet = "io.simplyblock.storagenodeset"
 )
-
-// NodeTypeStoragePlaneValue is the LabelNodeType value marking a worker as part
-// of the given cluster's storage plane.
-func NodeTypeStoragePlaneValue(clusterName string) string {
-	return "simplyblock-storage-plane-" + clusterName
-}
 
 // PoolNodeLabelKey is the label key identifying one storage pool.
 func PoolNodeLabelKey(poolUUID string) string {
