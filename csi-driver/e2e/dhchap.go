@@ -132,16 +132,10 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 			unauthorizedNQN := "nqn.2014-08.io.simplyblock:uuid:00000000-0000-0000-0000-000000000000"
 			status, body := connectAsHost(f, pluginPod, pluginContainer, clusterID, poolID, lvolID, unauthorizedNQN)
-			// Accept 404 (backend returned "not found in allowed hosts") or 0
-			// (backend dropped the TCP connection before sending an HTTP response:
-			// also a valid transport-level rejection, seen when the backend's DHCHAP
-			// gate closes the socket rather than returning a 4xx).
-			gomega.Expect(status).To(gomega.Or(gomega.Equal(404), gomega.Equal(0)),
-				"connect with an unauthorized host NQN should be rejected (404 or connection drop), got %d: %s", status, body)
-			if status == 404 {
-				gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
-					"rejection reason should name the allowed-hosts gate, got: %s", body)
-			}
+			gomega.Expect(status).To(gomega.Equal(404),
+				"connect with an unauthorized host NQN should be rejected, got %d: %s", status, body)
+			gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
+				"rejection reason should name the allowed-hosts gate, got: %s", body)
 
 			ginkgo.By("drop one NVMe path and confirm the guardian reconnects using the authorized identity")
 			sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID)
@@ -347,6 +341,15 @@ func sbctlPoolIDByName(f *framework.Framework, name string) string {
 // backend's authorization decision for an arbitrary host NQN without going
 // through the Go CSI client or the Kubernetes scheduler. Returns the HTTP
 // status code and response body.
+//
+// secret.json's cluster_endpoint is always recorded as a plain "http://" URL:
+// the chart's simplyblock.controlPlaneAddr renders it that way regardless of
+// tls.enabled. Whether the connection is actually TLS is a transport decision
+// made from this pod's own SB_TLS_* environment, the same environment
+// internal/controlplane/cluster.go's NewConnection reads. This script mirrors
+// that rewrite so the request reaches the control plane the way the driver
+// itself would, instead of a plaintext request a TLS-only listener drops
+// mid-handshake.
 func connectAsHost(
 	f *framework.Framework,
 	pluginPod, pluginContainer, clusterID, poolID, lvolID, hostNQN string,
@@ -358,6 +361,7 @@ func connectAsHost(
 	script := env + ` python3 - <<'PYEOF'
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -377,9 +381,26 @@ if token_path:
     except OSError:
         pass
 
+endpoint = cluster["cluster_endpoint"].rstrip("/")
+# Mirrors NewConnection's TLS handling in internal/controlplane/cluster.go:
+# SB_TLS_CONNECT of "disabled" (the default) leaves the endpoint as recorded;
+# anything else means the control plane is TLS-only, so the scheme is
+# rewritten and the CA (and, for "authenticated", the client keypair) this
+# same pod already mounts for the node plugin's own connections are used.
+ssl_context = None
+tls_mode = os.environ.get("SB_TLS_CONNECT", "disabled")
+if tls_mode != "disabled":
+    endpoint = endpoint.replace("http://", "https://", 1)
+    ca_file = os.environ.get("SB_TLS_CERTIFICATE_AUTHORITY", "/etc/simplyblock/tls/ca.crt")
+    ssl_context = ssl.create_default_context(cafile=ca_file)
+    if tls_mode == "authenticated":
+        cert_file = os.environ.get("SB_TLS_CERTIFICATE", "/etc/simplyblock/tls/tls.crt")
+        key_file = os.environ.get("SB_TLS_KEY", "/etc/simplyblock/tls/tls.key")
+        ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+
 query = urllib.parse.urlencode({"host_nqn": os.environ["HOST_NQN"]})
 url = (
-    cluster["cluster_endpoint"].rstrip("/")
+    endpoint
     + "/api/v2/clusters/" + os.environ["CLUSTER_ID"]
     + "/storage-pools/" + os.environ["POOL_ID"]
     + "/volumes/" + os.environ["LVOL_ID"]
@@ -387,19 +408,12 @@ url = (
 )
 req = urllib.request.Request(url, headers={"Authorization": "Bearer " + credential})
 try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10, context=ssl_context) as resp:
         print(resp.status)
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print(e.code)
     print(e.read().decode())
-except OSError as e:
-    # Backend closed the connection before sending an HTTP response
-    # (e.g. http.client.RemoteDisconnected). Treat as a transport-level
-    # rejection: print status 0 so the caller can distinguish it from a
-    # success without crashing the script.
-    print(0)
-    print("connection dropped: " + str(e))
 PYEOF`
 	out := execInPod(f, driverNamespace(), pluginPod, pluginContainer, script)
 	lines := strings.SplitN(strings.TrimLeft(out, "\n"), "\n", 2)
