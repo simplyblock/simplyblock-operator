@@ -492,10 +492,15 @@ declared (§5.1), so it is not a request anybody made and not theirs to withdraw
 validating webhook refuses `DELETE` from every identity except three. A service
 account in the operator's namespace is the first, which is the same identity test
 the node's own webhook applies to its operator-written fields
-([`design-storagenode.md`](design-storagenode.md) §3.2). The garbage collector is
-the second: the cascade below is Kubernetes' work rather than the operator's, and
-it arrives as the collector's own service account, so a rule that named only the
-operator would refuse the path this section relies on. A namespace that is itself
+([`design-storagenode.md`](design-storagenode.md) §3.2). Kubernetes' own cascade
+is the second: the deletion below is Kubernetes' work rather than the operator's,
+so a rule that named only the operator would refuse the path this section relies
+on. It arrives under one of two identities, and which one is a property of the
+cluster rather than a choice this operator has: a controller manager started with
+`--use-service-account-credentials` cascades as the garbage collector's own
+service account, and one started without it as the controller manager itself.
+Both are admitted, because a cluster answering with one is not a cluster
+misconfigured for the other. A namespace that is itself
 terminating is the third, because the deletes of a teardown come from the
 namespace controller and refusing them leaves the namespace in `Terminating` with
 nothing able to release it.

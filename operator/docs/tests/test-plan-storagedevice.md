@@ -108,20 +108,21 @@ subscription performs.
 
 File: `operator/internal/webhook/storagedevice_validator_test.go`
 
-| #     | Scenario                                                                                        | Type       | Test                                                     |
-|-------|-------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
-| U-30  | A user deleting an object: the webhook rejects it, with a reason                                | Negative   | `TestAUserMayNotDeleteAStorageDevice`                    |
-| U-31  | The operator's service account deleting an object: admitted                                     | Positive   | `TestTheOperatorMayDeleteAStorageDevice`                 |
-| U-32  | The namespace controller's teardown of a terminating namespace: admitted                        | Boundary   | `TestTheNamespaceControllersTeardownIsAdmitted`          |
-| U-33  | Deleting a `StorageNode` deletes its device objects                                             | Positive   | —                                                        |
-| U-61  | The object carries no finalizer, so the operator's own delete is immediate                      | Boundary   | —                                                        |
-| U-62  | An operator delete does not call the control plane                                              | Negative   | —                                                        |
-| U-85  | A service account of the same name in another namespace: refused                                | Negative   | `TestAServiceAccountElsewhereMayNotDelete`               |
-| U-86  | A user's delete in a terminating namespace: admitted, whoever asked                             | Boundary   | `TestAUsersDeleteInATerminatingNamespaceIsAdmitted`      |
-| U-87  | A namespace whose state cannot be read: refused rather than admitted                            | Boundary   | `TestAnUnreadableNamespaceDoesNotOpenTheGuard`           |
-| U-88  | A create, an update, or a connect: not this webhook's business                                  | Negative   | `TestOtherOperationsAreNotThisWebhooksBusiness`          |
-| U-121 | The garbage collector's cascade: admitted, since the owner reference is Kubernetes' to act on   | Regression | `TestTheGarbageCollectorMayDeleteAStorageDevice`         |
-| U-122 | Another `kube-system` service account: refused, since the exemption is the collector's identity | Negative   | `TestAnotherKubeSystemAccountMayNotDeleteAStorageDevice` |
+| #     | Scenario                                                                                                                   | Type       | Test                                                     |
+|-------|----------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-30  | A user deleting an object: the webhook rejects it, with a reason                                                           | Negative   | `TestAUserMayNotDeleteAStorageDevice`                    |
+| U-31  | The operator's service account deleting an object: admitted                                                                | Positive   | `TestTheOperatorMayDeleteAStorageDevice`                 |
+| U-32  | The namespace controller's teardown of a terminating namespace: admitted                                                   | Boundary   | `TestTheNamespaceControllersTeardownIsAdmitted`          |
+| U-33  | Deleting a `StorageNode` deletes its device objects                                                                        | Positive   | —                                                        |
+| U-61  | The object carries no finalizer, so the operator's own delete is immediate                                                 | Boundary   | —                                                        |
+| U-62  | An operator delete does not call the control plane                                                                         | Negative   | —                                                        |
+| U-85  | A service account of the same name in another namespace: refused                                                           | Negative   | `TestAServiceAccountElsewhereMayNotDelete`               |
+| U-86  | A user's delete in a terminating namespace: admitted, whoever asked                                                        | Boundary   | `TestAUsersDeleteInATerminatingNamespaceIsAdmitted`      |
+| U-87  | A namespace whose state cannot be read: refused rather than admitted                                                       | Boundary   | `TestAnUnreadableNamespaceDoesNotOpenTheGuard`           |
+| U-88  | A create, an update, or a connect: not this webhook's business                                                             | Negative   | `TestOtherOperationsAreNotThisWebhooksBusiness`          |
+| U-121 | The garbage collector's cascade: admitted, since the owner reference is Kubernetes' to act on                              | Regression | `TestTheGarbageCollectorMayDeleteAStorageDevice`         |
+| U-122 | Another `kube-system` service account: refused, since the exemption is the collector's identity                            | Negative   | `TestAnotherKubeSystemAccountMayNotDeleteAStorageDevice` |
+| U-123 | The controller manager cascading under its own identity: admitted, since per-controller credentials are a cluster's choice | Regression | `TestTheControllerManagerMayDeleteAStorageDevice`        |
 
 ### Events and Gauges (design §8)
 

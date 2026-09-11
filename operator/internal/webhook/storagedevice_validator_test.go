@@ -161,6 +161,17 @@ func TestTheGarbageCollectorMayDeleteAStorageDevice(t *testing.T) {
 	}
 }
 
+// A cluster whose controller manager runs without per-controller credentials
+// cascades under its own identity instead, and the cascade is the same one.
+func TestTheControllerManagerMayDeleteAStorageDevice(t *testing.T) {
+	v := deviceValidator(t, liveNamespace())
+
+	resp := v.Handle(context.Background(), deleteRequest("system:kube-controller-manager"))
+	if !resp.Allowed {
+		t.Fatalf("the controller manager's cascade was refused: %s", resp.Result.Message)
+	}
+}
+
 // The exemption is the collector's identity and not kube-system's: a service
 // account that happens to live there is still a caller with no business
 // withdrawing a device record.
