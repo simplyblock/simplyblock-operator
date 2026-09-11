@@ -106,21 +106,25 @@ SPELL_CSPELL_FILE_EXTENSIONS:
   - .md
   - .txt
 
-# checkov runs in project mode, so MegaLinter hands it `--directory .` and never
-# builds a file list. FILTER_REGEX_EXCLUDE above is applied while building that
-# list, which means it never reaches checkov: 286 of its 649 findings were in
-# paths excluded everywhere else. Project mode is still the right mode, because
-# it is what lets checkov render the Helm charts before scanning them and run the
-# CKV2_* checks that reason across resources, so the scope is set by argument.
+# checkov is scoped in .checkov.yml, not here. It runs in project mode, so
+# MegaLinter hands it `--directory .` and never builds a file list, and
+# FILTER_REGEX_EXCLUDE above is applied while building that list: it never
+# reaches checkov, and 286 of its 649 findings were in paths excluded everywhere
+# else. Project mode is still the right mode, because it is what lets checkov
+# render the Helm charts before scanning them and run the CKV2_* checks that
+# reason across resources, so .checkov.yml narrows it with skip-path instead.
 #
-# Three things were measured rather than assumed. A `directory:` key in
-# .checkov.yml is ignored, because the command-line `--directory` overrides it.
-# REPOSITORY_CHECKOV_FORWARD_EXCLUDED_DIRECTORIES defaults to true and is a no-op
-# here: with a directory named in EXCLUDED_DIRECTORIES, checkov still scanned it
-# and the command carried no --skip-path. Removing `--directory` does not remove
-# the ones added below, so the pair is what scopes the run.
-# Report without blocking, for now. The first clean run left roughly 1,880
-# findings across the tree, so a gate that failed on them would fail every pull
+# Three ways of doing it here were tried and are recorded so they are not tried
+# again. A `directory:` key in .checkov.yml is ignored, because the
+# command-line `--directory` overrides it.
+# REPOSITORY_CHECKOV_FORWARD_EXCLUDED_DIRECTORIES defaults to true and is a
+# no-op: with a directory named in EXCLUDED_DIRECTORIES, checkov scanned it
+# anyway and the command carried no --skip-path. And scoping by repeating
+# `--directory` works but reports every finding once per directory, which
+# turned 592 distinct findings into 1364.
+
+# Report without blocking, for now. The tree carries roughly a thousand
+# findings, so a gate that failed on them would fail every pull
 # request from the day it landed and teach everyone to ignore it. It reports
 # into the checks tab and the uploaded artifact instead. Remove this line once
 # the backlog is worked down. That is the point at which this becomes a gate.
