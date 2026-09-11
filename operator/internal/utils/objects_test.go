@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func TestRequiredNodesFromErasureCodingScheme(t *testing.T) {
@@ -70,6 +71,11 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
+	// The pool is read as the hub, which is the shape every controller reads;
+	// the cluster is not, because StorageCluster has no v1alpha2 yet.
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
 
 	clusterA := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "ns1"},
@@ -81,12 +87,12 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 	}
 
-	poolA := &simplyblockv1alpha1.StoragePool{
+	poolA := &simplyblockv1alpha2.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "ns1"},
-		Spec: simplyblockv1alpha1.StoragePoolSpec{
-			ClusterName: "cluster-a",
+		Spec: simplyblockv1alpha2.StoragePoolSpec{
+			ClusterRef: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.StoragePoolStatus{UUID: "pool-uuid-a"},
+		Status: simplyblockv1alpha2.StoragePoolStatus{UUID: "pool-uuid-a"},
 	}
 
 	c := fake.NewClientBuilder().

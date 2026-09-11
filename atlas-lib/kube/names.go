@@ -65,7 +65,11 @@ const (
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
 	ParamEncryption            = "encryption"
 
-	// QoS limits. Empty/absent means unset (0).
+	// The QoS limits' older spelling. Empty or absent means unset (0). These are
+	// read for as long as a class carrying them exists, which is indefinitely: a
+	// class's parameters are immutable, so one an older operator generated can
+	// never be rewritten. The current spellings and the resolver that prefers
+	// them are in qos.go.
 	ParamQoSRWIOPS   = "qos_rw_iops"
 	ParamQoSRWMBytes = "qos_rw_mbytes"
 	ParamQoSRMBytes  = "qos_r_mbytes"

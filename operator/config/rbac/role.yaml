@@ -101,6 +101,7 @@ rules:
   - storagebackups.storage.simplyblock.io
   - storageclusterops.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
+  - storagepools.storage.simplyblock.io
   resources:
   - customresourcedefinitions
   verbs:
@@ -258,6 +259,7 @@ rules:
   - storagenodeops
   - storagenodes
   - storagenodesets
+  - storagepoolops
   - storagepools
   - tasks
   - volumemigrations
@@ -287,6 +289,7 @@ rules:
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagenodesets/finalizers
+  - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -313,6 +316,7 @@ rules:
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
+  - storagepoolops/status
   - storagepools/status
   - tasks/status
   - volumemigrations/status

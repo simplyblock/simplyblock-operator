@@ -39,6 +39,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -728,14 +729,34 @@ func (r *BackupRestoreReconciler) resolvedPVCNamespacedName(
 	return name, restoreCR.Namespace
 }
 
+// restoreStorageClassName is the class the restored PersistentVolume and its
+// claim name.
+//
+// It is resolved through the pool's own assignment rather than derived from the
+// pool's name, because a class is authored and a pool may have any number of
+// them (design-storagepool.md §5). The restore has to name one, so it takes the
+// pool's default class if it has one and otherwise the first assigned class in
+// name order. A pool with no class at all fails the restore with a message
+// saying so, which is better than writing a PersistentVolume that names a class
+// nothing will ever create.
+func (r *BackupRestoreReconciler) restoreStorageClassName(
+	ctx context.Context, restoreCR *simplyblockv1alpha1.BackupRestore,
+) (string, error) {
+	return pool.ConsumingClassName(ctx, r.Client,
+		restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+}
+
 func (r *BackupRestoreReconciler) ensurePV(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 	pvName, pvcName, pvcNamespace, clusterUUID string,
 ) error {
+	wantStorageClass, err := r.restoreStorageClassName(ctx, restoreCR)
+	if err != nil {
+		return err
+	}
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
-		wantStorageClass := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
 		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolName, restoreCR.Status.RestoredLvolID)
 		var mismatch string
 		switch {
@@ -764,7 +785,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 		return fmt.Errorf("get PV %s: %w", pvName, err)
 	}
 
-	storageClassName := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	storageClassName := wantStorageClass
 
 	storageQty := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
 
@@ -898,7 +919,10 @@ func (r *BackupRestoreReconciler) ensurePVC(
 
 	pvcSpec := restoreCR.Spec.PVCTemplate.Spec.DeepCopy()
 	pvcSpec.VolumeName = restoreCR.Status.PVName
-	sc := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	sc, err := r.restoreStorageClassName(ctx, restoreCR)
+	if err != nil {
+		return err
+	}
 	pvcSpec.StorageClassName = &sc
 
 	pvc := &corev1.PersistentVolumeClaim{

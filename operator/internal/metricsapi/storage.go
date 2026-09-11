@@ -45,6 +45,14 @@ const ResourceName = "logicalvolumemetrics"
 // ShortName is the abbreviation `kubectl get lvm` resolves.
 const ShortName = "lvm"
 
+// The two field selectors every resource in this group answers, and the only
+// two: a reading is computed rather than indexed, so there is nothing behind a
+// selector on any other field and selecting on one returns nothing at all.
+const (
+	fieldSelectorName      = "metadata.name"
+	fieldSelectorNamespace = "metadata.namespace"
+)
+
 // VolumeSource is the read side of the control-plane volume cache. It is an
 // interface so the storage can be tested without a stream, and it is this narrow
 // because these two calls are all a read needs.
@@ -187,9 +195,9 @@ func matchesFieldSelector(options *metainternalversion.ListOptions, reading *met
 	for _, req := range options.FieldSelector.Requirements() {
 		var actual string
 		switch req.Field {
-		case "metadata.name":
+		case fieldSelectorName:
 			actual = reading.Name
-		case "metadata.namespace":
+		case fieldSelectorNamespace:
 			actual = reading.Namespace
 		default:
 			return false

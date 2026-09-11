@@ -7,13 +7,13 @@
 # the kube-apiserver before the operator is reached, and it needs no per-tenant
 # dashboard or query rewriting to hold.
 #
-# The two resources are confined by the same mechanism and to different
+# The three resources are confined by the same mechanism and to different
 # audiences, because their objects live in different namespaces. A
 # LogicalVolumeMetrics is named after a PersistentVolumeClaim and lives in the
 # tenant's namespace, so a tenant sees their own volumes. A StorageDeviceMetrics
-# lives beside the StorageNode that owns the device, which is the namespace the
-# storage cluster's own CRs are in, so it reaches whoever administers that
-# namespace rather than a tenant.
+# lives beside the StorageNode that owns the device, and a StoragePoolMetrics
+# beside its StoragePool, which is the namespace the storage cluster's own CRs
+# are in, so both reach whoever administers that namespace rather than a tenant.
 #
 # There are no write verbs because there is nothing to write. The resource is
 # computed on demand and the aggregated API server registers no mutating verbs at
@@ -32,6 +32,7 @@ rules:
   resources:
   - logicalvolumemetrics
   - storagedevicemetrics
+  - storagepoolmetrics
   verbs:
   - get
   - list

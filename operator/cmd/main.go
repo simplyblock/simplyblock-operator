@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/simplyblock/atlas/link"
 
@@ -54,6 +55,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -402,6 +404,35 @@ func main() {
 		}
 	}
 
+	// A pool's occupancy is the same kind of number as a device's, read one
+	// level up: it moves with every volume written to the pool, comes from the
+	// same Prometheus, and is worth neither an etcd write nor a reconcile. The
+	// collector also raises CapacityExhausted, which is the one pool event that
+	// needs a measurement to decide.
+	//
+	// It is registered after the volume stream because it reads that cache for
+	// the pool's logical-volume count, and the field is left unset when the
+	// stream is not running: a typed nil put into the interface would be a
+	// non-nil interface over a nil cache, which panics on the first pass.
+	var poolCapacity pool.CapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-pool capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		poolCapacity = provider
+	}
+	poolCollector := &pool.Collector{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("storagepool-collector"),
+		Capacity: poolCapacity,
+	}
+	if volumeSubscription != nil {
+		poolCollector.Volumes = volumeSubscription
+	}
+	if err := mgr.Add(poolCollector); err != nil {
+		setupLog.Error(err, "unable to add the storage pool collector")
+		os.Exit(1)
+	}
+
 	if err := (&controller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -432,13 +463,21 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
 		os.Exit(1)
 	}
-	if err := (&controller.StoragePoolReconciler{
+	if err := (&pool.StoragePoolReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes: volumeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
+		os.Exit(1)
+	}
+	if err := (&pool.StoragePoolOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagepoolops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StoragePoolOps")
 		os.Exit(1)
 	}
 	if err := (&controller.TaskReconciler{
@@ -681,6 +720,13 @@ func main() {
 				OperatorNamespace: operatorNamespace,
 			}})
 		setupLog.Info("registered storagedevice validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagepool",
+			&webhook.Admission{Handler: &internalwebhook.StoragePoolValidator{
+				Client:  mgr.GetClient(),
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			}})
+		setupLog.Info("registered storagepool validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
