@@ -37,12 +37,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
+
+// apiError and storagePoolAPIResponse moved here from the StorageBackup
+// reconciler that declared them, which is retired: a StorageBackup is now
+// discovered from the cluster's store rather than requested
+// (design-storagebackup.md §5.1). This controller is the last v1alpha1 one that
+// reads either.
+type apiError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e apiError) Error() string { return e.Message }
+
+type storagePoolAPIResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 
 const (
 	restoreProgressRequeue  = 10 * time.Second
@@ -286,7 +304,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	}
 
 	// Mark the BackupRestore as Failed if the StorageBackup is in terminal state Failed.
-	if backup.Status.Phase == simplyblockv1alpha1.BackupPhaseFailed {
+	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
 		msg := fmt.Sprintf("StorageBackup %q failed and cannot be restored: %s",
 			backup.Name, backup.Status.Message)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -299,7 +317,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		return ctrl.Result{}, true, nil
 	}
 
-	if backup.Status.Phase != simplyblockv1alpha1.BackupPhaseDone {
+	if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable {
 		msg := fmt.Sprintf("StorageBackup %q is not ready (phase=%s)", backup.Name, backup.Status.Phase)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
@@ -315,14 +333,15 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	// Guard on RestoredLvolID so we don't re-evaluate once the backend task is already running.
 	if restoreCR.Status.RestoredLvolID == "" {
 		storageReq := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+		backupSize := ptr.FromOrZero(backup.Copy().Size)
 		var specErr string
 		switch {
 		case storageReq.IsZero():
 			specErr = "spec.pvcTemplate.spec.resources.requests.storage must be set"
-		case backup.Status.Size > 0 && storageReq.Value() < backup.Status.Size:
+		case backupSize > 0 && storageReq.Value() < backupSize:
 			specErr = fmt.Sprintf(
 				"requested storage %s (%d bytes) is less than backup size %d bytes",
-				storageReq.String(), storageReq.Value(), backup.Status.Size,
+				storageReq.String(), storageReq.Value(), backupSize,
 			)
 		}
 		if specErr != "" {
@@ -339,10 +358,10 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 
 	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 		s.ClusterUUID = clusterUUID
-		s.BackupID = backup.Status.BackupID
-		s.SourceLvolID = backup.Status.LvolID
-		s.FSType = backup.Status.FSType
-		s.SourceClusterUUID = backup.Status.SourceClusterUUID
+		s.BackupID = backup.Spec.BackupID
+		s.SourceLvolID = backup.Source().LvolID
+		s.FSType = backup.Source().FSType
+		s.SourceClusterUUID = backup.Source().ClusterUUID
 		if s.Phase == "" {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
 		}
@@ -631,12 +650,12 @@ func (r *BackupRestoreReconciler) resolvePool(
 		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 		return
 	}
-	poolName = backup.Status.PoolName
+	poolName = backup.Source().PoolName
 	if poolName == "" {
 		err = fmt.Errorf("backup %q has no pool name in status", backup.Name)
 		return
 	}
-	poolUUID = backup.Status.PoolUUID
+	poolUUID = backup.Source().PoolUUID
 	if poolUUID == "" {
 		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 	}

@@ -292,6 +292,8 @@ func isAbsent(value any) bool {
 		return v == ""
 	case []string:
 		return len(v) == 0
+	case []map[string]string:
+		return len(v) == 0
 	case int64:
 		return v == 0
 	}
