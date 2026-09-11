@@ -2475,6 +2475,40 @@ spec:
                     pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                 type: object
+              tls:
+                description: |-
+                  TLS configures whether both plugins reach the control plane over TLS.
+                  Unset is plaintext, the shape every deployment ran before this field
+                  existed, so adoption of a deployment already running TLS needs this to
+                  already agree with what the plugins are configured for — see
+                  adoption.go's tlsAdoptionMismatch — rather than reading it off a live
+                  object the way spec.driverName's default cannot be.
+                properties:
+                  enableMutualTLS:
+                    default: false
+                    description: |-
+                      EnableMutualTLS additionally requires each plugin to present a client
+                      certificate, rather than dialing the control plane anonymously over
+                      the encrypted connection EnableTLS alone provides. Ignored when
+                      EnableTLS is false, the same as the Helm value it replaces.
+                    type: boolean
+                  enableTLS:
+                    default: false
+                    description: EnableTLS turns on TLS between both plugins and the
+                      control plane.
+                    type: boolean
+                  provider:
+                    default: cert-manager
+                    description: |-
+                      Provider selects where the CA bundle (and, with EnableMutualTLS, the
+                      client certificate) comes from. Required reading whenever EnableTLS is
+                      true: the two providers mount a differently shaped volume, and neither
+                      shape can be inferred from anything else on this object.
+                    enum:
+                    - OpenShift
+                    - cert-manager
+                    type: string
+                type: object
               tolerations:
                 description: |-
                   Tolerations are applied to the node plugin, which usually needs to run

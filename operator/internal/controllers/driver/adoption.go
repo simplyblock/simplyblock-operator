@@ -14,10 +14,13 @@
 package driver
 
 import (
+	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -109,21 +112,20 @@ func helmMetadataRemovalPatch() []byte {
 // lists env, volumes, and volumeMounts explicitly, and an entry the spec does
 // not name is an entry the apply removes.
 //
-// Refusing is the only safe answer. Turning TLS off on a deployment that had it
-// is a data path that stops being encrypted, and dropping csi-link is an agent
-// that stops reaching the operator, and neither is a change an administrator
-// asked for by writing a SimplyblockDriver.
+// Refusing is the only safe answer. Dropping csi-link is an agent that stops
+// reaching the operator, which is not a change an administrator asked for by
+// writing a SimplyblockDriver.
 //
-// Both are off by default, which is why the driver could move out of the chart
-// at all. Both need a spec surface before they can be adopted, which is the
-// TODO in workloads.go.
+// It is off by default, which is why the driver could move out of the chart at
+// all. It needs a spec surface before it can be adopted, which is the TODO in
+// workloads.go. TLS had the same shape here until spec.tls existed;
+// tlsAdoptionMismatch below is what replaced it, since TLS's refusal now
+// compares against what the spec asks for rather than refusing outright.
 var inexpressible = []struct {
 	what   string
 	envVar string
 	arg    string
 }{
-	{what: "TLS", envVar: "SB_TLS_SERVE"},
-	{what: "TLS", envVar: "SB_TLS_CONNECT"},
 	{what: "csi-link", arg: "--link"},
 }
 
@@ -152,6 +154,46 @@ func unsupportedConfiguration(ds *appsv1.DaemonSet) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// runningTLSConnectMode reads SB_TLS_CONNECT off a running node plugin, or
+// "disabled" if it carries none — the same string tls.go's tlsConnectMode
+// computes from spec.tls, so the two are the direct comparison
+// tlsAdoptionMismatch makes.
+func runningTLSConnectMode(ds *appsv1.DaemonSet) string {
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == "SB_TLS_CONNECT" {
+				return e.Value
+			}
+		}
+	}
+	return "disabled"
+}
+
+// tlsAdoptionMismatch compares a running node plugin's TLS mode against what
+// spec.tls would produce, on the same reasoning runningDriverName's caller
+// documents: adoption reconciles toward the spec, so a spec that does not yet
+// describe the running configuration is one the next reconcile silently
+// changes rather than adopts. Getting this wrong in either direction is a
+// data path that stops being encrypted, or a plugin dialing with TLS nothing
+// provisioned a certificate for, so a disagreement is refused rather than
+// applied.
+func tlsAdoptionMismatch(d *simplyblockv1alpha2.SimplyblockDriver, ds *appsv1.DaemonSet) (string, bool) {
+	if ds == nil {
+		return "", false
+	}
+	running := runningTLSConnectMode(ds)
+	wanted := tlsConnectMode(d)
+	if running == wanted {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"the running node plugin is configured for TLS mode %q (SB_TLS_CONNECT) and spec.tls "+
+			"describes %q; adopting it would reconcile the deployment to what spec.tls asks for, "+
+			"so this either turns TLS off on a live data path or on for a plugin nothing has "+
+			"provisioned a certificate for",
+		running, wanted), true
 }
 
 // runningDriverName reads the driver name a deployed node plugin registers

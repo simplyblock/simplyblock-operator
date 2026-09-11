@@ -35,37 +35,44 @@ here.
 
 File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_test.go`
 
-| #    | Scenario                                                                           | Type     | Test                                                   |
-|------|------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-01 | A fresh object: the node DaemonSet, controller StatefulSet, and RBAC applied       | Positive | `TestDesiredCoversTheWholeObjectSet`                   |
-| U-42 | Every per-driver sidecar is applied whatever the cluster already runs              | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
-| U-43 | Each sidecar receives this driver's socket as `--csi-address`                      | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
-| U-44 | The `csi-snapshotter` sidecar is applied even where a `snapshot-controller` exists | Boundary | `TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle` |
-| U-02 | The core `CSIDriver` registration is created with `spec.driverName`                | Positive | `TestRegistrationIsNamedByDriverName`                  |
-| U-33 | `spec.driverName` reaches the node plugin's kubelet registration path              | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
-| U-34 | It reaches the hostPath the node plugin mounts                                     | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
-| U-35 | It reaches the snapshot class's `driver` field when snapshots are enabled          | Positive | `TestSnapshotClassNamesTheDriver`                      |
-| U-36 | A non-default `driverName`: no object carries the default alongside it             | Negative | `TestNoObjectCarriesTheDefaultAlongsideAnOverride`     |
-| U-03 | Every applied object carries a controller reference                                | Positive | `TestEveryAppliedObjectIsOwned`                        |
-| U-04 | The cluster serves `snapshot.storage.k8s.io/v1`: no CRD and no controller applied  | Negative | —                                                      |
-| U-05 | The cluster does not serve it: the CRDs and a controller are applied               | Positive | —                                                      |
-| U-37 | The `VolumeSnapshotClass` for `spec.driverName` is applied in both cases           | Positive | `TestSnapshotClassFollowsTheToggle`                    |
-| U-38 | An installed CRD and controller carry no controller reference                      | Negative | —                                                      |
-| U-39 | `status.snapshotSupport` is `Detected` where the API was already served            | Positive | —                                                      |
-| U-40 | `status.snapshotSupport` is `Installed` where the operator applied them            | Positive | —                                                      |
-| U-41 | Deleting the object leaves an installed CRD and controller in place                | Boundary | —                                                      |
-| U-06 | One image reaches both plugins, never two                                          | Positive | `TestOneImageReachesBothPlugins`                       |
-| U-07 | `controllerReplicas` reaches the controller StatefulSet                            | Positive | `TestReplicasReachTheControllerOnly`                   |
-| U-08 | `nodeSelector` and `tolerations` reach the node DaemonSet and not the controller   | Positive | `TestPlacementReachesItsOwnPluginOnly`                 |
-| U-09 | The resource blocks reach their own plugin and not the other                       | Boundary | `TestResourcesReachTheirOwnPlugin`                     |
-| U-10 | A second reconcile applies nothing new                                             | Negative | —                                                      |
-| U-26 | The node `ConfigMap` carries the endpoint the cluster's `ControlPlane` publishes   | Positive | —                                                      |
-| U-27 | It carries the credentials for that control plane, and not the endpoint alone      | Positive | —                                                      |
-| U-28 | The published endpoint changes: the `ConfigMap` is rewritten                       | Positive | —                                                      |
-| U-29 | No `ControlPlane` in the cluster: the objects are applied and the driver waits     | Boundary | —                                                      |
-| U-30 | A `ControlPlane` that is not `Ready`: applied and waiting, not `Failed`            | Boundary | —                                                      |
-| U-81 | Several `StorageCluster`s: one `clusters` entry each, all naming one endpoint      | Positive | —                                                      |
-| U-82 | A `ControlPlane` in another namespace than the driver: resolved all the same       | Boundary | —                                                      |
+| #     | Scenario                                                                             | Type     | Test                                                   |
+|-------|--------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-01  | A fresh object: the node DaemonSet, controller StatefulSet, and RBAC applied         | Positive | `TestDesiredCoversTheWholeObjectSet`                   |
+| U-42  | Every per-driver sidecar is applied whatever the cluster already runs                | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
+| U-43  | Each sidecar receives this driver's socket as `--csi-address`                        | Positive | `TestEverySidecarIsAppliedAndAddressedToThisDriver`    |
+| U-44  | The `csi-snapshotter` sidecar is applied even where a `snapshot-controller` exists   | Boundary | `TestSnapshotterSidecarIsAppliedRegardlessOfTheToggle` |
+| U-02  | The core `CSIDriver` registration is created with `spec.driverName`                  | Positive | `TestRegistrationIsNamedByDriverName`                  |
+| U-33  | `spec.driverName` reaches the node plugin's kubelet registration path                | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
+| U-34  | It reaches the hostPath the node plugin mounts                                       | Positive | `TestDriverNameReachesTheKubeletPaths`                 |
+| U-35  | It reaches the snapshot class's `driver` field when snapshots are enabled            | Positive | `TestSnapshotClassNamesTheDriver`                      |
+| U-36  | A non-default `driverName`: no object carries the default alongside it               | Negative | `TestNoObjectCarriesTheDefaultAlongsideAnOverride`     |
+| U-03  | Every applied object carries a controller reference                                  | Positive | `TestEveryAppliedObjectIsOwned`                        |
+| U-04  | The cluster serves `snapshot.storage.k8s.io/v1`: no CRD and no controller applied    | Negative | —                                                      |
+| U-05  | The cluster does not serve it: the CRDs and a controller are applied                 | Positive | —                                                      |
+| U-37  | The `VolumeSnapshotClass` for `spec.driverName` is applied in both cases             | Positive | `TestSnapshotClassFollowsTheToggle`                    |
+| U-38  | An installed CRD and controller carry no controller reference                        | Negative | —                                                      |
+| U-39  | `status.snapshotSupport` is `Detected` where the API was already served              | Positive | —                                                      |
+| U-40  | `status.snapshotSupport` is `Installed` where the operator applied them              | Positive | —                                                      |
+| U-41  | Deleting the object leaves an installed CRD and controller in place                  | Boundary | —                                                      |
+| U-06  | One image reaches both plugins, never two                                            | Positive | `TestOneImageReachesBothPlugins`                       |
+| U-07  | `controllerReplicas` reaches the controller StatefulSet                              | Positive | `TestReplicasReachTheControllerOnly`                   |
+| U-08  | `nodeSelector` and `tolerations` reach the node DaemonSet and not the controller     | Positive | `TestPlacementReachesItsOwnPluginOnly`                 |
+| U-09  | The resource blocks reach their own plugin and not the other                         | Boundary | `TestResourcesReachTheirOwnPlugin`                     |
+| U-10  | A second reconcile applies nothing new                                               | Negative | —                                                      |
+| U-26  | The node `ConfigMap` carries the endpoint the cluster's `ControlPlane` publishes     | Positive | —                                                      |
+| U-27  | It carries the credentials for that control plane, and not the endpoint alone        | Positive | —                                                      |
+| U-28  | The published endpoint changes: the `ConfigMap` is rewritten                         | Positive | —                                                      |
+| U-29  | No `ControlPlane` in the cluster: the objects are applied and the driver waits       | Boundary | —                                                      |
+| U-30  | A `ControlPlane` that is not `Ready`: applied and waiting, not `Failed`              | Boundary | —                                                      |
+| U-81  | Several `StorageCluster`s: one `clusters` entry each, all naming one endpoint        | Positive | —                                                      |
+| U-82  | A `ControlPlane` in another namespace than the driver: resolved all the same         | Boundary | —                                                      |
+| U-94  | `spec.tls` unset: no `SB_TLS_*` env, no `tls` volume, no mount, on either plugin     | Negative | `TestTLSOffAddsNothing`                                |
+| U-95  | `enableTLS`: `SB_TLS_SERVE`, `SB_TLS_PROVIDER`, `SB_TLS_CONNECT=anonymous`           | Positive | `TestTLSEnvMatchesTheChart`                            |
+| U-96  | `enableMutualTLS`: `SB_TLS_CLIENT_AUTH`, `SB_TLS_CONNECT=authenticated`, `FDB_TLS_*` | Positive | `TestTLSEnvMatchesTheChart`                            |
+| U-97  | None of `U-95`/`U-96` reaches a sidecar or `csi-registrar`                           | Negative | `TestTLSReachesOnlyThePluginContainers`                |
+| U-98  | `enableTLS` alone mounts the CA bundle only, at the provider's shape                 | Positive | `TestTLSVolumeShape`                                   |
+| U-99  | `enableMutualTLS` mounts each plugin's own client-certificate Secret, by name        | Positive | `TestTLSVolumeShape`                                   |
+| U-100 | `enableMutualTLS` with `enableTLS` unset is ignored, the same as the chart           | Boundary | `TestTLSConnectMode`                                   |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's
@@ -129,6 +136,11 @@ carrying the Helm labels and annotations a live release writes.
 | U-85     | `spec.sidecarImages` unset: every sidecar takes the version this operator ships         | Positive     | `TestSidecarsDefaultToTheOperatorsRelease`              |
 | U-86     | One override set: it reaches its own container and no other                             | Boundary     | `TestOneSidecarOverrideReachesOnlyItsOwn`               |
 | U-87     | The snapshot controller's image is not overridable and is not installed either          | Negative     | `TestSidecarsAreSixAndExcludeTheSnapshotController`     |
+| U-101    | The running node plugin's `SB_TLS_CONNECT` agrees with what `spec.tls` would produce    | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-102    | Running is TLS, `spec.tls` says plaintext: refused                                      | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-103    | Running is plaintext, `spec.tls` asks for TLS: refused                                  | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-104    | Running is TLS anonymous, `spec.tls` asks for mutual: refused                           | Negative     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
+| U-105    | Both agree on mutual TLS: adopted                                                       | Positive     | `TestAdoptionRefusesOnATLSModeMismatch`                 |
 
 `U-55` is the row that holds design §4.3's in-place claim. An object with a new
 UID is an object that was deleted and reapplied, which for the node `DaemonSet`
@@ -139,9 +151,19 @@ table only because the chart's literal names are what the derivation produces fo
 an object named `simplyblock`, and a differently named object must therefore find
 nothing to adopt rather than adopt the first one's deployment.
 
-`U-66` is design §4.3's step 2, and it is the only refusal left. The mismatch is
-not repairable, because `driverName` is immutable and the edit that would fix the
-object is the one admission rejects.
+`U-66` is design §4.3's step 2, and it is the one refusal that is never
+repairable by an edit to `spec.tls`. The mismatch is not repairable, because
+`driverName` is immutable and the edit that would fix the object is the one
+admission rejects.
+
+`U-101` to `U-105` are the second comparison step 2 makes, once `spec.tls`
+existed to compare against. Unlike `driverName`, this one is repairable: an
+administrator who wrote `spec.tls` to disagree with the running deployment can
+edit it, and the next reconcile adopts. `U-102` to `U-104` are the three ways
+the two can disagree — TLS running where the spec says plaintext, plaintext
+running where the spec asks for TLS, and TLS running anonymous where the spec
+asks for mutual — and `U-101`/`U-105` are the agreeing case at each of TLS's
+two levels.
 
 `U-69` to `U-71` asserted a second refusal, over the control-plane endpoint and
 credentials. They are struck through: those live in the credentials `Secret` the
@@ -382,11 +404,11 @@ row for.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 89        | 52      | 37          |
+| Unit        | 101       | 64      | 37          |
 | Integration | 23        | 0       | 23          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **128**   | **52**  | **76**      |
+| **Total**   | **140**   | **64**  | **76**      |
 
 `I-12`, `U-74`, and `U-69` to `U-71` are superseded or retired and are not in the
 counts.
@@ -421,38 +443,38 @@ reconcile with a live cache.
 
 ### Axis coverage
 
-| Axis              | Value                                  | Scenarios                 |
-|-------------------|----------------------------------------|---------------------------|
-| Plugin health     | Both plugins serving                   | U-12, E-01                |
-|                   | A node plugin down                     | U-13, U-14, E-02          |
-|                   | The controller plugin down             | U-15, U-18, E-03          |
-|                   | Recovered                              | E-04, E-06                |
-| Worker scale      | No worker matches the selector         | U-17                      |
-|                   | One worker                             | U-13                      |
-|                   | Several workers                        | U-11, E-02                |
-| Version ordering  | Driver equal to the control plane      | U-21                      |
-|                   | Driver older                           | U-31, U-32                |
-|                   | Driver newer                           | U-22, E-05, M-01          |
-|                   | Unknown                                | U-25                      |
-| Snapshot support  | Detected                               | U-04, U-39                |
-|                   | Installed                              | U-05, U-40, E-08          |
-| Control plane     | Present and `Ready`                    | U-26, E-01                |
-|                   | Absent                                 | U-29                      |
-|                   | Present, not `Ready`                   | U-30                      |
-|                   | In a namespace other than the driver's | U-82                      |
-|                   | Fronting several `StorageCluster`s     | U-81                      |
-| Driver count      | The only one in the cluster            | I-20, and every other row |
-|                   | A second in the same namespace         | I-18                      |
-|                   | A second in another namespace          | I-19                      |
-|                   | A second past the webhook              | U-76 … U-80, E-13         |
-| Deployment origin | Created from nothing                   | U-56, E-01                |
-|                   | Adopted from a chart install           | U-54, U-57, E-09, M-02    |
-|                   | Adoption refused                       | U-66, U-69, U-70          |
-|                   | Adopted at non-default values          | M-03                      |
-| Sidecar images    | Pinned by the adopted release          | U-83                      |
-|                   | Left at the chart version's default    | U-84                      |
-|                   | Unset on a fresh object                | U-85, U-56                |
-|                   | Outside the trusted registries         | I-23                      |
+| Axis              | Value                                  | Scenarios                       |
+|-------------------|----------------------------------------|---------------------------------|
+| Plugin health     | Both plugins serving                   | U-12, E-01                      |
+|                   | A node plugin down                     | U-13, U-14, E-02                |
+|                   | The controller plugin down             | U-15, U-18, E-03                |
+|                   | Recovered                              | E-04, E-06                      |
+| Worker scale      | No worker matches the selector         | U-17                            |
+|                   | One worker                             | U-13                            |
+|                   | Several workers                        | U-11, E-02                      |
+| Version ordering  | Driver equal to the control plane      | U-21                            |
+|                   | Driver older                           | U-31, U-32                      |
+|                   | Driver newer                           | U-22, E-05, M-01                |
+|                   | Unknown                                | U-25                            |
+| Snapshot support  | Detected                               | U-04, U-39                      |
+|                   | Installed                              | U-05, U-40, E-08                |
+| Control plane     | Present and `Ready`                    | U-26, E-01                      |
+|                   | Absent                                 | U-29                            |
+|                   | Present, not `Ready`                   | U-30                            |
+|                   | In a namespace other than the driver's | U-82                            |
+|                   | Fronting several `StorageCluster`s     | U-81                            |
+| Driver count      | The only one in the cluster            | I-20, and every other row       |
+|                   | A second in the same namespace         | I-18                            |
+|                   | A second in another namespace          | I-19                            |
+|                   | A second past the webhook              | U-76 … U-80, E-13               |
+| Deployment origin | Created from nothing                   | U-56, E-01                      |
+|                   | Adopted from a chart install           | U-54, U-57, E-09, M-02          |
+|                   | Adoption refused                       | U-66, U-69, U-70, U-102 … U-104 |
+|                   | Adopted at non-default values          | M-03                            |
+| Sidecar images    | Pinned by the adopted release          | U-83                            |
+|                   | Left at the chart version's default    | U-84                            |
+|                   | Unset on a fresh object                | U-85, U-56                      |
+|                   | Outside the trusted registries         | I-23                            |
 
 **The version-ordering axis is the one this kind exists for.** `U-22`, `E-05`, and
 `M-01` cover the reported ordering, and `U-31` covers the supported one. Design §1

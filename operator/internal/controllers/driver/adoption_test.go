@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -214,6 +215,79 @@ func TestAdoptionRefusesOnADriverNameItCannotChange(t *testing.T) {
 	}
 }
 
+// TLS's spec surface replaced an unconditional refusal (once-a-#432-style
+// TestAdoptionRefusesConfigurationTheSpecCannotExpress case) with a
+// comparison against spec.tls, the same shape as the driver-name check above:
+// agreement adopts, disagreement in either direction refuses.
+func TestAdoptionRefusesOnATLSModeMismatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		runningEnv  []corev1.EnvVar
+		specTLS     simplyblockv1alpha2.DriverTLS
+		wantRefused bool
+	}{
+		{
+			name:        "both plaintext",
+			wantRefused: false,
+		},
+		{
+			name:        "running is TLS, spec says plaintext",
+			runningEnv:  []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "anonymous"}},
+			wantRefused: true,
+		},
+		{
+			name:        "running is plaintext, spec asks for TLS",
+			specTLS:     simplyblockv1alpha2.DriverTLS{EnableTLS: ptr.To(true)},
+			wantRefused: true,
+		},
+		{
+			name:        "both TLS, anonymous",
+			runningEnv:  []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "anonymous"}},
+			specTLS:     simplyblockv1alpha2.DriverTLS{EnableTLS: ptr.To(true)},
+			wantRefused: false,
+		},
+		{
+			name:       "running is TLS anonymous, spec asks for mutual",
+			runningEnv: []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "anonymous"}},
+			specTLS: simplyblockv1alpha2.DriverTLS{
+				EnableTLS: ptr.To(true), EnableMutualTLS: ptr.To(true),
+			},
+			wantRefused: true,
+		},
+		{
+			name:       "both TLS, mutual",
+			runningEnv: []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "authenticated"}},
+			specTLS: simplyblockv1alpha2.DriverTLS{
+				EnableTLS: ptr.To(true), EnableMutualTLS: ptr.To(true),
+			},
+			wantRefused: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := reconcilerScheme(t)
+			d := testDriver("simplyblock")
+			d.Spec.TLS = tc.specTLS
+
+			node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+			node.Spec.Template.Spec.Containers[0].Env = tc.runningEnv
+
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(d, node).WithStatusSubresource(d).Build()
+			r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+			message, refused, err := r.adoptionRefusal(context.Background(), d)
+			if err != nil {
+				t.Fatalf("adoptionRefusal: %v", err)
+			}
+			if refused != tc.wantRefused {
+				t.Fatalf("refused = %v, want %v (%s)", refused, tc.wantRefused, message)
+			}
+		})
+	}
+}
+
 // An empty namespace has nothing to refuse over.
 func TestNothingToAdoptDoesNotRefuse(t *testing.T) {
 	scheme := reconcilerScheme(t)
@@ -349,8 +423,6 @@ func TestAdoptionRefusesConfigurationTheSpecCannotExpress(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "TLS serving", env: []corev1.EnvVar{{Name: "SB_TLS_SERVE", Value: "1"}}, want: "TLS"},
-		{name: "TLS client", env: []corev1.EnvVar{{Name: "SB_TLS_CONNECT", Value: "1"}}, want: "TLS"},
 		{name: "csi-link", args: []string{"--link"}, want: "csi-link"},
 	}
 

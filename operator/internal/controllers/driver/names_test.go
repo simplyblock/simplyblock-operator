@@ -27,6 +27,8 @@ var chartNames = map[string]string{
 	"secret":                 "simplyblock-csi-secret",
 	"secret v2":              "simplyblock-csi-secret-v2",
 	"snapshot class":         "simplyblock-csi-snapshotclass",
+	"controller client tls":  "simplyblock-csi-controller-client-tls",
+	"node client tls":        "simplyblock-csi-node-client-tls",
 	"node role":              "simplyblock-csi-node-role",
 	"node binding":           "simplyblock-csi-node-binding",
 	"provisioner role":       "simplyblock-csi-provisioner-role",
@@ -65,6 +67,8 @@ func derivedNames(d *simplyblockv1alpha2.SimplyblockDriver) map[string]string {
 		"secret":                 n.secret,
 		"secret v2":              n.secretV2,
 		"snapshot class":         n.snapshotClass,
+		"controller client tls":  n.controllerClientSecret,
+		"node client tls":        n.nodeClientSecret,
 	}
 	for _, r := range clusterRoleComponents {
 		out[r+" role"] = n.clusterRole(r)

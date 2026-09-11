@@ -361,12 +361,12 @@ func (r *SimplyblockDriverReconciler) inspectExisting(
 // same as translating it. design-api-upgrade.md §13.1 covers only the values
 // renaming, so the table is unowned in both documents.
 
-// adoptionRefusal compares the driver name a running node plugin registers
-// under against the one the spec declares. The two disagree only where a
-// deployment registered under a name this object cannot be edited to match,
-// since spec.driverName is immutable, and applying over it would leave the
-// object declaring one driver while the cluster attaches volumes through
-// another.
+// adoptionRefusal reports the first thing about a running deployment that
+// this spec does not yet describe: an inexpressible configuration (csi-link),
+// a TLS mode spec.tls does not match, or a driver name that disagrees with
+// the immutable spec.driverName. All three are refused rather than
+// reconciled over, because each is a live property that an apply built from
+// the spec as it stands would silently change.
 func (r *SimplyblockDriverReconciler) adoptionRefusal(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (message string, refused bool, err error) {
@@ -385,6 +385,10 @@ func (r *SimplyblockDriverReconciler) adoptionRefusal(
 				"adopting it would reconcile that configuration away, so the handover stops here "+
 				"rather than turning it off",
 			what), true, nil
+	}
+
+	if message, mismatched := tlsAdoptionMismatch(d, &node); mismatched {
+		return message, true, nil
 	}
 
 	running, found := runningDriverName(&node)
