@@ -23,20 +23,16 @@ const (
 	// volume that is actively replicating snapshots to the target cluster.
 	ReplicationBackendStateReplicating = "replicating"
 
-	ClusterActionActivate           = "activate"
-	ClusterActionExpand             = "expand"
-	ClusterActionShutdown           = "shutdown"
-	ClusterActionStart              = "start"
-	ClusterActionRestart            = "restart"
-	ClusterActionNodeRollingRestart = "node-rolling-restart"
+	// The StorageCluster action names used to live here as untyped strings. They
+	// are now the StorageClusterOpsAction enum on the API type, which is where an
+	// enum's values belong, and the v1alpha1 spellings survive only in that
+	// version's conversion table.
 
-	// StorageNode action names.
-	NodeActionShutdown = "shutdown"
-	NodeActionRestart  = "restart"
-	NodeActionSuspend  = "suspend"
-	NodeActionResume   = "resume"
-	NodeActionRemove   = "remove"
-	NodeActionMigrate  = "migrate"
+	// The StorageNode action names moved to the StorageNodeOpsAction enum for the
+	// same reason the cluster ones did. Leaving them here as untyped strings was
+	// actively dangerous once the values were recased: an untyped constant
+	// compares against the named type without complaint, so a stale "remove"
+	// tested against StorageNodeOpsActionRemove compiles and is never equal.
 
 	// NodeRollingRestart per-node phases
 	NodeRollingRestartPhaseSnodeRefresh     = "snode-refresh"
@@ -92,6 +88,22 @@ const (
 	// rotator and the webhook-server certwatcher agree without extra flags, and so
 	// the config/default/manager_webhook_patch.yaml emptyDir mount lines up.
 	WebhookCertDir = "/tmp/k8s-webhook-server/serving-certs"
+
+	// Conversion-webhook wiring. The conversion webhook runs as its own
+	// Deployment rather than inside the operator
+	// (design-api-upgrade.md §6.1): a CRD whose conversion strategy is Webhook
+	// cannot be read at all while the webhook is unreachable, and the objects an
+	// administrator reads to diagnose a failed operator are simplyblock custom
+	// resources. Sharing the operator's process would make those unreadable
+	// exactly when they are needed.
+	//
+	// Its Service, Secret, and certificate directory are therefore its own. The
+	// operator's rotator pre-creates and owns WebhookServerCertSecret, so a
+	// conversion webhook waiting on that Secret would be waiting on the operator
+	// having started, which is the coupling §6.1 removes.
+	ConversionWebhookServiceName      = "simplyblock-operator-conversion-webhook-service"
+	ConversionWebhookServerCertSecret = "conversion-webhook-server-cert"
+	ConversionWebhookCertDir          = "/tmp/k8s-conversion-webhook-server/serving-certs"
 
 	// Aggregated metrics API wiring. MetricsAPIServiceName carries the Kustomize
 	// namePrefix (simplyblock-operator-) applied in config/default. The

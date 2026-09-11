@@ -48,6 +48,20 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
 
+# The conversion webhook ships in this image under its own entry point rather
+# than an image of its own, so the conversion code and the API types it converts
+# between are versioned together with the operator that reads them
+# (design-api-upgrade.md §29.3). It runs as a separate Deployment all the same:
+# a CRD whose conversion strategy is Webhook is unreadable while the webhook is
+# down, and the resources an administrator reads to diagnose a failed operator
+# are exactly those (§6.1).
+#
+# It serves TLS, so it takes the same BoringCrypto build the manager does.
+RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+    CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a -o conversion-webhook ./cmd/conversion-webhook
+
 # Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
 # ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
 FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
@@ -71,6 +85,7 @@ WORKDIR /
 COPY --from=builder /workspace/manager .
 # On PATH, because the probe Job names it by name rather than by path.
 COPY --from=builder /workspace/simplyblock-nodeprobe /usr/local/bin/simplyblock-nodeprobe
+COPY --from=builder /workspace/conversion-webhook /usr/local/bin/conversion-webhook
 COPY LICENSE /licenses/LICENSE
 
 # The manager runs unprivileged as this user. The probe pod overrides it: it

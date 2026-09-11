@@ -77,8 +77,10 @@ type serverGroupsGetter interface {
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
+	// v1alpha2 is the shape every controller reads for the kinds that have one.
+	// v1alpha1 stays registered because it is still the storage version and still
+	// served (design-property-renames.md §3.8).
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -641,8 +643,10 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	// Provision the mutating-webhook serving certificate at runtime (self-signed
+	// Provision the admission webhooks' serving certificate at runtime (self-signed
 	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	// Conversion is not served here: it runs as its own Deployment
+	// (design-api-upgrade.md §6.1, cmd/conversion-webhook).
 	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
 	if err != nil {
 		setupLog.Error(err, "unable to set up webhook serving certificate")

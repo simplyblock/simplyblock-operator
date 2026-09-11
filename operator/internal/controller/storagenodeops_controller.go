@@ -43,6 +43,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -73,7 +74,7 @@ type StorageNodeOpsReconciler struct {
 func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	var ops simplyblockv1alpha1.StorageNodeOps
+	var ops simplyblockv1alpha2.StorageNodeOps
 	if err := r.Get(ctx, req.NamespacedName, &ops); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -82,15 +83,15 @@ func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Terminal — nothing left to do.
-	if ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded ||
-		ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+	if ops.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded ||
+		ops.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
 		return ctrl.Result{}, nil
 	}
 
 	// Fetch the target StorageNode.
 	var sn simplyblockv1alpha1.StorageNode
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      ops.Spec.StorageNodeRef,
+		Name:      ops.Spec.NodeRef,
 		Namespace: ops.Namespace,
 	}, &sn); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -118,12 +119,12 @@ func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	apiClient := webapi.NewClient()
 
 	// Mutual exclusion: only one ops may run per StorageNode at a time.
-	if ops.Status.Phase == "" || ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhasePending {
+	if ops.Status.Phase == "" || ops.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhasePending {
 		return r.acquireLock(ctx, &ops, &sn)
 	}
 
 	// Cluster pause check for drain operations.
-	if ops.Spec.Action == utils.NodeActionRemove {
+	if ops.Spec.Action == simplyblockv1alpha2.StorageNodeOpsActionRemove {
 		if res, paused := r.clusterPauseCheck(ctx, &ops, apiClient); paused {
 			return res, nil
 		}
@@ -137,7 +138,7 @@ func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // Requeues if another ops holds the lock.
 func (r *StorageNodeOpsReconciler) acquireLock(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -155,10 +156,10 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 
 	now := metav1.Now()
 	opsPatch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
+	ops.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	if ops.Spec.Action == utils.NodeActionRemove {
-		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating
+	if ops.Spec.Action == simplyblockv1alpha2.StorageNodeOpsActionRemove {
+		ops.Status.SubPhase = simplyblockv1alpha2.StorageNodeOpsSubPhaseValidating
 	}
 	if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
 		return ctrl.Result{}, err
@@ -169,16 +170,16 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 // dispatch routes the ops to the correct handler.
 func (r *StorageNodeOpsReconciler) dispatch(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	switch ops.Spec.Action {
-	case utils.NodeActionRemove:
+	case simplyblockv1alpha2.StorageNodeOpsActionRemove:
 		return r.runDrain(ctx, ops, sn, clusterUUID, apiClient)
-	case utils.NodeActionMigrate:
+	case simplyblockv1alpha2.StorageNodeOpsActionMigrate:
 		return r.runMigrate(ctx, ops, sn, sns, clusterUUID, apiClient)
 	case "shutdown", "restart", "suspend", "resume":
 		return r.runSimpleAction(ctx, ops, sn, sns, clusterUUID, apiClient)
@@ -191,7 +192,7 @@ func (r *StorageNodeOpsReconciler) dispatch(
 // the backend and polling until the node reaches its terminal status.
 func (r *StorageNodeOpsReconciler) runSimpleAction(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	_ *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
@@ -230,11 +231,11 @@ func (r *StorageNodeOpsReconciler) runSimpleAction(
 	}
 
 	// Poll node status until terminal.
-	terminalStatus := map[string]string{
-		"suspend":  utils.NodeStatusSuspended,
-		"resume":   utils.NodeStatusOnline,
-		"restart":  utils.NodeStatusOnline,
-		"shutdown": "offline",
+	terminalStatus := map[simplyblockv1alpha2.StorageNodeOpsAction]string{
+		simplyblockv1alpha2.StorageNodeOpsActionSuspend:  utils.NodeStatusSuspended,
+		simplyblockv1alpha2.StorageNodeOpsActionResume:   utils.NodeStatusOnline,
+		simplyblockv1alpha2.StorageNodeOpsActionRestart:  utils.NodeStatusOnline,
+		simplyblockv1alpha2.StorageNodeOpsActionShutdown: "offline",
 	}
 	want := terminalStatus[action]
 
@@ -263,14 +264,14 @@ func (r *StorageNodeOpsReconciler) runSimpleAction(
 // and running a storage-node-api pod), otherwise node_address is unreachable.
 func (r *StorageNodeOpsReconciler) runMigrate(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	nodeUUID := sn.Status.UUID
-	target := ops.Spec.TargetWorkerNode
+	target := ops.Spec.MigrateParams().TargetWorkerNode
 
 	// Validate the request.
 	if target == "" {
@@ -294,14 +295,14 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 	case "":
 		// Enter the state machine. Persist Preparing first so the phase is
 		// observable before any preparation work begins.
-		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing:
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhasePreparing)
+	case simplyblockv1alpha2.StorageNodeOpsSubPhasePreparing:
 		return r.migratePrepare(ctx, ops, sn, sns, target, clusterUUID)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseMigrating:
 		return r.migrateRestart(ctx, ops, sn, target, clusterUUID, nodeUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRestarting:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseRestarting:
 		return r.migrateAwaitOnline(ctx, ops, target, clusterUUID, nodeUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhasePromoting:
 		return r.migratePromote(ctx, ops, sn, sns, target, clusterUUID, nodeUUID, apiClient)
 	default:
 		return r.failOps(ctx, ops, fmt.Sprintf("migrate: unexpected sub-phase %q", ops.Status.SubPhase))
@@ -318,7 +319,7 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 // control plane resets the node to OFFLINE.
 func (r *StorageNodeOpsReconciler) migratePrepare(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	target string,
@@ -343,7 +344,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	// requested via spec.newSsdPcie are merged into the cloned PCI_ALLOWED so the
 	// target host binds them on start. Done before labeling so the entry exists
 	// by the time the pod's init container sources it.
-	if err := r.ensureMigratedWorkerConfig(ctx, sns, sn.Spec.WorkerNode, target, ops.Spec.NewSsdPcie); err != nil {
+	if err := r.ensureMigratedWorkerConfig(ctx, sns, sn.Spec.WorkerNode, target, ops.Spec.MigrateParams().NewSsdPcie); err != nil {
 		log.Error(err, "migrate: failed to clone per-node config to target worker",
 			"source", sn.Spec.WorkerNode, "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -390,7 +391,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 			fmt.Sprintf("waiting for worker %s DNS to be published before restart", target))
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseMigrating)
 }
 
 // migrateRestart runs the Migrating sub-phase: it issues the control-plane
@@ -403,7 +404,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 // Restarting phase's later "back to online" is the genuine post-restart state.
 func (r *StorageNodeOpsReconciler) migrateRestart(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	target, clusterUUID, nodeUUID string,
 	apiClient *webapi.Client,
@@ -422,8 +423,8 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 		if ops.Spec.ReattachVolume != nil {
 			payload["reattach_volume"] = *ops.Spec.ReattachVolume
 		}
-		if len(ops.Spec.NewSsdPcie) > 0 {
-			payload["new_ssd_pcie"] = ops.Spec.NewSsdPcie
+		if len(ops.Spec.MigrateParams().NewSsdPcie) > 0 {
+			payload["new_ssd_pcie"] = ops.Spec.MigrateParams().NewSsdPcie
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
 		respBody, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, payload)
@@ -463,7 +464,7 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 	}
 
 	// Node has left online (in_restart / offline) — the restart is underway.
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRestarting)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseRestarting)
 }
 
 // migrateAwaitOnline runs the Restarting sub-phase: the restart is confirmed
@@ -472,7 +473,7 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 // only then advances to Promoting.
 func (r *StorageNodeOpsReconciler) migrateAwaitOnline(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	target, clusterUUID, nodeUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
@@ -488,7 +489,7 @@ func (r *StorageNodeOpsReconciler) migrateAwaitOnline(
 			fmt.Sprintf("waiting for node %s to come online on worker %s (status %s)", nodeUUID, target, currentStatus))
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhasePromoting)
 }
 
 // migratePromote runs the Promoting sub-phase: it issues the control-plane
@@ -499,7 +500,7 @@ func (r *StorageNodeOpsReconciler) migrateAwaitOnline(
 // onto the relocated node.
 func (r *StorageNodeOpsReconciler) migratePromote(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	target, clusterUUID, nodeUUID string,
@@ -534,7 +535,7 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 	// Promote issued — re-point the Kubernetes topology: update this StorageNode's
 	// spec.workerNode and swap the owning StorageNodeSet's worker list (and status)
 	// from the source to the target worker.
-	if err := r.reconcileMigratedTopology(ctx, sn, sns, target, ops.Spec.NewSsdPcie); err != nil {
+	if err := r.reconcileMigratedTopology(ctx, sn, sns, target, ops.Spec.MigrateParams().NewSsdPcie); err != nil {
 		log.Error(err, "migrate: failed to reconcile topology after migration", "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -556,7 +557,7 @@ const migrateRestartPoll = 3 * time.Second
 // without changing the sub-phase — used while a migrate precondition is pending.
 func (r *StorageNodeOpsReconciler) migrateWaiting(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	msg string,
 ) (ctrl.Result, error) {
 	return r.migrateWaitingAfter(ctx, ops, 10*time.Second, msg)
@@ -565,7 +566,7 @@ func (r *StorageNodeOpsReconciler) migrateWaiting(
 // migrateWaitingAfter is migrateWaiting with a caller-chosen requeue interval.
 func (r *StorageNodeOpsReconciler) migrateWaitingAfter(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	after time.Duration,
 	msg string,
 ) (ctrl.Result, error) {
@@ -982,21 +983,21 @@ func (r *StorageNodeOpsReconciler) storageNodePodReady(
 
 func (r *StorageNodeOpsReconciler) runDrain(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	switch ops.Status.SubPhase {
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseValidating:
 		return r.drainValidate(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseSuspending:
 		return r.drainSuspend(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseMigrating:
 		return r.drainMigrate(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseVerifying:
 		return r.drainVerify(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving:
+	case simplyblockv1alpha2.StorageNodeOpsSubPhaseRemoving:
 		return r.drainRemove(ctx, ops, sn, clusterUUID, apiClient)
 	default:
 		return r.failOps(ctx, ops, fmt.Sprintf("unknown drain sub-phase %q", ops.Status.SubPhase))
@@ -1005,7 +1006,7 @@ func (r *StorageNodeOpsReconciler) runDrain(
 
 func (r *StorageNodeOpsReconciler) drainValidate(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -1083,7 +1084,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 			"removing node %s would violate failure-domain balance: %s", nodeUUID, reason))
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseSuspending)
 }
 
 // fdRemovalBalanceCheck reports whether removing sn would violate the
@@ -1147,7 +1148,7 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 
 func (r *StorageNodeOpsReconciler) drainSuspend(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -1207,12 +1208,12 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseMigrating)
 }
 
 func (r *StorageNodeOpsReconciler) drainMigrate(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -1267,7 +1268,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"all %d volume migrations completed", completed)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrationCompleted", fmt.Sprintf("all %d volume migrations completed", completed))
-		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseVerifying)
 	}
 
 	patch := client.MergeFrom(ops.DeepCopy())
@@ -1280,7 +1281,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 
 func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	apiClient *webapi.Client,
 	items []simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, bool) {
@@ -1323,7 +1324,7 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	existingVMNames map[string]struct{},
 ) bool {
 	vols, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
@@ -1352,7 +1353,7 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	existingItems []simplyblockv1alpha1.VolumeMigration,
 	existingVMNames map[string]struct{},
@@ -1382,7 +1383,7 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 	}
 
 	if len(pvManaged) == 0 && len(existingItems) == 0 {
-		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseVerifying)
 	}
 
 	pvNames := make([]string, 0, len(pvManaged))
@@ -1450,7 +1451,7 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 
 func (r *StorageNodeOpsReconciler) drainVerify(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -1519,12 +1520,12 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha2.StorageNodeOpsSubPhaseRemoving)
 }
 
 func (r *StorageNodeOpsReconciler) drainRemove(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -1554,7 +1555,7 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 
 func (r *StorageNodeOpsReconciler) resumeAndFail(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 	apiClient *webapi.Client,
 	clusterUUID, reason string,
@@ -1581,14 +1582,14 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 // clusterPauseCheck returns (requeue, true) if the cluster is not ready for drain operations.
 func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	_ *webapi.Client,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)
 
 	// Resolve the StorageNode to get the namespace and cluster name.
 	var sn simplyblockv1alpha1.StorageNode
-	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.StorageNodeRef, Namespace: ops.Namespace}, &sn); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.NodeRef, Namespace: ops.Namespace}, &sn); err != nil {
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, false
 	}
 	var sns simplyblockv1alpha1.StorageNodeSet
@@ -1626,8 +1627,8 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 // advanceSubPhase patches ops.status.subPhase and requeues immediately.
 func (r *StorageNodeOpsReconciler) advanceSubPhase(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
-	next simplyblockv1alpha1.StorageNodeOpsSubPhase,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	next simplyblockv1alpha2.StorageNodeOpsSubPhase,
 ) (ctrl.Result, error) {
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.SubPhase = next
@@ -1642,12 +1643,12 @@ func (r *StorageNodeOpsReconciler) advanceSubPhase(
 // succeedOps marks the ops as Succeeded and releases the lock on the StorageNode.
 func (r *StorageNodeOpsReconciler) succeedOps(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded
+	ops.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded
 	ops.Status.SubPhase = ""
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
@@ -1659,7 +1660,7 @@ func (r *StorageNodeOpsReconciler) succeedOps(
 // failOps marks the ops as Failed with the given reason and releases the lock.
 func (r *StorageNodeOpsReconciler) failOps(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	reason string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -1669,7 +1670,7 @@ func (r *StorageNodeOpsReconciler) failOps(
 
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseFailed
+	ops.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhaseFailed
 	ops.Status.SubPhase = ""
 	ops.Status.Message = reason
 	ops.Status.CompletedAt = &now
@@ -1679,7 +1680,7 @@ func (r *StorageNodeOpsReconciler) failOps(
 
 	var sn simplyblockv1alpha1.StorageNode
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      ops.Spec.StorageNodeRef,
+		Name:      ops.Spec.NodeRef,
 		Namespace: ops.Namespace,
 	}, &sn); err == nil {
 		_ = r.releaseLock(ctx, &sn, ops.Name)
@@ -1691,11 +1692,11 @@ func (r *StorageNodeOpsReconciler) failOps(
 // mirroring events that are also emitted on the StorageNodeOps CR itself.
 func (r *StorageNodeOpsReconciler) emitOnStorageNode(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 	eventType, reason, message string,
 ) {
 	var sn simplyblockv1alpha1.StorageNode
-	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.StorageNodeRef, Namespace: ops.Namespace}, &sn); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.NodeRef, Namespace: ops.Namespace}, &sn); err != nil {
 		return
 	}
 	r.Recorder.Eventf(&sn, nil, eventType, reason, reason, "%s", message)
@@ -1718,11 +1719,11 @@ func (r *StorageNodeOpsReconciler) releaseLock(
 // resolveOpsSystemVolumeFilter compiles the system volume filter regex from the ops,
 // falling back to the default pattern.
 func (r *StorageNodeOpsReconciler) resolveOpsSystemVolumeFilter(
-	ops *simplyblockv1alpha1.StorageNodeOps,
+	ops *simplyblockv1alpha2.StorageNodeOps,
 ) (*regexp.Regexp, error) {
 	pattern := simplyblockv1alpha1.DefaultSystemVolumeFilterRegex
-	if ops.Spec.Drain != nil && ops.Spec.Drain.SystemVolumeFilterRegex != nil {
-		pattern = *ops.Spec.Drain.SystemVolumeFilterRegex
+	if ops.Spec.Remove != nil && ops.Spec.Remove.SystemVolumeFilterRegex != nil {
+		pattern = *ops.Spec.Remove.SystemVolumeFilterRegex
 	}
 	return regexp.Compile(pattern)
 }
@@ -1734,7 +1735,7 @@ func (r *StorageNodeOpsReconciler) storageNodeToOpsRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	var opsList simplyblockv1alpha1.StorageNodeOpsList
+	var opsList simplyblockv1alpha2.StorageNodeOpsList
 	if err := r.List(ctx, &opsList,
 		client.InNamespace(obj.GetNamespace()),
 		client.MatchingFields{"spec.storageNodeRef": obj.GetName()},
@@ -1743,7 +1744,7 @@ func (r *StorageNodeOpsReconciler) storageNodeToOpsRequests(
 	}
 	reqs := make([]reconcile.Request, 0, len(opsList.Items))
 	for _, ops := range opsList.Items {
-		if ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhasePending ||
+		if ops.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhasePending ||
 			ops.Status.Phase == "" {
 			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
 				Name:      ops.Name,
@@ -1759,11 +1760,11 @@ func (r *StorageNodeOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index StorageNodeOps by their target StorageNode for efficient watch lookups.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
-		&simplyblockv1alpha1.StorageNodeOps{},
+		&simplyblockv1alpha2.StorageNodeOps{},
 		"spec.storageNodeRef",
 		func(obj client.Object) []string {
-			ops := obj.(*simplyblockv1alpha1.StorageNodeOps)
-			return []string{ops.Spec.StorageNodeRef}
+			ops := obj.(*simplyblockv1alpha2.StorageNodeOps)
+			return []string{ops.Spec.NodeRef}
 		},
 	); err != nil {
 		return err
@@ -1773,7 +1774,7 @@ func (r *StorageNodeOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.apiReader = mgr.GetAPIReader()
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageNodeOps{}).
+		For(&simplyblockv1alpha2.StorageNodeOps{}).
 		Named("storagenodeops").
 		Watches(
 			&simplyblockv1alpha1.StorageNode{},

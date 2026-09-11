@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -248,7 +249,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 	importCR *simplyblockv1alpha1.BackupImport,
 	name, srcClusterUUID string,
 ) error {
-	existing := &simplyblockv1alpha1.StorageBackup{}
+	existing := &simplyblockv1alpha2.StorageBackup{}
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: importCR.Namespace}, existing)
 	if err == nil {
 		return nil // already exists
@@ -257,7 +258,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 		return fmt.Errorf("get StorageBackup %s: %w", name, err)
 	}
 
-	backupCR := &simplyblockv1alpha1.StorageBackup{
+	backupCR := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: importCR.Namespace,
@@ -265,8 +266,8 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 				*metav1.NewControllerRef(importCR, simplyblockv1alpha1.GroupVersion.WithKind("BackupImport")),
 			},
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName:       importCR.Spec.TargetClusterName,
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef:        importCR.Spec.TargetClusterName,
 			SourceClusterUUID: srcClusterUUID,
 		},
 	}
@@ -283,7 +284,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 
 func (r *BackupImportReconciler) patchStorageBackupStatus(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	backupID, srcClusterUUID, targetClusterUUID string,
 ) error {
 	patch := client.MergeFrom(backupCR.DeepCopy())

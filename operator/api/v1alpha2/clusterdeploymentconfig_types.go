@@ -20,10 +20,37 @@ package v1alpha2
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-
 	"github.com/simplyblock/atlas/statemachine"
 )
+
+// JournalManagerSpec configures the journal managers on a set of nodes.
+//
+// It is declared here rather than borrowed from v1alpha1, as
+// design-clusterdeploymentconfig.md §Appendix A spells it. A v1alpha2 type whose
+// fields are v1alpha1 types cannot be reshaped by the redesign without changing
+// this version's wire format, and it makes the import cycle that the conversion
+// webhook needs impossible: the spoke's ConvertTo and ConvertFrom have to be
+// methods on the v1alpha1 type, so v1alpha1 imports v1alpha2 and v1alpha2 cannot
+// import back.
+type JournalManagerSpec struct {
+	// Count is the number of journal managers to configure.
+	// +optional
+	Count *int32 `json:"count,omitempty"`
+	// PercentPerDevice is the journal manager capacity percentage per device.
+	// +optional
+	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
+}
+
+// StripeSpec is the erasure-coding layout. Declared here for the reason
+// JournalManagerSpec is.
+type StripeSpec struct {
+	// DataChunks defines the number of data chunks in the erasure-coding layout.
+	// +optional
+	DataChunks *int32 `json:"dataChunks,omitempty"`
+	// ParityChunks defines the number of parity chunks in the erasure-coding layout.
+	// +optional
+	ParityChunks *int32 `json:"parityChunks,omitempty"`
+}
 
 // ClusterDeploymentConfigPhase is where the operator has got to with this
 // document.
@@ -158,7 +185,7 @@ type NodeGroup struct {
 
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
-	JournalManager *v1alpha1.JournalManagerSpec `json:"journalManager,omitempty"`
+	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -215,7 +242,7 @@ type ClusterTemplate struct {
 
 	// Stripe is the erasure-coding layout.
 	// +optional
-	Stripe *v1alpha1.StripeSpec `json:"stripe,omitempty"`
+	Stripe *StripeSpec `json:"stripe,omitempty"`
 
 	// FabricType is the storage fabric.
 	// +kubebuilder:validation:MaxLength=32

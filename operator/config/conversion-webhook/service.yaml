@@ -1,0 +1,26 @@
+# The Service the API server dials for conversion.
+#
+# Its name is what the converting CRDs' clientConfig points at, and it is the
+# webhook's own rather than the operator's: sharing the operator's Service would
+# route conversion at the operator's pods, which is what design-api-upgrade.md
+# §6.1 separates. utils.ConversionWebhookServiceName carries the same name on the
+# Go side, and the webhook corrects the CRDs' namespace to wherever it is actually
+# running.
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-operator-conversion-webhook-service
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/component: conversion-webhook
+spec:
+  selector:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/component: conversion-webhook
+  ports:
+    # 443 is the port a CRD's clientConfig defaults to, and the webhook serves
+    # on 9443 as controller-runtime's server does.
+    - name: webhook
+      port: 443
+      targetPort: webhook
+      protocol: TCP

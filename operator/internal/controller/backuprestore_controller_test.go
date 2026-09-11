@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -160,13 +161,13 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
 	cluster := testCluster("default", "mycluster", "cluster-uuid")
-	backup := &simplyblockv1alpha1.StorageBackup{
+	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "backup-sample",
 			Namespace: "default",
 		},
-		Status: simplyblockv1alpha1.StorageBackupStatus{
-			Phase:   simplyblockv1alpha1.BackupPhaseFailed,
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			Phase:   simplyblockv1alpha2.BackupPhaseFailed,
 			Message: "Snapshot snap-1 not found",
 		},
 	}
@@ -470,10 +471,10 @@ func TestBackupRestoreAcceptsARestoreOnItsLastAttempt(t *testing.T) {
 	}
 
 	// The backup finishes, so the next pass can place the restore.
-	backup := &simplyblockv1alpha1.StorageBackup{
+	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "late-backup", Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageBackupStatus{
-			Phase:    simplyblockv1alpha1.BackupPhaseDone,
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			Phase:    simplyblockv1alpha2.BackupPhaseDone,
 			BackupID: "backup-id",
 			PoolName: "pool-a",
 			PoolUUID: "pool-uuid",
