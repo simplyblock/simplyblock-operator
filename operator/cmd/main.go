@@ -155,14 +155,16 @@ func main() {
 	var enableMetricsAPI bool
 	var metricsAPIPort int
 	flag.BoolVar(&enableMetricsAPI, "enable-metrics-api", true,
-		"Serve the aggregated metrics.simplyblock.io API (LogicalVolumeMetrics). "+
-			"Disable it on a cluster where the APIService is not installed.")
+		"Serve the aggregated metrics.simplyblock.io API (LogicalVolumeMetrics and "+
+			"StorageDeviceMetrics). Disable it on a cluster where the APIService is "+
+			"not installed.")
 	flag.IntVar(&metricsAPIPort, "metrics-api-bind-port", metricsapi.DefaultBindPort,
 		"The HTTPS port the aggregated metrics API listens on.")
 	var prometheusURL string
 	flag.StringVar(&prometheusURL, "prometheus-url", utils.DefaultPrometheusURL,
 		"Prometheus endpoint the aggregated metrics API reads capacity samples from. "+
-			"Empty serves each volume's provisioned size with no measured values.")
+			"Empty serves each volume's provisioned size with no measured values, and no "+
+			"device readings at all.")
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -349,11 +351,30 @@ func main() {
 		nodeCapacity = provider
 	}
 	if err := (&controller.StorageDeviceReconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		Devices: deviceSubscription,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Devices:  deviceSubscription,
+		Recorder: mgr.GetEventRecorder("storagedevice-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
+		os.Exit(1)
+	}
+	// What a device holds is neither desired state nor an event: it moves
+	// continuously and comes from the same Prometheus the node capacity does. The
+	// collector publishes it as a gauge on a timer and warns about a device over
+	// its cluster's threshold, without writing any of it to an object.
+	var deviceCapacity controller.DeviceCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-device capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		deviceCapacity = provider
+	}
+	if err := mgr.Add(&controller.StorageDeviceCollector{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("storagedevice-collector"),
+		Capacity: deviceCapacity,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the storage device collector")
 		os.Exit(1)
 	}
 	if err := mgr.Add(cpSubscriptions); err != nil {
@@ -650,6 +671,13 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockDriverValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblockdriver validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagedevice",
+			&webhook.Admission{Handler: &internalwebhook.StorageDeviceValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
+		setupLog.Info("registered storagedevice validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
 				Client:    mgr.GetClient(),
@@ -667,7 +695,8 @@ func main() {
 	}()
 
 	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
-	// cache above, joined to the claims that name them.
+	// cache above joined to the claims that name them, and StorageDeviceMetrics
+	// from the device objects joined to what Prometheus last measured of them.
 	if enableMetricsAPI {
 		err := metricsapi.Install(
 			mgr, operatorNamespace, metricsAPIPort, volumeSubscription, prometheusURL,

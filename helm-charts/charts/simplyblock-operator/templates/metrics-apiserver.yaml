@@ -30,6 +30,8 @@ spec:
     app: simplyblock-operator
 ---
 # The name is fixed by Kubernetes as <version>.<group>; it is not configurable.
+# An APIService registers a group version rather than a group, so a second served
+# version would need a second object.
 #
 # caBundle is absent on purpose. The operator injects it at runtime through
 # cert-controller, together with the serving certificate it belongs to, so a
@@ -39,13 +41,13 @@ spec:
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
-  name: v1alpha1.metrics.simplyblock.io
+  name: v1alpha2.metrics.simplyblock.io
   labels:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: Helm
 spec:
   group: metrics.simplyblock.io
-  version: v1alpha1
+  version: v1alpha2
   service:
     name: simplyblock-operator-metrics-apiserver
     namespace: {{ .Release.Namespace }}

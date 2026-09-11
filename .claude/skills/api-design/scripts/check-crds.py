@@ -37,7 +37,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-API_DIR = "operator/api/v1alpha1"
+# Every directory a CRD type can be declared in. The group is versioned, so a
+# kind that is new starts at the current version rather than in v1alpha1, and an
+# audit that read only the first directory would stop covering a kind on the day
+# it moved.
+API_DIRS = ("operator/api/v1alpha1", "operator/api/v1alpha2")
+
+# The one the repository is located by. Any of them would do, and the first is
+# the one that has always been there.
+API_DIR = API_DIRS[0]
 
 MARKER_RE = re.compile(r"^\s*//\s*(\+.*)$")
 COMMENT_RE = re.compile(r"^\s*//\s?(.*)$")
@@ -68,7 +76,7 @@ ENUM_MARKER_RE = re.compile(r"validation:Enum=(\S+)")
 
 # A value this API group invents is PascalCase. The exception is a value that
 # names something outside the group, whose own spelling wins: a filesystem
-# (ext4, xfs), a wire protocol, or a vocabulary an external API already defines.
+# (ext4, XFS), a wire protocol, or a vocabulary an external API already defines.
 # Those are listed rather than pattern-matched, because "looks like a foreign
 # word" is not a property a regex has.
 ENUM_PASCAL_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -259,6 +267,16 @@ def audit_kind(kind, structs, aliases, path, kinds=()):
     spec = structs.get(f"{kind}Spec")
     status = structs.get(f"{kind}Status")
     is_ops = kind.endswith("Ops")
+
+    # A kind served by the aggregated API server rather than stored as a custom
+    # resource is not measured against the CRD conventions, because none of them
+    # applies to it: there is no CustomResourceDefinition to carry a status
+    # subresource, a short name, or print columns, and the server decides its
+    # columns in Go through rest.TableConvertor. `+k8s:openapi-gen=true` on the
+    # root type is the marker that says so, since the aggregated API server
+    # requires the generated definitions and nothing else in the repository does.
+    if root.has("k8s:openapi-gen"):
+        return found
 
     def error(rule, line, message):
         found.append(("ERROR", rule, line, message))
@@ -524,7 +542,7 @@ def adoption(files):
                 if "immutab" in field.doc.lower():
                     immutable_claims += 1
 
-    print(f"{kinds} root kinds in {API_DIR}\n")
+    print(f"{kinds} root kinds in {', '.join(API_DIRS)}\n")
     print("marker                       count")
     print("-----------------------------------")
     for marker, count in counts.most_common():
@@ -624,9 +642,9 @@ def main():
 
         listed = set()
         for command in (
-            ["git", "diff", "--name-only", "HEAD", "--", API_DIR],
-            ["git", "diff", "--name-only", "--cached", "--", API_DIR],
-            ["git", "ls-files", "--others", "--exclude-standard", "--", API_DIR],
+            ["git", "diff", "--name-only", "HEAD", "--", *API_DIRS],
+            ["git", "diff", "--name-only", "--cached", "--", *API_DIRS],
+            ["git", "ls-files", "--others", "--exclude-standard", "--", *API_DIRS],
         ):
             result = subprocess.run(command, cwd=repo, capture_output=True, text=True)
             listed.update(line for line in result.stdout.split("\n") if line.endswith("_types.go"))
@@ -635,7 +653,9 @@ def main():
             print("check-crds.py: no API type files changed against HEAD")
             return 0
     else:
-        files = sorted((repo / API_DIR).glob("*_types.go"))
+        files = sorted(
+            path for directory in API_DIRS for path in (repo / directory).glob("*_types.go")
+        )
     files = [f for f in files if f.is_file() and "zz_generated" not in f.name]
     if not files:
         print("check-crds.py: no type files in scope", file=sys.stderr)

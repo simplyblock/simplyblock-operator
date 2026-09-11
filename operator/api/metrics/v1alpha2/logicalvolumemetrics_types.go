@@ -20,7 +20,7 @@
 //     no deletion, no finalizer, and no tombstone; a volume that goes away stops
 //     being listed.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	"k8s.io/apimachinery/pkg/api/resource"

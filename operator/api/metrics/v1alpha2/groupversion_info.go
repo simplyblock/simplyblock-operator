@@ -1,4 +1,4 @@
-// The metrics.simplyblock.io/v1alpha1 group: read-only measurements of
+// The metrics.simplyblock.io/v1alpha2 group: read-only measurements of
 // simplyblock objects, served by the operator's aggregated API server rather
 // than stored as custom resources.
 //
@@ -9,10 +9,17 @@
 // computed on demand from the control-plane cache when a client asks for it, it
 // is never written, and it is gone the moment the process restarts. Mixing the
 // two in one group would put a resource that cannot be applied, watched, or
-// backed up beside sixteen that can.
+// backed up beside seventeen that can.
 //
 // This mirrors how core Kubernetes splits metrics.k8s.io from the workload
 // groups, and for the same reason.
+//
+// v1alpha2 is the group's only version. Both kinds are new, so neither has an
+// older spelling to convert from, and the group starts where the CRD redesign
+// leaves the storage group rather than at a version that would exist only for
+// symmetry. That is also what keeps the aggregated API server's internal version
+// an alias: each Go type is registered under this version and under the internal
+// one, so every conversion the codec performs is a copy of a type into itself.
 //
 // The kinds here are served by an aggregated API server, so no CustomResource-
 // Definition describes them and `+kubebuilder:skip` keeps the CRD generator out
@@ -28,7 +35,7 @@
 // +kubebuilder:skip
 // +k8s:openapi-gen=true
 // +groupName=metrics.simplyblock.io
-package v1alpha1
+package v1alpha2
 
 import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -38,10 +45,10 @@ import (
 const GroupName = "metrics.simplyblock.io"
 
 // GroupVersion is the group version this package defines.
-var GroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
+var GroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha2"}
 
-// Resource qualifies an unqualified resource name with this group, for the
-// API errors the REST storage returns.
+// Resource qualifies an unqualified resource name with this group, for the API
+// errors the REST storage returns.
 func Resource(resource string) schema.GroupResource {
 	return GroupVersion.WithResource(resource).GroupResource()
 }

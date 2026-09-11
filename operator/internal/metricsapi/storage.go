@@ -1,4 +1,4 @@
-// The REST storage behind metrics.simplyblock.io/v1alpha1 logicalvolumemetrics:
+// The REST storage behind metrics.simplyblock.io/v1alpha2 logicalvolumemetrics:
 // the handful of interfaces k8s.io/apiserver asks a resource to implement, wired
 // to the control-plane volume cache and the join in binding.go.
 //
@@ -33,7 +33,7 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/prometheus"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
 
@@ -89,7 +89,7 @@ func NewStorage(volumes VolumeSource, reader client.Reader, capacity CapacitySou
 }
 
 // New implements rest.Storage.
-func (s *Storage) New() runtime.Object { return &metricsv1alpha1.LogicalVolumeMetrics{} }
+func (s *Storage) New() runtime.Object { return &metricsv1alpha2.LogicalVolumeMetrics{} }
 
 // Destroy implements rest.Storage. There is nothing to release: no client, no
 // watch, and no connection is owned here.
@@ -106,7 +106,7 @@ func (s *Storage) GetSingularName() string { return ResourceName }
 func (s *Storage) ShortNames() []string { return []string{ShortName} }
 
 // NewList implements rest.Lister.
-func (s *Storage) NewList() runtime.Object { return &metricsv1alpha1.LogicalVolumeMetricsList{} }
+func (s *Storage) NewList() runtime.Object { return &metricsv1alpha2.LogicalVolumeMetricsList{} }
 
 // Get implements rest.Getter. The name is a PersistentVolumeClaim's, so the
 // lookup runs claim to volume and never scans the cache.
@@ -119,7 +119,7 @@ func (s *Storage) Get(ctx context.Context, name string, _ *metav1.GetOptions) (r
 		return nil, apierrors.NewInternalError(err)
 	}
 	if !ok {
-		return nil, apierrors.NewNotFound(metricsv1alpha1.Resource(ResourceName), name)
+		return nil, apierrors.NewNotFound(metricsv1alpha2.Resource(ResourceName), name)
 	}
 
 	_, _, volumeID, err := bound.handle.Split()
@@ -131,7 +131,7 @@ func (s *Storage) Get(ctx context.Context, name string, _ *metav1.GetOptions) (r
 		// The claim is real but the control plane has not reported its volume,
 		// which is a cold or disconnected cache. Absent beats a zeroed reading:
 		// zeros would be indistinguishable from an empty volume.
-		return nil, apierrors.NewNotFound(metricsv1alpha1.Resource(ResourceName), name)
+		return nil, apierrors.NewNotFound(metricsv1alpha2.Resource(ResourceName), name)
 	}
 	lookup := newCapacityLookup(s.capacity, logf.FromContext(ctx))
 	sample := lookup.forVolume(ctx, dto.ClusterID, dto.ID)
@@ -150,7 +150,7 @@ func (s *Storage) List(ctx context.Context, options *metainternalversion.ListOpt
 
 	lookup := newCapacityLookup(s.capacity, logf.FromContext(ctx))
 
-	out := &metricsv1alpha1.LogicalVolumeMetricsList{}
+	out := &metricsv1alpha2.LogicalVolumeMetricsList{}
 	for _, dto := range s.volumes.All() {
 		handle := lvol.NewVolumeHandle(dto.ClusterID, dto.PoolID, dto.ID)
 		bound, ok, err := bindingForHandle(ctx, s.reader, handle)
@@ -180,7 +180,7 @@ func (s *Storage) List(ctx context.Context, options *metainternalversion.ListOpt
 // answer. They are supported because a client that passes one and is silently
 // ignored gets a wrong answer rather than an error; anything else selects
 // nothing, which is the honest response to a field the object has no index for.
-func matchesFieldSelector(options *metainternalversion.ListOptions, reading *metricsv1alpha1.LogicalVolumeMetrics) bool {
+func matchesFieldSelector(options *metainternalversion.ListOptions, reading *metricsv1alpha2.LogicalVolumeMetrics) bool {
 	if options == nil || options.FieldSelector == nil || options.FieldSelector.Empty() {
 		return true
 	}
@@ -265,10 +265,10 @@ func newReading(
 	bound binding,
 	dto subscriptions.VolumeDTO,
 	sample prometheus.Capacity,
-) *metricsv1alpha1.LogicalVolumeMetrics {
-	return &metricsv1alpha1.LogicalVolumeMetrics{
+) *metricsv1alpha2.LogicalVolumeMetrics {
+	return &metricsv1alpha2.LogicalVolumeMetrics{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: metricsv1alpha1.GroupVersion.String(),
+			APIVersion: metricsv1alpha2.GroupVersion.String(),
 			Kind:       "LogicalVolumeMetrics",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -281,7 +281,7 @@ func newReading(
 		VolumeHandle:     string(bound.handle),
 		PersistentVolume: bound.persistentVolume,
 		PoolName:         dto.PoolName,
-		Capacity: metricsv1alpha1.LogicalVolumeCapacity{
+		Capacity: metricsv1alpha2.LogicalVolumeCapacity{
 			Provisioned:        *resource.NewQuantity(dto.Size, resource.BinarySI),
 			Used:               *resource.NewQuantity(sample.Used, resource.BinarySI),
 			Free:               *resource.NewQuantity(sample.Free, resource.BinarySI),
