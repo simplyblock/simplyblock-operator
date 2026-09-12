@@ -199,6 +199,22 @@ spec:
       kind: SimplyblockDriver
       name: simplyblockdrivers.storage.simplyblock.io
       version: v1alpha2
+    - description: StorageBackupOps is a single operation performed against one StorageBackup.
+        It runs to a terminal phase and stays afterward as the audit record of what
+        was restored, into which pool, and how it ended. The claim a restore produces
+        outlives it.
+      displayName: Storage Backup Ops
+      kind: StorageBackupOps
+      name: storagebackupops.storage.simplyblock.io
+      version: v1alpha2
+    - description: StorageBackupPolicy schedules and retains the backups of the claims
+        it selects. It is the only thing that decides a backup is taken; the copies
+        themselves are the control plane's, are pruned by its retention, and reach
+        Kubernetes as StorageBackup objects the operator discovers.
+      displayName: Storage Backup Policy
+      kind: StorageBackupPolicy
+      name: storagebackuppolicies.storage.simplyblock.io
+      version: v1alpha2
     - description: StorageClusterOps is the Schema for the storageclusterops API.
       displayName: Storage Cluster Ops
       kind: StorageClusterOps
@@ -208,6 +224,14 @@ spec:
       displayName: Storage Device
       kind: StorageDevice
       name: storagedevices.storage.simplyblock.io
+      version: v1alpha2
+    - description: StoragePoolOps is a single operation performed against one StoragePool.
+        Analogous to a Kubernetes Job, it drives an action to completion and records
+        the result, and only one may be active per pool at a time, which the pool's
+        status.activeOpsRef enforces.
+      displayName: Storage Pool Ops
+      kind: StoragePoolOps
+      name: storagepoolops.storage.simplyblock.io
       version: v1alpha2
     - description: StorageBackup is the Schema for the storagebackups API.
       displayName: Storage Backup
