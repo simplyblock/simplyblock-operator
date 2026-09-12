@@ -778,8 +778,8 @@ func waitForPVDeleted(c kubernetes.Interface, pvName string, timeout time.Durati
 // StorageClass helpers
 // ---------------------------------------------------------------------------
 
-// specStorageClass writes the StorageClass the calling spec provisions through
-// and registers its removal, returning the name.
+// specStorageClass writes the plain StorageClass the calling spec provisions
+// through and registers its removal, returning the name.
 //
 // Every spec gets its own. A StorageClass's parameters are immutable in the
 // Kubernetes API, so a shared one is a shared decision about the filesystem, the
@@ -788,9 +788,13 @@ func waitForPVDeleted(c kubernetes.Interface, pvName string, timeout time.Durati
 // creates itself, so a spec drawing from any other pool has none to borrow. The
 // name is the spec's namespace, which the framework already made unique, so two
 // specs running in parallel cannot collide on a cluster-scoped object.
-func specStorageClass(f *framework.Framework, extraParams map[string]string) string {
+//
+// It takes no parameters, because a spec that has any is a spec about them: it
+// names its class for what it is testing and calls createStorageClass directly,
+// rather than hiding the one thing it is about behind a word like "spec".
+func specStorageClass(f *framework.Framework) string {
 	scName := f.Namespace.Name + "-sc"
-	createStorageClass(f, scName, extraParams, nil)
+	createStorageClass(f, scName, nil, nil)
 	ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 	return scName
 }

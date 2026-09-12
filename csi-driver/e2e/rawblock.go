@@ -23,7 +23,7 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 		blockPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc-block"}
 
 		ginkgo.By("create block PVC and pod")
-		deployBlockPVC(ns, specStorageClass(f, nil))
+		deployBlockPVC(ns, specStorageClass(f))
 		deployBlockTestPod(ns)
 		ginkgo.DeferCleanup(func() {
 			deleteBlockTestPod(ns)
@@ -65,7 +65,7 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 		blockPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc-block"}
 
 		ginkgo.By("create block PVC and pod")
-		deployBlockPVC(ns, specStorageClass(f, nil))
+		deployBlockPVC(ns, specStorageClass(f))
 		deployBlockTestPod(ns)
 		ginkgo.DeferCleanup(func() {
 			deleteBlockTestPod(ns)
@@ -117,7 +117,7 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 		blockPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc-block"}
 
 		ginkgo.By("create block PVC and pod")
-		deployBlockPVC(ns, specStorageClass(f, nil))
+		deployBlockPVC(ns, specStorageClass(f))
 		deployBlockTestPod(ns)
 		ginkgo.DeferCleanup(func() {
 			deleteBlockTestPod(ns)

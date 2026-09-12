@@ -63,7 +63,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 		ns := f.Namespace.Name
 
 		ginkgo.By("create PVC and test pod")
-		deployPVC(ns, specStorageClass(f, nil))
+		deployPVC(ns, specStorageClass(f))
 		deployTestPod(ns)
 		ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 
@@ -95,7 +95,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 	ginkgo.It("cloning from a non-existent source PVC leaves the clone PVC Pending", func() {
 		ns := f.Namespace.Name
 		const clonePVCName = "spdkcsi-clone-bad-source"
-		scName := specStorageClass(f, nil)
+		scName := specStorageClass(f)
 
 		ginkgo.By("create clone PVC referencing a source PVC that does not exist")
 		dataSourceAPIGroup := ""

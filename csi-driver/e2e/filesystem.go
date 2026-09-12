@@ -109,7 +109,7 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
 
 		ginkgo.By("create PVC and test pod")
-		deployPVC(ns, specStorageClass(f, nil))
+		deployPVC(ns, specStorageClass(f))
 		deployTestPod(ns)
 		ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 

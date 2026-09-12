@@ -14,7 +14,7 @@ var _ = ginkgo.Describe("SPDKCSI-SNAPSHOT", func() {
 	ginkgo.It("snapshot volumes preserve data from before each snapshot was taken", func() {
 		ns := f.Namespace.Name
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
-		scName := specStorageClass(f, nil)
+		scName := specStorageClass(f)
 
 		ginkgo.By("create source PVC")
 		deployPVC(ns, scName)

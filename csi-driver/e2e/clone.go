@@ -14,7 +14,7 @@ var _ = ginkgo.Describe("SPDKCSI-CLONE", func() {
 	ginkgo.It("cloned volume contains data written to the source volume", func() {
 		ns := f.Namespace.Name
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
-		scName := specStorageClass(f, nil)
+		scName := specStorageClass(f)
 
 		ginkgo.By("create source PVC")
 		deployPVC(ns, scName)

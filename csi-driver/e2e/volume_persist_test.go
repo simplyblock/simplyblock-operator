@@ -43,7 +43,7 @@ var _ = ginkgo.Describe("SPDKCSI-VOLUME-PERSIST", func() {
 
 			ginkgo.By("create PVC")
 			framework.ExpectNoError(
-				applyTemplateWithStorageClass(ns, pvcPersistPath, specStorageClass(f, nil)),
+				applyTemplateWithStorageClass(ns, pvcPersistPath, specStorageClass(f)),
 				"deploy persist PVC",
 			)
 			ginkgo.DeferCleanup(func() {

@@ -20,7 +20,7 @@ var _ = ginkgo.Describe("SPDKCSI-DELETION", func() {
 	ginkgo.It("PV is deleted after its PVC is removed (reclaimPolicy: Delete)", func() {
 		ns := f.Namespace.Name
 
-		scName := specStorageClass(f, nil)
+		scName := specStorageClass(f)
 
 		ginkgo.By("create PVC and test pod")
 		deployPVC(ns, scName)
@@ -70,7 +70,7 @@ var _ = ginkgo.Describe("SPDKCSI-DELETION", func() {
 	ginkgo.It("VolumeSnapshot is removed after explicit deletion", func() {
 		ns := f.Namespace.Name
 		const snapshotName = "spdk-snapshot-deletion-test"
-		scName := specStorageClass(f, nil)
+		scName := specStorageClass(f)
 
 		ginkgo.By("create source PVC and test pod")
 		deployPVC(ns, scName)
