@@ -14,9 +14,10 @@ var _ = ginkgo.Describe("SPDKCSI-CLONE", func() {
 	ginkgo.It("cloned volume contains data written to the source volume", func() {
 		ns := f.Namespace.Name
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
+		scName := specStorageClass(f, nil)
 
 		ginkgo.By("create source PVC")
-		deployPVC(ns)
+		deployPVC(ns, scName)
 		ginkgo.DeferCleanup(func() { deletePVC(ns) })
 
 		ginkgo.By("deploy test pod and write data to source PVC")
@@ -39,7 +40,7 @@ var _ = ginkgo.Describe("SPDKCSI-CLONE", func() {
 		)
 
 		ginkgo.By("create clone PVC and pod")
-		deployClone(ns)
+		deployClone(ns, scName)
 		ginkgo.DeferCleanup(func() { deleteClone(ns) })
 
 		ginkgo.By("wait for clone pod to be ready")

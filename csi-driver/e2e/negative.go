@@ -63,7 +63,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 		ns := f.Namespace.Name
 
 		ginkgo.By("create PVC and test pod")
-		deployPVC(ns)
+		deployPVC(ns, specStorageClass(f, nil))
 		deployTestPod(ns)
 		ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 
@@ -95,6 +95,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 	ginkgo.It("cloning from a non-existent source PVC leaves the clone PVC Pending", func() {
 		ns := f.Namespace.Name
 		const clonePVCName = "spdkcsi-clone-bad-source"
+		scName := specStorageClass(f, nil)
 
 		ginkgo.By("create clone PVC referencing a source PVC that does not exist")
 		dataSourceAPIGroup := ""
@@ -110,10 +111,7 @@ var _ = ginkgo.Describe("SPDKCSI-NEGATIVE", func() {
 						corev1.ResourceStorage: resource.MustParse("1Gi"),
 					},
 				},
-				StorageClassName: func() *string {
-					s := storageClassName
-					return &s
-				}(),
+				StorageClassName: &scName,
 				DataSource: &corev1.TypedLocalObjectReference{
 					APIGroup: &dataSourceAPIGroup,
 					Kind:     "PersistentVolumeClaim",

@@ -30,9 +30,10 @@ var _ = ginkgo.Describe("SPDKCSI-NVMEOF", func() {
 
 		ginkgo.It("dynamically provisioned volume binds and pod reaches Running", func() {
 			ns := f.Namespace.Name
+			scName := specStorageClass(f, nil)
 
 			ginkgo.By("create PVC and test pod")
-			deployPVC(ns)
+			deployPVC(ns, scName)
 			deployTestPod(ns)
 			// DeferCleanup is scoped to this It block and runs even on failure.
 			ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
@@ -49,9 +50,10 @@ var _ = ginkgo.Describe("SPDKCSI-NVMEOF", func() {
 			pvcName := "spdkcsi-pvc"
 			expandedSize := resource.MustParse("2Gi")
 			testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
+			scName := specStorageClass(f, nil)
 
 			ginkgo.By("create PVC and test pod")
-			deployPVC(ns)
+			deployPVC(ns, scName)
 			deployTestPod(ns)
 			ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 
@@ -80,9 +82,10 @@ var _ = ginkgo.Describe("SPDKCSI-NVMEOF", func() {
 		ginkgo.It("kubelet reports volume stats for a mounted volume", func() {
 			ns := f.Namespace.Name
 			testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
+			scName := specStorageClass(f, nil)
 
 			ginkgo.By("create PVC and test pod")
-			deployPVC(ns)
+			deployPVC(ns, scName)
 			deployTestPod(ns)
 			ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 
@@ -105,8 +108,10 @@ var _ = ginkgo.Describe("SPDKCSI-NVMEOF", func() {
 		ginkgo.It("data persists across pod restarts when using multiple PVCs", func() {
 			ns := f.Namespace.Name
 
+			scName := specStorageClass(f, nil)
+
 			ginkgo.By("create three PVCs and a pod that mounts all three")
-			deployMultiPvcs(ns)
+			deployMultiPvcs(ns, scName)
 			deployTestPodWithMultiPvcs(ns)
 			ginkgo.DeferCleanup(func() {
 				deleteMultiPvcsAndTestPodWithMultiPvcs(ns)

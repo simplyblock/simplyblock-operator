@@ -11,6 +11,7 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"github.com/simplyblock/atlas/kube"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,10 +32,16 @@ var (
 	// watcher in e2e.go. Test helpers accept an explicit ns parameter so
 	// each It block is isolated in its own framework-managed namespace.
 	nameSpace         string
-	storageClassName  string
 	snapshotClassName string
 	operatorMode      bool
 	systemNamespace   string
+
+	// clusterID is resolved once per process by clusterIDForTests and kept. It
+	// does not change while a suite runs and one of the two ways of reading it
+	// is an exec into a pod, so it is not read per spec. Ginkgo runs specs in
+	// parallel across processes and one at a time within a process, so nothing
+	// synchronizes it.
+	clusterID string
 )
 
 const (
@@ -50,6 +57,15 @@ const (
 	// NVMe-oF subsystem so its NQN (and PV "model" attribute) carry its own
 	// lvol id instead of a shared subsystem's master lvol id.
 	scParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
+
+	// scParamPool is the StorageClass parameter naming the StoragePool a class
+	// provisions out of.
+	scParamPool = "pool_name"
+
+	// scParamFSType is Kubernetes' own well-known key for the filesystem an
+	// external provisioner formats with, which is why it is not spelled the way
+	// this driver's own parameters are.
+	scParamFSType = "csi.storage.k8s.io/fstype"
 
 	// shPath is the shell used to run commands inside test/plugin pods.
 	shPath = "/bin/sh"
@@ -82,10 +98,12 @@ func init() {
 	if nameSpace == "" {
 		nameSpace = "default"
 	}
-	storageClassName = os.Getenv("STORAGE_CLASS_NAME")
-	if storageClassName == "" {
-		storageClassName = "simplyblock-csi-sc"
-	}
+	// No STORAGE_CLASS_NAME. A class is not configuration this suite is handed:
+	// every spec writes the one it provisions through, because a class's
+	// parameters are immutable and the filesystem, the QoS ceilings and the
+	// subsystem packing a spec needs are the spec's own to state. What the suite
+	// is told is the cluster and the pool — CLUSTER_NAME and POOL_NAME — and it
+	// builds the rest.
 	snapshotClassName = os.Getenv("SNAPSHOT_CLASS_NAME")
 	if snapshotClassName == "" {
 		snapshotClassName = "simplyblock-csi-snapshotclass"
@@ -122,14 +140,16 @@ func newTestFramework(baseName string) *framework.Framework {
 	return f
 }
 
-// applyTemplateWithStorageClass applies a YAML template after substituting
-// the default storage class name with the one configured via STORAGE_CLASS_NAME.
-func applyTemplateWithStorageClass(ns, path string) error {
+// applyTemplateWithStorageClass applies a YAML template after pointing every
+// claim in it at scName, the class the calling spec created for itself. The
+// templates carry a placeholder rather than a real class name: there is no
+// suite-wide class for them to name.
+func applyTemplateWithStorageClass(ns, path, scName string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	modified := strings.ReplaceAll(string(data), "simplyblock-csi-sc", storageClassName)
+	modified := strings.ReplaceAll(string(data), "simplyblock-csi-sc", scName)
 	tmp, err := os.CreateTemp("", "e2e-*.yaml")
 	if err != nil {
 		return err
@@ -153,20 +173,22 @@ func deployTestPod(ns string) {
 	framework.ExpectNoError(err, "deploy test pod")
 }
 
-func deployPVC(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, pvcPath), "deploy PVC")
+func deployPVC(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, pvcPath, scName), "deploy PVC")
 }
 
-func deploySnapshot(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithSnapshotPath), "deploy snapshot resources")
+func deploySnapshot(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithSnapshotPath, scName),
+		"deploy snapshot resources")
 }
 
-func deploySnapshot2(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithSnapshotPath2), "deploy snapshot2 resources")
+func deploySnapshot2(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithSnapshotPath2, scName),
+		"deploy snapshot2 resources")
 }
 
-func deployClone(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithClonePath), "deploy clone resources")
+func deployClone(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, testPodWithClonePath, scName), "deploy clone resources")
 }
 
 func deployTestPodWithMultiPvcs(ns string) {
@@ -174,8 +196,8 @@ func deployTestPodWithMultiPvcs(ns string) {
 	framework.ExpectNoError(err, "deploy test pod with multi-PVCs")
 }
 
-func deployMultiPvcs(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, multiPvcsPath), "deploy multi-PVCs")
+func deployMultiPvcs(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, multiPvcsPath, scName), "deploy multi-PVCs")
 }
 
 // ---------------------------------------------------------------------------
@@ -659,8 +681,8 @@ type kubeletStatsSummary struct {
 // Block-volume helpers
 // ---------------------------------------------------------------------------
 
-func deployBlockPVC(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, pvcBlockPath), "deploy block PVC")
+func deployBlockPVC(ns, scName string) {
+	framework.ExpectNoError(applyTemplateWithStorageClass(ns, pvcBlockPath, scName), "deploy block PVC")
 }
 
 func deleteBlockPVC(ns string) {
@@ -718,8 +740,12 @@ func waitForSnapshotGone(ns, snapshotName string, timeout time.Duration) error {
 	return nil
 }
 
+// deploySnapshotOnly applies the VolumeSnapshot on its own, with no class
+// substitution: a snapshot names a claim and a VolumeSnapshotClass, never a
+// StorageClass.
 func deploySnapshotOnly(ns string) {
-	framework.ExpectNoError(applyTemplateWithStorageClass(ns, snapshotOnlyPath), "deploy snapshot-only resource")
+	_, err := e2ekubectl.RunKubectl(ns, "apply", "-f", snapshotOnlyPath)
+	framework.ExpectNoError(err, "deploy snapshot-only resource")
 }
 
 func deleteSnapshotOnly(ns string) {
@@ -752,49 +778,99 @@ func waitForPVDeleted(c kubernetes.Interface, pvName string, timeout time.Durati
 // StorageClass helpers
 // ---------------------------------------------------------------------------
 
-func createStorageClassWithParams(c kubernetes.Interface, scName string, extraParams map[string]string) {
-	createStorageClassWithParamsAndLabels(c, scName, extraParams, nil)
+// specStorageClass writes the StorageClass the calling spec provisions through
+// and registers its removal, returning the name.
+//
+// Every spec gets its own. A StorageClass's parameters are immutable in the
+// Kubernetes API, so a shared one is a shared decision about the filesystem, the
+// QoS ceilings and the subsystem packing that no spec needing a different answer
+// can edit; and the operator writes a class only for the pool a StorageCluster
+// creates itself, so a spec drawing from any other pool has none to borrow. The
+// name is the spec's namespace, which the framework already made unique, so two
+// specs running in parallel cannot collide on a cluster-scoped object.
+func specStorageClass(f *framework.Framework, extraParams map[string]string) string {
+	scName := f.Namespace.Name + "-sc"
+	createStorageClass(f, scName, extraParams, nil)
+	ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+	return scName
 }
 
-// createStorageClassWithParamsAndLabels is like createStorageClassWithParams but
-// also sets metadata labels on the StorageClass (e.g., the guardian
-// auto-restart-on-pathloss opt-in).
-func createStorageClassWithParamsAndLabels(
-	c kubernetes.Interface,
+// createStorageClass writes a class that provisions out of the pool this suite
+// was pointed at, on the cluster it is running against.
+//
+// It is built rather than copied. Deriving a spec's class from another class
+// carried whatever that one happened to state — a stale cluster_id, a pool that
+// no longer exists, a filesystem some earlier spec chose — into every spec that
+// derived from it, and made the suite skip itself when the class it copied was
+// missing. cluster_id and pool_name are read from the cluster under test, the
+// filesystem is the one the CRD declares as a pool's default, and extraParams is
+// what this spec is actually about.
+func createStorageClass(
+	f *framework.Framework,
 	scName string,
 	extraParams, scLabels map[string]string,
 ) {
-	base, err := c.StorageV1().StorageClasses().Get(context.Background(), storageClassName, metav1.GetOptions{})
-	if err != nil {
-		ginkgo.Skip(fmt.Sprintf("base StorageClass %q unavailable (%v) — skipping", storageClassName, err))
-		return
+	params := map[string]string{
+		scParamClusterID: clusterIDForTests(f),
+		scParamPool:      poolNameForTests(),
+		// XFS, matching the default a StoragePool's spec.volumeDefaults declares
+		// and therefore what a volume on this cluster is formatted with unless
+		// somebody asked for otherwise. Absent, the node plugin would fall back
+		// to ext4 and every spec would exercise a filesystem no pool asks for.
+		scParamFSType: "xfs",
+	}
+	for key, value := range extraParams {
+		params[key] = value
 	}
 
-	params := make(map[string]string, len(base.Parameters)+len(extraParams))
-	for k, v := range base.Parameters {
-		params[k] = v
-	}
-	for k, v := range extraParams {
-		params[k] = v
-	}
+	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
+	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
+	allowExpansion := true
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta:           metav1.ObjectMeta{Name: scName, Labels: scLabels},
-		Provisioner:          base.Provisioner,
+		Provisioner:          kube.DriverName,
 		Parameters:           params,
-		ReclaimPolicy:        base.ReclaimPolicy,
-		VolumeBindingMode:    base.VolumeBindingMode,
-		AllowVolumeExpansion: base.AllowVolumeExpansion,
-		AllowedTopologies:    base.AllowedTopologies,
+		ReclaimPolicy:        &reclaimPolicy,
+		VolumeBindingMode:    &bindingMode,
+		AllowVolumeExpansion: &allowExpansion,
+		// Deliberately no AllowedTopologies: external-provisioner matches those
+		// terms against the CSINode topology keys frozen at csi-node
+		// registration, so a term naming anything registered later fails every
+		// claim with "is not in requisite" (#484).
 	}
-	_, err = c.StorageV1().StorageClasses().Create(context.Background(), sc, metav1.CreateOptions{})
+	_, err := f.ClientSet.StorageV1().StorageClasses().
+		Create(context.Background(), sc, metav1.CreateOptions{})
 	framework.ExpectNoError(err, "create StorageClass %s", scName)
+}
+
+// clusterIDForTests is the UUID of the cluster this suite provisions from, which
+// every class it writes has to carry.
+//
+// The StorageCluster's status is the reading where the operator is running: it
+// is one API read, and it is the same object the pool the class names belongs
+// to. sbctl is the fallback for a run with no operator, where there is no CR to
+// read it from and the control plane has to be asked directly.
+func clusterIDForTests(f *framework.Framework) string {
+	// Cached only once resolved, and not behind a sync.Once: a failed resolution
+	// aborts the spec from inside, and a Once would record the attempt as done
+	// and hand every later spec the empty string it never got.
+	if clusterID != "" {
+		return clusterID
+	}
+	if operatorMode {
+		uuid, err := waitForStorageClusterUUID(nameSpace, storageClusterNameForPools(), 10*time.Minute)
+		framework.ExpectNoError(err, "resolve the cluster UUID from the StorageCluster status")
+		clusterID = uuid
+		return clusterID
+	}
+	clusterID = liveClusterID(f)
+	return clusterID
 }
 
 // liveClusterID resolves the UUID of the simplyblock cluster the tests run
 // against from `sbctl cluster list` (matched by CLUSTER_NAME when set, else the
-// sole cluster). Tests use this to build StorageClasses pinned to the current
-// cluster instead of relying on a possibly stale operator-created SC.
+// sole cluster).
 func liveClusterID(f *framework.Framework) string {
 	name := os.Getenv("CLUSTER_NAME")
 	id := sbctlClusterID(f, name)
@@ -917,20 +993,15 @@ func deletePodByName(c kubernetes.Interface, ns, podName string) {
 // Reconnect helpers, shared by the SPDKCSI-RECONNECT-* specs.
 // ---------------------------------------------------------------------------
 
-// poolNameForTests resolves the storage pool the reconnect tests should use for
-// directly created (unmanaged) volumes. It prefers E2E_SB_POOL, then the
-// pool_name of the StorageClass under test (guaranteed to exist on this
-// cluster), then POOL_NAME. It never returns an empty string: as a last resort
-// it falls back
-// to `testing1` so misconfiguration surfaces as a clear `pool not found`.
-func poolNameForTests(c kubernetes.Interface) string {
+// poolNameForTests is the storage pool every class this suite writes draws from,
+// and the pool the reconnect specs create their unmanaged volumes in directly.
+// E2E_SB_POOL overrides it for a run against a cluster whose pool is called
+// something else. It never returns an empty string: as a last resort it falls
+// back to `testing1` so misconfiguration surfaces as a clear `pool not found`
+// rather than as a class that provisions out of nowhere.
+func poolNameForTests() string {
 	if p := os.Getenv("E2E_SB_POOL"); p != "" {
 		return p
-	}
-	if sc, err := c.StorageV1().StorageClasses().Get(context.Background(), storageClassName, metav1.GetOptions{}); err == nil { //nolint:lll // unwrappable string/log/signature
-		if p := sc.Parameters["pool_name"]; p != "" {
-			return p
-		}
 	}
 	if p := os.Getenv("POOL_NAME"); p != "" {
 		return p
@@ -960,8 +1031,8 @@ type managedWorkload struct {
 // the StorageClass and Deployment and returns the handles needed to drive and
 // verify recovery.
 //
-// We build our own StorageClass (pinned to the live cluster_id via sbctl) rather
-// than reusing the operator's default SC, which may reference a stale cluster.
+// The StorageClass is this workload's own, carrying the opt-in label the
+// guardian reads and one namespace per subsystem.
 func setupManagedWorkload(f *framework.Framework, m fullLossMode, appLabel string) managedWorkload {
 	ns := f.Namespace.Name
 	pvcName := appLabel + "-pvc"
@@ -969,20 +1040,19 @@ func setupManagedWorkload(f *framework.Framework, m fullLossMode, appLabel strin
 	ginkgo.By("check the node DaemonSet is ready")
 	framework.ExpectNoError(waitForNodeServerReady(f.ClientSet, 3*time.Minute), "node DaemonSet ready")
 
-	ginkgo.By("create an opt-in StorageClass on the live cluster and the PVC")
+	ginkgo.By("create this workload's opt-in StorageClass and the PVC")
 	scName := fmt.Sprintf("%s-%s", appLabel, ns)
 	// max_namespace_per_subsys=1 gives each volume its own NVMe-oF subsystem, so
 	// the NQN carries this volume's lvol id (not a shared subsystem's), a total
 	// disconnect affects only this volume (no cross-spec interference under
 	// parallelism), and staging never races a sibling's "already connected" path.
 	scParams := map[string]string{
-		scParamClusterID:             liveClusterID(f),
 		scParamMaxNamespacePerSubsys: "1",
 	}
 	if !m.block {
-		scParams["csi.storage.k8s.io/fstype"] = m.fsType
+		scParams[scParamFSType] = m.fsType
 	}
-	createStorageClassWithParamsAndLabels(f.ClientSet, scName, scParams,
+	createStorageClass(f, scName, scParams,
 		map[string]string{"simplyblock.io/auto-restart-on-pathloss": trueStr})
 	ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 	framework.ExpectNoError(createModePVC(f.ClientSet, ns, pvcName, scName, m.block), "create PVC")

@@ -14,7 +14,6 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/nqn"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -87,11 +86,11 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			// subsystem, so its NQN (and the PV's "model" attribute) carry this
 			// volume's own lvol id rather than a shared subsystem's master lvol
 			// id. See the same rationale in setupManagedWorkload.
-			createStorageClassWithParams(f.ClientSet, scName, map[string]string{
+			createStorageClass(f, scName, map[string]string{
 				scParamClusterID:             clusterID,
-				"pool_name":                  poolName,
+				scParamPool:                  poolName,
 				scParamMaxNamespacePerSubsys: "1",
-			})
+			}, nil)
 			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create DHCHAP PVC")
 			ginkgo.DeferCleanup(func() {
@@ -203,34 +202,51 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			createDHCHAPStoragePool(nameSpace, poolName, clusterName, workerNode)
 			ginkgo.DeferCleanup(func() { deleteStoragePool(nameSpace, poolName) })
 
-			// Everything below reads what the operator produced instead of
-			// rebuilding it: the node label, the backend allowed-host entry and
-			// the StorageClass all come from the StoragePool reconciler. This
-			// spec used to hand-build its own class, which is exactly why #484
-			// — a broken allowedTopologies term on the generated class — passed
-			// CI for a whole release: the class users actually get was never
-			// exercised by any test.
-			scName := operatorStorageClassName(nameSpace, clusterName, poolName)
-			sc := waitForStorageClass(f.ClientSet, scName, 3*time.Minute)
-
-			// The label key comes from the class the operator generated, not from a
-			// copy of its derivation. That parameter is the contract CreateVolume
-			// reads, so taking the key from it is what proves the two components
-			// agree; a mirrored formula here would only prove this file agrees with
-			// itself.
-			nodeLabelKey := sc.Parameters[dhchapNodeSelectorParam]
-			gomega.Expect(nodeLabelKey).To(gomega.HavePrefix(kube.LabelPoolPrefix),
-				"generated DHCHAP StorageClass %s must carry %s — it is the only thing CreateVolume turns "+
-					"into the PV's nodeAffinity (#403), and with allowedTopologies gone it is the sole "+
-					"allowed-node gate", scName, dhchapNodeSelectorParam)
+			// The node label and the backend allowed-host entry still come from
+			// the reconciler and are read rather than rebuilt. The class does
+			// not: #525 made the assignment an authored one, so the operator now
+			// writes exactly one class — for the pool a StorageCluster creates —
+			// and this pool is not that pool. Authoring it here is what a user
+			// has to do, which keeps the spec on the path users are actually on.
+			//
+			// The pool's UUID is the one thing the DHCHAP gate is derived from,
+			// so nothing about the class can be written before the reconciler
+			// reports it.
+			poolUUID := waitForStoragePoolUUID(nameSpace, poolName, 3*time.Minute)
+			nodeLabelKey := kube.PoolNodeLabelKey(poolUUID)
 			waitForNodeLabel(f.ClientSet, workerNode, nodeLabelKey, dhchapAllowedLabelValue, 3*time.Minute)
 
-			ginkgo.By("verify the generated StorageClass can actually provision and carries the DHCHAP gate")
-			gomega.Expect(sc.AllowedTopologies).To(gomega.BeEmpty(),
-				"generated DHCHAP StorageClass %s must not carry allowedTopologies: external-provisioner "+
-					"matches those terms against the CSINode topology keys frozen at csi-node registration, "+
-					"so a pool label written afterwards makes every PVC fail with "+
-					"\"is not in requisite\" (#484)", scName)
+			ginkgo.By("assign a StorageClass to the pool and verify it can provision")
+			// The three labels are the assignment (design-storagepool.md §5).
+			// They are what makes this a class the pool knows about — it
+			// publishes the name in status.storageClassNames and holds its own
+			// deletion while the class is there — rather than one that merely
+			// names the pool in a parameter. Spelled out because the csi-driver
+			// module does not depend on the operator's, the same reason
+			// dhchapNodeSelectorParam is.
+			scName := "dhchap-sched-" + ns
+			createStorageClass(f, scName,
+				map[string]string{
+					scParamPool: poolName,
+					// The sole allowed-node gate: CreateVolume turns this key
+					// into the PV's nodeAffinity (#403). Deliberately not paired
+					// with an allowedTopologies term, which external-provisioner
+					// matches against the CSINode topology keys frozen at
+					// csi-node registration, so a pool label written afterwards
+					// would fail every claim with "is not in requisite" (#484).
+					dhchapNodeSelectorParam: nodeLabelKey,
+					// One NVMe-oF subsystem per volume, matching the pool's
+					// volumeDefaults so its NQN carries its own lvol id.
+					scParamMaxNamespacePerSubsys: "1",
+				},
+				map[string]string{
+					"storage.simplyblock.io/namespace": nameSpace,
+					"storage.simplyblock.io/cluster":   clusterName,
+					"storage.simplyblock.io/pool":      poolName,
+				})
+			// Registered after the pool's cleanup and therefore run before it:
+			// the pool's deletion is held while a class is assigned to it.
+			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create PVC")
 			ginkgo.DeferCleanup(func() {
 				framework.ExpectNoError(
@@ -502,11 +518,6 @@ func deleteStoragePool(ns, poolName string) {
 		"StoragePool %s/%s should be fully reclaimed once its PVC is gone", ns, poolName)
 }
 
-// operatorStorageClassName mirrors simplyblockStorageClassName in the operator.
-func operatorStorageClassName(ns, clusterName, poolName string) string {
-	return fmt.Sprintf("simplyblock-%s-%s-%s", ns, clusterName, poolName)
-}
-
 // waitForNodeLabel waits for the operator's syncNodeLabels to put key=value on
 // nodeName.
 func waitForNodeLabel(c kubernetes.Interface, nodeName, key, value string, timeout time.Duration) {
@@ -522,21 +533,32 @@ func waitForNodeLabel(c kubernetes.Interface, nodeName, key, value string, timeo
 	framework.ExpectNoError(err, "operator should label node %s with %s=%s", nodeName, key, value)
 }
 
-// waitForStorageClass waits for the operator to create scName and returns it.
-func waitForStorageClass(c kubernetes.Interface, scName string, timeout time.Duration) *storagev1.StorageClass {
-	var sc *storagev1.StorageClass
+// waitForStoragePoolUUID waits for the reconciler to create the pool on the
+// backend and report the UUID back. Every per-pool identity is derived from it,
+// the DHCHAP allowed-node label key included, so nothing about the pool can be
+// authored before it lands.
+func waitForStoragePoolUUID(ns, poolName string, timeout time.Duration) string {
+	return waitForJSONPath(ns, "storagepools.storage.simplyblock.io", poolName,
+		"{.status.uuid}", timeout)
+}
+
+// waitForJSONPath polls one object's field until it reports a non-empty value.
+// A field a controller fills in is absent rather than empty until it does, and
+// kubectl reports both the same way, so the emptiness is the wait.
+func waitForJSONPath(ns, resource, name, jsonPath string, timeout time.Duration) string {
+	var value string
 	err := wait.PollUntilContextTimeout(context.Background(), 5*time.Second, timeout, true,
-		func(ctx context.Context) (bool, error) {
-			got, err := c.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
+		func(_ context.Context) (bool, error) {
+			out, err := e2ekubectl.RunKubectl(ns, "get", resource, name, "-o", "jsonpath="+jsonPath)
 			if err != nil {
-				framework.Logf("waiting for StorageClass %s: %v", scName, err)
+				framework.Logf("waiting for %s %s/%s %s: %v", resource, ns, name, jsonPath, err)
 				return false, nil
 			}
-			sc = got
-			return true, nil
+			value = strings.TrimSpace(out)
+			return value != "", nil
 		})
-	framework.ExpectNoError(err, "operator should create StorageClass %s for the pool", scName)
-	return sc
+	framework.ExpectNoError(err, "%s %s/%s should report %s", resource, ns, name, jsonPath)
+	return value
 }
 
 // pvForPVC resolves the bound PersistentVolume for a PVC.

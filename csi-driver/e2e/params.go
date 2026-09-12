@@ -24,9 +24,9 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 		const scName = "spdkcsi-e2e-qos-iops"
 
 		ginkgo.By("create StorageClass with qos_rw_iops parameter")
-		createStorageClassWithParams(f.ClientSet, scName, map[string]string{
+		createStorageClass(f, scName, map[string]string{
 			"qos_rw_iops": "1000",
-		})
+		}, nil)
 		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 
 		ginkgo.By("create PVC using QoS StorageClass")
@@ -70,9 +70,9 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 		const scName = "spdkcsi-e2e-qos-mbytes"
 
 		ginkgo.By("create StorageClass with qos_rw_mbytes parameter")
-		createStorageClassWithParams(f.ClientSet, scName, map[string]string{
+		createStorageClass(f, scName, map[string]string{
 			"qos_rw_mbytes": "100",
-		})
+		}, nil)
 		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 
 		ginkgo.By("create PVC using QoS MB/s StorageClass")
@@ -119,7 +119,7 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 		)
 
 		ginkgo.By("create base StorageClass (no QoS)")
-		createStorageClassWithParams(f.ClientSet, scName, map[string]string{})
+		createStorageClass(f, scName, nil, nil)
 		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 
 		ginkgo.By("create PVC with QoS annotation override")
@@ -166,9 +166,9 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 		const scName = "spdkcsi-e2e-encrypted"
 
 		ginkgo.By("create StorageClass with encryption parameter")
-		createStorageClassWithParams(f.ClientSet, scName, map[string]string{
+		createStorageClass(f, scName, map[string]string{
 			"encryption": "True",
-		})
+		}, nil)
 		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 
 		ginkgo.By("create PVC using encrypted StorageClass")

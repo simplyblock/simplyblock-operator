@@ -14,9 +14,10 @@ var _ = ginkgo.Describe("SPDKCSI-SNAPSHOT", func() {
 	ginkgo.It("snapshot volumes preserve data from before each snapshot was taken", func() {
 		ns := f.Namespace.Name
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
+		scName := specStorageClass(f, nil)
 
 		ginkgo.By("create source PVC")
-		deployPVC(ns)
+		deployPVC(ns, scName)
 		ginkgo.DeferCleanup(func() { deletePVC(ns) })
 
 		ginkgo.By("deploy test pod and write first data set")
@@ -33,7 +34,7 @@ var _ = ginkgo.Describe("SPDKCSI-SNAPSHOT", func() {
 		)
 
 		ginkgo.By("create snapshot1 and verify first data set")
-		deploySnapshot(ns)
+		deploySnapshot(ns, scName)
 		ginkgo.DeferCleanup(func() {
 			deleteSnapshot(ns)
 			if err := waitForTestPodGone(f.ClientSet, ns, "spdkcsi-test-snapshot1"); err != nil {
@@ -68,7 +69,7 @@ var _ = ginkgo.Describe("SPDKCSI-SNAPSHOT", func() {
 		)
 
 		ginkgo.By("create snapshot2 and verify both data sets")
-		deploySnapshot2(ns)
+		deploySnapshot2(ns, scName)
 		ginkgo.DeferCleanup(func() { deleteSnapshot2(ns) })
 		framework.ExpectNoError(
 			waitForTestPodReady(f.ClientSet, 3*time.Minute, ns, "spdkcsi-test-snapshot2"),

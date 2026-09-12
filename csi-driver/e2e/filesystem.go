@@ -20,16 +20,17 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 	// -------------------------------------------------------------------------
 
 	// A unique StorageClass name is generated per test so parallel runs do not
-	// collide. The SC is created by copying the default one and overriding
-	// `csi.storage.k8s.io/fstype` to `xfs`.
+	// collide. The class names xfs explicitly rather than leaning on the default
+	// every class this suite writes carries: XFS is what this spec is about, so
+	// it says so, and it keeps asserting XFS if that default ever moves.
 	ginkgo.It("XFS volume is provisioned and data persists across pod restarts", func() {
 		ns := f.Namespace.Name
 		const xfsSC = "spdkcsi-e2e-xfs"
 
-		ginkgo.By("create XFS StorageClass derived from the default one")
-		createStorageClassWithParams(f.ClientSet, xfsSC, map[string]string{
-			"csi.storage.k8s.io/fstype": "xfs",
-		})
+		ginkgo.By("create the XFS StorageClass this spec provisions through")
+		createStorageClass(f, xfsSC, map[string]string{
+			scParamFSType: "xfs",
+		}, nil)
 		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, xfsSC) })
 
 		ginkgo.By("create PVC using XFS StorageClass")
@@ -94,20 +95,21 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 	})
 
 	// -------------------------------------------------------------------------
-	// The default class: subdirectory writes survive pod restart
+	// An unadorned class: subdirectory writes survive pod restart
 	// -------------------------------------------------------------------------
 
 	// The name says ext4 and the spec is kept under it, but the filesystem is
-	// whichever one the default class formats, and in operator mode that is the
-	// pool's declared filesystem: XFS unless a StoragePool asks for ext4. What
-	// the spec asserts holds either way, so nothing below may name a filesystem.
+	// whichever one a class that asks for nothing in particular formats, which
+	// is the declared default: XFS. What the spec asserts holds either way, so
+	// nothing below may name a filesystem — the annotation is compared against
+	// what is actually mounted.
 
 	ginkgo.It("ext4 volume supports nested directory writes that persist across pod restarts", func() {
 		ns := f.Namespace.Name
 		testPodLabel := metav1.ListOptions{LabelSelector: "app=spdkcsi-pvc"}
 
 		ginkgo.By("create PVC and test pod")
-		deployPVC(ns)
+		deployPVC(ns, specStorageClass(f, nil))
 		deployTestPod(ns)
 		ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 
@@ -129,10 +131,9 @@ var _ = ginkgo.Describe("SPDKCSI-FILESYSTEM", func() {
 		//
 		// What the annotation is compared against is the mounted filesystem
 		// rather than a filesystem named here, because the two have to agree and
-		// only one of them is this spec's to know. The default class formats what
-		// its pool declares, which is XFS unless a StoragePool says otherwise, so
-		// a literal would assert how the cluster under test happens to be
-		// configured instead of whether the driver recorded what it staged.
+		// only one of them is this spec's to know. A literal would assert how
+		// this spec's class happens to be built instead of whether the driver
+		// recorded what it staged.
 		mounted, _ := execCommandInPod(f, "df -T /spdkvol | awk 'NR==2 {print $2}'", ns, &testPodLabel)
 		mounted = strings.TrimSpace(mounted)
 		gomega.Expect(mounted).NotTo(gomega.BeEmpty(), "read the filesystem mounted at /spdkvol")

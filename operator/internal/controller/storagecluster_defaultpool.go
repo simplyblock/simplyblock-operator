@@ -66,11 +66,21 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace},
 		Spec: simplyblockv1alpha2.StoragePoolSpec{
 			ClusterRef: cluster.Name,
-			// No limits and no volume defaults. The control plane's own
-			// defaults are what an administrator who has not yet decided how to
-			// divide the cluster should get, and spec.volumeDefaults is
-			// immutable once set: guessing a filesystem or a ceiling here would
-			// be guessing one nobody could change afterward.
+			// No limits: the control plane's own are what an administrator who
+			// has not yet decided how to divide the cluster should get, and
+			// guessing a ceiling here would be guessing one the immutability of
+			// spec.volumeDefaults puts out of reach afterward.
+			//
+			// An empty volume defaults block is not the same as none, and the
+			// difference is the filesystem. The API server only applies the
+			// defaults declared inside an object that is present, so a nil block
+			// leaves spec.volumeDefaults.filesystem unset, the generated class
+			// carries no csi.storage.k8s.io/fstype, and the node plugin falls
+			// back to ext4 — which is neither what the CRD declares nor what
+			// every release before this one formatted with. Writing the block
+			// empty asks for exactly the declared defaults: xfs, and no ceiling
+			// of any kind, since filesystem is the only field that has one.
+			VolumeDefaults: &simplyblockv1alpha2.VolumeDefaults{},
 		},
 	}
 	if err := controllerutil.SetControllerReference(cluster, p, r.Scheme); err != nil {

@@ -20,8 +20,10 @@ var _ = ginkgo.Describe("SPDKCSI-DELETION", func() {
 	ginkgo.It("PV is deleted after its PVC is removed (reclaimPolicy: Delete)", func() {
 		ns := f.Namespace.Name
 
+		scName := specStorageClass(f, nil)
+
 		ginkgo.By("create PVC and test pod")
-		deployPVC(ns)
+		deployPVC(ns, scName)
 		deployTestPod(ns)
 		// Register cleanup for the failure path. In the success path the test
 		// delete explicitly below so we can observe the PV lifecycle.
@@ -68,9 +70,10 @@ var _ = ginkgo.Describe("SPDKCSI-DELETION", func() {
 	ginkgo.It("VolumeSnapshot is removed after explicit deletion", func() {
 		ns := f.Namespace.Name
 		const snapshotName = "spdk-snapshot-deletion-test"
+		scName := specStorageClass(f, nil)
 
 		ginkgo.By("create source PVC and test pod")
-		deployPVC(ns)
+		deployPVC(ns, scName)
 		deployTestPod(ns)
 		ginkgo.DeferCleanup(func() { deletePVC(ns) }) // PVC outlives the test pod
 		ginkgo.DeferCleanup(func() {
