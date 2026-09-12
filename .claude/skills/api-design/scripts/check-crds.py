@@ -85,6 +85,8 @@ ENUM_FOREIGN = {
     "ext2", "ext3", "ext4", "xfs", "btrfs",
     # Wire protocols and fabrics, named by their specifications.
     "tcp", "rdma", "fc", "udp", "sctp",
+    # A product's own name, spelled the way that product spells it.
+    "cert-manager",
 }
 
 # A doc comment claiming a validating webhook guards the field. It is the one

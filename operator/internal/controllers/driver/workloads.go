@@ -52,24 +52,15 @@ func nodePluginHostDir(driver string) string {
 	return kubeletPluginsDir + "/" + driver
 }
 
-// TODO(simplyblockdriver): give TLS and csi-link a spec surface. The chart
-// could express both and this kind cannot, so adoption refuses a deployment
-// carrying either rather than reconciling it away
-// (adoption.go, unsupportedConfiguration).
+// TODO(simplyblockdriver): give csi-link a spec surface. TLS now has one
+// (tls.go, spec.tls); this is the other half of the TODO that used to stand
+// here.
 //
-// TLS was the unconditional `simplyblock.tlsEnv`, `tlsVolumeMount`, and
-// `clientTlsVolume` on both plugins, gated on tls.enabled: SB_TLS_SERVE,
-// SB_TLS_PROVIDER, SB_TLS_CLIENT_AUTH, SB_TLS_CONNECT, the FDB_TLS_* set, a
-// serving bundle, and a client certificate per plugin. It is the more urgent of
-// the two, because a deployment that had it is one whose data path is
-// encrypted.
-//
-// csiLink is the second. The chart
-// gated it on csiLink.enabled and gave each plugin three arguments, a
-// service-account token projected for the operator's audience, and a CA bundle
-// from a ConfigMap. None of that is expressible on the CRD, so a deployment
-// that had it enabled loses it here, and the values that configured it now
-// configure only the Service the operator itself serves.
+// The chart gated csi-link on csiLink.enabled and gave each plugin three
+// arguments, a service-account token projected for the operator's audience,
+// and a CA bundle from a ConfigMap. None of that is expressible on the CRD, so
+// a deployment that had it enabled loses it here, and the values that
+// configured it now configure only the Service the operator itself serves.
 //
 // It is off in every deployment measured, which is why the driver could move
 // without it. Turning it on again needs a spec surface first, and that decision
@@ -81,6 +72,11 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 	s := sidecars(d)
 	driver := n.csiDriver
 	labels := map[string]string{"app": n.nodeDaemonSet}
+
+	volumes := nodeVolumes(n, driver)
+	if v := tlsVolume(d, n.nodeClientSecret); v != nil {
+		volumes = append(volumes, *v)
+	}
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
@@ -98,7 +94,7 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),
 					},
-					Volumes: nodeVolumes(n, driver),
+					Volumes: volumes,
 				},
 			},
 		},
@@ -152,15 +148,15 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			"--nodeid=$(NODE_ID)",
 			"--node",
 		},
-		Env: append([]corev1.EnvVar{
+		Env: append(append([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			{Name: "GUARDIAN_MIN_BROKEN_FOR", Value: "30s"},
-		}, serviceAccountAuthEnv(d)...),
+		}, serviceAccountAuthEnv(d)...), tlsEnv(d)...),
 		Lifecycle: &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", nodePostStartScript}},
 		}},
 		Resources: d.Spec.NodeResources,
-		VolumeMounts: []corev1.VolumeMount{
+		VolumeMounts: append([]corev1.VolumeMount{
 			{Name: "socket-dir", MountPath: socketDir},
 			{Name: "plugin-dir", MountPath: kubeletPluginsDir, MountPropagation: &bidirectional},
 			{Name: "pod-dir", MountPath: "/var/lib/kubelet/pods", MountPropagation: &bidirectional},
@@ -172,7 +168,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
-		},
+		}, tlsVolumeMount(d)...),
 	}
 }
 
@@ -256,6 +252,20 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 		{ContainerPort: 8080, Name: "http-endpoint", Protocol: corev1.ProtocolTCP},
 	}
 
+	volumes := []corev1.Volume{
+		{
+			Name: "socket-dir",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
+			},
+		},
+		configMapVolume("csi-config", n.configMap, false),
+		secretVolume("csi-secret", n.secretV2),
+	}
+	if v := tlsVolume(d, n.controllerClientSecret); v != nil {
+		volumes = append(volumes, *v)
+	}
+
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.controllerStatefulSet, Namespace: d.Namespace},
 		Spec: appsv1.StatefulSetSpec{
@@ -271,16 +281,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 					HostNetwork:        true,
 					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 					Containers:         containers,
-					Volumes: []corev1.Volume{
-						{
-							Name: "socket-dir",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
-							},
-						},
-						configMapVolume("csi-config", n.configMap, false),
-						secretVolume("csi-secret", n.secretV2),
-					},
+					Volumes:            volumes,
 				},
 			},
 		},
@@ -312,15 +313,15 @@ func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image s
 			"--nodeid=$(NODE_ID)",
 			"--controller",
 		},
-		Env: append([]corev1.EnvVar{
+		Env: append(append([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
-		}, serviceAccountAuthEnv(d)...),
+		}, serviceAccountAuthEnv(d)...), tlsEnv(d)...),
 		Resources: d.Spec.ControllerResources,
-		VolumeMounts: []corev1.VolumeMount{
+		VolumeMounts: append([]corev1.VolumeMount{
 			{Name: "socket-dir", MountPath: socketDir},
 			{Name: "csi-config", MountPath: "/etc/spdkcsi-config/", ReadOnly: true},
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
-		},
+		}, tlsVolumeMount(d)...),
 	}
 }
 

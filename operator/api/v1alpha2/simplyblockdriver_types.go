@@ -86,6 +86,64 @@ type SidecarImages struct {
 	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
 }
 
+// DriverTLSProvider is where the TLS certificate on this connection comes
+// from. The values are not this group's to spell: OpenShift and cert-manager
+// are the two products, and the operator's own internal/utils package already
+// carries these exact strings for the control plane's own SB_TLS_PROVIDER, so
+// a driver and a control plane in the same namespace agree on the same word
+// without a translation table between them.
+// +kubebuilder:validation:Enum=OpenShift;cert-manager
+type DriverTLSProvider string
+
+const (
+	// DriverTLSProviderOpenShift is OpenShift's service-ca operator: a
+	// ConfigMap carrying the cluster CA, and a Secret an administrator
+	// provisions for each plugin's client certificate.
+	DriverTLSProviderOpenShift DriverTLSProvider = "OpenShift"
+	// DriverTLSProviderCertManager is cert-manager: a ClusterIssuer already
+	// installed by this chart mints a Certificate per plugin, and the Secret
+	// it writes carries the CA bundle alongside the client keypair.
+	DriverTLSProviderCertManager DriverTLSProvider = "cert-manager"
+)
+
+// DriverTLS configures whether this deployment's two plugins reach the
+// control plane over TLS. Unset (every field at its zero value) is a
+// plaintext data path, which is what every deployment measured before this
+// field existed ran as — the chart rendered `simplyblock.tlsEnv`,
+// `simplyblock.tlsVolumeMount`, and `simplyblock.clientTlsVolume`
+// unconditionally on both plugins, gated on the same three Helm values these
+// fields replace.
+//
+// The client-certificate Secret each plugin mounts is not named here: it is
+// `<object name>-csi-controller-client-tls` and
+// `<object name>-csi-node-client-tls`, the same names
+// operator/internal/controllers/driver/names.go derives for every other
+// object, and the same ones this chart's controlplane_certificates.yaml
+// already writes for cert-manager. A field naming them again would be a
+// second place for the two to disagree.
+type DriverTLS struct {
+	// EnableTLS turns on TLS between both plugins and the control plane.
+	// +kubebuilder:default=false
+	// +optional
+	EnableTLS *bool `json:"enableTLS,omitempty"`
+
+	// EnableMutualTLS additionally requires each plugin to present a client
+	// certificate, rather than dialing the control plane anonymously over
+	// the encrypted connection EnableTLS alone provides. Ignored when
+	// EnableTLS is false, the same as the Helm value it replaces.
+	// +kubebuilder:default=false
+	// +optional
+	EnableMutualTLS *bool `json:"enableMutualTLS,omitempty"`
+
+	// Provider selects where the CA bundle (and, with EnableMutualTLS, the
+	// client certificate) comes from. Required reading whenever EnableTLS is
+	// true: the two providers mount a differently shaped volume, and neither
+	// shape can be inferred from anything else on this object.
+	// +kubebuilder:default=cert-manager
+	// +optional
+	Provider DriverTLSProvider `json:"provider,omitempty"`
+}
+
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
 type SimplyblockDriverSpec struct {
@@ -170,6 +228,15 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
+
+	// TLS configures whether both plugins reach the control plane over TLS.
+	// Unset is plaintext, the shape every deployment ran before this field
+	// existed, so adoption of a deployment already running TLS needs this to
+	// already agree with what the plugins are configured for — see
+	// adoption.go's tlsAdoptionMismatch — rather than reading it off a live
+	// object the way spec.driverName's default cannot be.
+	// +optional
+	TLS DriverTLS `json:"tls,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from.
