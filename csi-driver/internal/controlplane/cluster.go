@@ -197,10 +197,21 @@ func (c *ClusterClient) GetRelationship(ctx context.Context, lvolID string) (*Re
 
 // CreateLVolData is the data structure for creating a logical volume
 type CreateLVolData struct {
-	LvolName     string `json:"name"`
-	Size         string `json:"size"`
-	LvsName      string `json:"pool"`
-	Fabric       string `json:"fabric"`
+	LvolName string `json:"name"`
+	Size     string `json:"size"`
+	LvsName  string `json:"pool"`
+
+	// Fabric omits itself when the StorageClass does not name one, and that is
+	// the whole of what makes the control plane's own default reachable. Its
+	// default for the key is "tcp" and it applies it only when the key is
+	// absent: a request carrying "fabric": "" is a request that named a fabric,
+	// and the empty string travels all the way to add_lvol_ha, where the node's
+	// liveness is read off the attribute named active_<fabric> and an empty one
+	// names nothing. Every class the operator generated used to carry tcp
+	// explicitly, so an absent fabric was unreachable until a class could be
+	// authored without one.
+	Fabric string `json:"fabric,omitempty"`
+
 	Encryption   bool   `json:"encrypt"`
 	MaxRWIOPS    string `json:"max_rw_iops"`
 	MaxRWmBytes  string `json:"max_rw_mbytes"`
