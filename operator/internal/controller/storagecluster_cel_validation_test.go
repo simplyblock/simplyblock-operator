@@ -198,3 +198,75 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 		})
 	}
 }
+
+// TestStorageClusterVCPUCountMinimum pins the schema floor on spec.vcpuCount
+// (test plan I-09).
+//
+// The floor is a generated value: it lives as a kubebuilder marker on the Go
+// field and reaches the apiserver only through config/crd/bases, which the
+// four committed copies of the CRD are in turn derived from. Nothing else in
+// the tree fails when the marker and the generated schema disagree, so this
+// asserts against the CRD an apiserver actually loads rather than against the
+// constant.
+func TestStorageClusterVCPUCountMinimum(t *testing.T) {
+	if err := simplyblockv1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		t.Fatalf("adding the simplyblock scheme: %v", err)
+	}
+
+	env := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		ErrorIfCRDPathMissing: true,
+		BinaryAssetsDirectory: getFirstFoundEnvTestBinaryDir(),
+	}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatalf("starting envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("stopping envtest: %v", err)
+		}
+	})
+
+	apiClient, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		t.Fatalf("building a client: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		vcpuCount  int32
+		wantDenied bool
+	}{
+		{name: "one below the floor", vcpuCount: 3, wantDenied: true},
+		{name: "at the floor", vcpuCount: 4},
+		{name: "above the floor", vcpuCount: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha1.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "vcpumin-", Namespace: "default"},
+				Spec: simplyblockv1alpha1.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(tc.vcpuCount),
+				},
+			}
+
+			err := apiClient.Create(context.Background(), cluster)
+			if tc.wantDenied {
+				if err == nil {
+					t.Fatalf("expected the apiserver to reject vcpuCount %d, but it was accepted", tc.vcpuCount)
+				}
+				if !strings.Contains(err.Error(), "should be greater than or equal to 4") {
+					t.Fatalf("rejected for the wrong reason: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected the apiserver to accept vcpuCount %d, got: %v", tc.vcpuCount, err)
+			}
+			if err := apiClient.Delete(context.Background(), cluster); err != nil {
+				t.Errorf("cleaning up the cluster: %v", err)
+			}
+		})
+	}
+}

@@ -278,7 +278,7 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 | I-06 | `spec.maxSubsystemCount` omitted: creation rejected as `Required`                                        | Negative | —                 |
 | I-07 | `spec.maxSubsystemCount` of 9 and of 76: both rejected by the range                                      | Boundary | —                 |
 | I-08 | `spec.maxSubsystemCount` of 10 and of 75: both accepted                                                  | Boundary | —                 |
-| I-09 | `spec.vcpuCount` of 5 rejected, of 6 accepted                                                            | Boundary | —                 |
+| I-09 | `spec.vcpuCount` of 3 rejected, of 4 accepted                                                            | Boundary | `TestStorageClusterVCPUCountMinimum` (in `internal/controller/storagecluster_cel_validation_test.go`) |
 | I-10 | `spec.maxConcurrentWorkerRestarts` of 0: rejected by the minimum                                         | Boundary | —                 |
 | I-11 | `spec.volumeMigrationSettings.dataRealignment.minMoves` of 0: rejected                                   | Boundary | —                 |
 | I-12 | `spec.action` on `StorageClusterOps` outside the enum: rejected by admission                             | Negative | —                 |

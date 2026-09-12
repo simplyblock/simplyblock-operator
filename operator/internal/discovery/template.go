@@ -24,7 +24,7 @@ const (
 	// fleet whose chosen memory nodes have fewer cores than this cannot host a
 	// storage node, and a draft naming a smaller number would be refused by
 	// the schema rather than reviewed.
-	MinimumVCPUCount int32 = 6
+	MinimumVCPUCount int32 = 4
 
 	// DefaultMaxSubsystemCount is what a draft proposes for the number of
 	// NVMe-oF subsystems each storage node serves.
