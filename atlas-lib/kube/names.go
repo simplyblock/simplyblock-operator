@@ -65,7 +65,21 @@ const (
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
 	ParamEncryption            = "encryption"
 
-	// QoS limits. Empty/absent means unset (0).
+	// The three a StoragePool's volume defaults reach the class under and that
+	// nothing consumes yet. They are written because the pool's contract is that
+	// its defaults appear in the class's parameters, and a class's parameters
+	// are immutable: a key omitted now cannot be added to a class later, so the
+	// pool that wanted compression would need replacing rather than editing.
+	// What the driver does with a parameter is its own concern.
+	ParamCompression   = "compression"
+	ParamReplication   = "replicate"
+	ParamPriorityClass = "priority_class"
+
+	// The QoS limits' older spelling. Empty or absent means unset (0). These are
+	// read for as long as a class carrying them exists, which is indefinitely: a
+	// class's parameters are immutable, so one an older operator generated can
+	// never be rewritten. The current spellings and the resolver that prefers
+	// them are in qos.go.
 	ParamQoSRWIOPS   = "qos_rw_iops"
 	ParamQoSRWMBytes = "qos_rw_mbytes"
 	ParamQoSRMBytes  = "qos_r_mbytes"

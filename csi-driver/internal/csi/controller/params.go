@@ -16,19 +16,16 @@ import (
 const (
 	annotationNvmfModelID = "simplyblock.io/nvmf-model-id"
 	annotationLvolID      = "simplyblock.io/lvol-id"
-	annotationQoSRWIOPS   = "simplyblock.io/qos-rw-iops"
-	annotationQoSRWMBps   = "simplyblock.io/qos-rw-mbps"
-	annotationQoSRMBps    = "simplyblock.io/qos-r-mbps"
-	annotationQoSWMBps    = "simplyblock.io/qos-w-mbps"
 	annotationPodAffinity = "simplyblock.io/pod-affinity"
 
 	// Deprecated annotation keys, still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
 	deprecatedAnnotationLvolID      = "simplybk/lvol-id"
-	deprecatedAnnotationQoSRWIOPS   = "simplybk/qos-rw-iops"
-	deprecatedAnnotationQoSRWMBps   = "simplybk/qos-rw-mbytes"
-	deprecatedAnnotationQoSRMBps    = "simplybk/qos-r-mbytes"
-	deprecatedAnnotationQoSWMBps    = "simplybk/qos-w-mbytes"
+
+	// The four QoS ceilings are not here. Each of them has three live spellings
+	// and the operator writes one of them, so the keys and the order they are
+	// tried in belong where both components can read them: atlas-lib's
+	// kube.QoSParam and kube.QoSAnnotation.
 
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"

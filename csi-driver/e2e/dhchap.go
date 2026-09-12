@@ -433,21 +433,26 @@ func storageClusterNameForPools() string {
 // createDHCHAPStoragePool applies a StoragePool CR with DHCHAP enabled and a
 // single allowed node, then leaves the operator to do the rest: register that
 // node's NQN on the backend, label the node, and generate the StorageClass.
-// maxNamespacePerSubsys=1 gives each volume its own NVMe-oF subsystem so its
+// maxNamespacesPerSubsystem=1 gives each volume its own NVMe-oF subsystem so its
 // NQN carries its own lvol id — same rationale as setupManagedWorkload.
+//
+// The manifest is authored at v1alpha2 because that is the storage version, and
+// StoragePool is served through a conversion webhook that only an upgrade
+// deploys. At v1alpha1 this apply asks the API server to dial a service that is
+// not there on a fresh install, and the spec never reaches the reconciler.
 func createDHCHAPStoragePool(ns, poolName, clusterName, allowedNode string) {
-	manifest := fmt.Sprintf(`apiVersion: storage.simplyblock.io/v1alpha1
+	manifest := fmt.Sprintf(`apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: %s
   namespace: %s
 spec:
-  clusterName: %s
-  dhchap: true
+  clusterRef: %s
   allowedNodes:
   - %s
-  storageClassParameters:
-    maxNamespacePerSubsys: "1"
+  volumeDefaults:
+    enableDHCHAP: true
+    maxNamespacesPerSubsystem: 1
 `, poolName, ns, clusterName, allowedNode)
 
 	tmp, err := os.CreateTemp("", "e2e-storagepool-*.yaml")

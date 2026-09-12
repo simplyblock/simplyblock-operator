@@ -37,10 +37,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
+
+// apiError and storagePoolAPIResponse moved here from the StorageBackup
+// reconciler that declared them, which is retired: a StorageBackup is now
+// discovered from the cluster's store rather than requested
+// (design-storagebackup.md §5.1). This controller is the last v1alpha1 one that
+// reads either.
+type apiError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e apiError) Error() string { return e.Message }
+
+type storagePoolAPIResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 
 const (
 	restoreProgressRequeue  = 10 * time.Second
@@ -267,7 +287,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
-	backup := &simplyblockv1alpha1.StorageBackup{}
+	backup := &simplyblockv1alpha2.StorageBackup{}
 	if err := r.Get(ctx, client.ObjectKey{
 		Name:      restoreCR.Spec.BackupRef.Name,
 		Namespace: restoreCR.Namespace,
@@ -284,7 +304,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	}
 
 	// Mark the BackupRestore as Failed if the StorageBackup is in terminal state Failed.
-	if backup.Status.Phase == simplyblockv1alpha1.BackupPhaseFailed {
+	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
 		msg := fmt.Sprintf("StorageBackup %q failed and cannot be restored: %s",
 			backup.Name, backup.Status.Message)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -297,7 +317,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		return ctrl.Result{}, true, nil
 	}
 
-	if backup.Status.Phase != simplyblockv1alpha1.BackupPhaseDone {
+	if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable {
 		msg := fmt.Sprintf("StorageBackup %q is not ready (phase=%s)", backup.Name, backup.Status.Phase)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
@@ -313,14 +333,15 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	// Guard on RestoredLvolID so we don't re-evaluate once the backend task is already running.
 	if restoreCR.Status.RestoredLvolID == "" {
 		storageReq := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+		backupSize := ptr.FromOrZero(backup.Copy().Size)
 		var specErr string
 		switch {
 		case storageReq.IsZero():
 			specErr = "spec.pvcTemplate.spec.resources.requests.storage must be set"
-		case backup.Status.Size > 0 && storageReq.Value() < backup.Status.Size:
+		case backupSize > 0 && storageReq.Value() < backupSize:
 			specErr = fmt.Sprintf(
 				"requested storage %s (%d bytes) is less than backup size %d bytes",
-				storageReq.String(), storageReq.Value(), backup.Status.Size,
+				storageReq.String(), storageReq.Value(), backupSize,
 			)
 		}
 		if specErr != "" {
@@ -337,10 +358,10 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 
 	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 		s.ClusterUUID = clusterUUID
-		s.BackupID = backup.Status.BackupID
-		s.SourceLvolID = backup.Status.LvolID
-		s.FSType = backup.Status.FSType
-		s.SourceClusterUUID = backup.Status.SourceClusterUUID
+		s.BackupID = backup.Spec.BackupID
+		s.SourceLvolID = backup.Source().LvolID
+		s.FSType = backup.Source().FSType
+		s.SourceClusterUUID = backup.Source().ClusterUUID
 		if s.Phase == "" {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
 		}
@@ -622,19 +643,19 @@ func (r *BackupRestoreReconciler) resolvePool(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	backup *simplyblockv1alpha1.StorageBackup,
+	backup *simplyblockv1alpha2.StorageBackup,
 ) (poolName, poolUUID string, err error) {
 	if restoreCR.Spec.TargetPool != "" {
 		poolName = restoreCR.Spec.TargetPool
 		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 		return
 	}
-	poolName = backup.Status.PoolName
+	poolName = backup.Source().PoolName
 	if poolName == "" {
 		err = fmt.Errorf("backup %q has no pool name in status", backup.Name)
 		return
 	}
-	poolUUID = backup.Status.PoolUUID
+	poolUUID = backup.Source().PoolUUID
 	if poolUUID == "" {
 		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 	}
@@ -727,14 +748,34 @@ func (r *BackupRestoreReconciler) resolvedPVCNamespacedName(
 	return name, restoreCR.Namespace
 }
 
+// restoreStorageClassName is the class the restored PersistentVolume and its
+// claim name.
+//
+// It is resolved through the pool's own assignment rather than derived from the
+// pool's name, because a class is authored and a pool may have any number of
+// them (design-storagepool.md §5). The restore has to name one, so it takes the
+// pool's default class if it has one and otherwise the first assigned class in
+// name order. A pool with no class at all fails the restore with a message
+// saying so, which is better than writing a PersistentVolume that names a class
+// nothing will ever create.
+func (r *BackupRestoreReconciler) restoreStorageClassName(
+	ctx context.Context, restoreCR *simplyblockv1alpha1.BackupRestore,
+) (string, error) {
+	return pool.ConsumingClassName(ctx, r.Client,
+		restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+}
+
 func (r *BackupRestoreReconciler) ensurePV(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 	pvName, pvcName, pvcNamespace, clusterUUID string,
 ) error {
+	wantStorageClass, err := r.restoreStorageClassName(ctx, restoreCR)
+	if err != nil {
+		return err
+	}
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
-		wantStorageClass := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
 		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolName, restoreCR.Status.RestoredLvolID)
 		var mismatch string
 		switch {
@@ -763,7 +804,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 		return fmt.Errorf("get PV %s: %w", pvName, err)
 	}
 
-	storageClassName := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	storageClassName := wantStorageClass
 
 	storageQty := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
 
@@ -897,7 +938,10 @@ func (r *BackupRestoreReconciler) ensurePVC(
 
 	pvcSpec := restoreCR.Spec.PVCTemplate.Spec.DeepCopy()
 	pvcSpec.VolumeName = restoreCR.Status.PVName
-	sc := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	sc, err := r.restoreStorageClassName(ctx, restoreCR)
+	if err != nil {
+		return err
+	}
 	pvcSpec.StorageClassName = &sc
 
 	pvc := &corev1.PersistentVolumeClaim{

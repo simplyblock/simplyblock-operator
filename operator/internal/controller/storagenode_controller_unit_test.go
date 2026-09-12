@@ -20,6 +20,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -44,7 +45,7 @@ func newSNReconciler(t *testing.T, objects ...client.Object) *StorageNodeReconci
 		WithScheme(scheme).
 		WithStatusSubresource(
 			&simplyblockv1alpha1.StorageNode{},
-			&simplyblockv1alpha1.StorageNodeOps{},
+			&simplyblockv1alpha2.StorageNodeOps{},
 			&simplyblockv1alpha1.StorageCluster{},
 			&simplyblockv1alpha1.StorageNodeSet{},
 		).
@@ -323,26 +324,26 @@ func TestEnsureRemoveOps_CreatesOpsWhenMissing(t *testing.T) {
 		t.Fatalf("ensureRemoveOps returned error: %v", err)
 	}
 
-	var ops simplyblockv1alpha1.StorageNodeOps
+	var ops simplyblockv1alpha2.StorageNodeOps
 	if err := r.Get(context.Background(), types.NamespacedName{
 		Name: "sn-1-remove", Namespace: snTestNS,
 	}, &ops); err != nil {
 		t.Fatalf("expected StorageNodeOps to be created: %v", err)
 	}
-	if ops.Spec.Action != "remove" {
-		t.Errorf("expected action=remove, got %q", ops.Spec.Action)
+	if ops.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionRemove {
+		t.Errorf("expected action=Remove, got %q", ops.Spec.Action)
 	}
-	if ops.Spec.StorageNodeRef != "sn-1" {
-		t.Errorf("expected storageNodeRef=sn-1, got %q", ops.Spec.StorageNodeRef)
+	if ops.Spec.NodeRef != "sn-1" {
+		t.Errorf("expected nodeRef=sn-1, got %q", ops.Spec.NodeRef)
 	}
 }
 
 func TestEnsureRemoveOps_IdempotentWhenAlreadyExists(t *testing.T) {
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
 	sn.Status.UUID = "uuid-1"
-	existingOps := &simplyblockv1alpha1.StorageNodeOps{
+	existingOps := &simplyblockv1alpha2.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: "remove"},
+		Spec:       simplyblockv1alpha2.StorageNodeOpsSpec{NodeRef: "sn-1", Action: simplyblockv1alpha2.StorageNodeOpsActionRemove},
 	}
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	r := newSNReconciler(t, sn, sns, existingOps)
@@ -392,11 +393,11 @@ func TestHandleDeletion_FailedRemoveOpsBlocksFinalizerRemoval(t *testing.T) {
 	// ActiveOpsRef already cleared by releaseLock when the ops failed.
 	sn.Status.ActiveOpsRef = ""
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
-	ops := &simplyblockv1alpha1.StorageNodeOps{
+	ops := &simplyblockv1alpha2.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
-		Status: simplyblockv1alpha1.StorageNodeOpsStatus{
-			Phase:   simplyblockv1alpha1.StorageNodeOpsPhaseFailed,
+		Spec:       simplyblockv1alpha2.StorageNodeOpsSpec{NodeRef: "sn-1", Action: simplyblockv1alpha2.StorageNodeOpsActionRemove},
+		Status: simplyblockv1alpha2.StorageNodeOpsStatus{
+			Phase:   simplyblockv1alpha2.StorageNodeOpsPhaseFailed,
 			Message: "blocked: failure-domain balance: ...",
 		},
 	}
@@ -434,10 +435,10 @@ func TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval(t *testing.T) {
 	sn.Status.Status = utils.NodeStatusOnline
 	sn.Status.ActiveOpsRef = ""
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
-	ops := &simplyblockv1alpha1.StorageNodeOps{
+	ops := &simplyblockv1alpha2.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
-		Status:     simplyblockv1alpha1.StorageNodeOpsStatus{Phase: simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded},
+		Spec:       simplyblockv1alpha2.StorageNodeOpsSpec{NodeRef: "sn-1", Action: simplyblockv1alpha2.StorageNodeOpsActionRemove},
+		Status:     simplyblockv1alpha2.StorageNodeOpsStatus{Phase: simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded},
 	}
 	r := newSNReconciler(t, sn, sns, ops)
 

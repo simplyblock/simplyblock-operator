@@ -2,10 +2,12 @@
 resources:
 - storage_v1alpha1_storagecluster.yaml
 - storage_v1alpha1_storagenodeset.yaml
-- storage_v1alpha1_storagepool.yaml
+- storage_v1alpha2_storagepool.yaml
+- storage_v1alpha2_storagepoolops.yaml
 - storage_v1alpha1_task.yaml
 - storage_v1alpha1_snapshotreplication.yaml
-- storage_v1alpha1_storagebackup.yaml
+- storage_v1alpha2_storagebackuppolicy.yaml
+- storage_v1alpha2_storagebackupops.yaml
 - storage_v1alpha1_backuprestore.yaml
 - storage_v1alpha2_operatorops.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

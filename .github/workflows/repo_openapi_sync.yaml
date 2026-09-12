@@ -46,25 +46,35 @@ jobs:
           ref: ${{ inputs.sbcli_ref || 'main' }}
           path: .sbcli
 
-      - uses: actions/setup-python@v5
+      # sbcli declares its dependencies in pyproject.toml and pins them in
+      # uv.lock, so uv is what installs them and brings its own interpreter. The
+      # requirements.txt this job used to install from went away when sbcli moved
+      # to PEP 621 packaging.
+      - uses: astral-sh/setup-uv@v10
         with:
-          # The control plane's own runtime (see sbcli docker/Dockerfile_base).
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: .sbcli/requirements.txt
+          enable-cache: true
+          cache-dependency-glob: .sbcli/uv.lock
 
-      # The whole requirement set, not a hand-picked subset: the export imports
-      # the FastAPI app, which imports the controllers, and what those pull in is
+      # The whole locked set, not a hand-picked subset: the export imports the
+      # FastAPI app, which imports the controllers, and what those pull in is
       # sbcli's business rather than something to track here. No database and no
       # FoundationDB client library are needed — nothing connects at import time.
+      #
+      # The interpreter and the flags are the control plane's own, from sbcli's
+      # docker/Dockerfile: free-threaded 3.14, no dependency groups, and --locked
+      # so the export runs against the pinned versions rather than whatever a
+      # fresh resolution would pick. The exported spec is identical on 3.13, but
+      # an import that breaks on only one interpreter should break on the one the
+      # control plane runs.
       - name: Install sbcli's dependencies
-        run: pip install -r .sbcli/requirements.txt
+        run: uv sync --locked --no-default-groups --python 3.14t --project .sbcli
 
       - name: Export the spec
         id: export
         run: |
           cp shared/openapi.json "$RUNNER_TEMP/openapi.old.json"
-          python shared/export-openapi.py export --sbcli .sbcli --out shared/openapi.json
+          uv run --project .sbcli --no-sync \
+            python shared/export-openapi.py export --sbcli .sbcli --out shared/openapi.json
 
           if git diff --quiet -- shared/openapi.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -111,7 +121,8 @@ jobs:
       - name: Summarize the change
         if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
         run: |
-          python shared/export-openapi.py summarize \
+          uv run --project .sbcli --no-sync \
+            python shared/export-openapi.py summarize \
             --old "$RUNNER_TEMP/openapi.old.json" \
             --new shared/openapi.json > "$RUNNER_TEMP/summary.md"
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"

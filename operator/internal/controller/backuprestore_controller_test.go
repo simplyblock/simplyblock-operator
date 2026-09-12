@@ -15,15 +15,29 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const lvolUUID = "lvol-uuid"
 
 func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	k8sClient := newTestClient(t, scheme, nil)
+	scheme := newTestScheme(t, corev1.AddToScheme,
+		simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
+	// The restored volume names a class the pool it was restored into is
+	// assigned, rather than one derived from the pool's name: a class is
+	// authored, and a pool may have any number of them.
+	sourcePool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: "mycluster"},
+		Status: simplyblockv1alpha2.StoragePoolStatus{
+			UUID:              "pool-uuid",
+			StorageClassNames: []string{"restore-target-class"},
+		},
+	}
+	k8sClient := newTestClient(t, scheme, nil, sourcePool)
 
 	apiClient := &webapi.Client{
 		BaseURL: "http://simplyblock.test",
@@ -119,7 +133,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 		t.Fatalf("failed to get created PV: %v", err)
 	}
 
-	wantStorageClass := "simplyblock-default-mycluster-pool-a"
+	wantStorageClass := "restore-target-class"
 	if pv.Spec.StorageClassName != wantStorageClass {
 		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
 	}
@@ -160,13 +174,13 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
 	cluster := testCluster("default", "mycluster", "cluster-uuid")
-	backup := &simplyblockv1alpha1.StorageBackup{
+	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "backup-sample",
 			Namespace: "default",
 		},
-		Status: simplyblockv1alpha1.StorageBackupStatus{
-			Phase:   simplyblockv1alpha1.BackupPhaseFailed,
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			Phase:   simplyblockv1alpha2.StorageBackupPhaseFailed,
 			Message: "Snapshot snap-1 not found",
 		},
 	}
@@ -470,15 +484,17 @@ func TestBackupRestoreAcceptsARestoreOnItsLastAttempt(t *testing.T) {
 	}
 
 	// The backup finishes, so the next pass can place the restore.
-	backup := &simplyblockv1alpha1.StorageBackup{
+	backup := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "late-backup", Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageBackupStatus{
-			Phase:    simplyblockv1alpha1.BackupPhaseDone,
-			BackupID: "backup-id",
-			PoolName: "pool-a",
-			PoolUUID: "pool-uuid",
-			LvolID:   "source-lvol",
-			Size:     1 << 30,
+		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "mycluster", BackupID: "backup-id"},
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			Phase:  simplyblockv1alpha2.StorageBackupPhaseAvailable,
+			Backup: &simplyblockv1alpha2.BackupCopy{BackupID: "backup-id", Size: ptr.To(int64(1 << 30))},
+			Source: &simplyblockv1alpha2.BackupSource{
+				PoolName: "pool-a",
+				PoolUUID: "pool-uuid",
+				LvolID:   "source-lvol",
+			},
 		},
 	}
 	if err := k8sClient.Create(context.Background(), backup); err != nil {

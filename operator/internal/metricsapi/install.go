@@ -63,25 +63,35 @@ func Install(
 	log := mgr.GetLogger().WithName("metricsapi")
 
 	// The sampled half of a reading. A logical volume's capacity block is all
-	// zeros in the control plane's own DTO, so these numbers exist only in the
-	// metrics the same service exports.
+	// zeros in the control plane's own DTO and a device's is never updated by the
+	// watch stream, so these numbers exist only in the metrics the same service
+	// exports.
 	//
-	// An unconfigured or unbuildable endpoint is not fatal: the readings then
-	// carry each volume's provisioned size and nothing measured. Serving the
-	// identities and sizes beats serving nothing over a dependency this API can
-	// answer partially without.
+	// An unconfigured or unbuildable endpoint is not fatal, and it costs the
+	// three kinds differently. A volume reading keeps its provisioned size and
+	// loses what it occupies, because the first is known without measuring. A
+	// device reading and a pool reading are measurement throughout, so neither is
+	// served at all. Serving what can be answered beats serving nothing over a
+	// dependency this API can answer partially without.
 	var capacity CapacitySource
+	var deviceCapacity DeviceCapacitySource
+	var poolCapacity PoolCapacitySource
 	if prometheusURL == "" {
 		log.Info("no Prometheus endpoint configured; capacity samples will be absent")
 	} else if provider, err := prometheus.New(prometheusURL); err != nil {
 		log.Error(err, "capacity samples will be absent", "prometheusURL", prometheusURL)
 	} else {
+		// One provider satisfies all three: the volume, device, and pool
+		// readings are the same exporter's gauges under different prefixes.
 		capacity = provider
+		deviceCapacity = provider
+		poolCapacity = provider
 	}
 	go func() {
 		<-ready
 		server, err := NewServer(
-			Options{BindPort: port, CertDir: CertDir}, volumes, mgr.GetCache(), capacity, log,
+			Options{BindPort: port, CertDir: CertDir},
+			volumes, mgr.GetCache(), capacity, deviceCapacity, poolCapacity, log,
 		)
 		if err != nil {
 			log.Error(err, "the aggregated metrics API will not be served")

@@ -400,10 +400,12 @@ csiLink:
   # against the operator.
   audience: simplyblock-csi-link
 # The aggregated metrics API, served by the operator at
-# metrics.simplyblock.io/v1alpha1. It publishes LogicalVolumeMetrics: the space
-# each logical volume actually occupies, read with
-# `kubectl get lvm -n <namespace>` and confined to a tenant's own claims by
-# ordinary namespaced RBAC.
+# metrics.simplyblock.io/v1alpha2. It publishes two readings, both computed on
+# demand and never stored: LogicalVolumeMetrics, the space each logical volume
+# actually occupies, read with `kubectl get lvm -n <namespace>` and confined to a
+# tenant's own claims by ordinary namespaced RBAC; and StorageDeviceMetrics, the
+# space each storage device holds, read with `kubectl get sdm -n <namespace>` in
+# the namespace the storage cluster's own CRs live in.
 #
 # Disabling it removes the APIService, the Service, and the delegated-auth
 # bindings, and starts the operator with --enable-metrics-api=false. Nothing else

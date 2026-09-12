@@ -1,10 +1,24 @@
 {{- if .Values.operator.enabled }}
 ---
-apiVersion: storage.simplyblock.io/v1alpha1
+# Authored at v1alpha2, which is the storage version a fresh install gets.
+#
+# That is what keeps the conversion webhook out of a new deployment: an object
+# written at the storage version needs no conversion, so nothing on this path
+# ever calls the webhook and it is not deployed. Writing this at v1alpha1 would
+# make the chart itself the one client that forces conversion, on a cluster where
+# nothing is serving it.
+#
+# The image moved under spec.source.managed with the rename
+# (design-controlplane.md §5.1). A v1alpha1 spec.image here would be pruned
+# rather than converted, because the apiVersion above declares which schema the
+# body is read against.
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
   name: simplyblock
   namespace: {{ .Release.Namespace }}
 spec:
-  image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
+  source:
+    managed:
+      image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
 {{- end }}

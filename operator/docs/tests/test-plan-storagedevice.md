@@ -11,14 +11,14 @@ Scenario IDs are permanent and are never reused or renumbered. A `—` in the
 `Test` column means nothing implements the scenario yet, and every such row
 reappears in §6 with its reason.
 
-Both kinds are new, so every row is a specification rather than a gap against
-shipped behavior. Nothing here has a shipped spelling to name.
+`StorageDevice`, its mirror, the readings of design §4.4, and the observability of
+design §8 are implemented, and their rows name the tests that cover them.
+`StorageDeviceOps` is not, so every operation row is a specification: what is still
+unconfirmed is one control-plane verb per action, `self-test`, `fail`, `detach`, and
+the adopt call, and those rows name endpoints nothing in this repository calls yet.
 
-**What this plan rests on is narrower than it was.** Design §7 confirms the device
-list and the hardware fields, so the kind has something to build objects from and
-something to publish. What is still unconfirmed is one control-plane verb per action:
-`self-test`, `fail`, `detach`, and the adopt call. The operation rows below therefore
-name endpoints nothing in this repository calls yet.
+A row whose behavior the design has since dropped is struck through in place with
+the ID that superseded it, because these numbers are cited from review history.
 
 | Class       | Prefix | Harness                                                                |
 |-------------|--------|------------------------------------------------------------------------|
@@ -36,71 +36,152 @@ lands here: a device list in, a set of objects out.
 
 ### Object Projection (design §5.1)
 
-File: `operator/internal/controllers/node/storagedevice_projection_test.go`
+Files: `operator/internal/controller/storagedevice_controller_unit_test.go`,
+`operator/internal/controller/storagedevice_controller_reporting_test.go`, and
+`operator/internal/cpinformer/subscriptions/device_test.go` for the naming the
+subscription performs.
 
-| #    | Scenario                                                                 | Type     | Test |
-|------|--------------------------------------------------------------------------|----------|------|
-| U-01 | A node with four devices, no objects: four objects are created           | Positive | —    |
-| U-02 | Each object is named `<node>-<short-device-id>` and is a valid DNS label | Positive | —    |
-| U-03 | Each object carries a controller reference to its `StorageNode`          | Positive | —    |
-| U-04 | Each object carries the cluster, node, and worker labels                 | Positive | —    |
-| U-05 | A device whose object exists: the object is updated, not recreated       | Negative | —    |
-| U-06 | A node with no devices: no object is created and none is removed         | Boundary | —    |
-| U-07 | A node with one device: one object                                       | Boundary | —    |
-| U-08 | Two nodes with a device of the same ID: two objects, no collision        | Boundary | —    |
-| U-09 | A device list that has not changed: no status patch is issued            | Negative | —    |
-| U-10 | A device ID long enough to overflow the name: truncated and still unique | Boundary | —    |
+| #     | Scenario                                                                 | Type       | Test                                                     |
+|-------|--------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-01  | A node with four devices, no objects: four objects are created           | Positive   | —                                                        |
+| U-02  | Each object is named `<node>-<short-device-id>` and is a valid DNS label | Positive   | `TestDeviceSubscriptionSnapshotCachesSyncsAndTriggers`   |
+| U-03  | Each object carries a controller reference to its `StorageNode`          | Positive   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-04  | Each object carries the cluster, node, and worker labels                 | Positive   | `TestTheMirrorLabelsADeviceWithItsClusterNodeAndWorker`  |
+| U-05  | A device whose object exists: the object is updated, not recreated       | Negative   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-06  | A node with no devices: no object is created and none is removed         | Boundary   | —                                                        |
+| U-07  | A node with one device: one object                                       | Boundary   | `TestStorageDeviceReconcileCreatesAndUpdates`            |
+| U-08  | Two nodes with a device of the same ID: two objects, no collision        | Boundary   | —                                                        |
+| U-09  | A device list that has not changed: no status patch is issued            | Negative   | —                                                        |
+| U-10  | A device ID long enough to overflow the name: truncated and still unique | Boundary   | —                                                        |
+| U-77  | A label somebody stripped is restored, and a foreign label is kept       | Boundary   | `TestTheMirrorRestoresALabelSomebodyRemoved`             |
+| U-81  | The object is created in the owning node's namespace, not the operator's | Regression | `TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace` |
+| U-82  | A device whose node object is absent: no ownerless object is created     | Negative   | `TestStorageDeviceReconcileWaitsForItsNode`              |
+| U-79  | A status write rejected with a conflict is retried, not surfaced         | Regression | `TestStorageDeviceStatusUpdateRetriesOnConflict`         |
+| U-80  | A spec write rejected with a conflict is retried                         | Regression | `TestStorageDeviceSpecUpdateRetriesOnConflict`           |
+| U-118 | An owned label the mirror can no longer resolve is removed               | Boundary   | `TestALabelThatStopsBeingResolvableIsRemoved`            |
 
 ### Status Mapping (design §4.2)
 
-| #    | Scenario                                                                          | Type     | Test |
-|------|-----------------------------------------------------------------------------------|----------|------|
-| U-11 | An online device maps to phase `Online`                                           | Positive | —    |
-| U-12 | A failed device maps to `Failed`                                                  | Positive | —    |
-| U-13 | A device under test maps to `Degraded`, not `Failed`                              | Boundary | —    |
-| U-14 | A new device not yet in the layout maps to `Degraded`                             | Boundary | —    |
-| U-15 | A removed device maps to `Removed`                                                | Positive | —    |
-| U-16 | An unrecognized device status: preserved verbatim in `status.deviceStatus`        | Positive | —    |
-| U-17 | `status.capacity` carries the total and used bytes                                | Positive | —    |
-| U-18 | The control plane returns no capacity: the fields stay absent, not zero           | Boundary | —    |
-| U-19 | `status.hardware` carries the PCI address, serial, model, and namespace path      | Positive | —    |
-| U-20 | The control plane returns no hardware fields: the block stays absent              | Boundary | —    |
-| U-58 | An NVMe device: a PCI address and an `/dev/nvme*` path                            | Positive | —    |
-| U-59 | A logical block device: no PCI address, a `/dev/sd*` path                         | Positive | —    |
-| U-60 | A `Failed` device on an offline node: the phase is kept, not `Unknown`            | Boundary | —    |
-| U-21 | `status.role` reflects whether the device carries a journal, storage, or both     | Positive | —    |
-| U-22 | A used-bytes value above the total: reported as given, not clamped                | Boundary | —    |
-| U-63 | `status.capacity.sampledAt` carries the time the exporter took the reading        | Positive | —    |
-| U-64 | A sample under the one-percent threshold: the reconcile issues no patch           | Negative | —    |
-| U-65 | A sample over it, or a changed total: the value and the sample time are written   | Positive | —    |
-| U-66 | No reachable metrics source: `capacity` absent and the rest of the status written | Negative | —    |
+| #               | Scenario                                                                              | Type     | Test                                                                                                           |
+|-----------------|---------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------|
+| U-11            | An online device maps to phase `Online`                                               | Positive | `TestDevicePhaseFromStatus`                                                                                    |
+| U-12            | A failed device maps to `Failed`                                                      | Positive | `TestDevicePhaseFromStatus`                                                                                    |
+| U-13            | A device under test maps to `Degraded`, not `Failed`                                  | Boundary | `TestDevicePhaseFromStatus`                                                                                    |
+| U-14            | A new device not yet in the layout maps to `Degraded`                                 | Boundary | `TestDevicePhaseFromStatus`                                                                                    |
+| U-15            | A removed device maps to `Removed`                                                    | Positive | `TestDevicePhaseFromStatus`                                                                                    |
+| U-16            | An unrecognized device status: preserved verbatim in `status.deviceStatus`            | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-18            | The control plane reports no size: `capacity` stays absent, not zero                  | Boundary | `TestADeviceWithNoReportedSizeCarriesNoCapacity`                                                               |
+| U-20            | The control plane reports no hardware fields: the block stays absent                  | Boundary | `TestADeviceWithNoHardwareFieldsCarriesNoHardware`                                                             |
+| U-60            | A `Failed` device on an unreachable node: the phase and its reason are kept           | Boundary | `TestUnknownDoesNotOverwriteATerminalPhase`                                                                    |
+| U-67            | `status.capacity` carries the device's size and nothing else                          | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-68            | `status.hardware` carries the PCI address, serial, model, and NVMe controller         | Positive | `TestStorageDeviceReconcileCreatesAndUpdates`                                                                  |
+| U-71            | `status.role` is `Journal` for a `JM_DEV` device and `Storage` for every other        | Positive | `TestDeviceRoleFromStatus`                                                                                     |
+| U-72            | An online device with a failing health signal is `Degraded`, and the message names it | Positive | `TestTheMirrorSaysWhyTheDeviceIsDegraded`                                                                      |
+| U-73            | An unrecognized status is `Unknown`, and the message quotes the status back           | Positive | `TestTheMirrorSaysWhyTheDeviceIsUnrecognized`                                                                  |
+| U-76            | The mirror's own status rewrite does not clear `status.activeOpsRef`                  | Negative | `TestTheMirrorDoesNotClearTheOperationLock`                                                                    |
+| ~~U-17~~        | ~~`status.capacity` carries the total and used bytes~~                                | —        | Superseded by U-67 and U-93: the used size left the status (design §4.2)                                       |
+| ~~U-19~~        | ~~`status.hardware` carries the PCI address, serial, model, and namespace path~~      | —        | Superseded by U-68: the control plane reports no host path (design §4.2)                                       |
+| ~~U-21~~        | ~~`status.role` reflects whether the device carries a journal, storage, or both~~     | —        | Superseded by U-71: the control plane reports one or the other, never both                                     |
+| ~~U-22~~        | ~~A used-bytes value above the total: reported as given, not clamped~~                | —        | Superseded by U-96: the figure is served rather than stored                                                    |
+| ~~U-58~~        | ~~An NVMe device: a PCI address and an `/dev/nvme*` path~~                            | —        | Superseded by U-68                                                                                             |
+| ~~U-59~~        | ~~A logical block device: no PCI address, a `/dev/sd*` path~~                         | —        | Superseded by U-20                                                                                             |
+| ~~U-63 … U-65~~ | ~~`sampledAt`, and the one-percent write threshold~~                                  | —        | Superseded by U-93 … U-102: a device cannot be resized, so there is no stream of samples to damp (design §4.2) |
+| ~~U-66~~        | ~~No reachable metrics source: `capacity` absent, the rest of the status written~~    | —        | Superseded by U-95: the size comes from the stream, so no source costs the readings alone                      |
 
 ### A Device That Stops Being Reported (design §5.2)
 
-| #    | Scenario                                                                       | Type     | Test |
-|------|--------------------------------------------------------------------------------|----------|------|
-| U-23 | A device removed by an operation: the object is deleted, `DeviceRemoved`       | Positive | —    |
-| U-24 | A device that disappears with no operation: deleted, `DeviceDisappeared`       | Negative | —    |
-| U-25 | Both events land on the `StorageNode`, not on the disappearing object          | Positive | —    |
-| U-26 | A device list that is empty because the control plane errored: nothing deleted | Negative | —    |
-| U-27 | A control-plane error is not read as every device disappearing                 | Negative | —    |
-| U-28 | An offline node reporting no devices: objects kept and moved to `Unknown`      | Positive | —    |
-| U-29 | A device that reappears: its object is recreated with the same name            | Boundary | —    |
+| #     | Scenario                                                                      | Type       | Test                                                   |
+|-------|-------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-23  | A device last reported as `removed`: the object is deleted, `DeviceRemoved`   | Positive   | `TestARemovedDeviceIsDeletedWithoutAWarning`           |
+| U-24  | A device that was serving until it vanished: deleted, `DeviceDisappeared`     | Negative   | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
+| U-25  | Both events land on the `StorageNode`, not on the disappearing object         | Positive   | `TestAPulledDriveIsDeletedAndWarnedAbout`              |
+| U-26  | A scope whose first snapshot has not arrived: nothing is deleted              | Negative   | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
+| U-27  | A cold cache is not read as every device disappearing                         | Negative   | `TestStorageDeviceReconcileWaitsForSyncBeforeDeleting` |
+| U-28  | An unreachable node reporting no devices: objects kept and moved to `Unknown` | Positive   | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
+| U-29  | A device that reappears: its object is recreated with the same name           | Boundary   | —                                                      |
+| U-78  | A restarting node's devices survive the restart rather than churning          | Boundary   | `TestARestartingNodesDevicesAreKept`                   |
+| U-83  | A synced scope on an online node saying nothing: the object is deleted        | Positive   | `TestStorageDeviceReconcileDeletesWhenGoneAndSynced`   |
+| U-84  | The `Unknown` transition is announced once, as `DeviceStateUnknown`           | Positive   | `TestAnUnreachableNodesDevicesBecomeUnknownAndAreKept` |
+| U-119 | The `Unknown` write rejected with a conflict is retried, not surfaced         | Regression | `TestTheUnknownTransitionRetriesOnConflict`            |
 
 ### Deletion (design §5.3)
 
-| #    | Scenario                                                                    | Type     | Test |
-|------|-----------------------------------------------------------------------------|----------|------|
-| U-30 | A user deleting an object: the webhook rejects it                           | Negative | —    |
-| U-31 | The operator's service account deleting an object: admitted                 | Positive | —    |
-| U-32 | A delete while the namespace is terminating: admitted, so teardown finishes | Boundary | —    |
-| U-33 | Deleting a `StorageNode` deletes its device objects                         | Positive | —    |
-| U-61 | The object carries no finalizer, so the operator's own delete is immediate  | Boundary | —    |
-| U-62 | An operator delete does not call the control plane                          | Negative | —    |
+File: `operator/internal/webhook/storagedevice_validator_test.go`
+
+| #     | Scenario                                                                                                                   | Type       | Test                                                     |
+|-------|----------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-30  | A user deleting an object: the webhook rejects it, with a reason                                                           | Negative   | `TestAUserMayNotDeleteAStorageDevice`                    |
+| U-31  | The operator's service account deleting an object: admitted                                                                | Positive   | `TestTheOperatorMayDeleteAStorageDevice`                 |
+| U-32  | The namespace controller's teardown of a terminating namespace: admitted                                                   | Boundary   | `TestTheNamespaceControllersTeardownIsAdmitted`          |
+| U-33  | Deleting a `StorageNode` deletes its device objects                                                                        | Positive   | —                                                        |
+| U-61  | The object carries no finalizer, so the operator's own delete is immediate                                                 | Boundary   | —                                                        |
+| U-62  | An operator delete does not call the control plane                                                                         | Negative   | —                                                        |
+| U-85  | A service account of the same name in another namespace: refused                                                           | Negative   | `TestAServiceAccountElsewhereMayNotDelete`               |
+| U-86  | A user's delete in a terminating namespace: admitted, whoever asked                                                        | Boundary   | `TestAUsersDeleteInATerminatingNamespaceIsAdmitted`      |
+| U-87  | A namespace whose state cannot be read: refused rather than admitted                                                       | Boundary   | `TestAnUnreadableNamespaceDoesNotOpenTheGuard`           |
+| U-88  | A create, an update, or a connect: not this webhook's business                                                             | Negative   | `TestOtherOperationsAreNotThisWebhooksBusiness`          |
+| U-121 | The garbage collector's cascade: admitted, since the owner reference is Kubernetes' to act on                              | Regression | `TestTheGarbageCollectorMayDeleteAStorageDevice`         |
+| U-122 | Another `kube-system` service account: refused, since the exemption is the collector's identity                            | Negative   | `TestAnotherKubeSystemAccountMayNotDeleteAStorageDevice` |
+| U-123 | The controller manager cascading under its own identity: admitted, since per-controller credentials are a cluster's choice | Regression | `TestTheControllerManagerMayDeleteAStorageDevice`        |
+
+### Events and Gauges (design §8)
+
+File: `operator/internal/controller/storagedevice_collector_test.go`, and the
+mirror's own file for the events it emits.
+
+| #     | Scenario                                                                                             | Type     | Test                                                   |
+|-------|------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-89  | A device found for the first time: `DeviceDiscovered`, on the node                                   | Positive | `TestDiscoveryIsAnnouncedOnTheNode`                    |
+| U-74  | A phase change is announced once, and a settled device announces nothing                             | Positive | `TestAPhaseChangeIsAnnouncedOnceOnTheDevice`           |
+| U-75  | A device that was `Online` when first seen is not announced as recovered                             | Negative | `TestRecoveryIsAnnouncedButDiscoveryIsNot`             |
+| U-90  | The size and the phase of each device are published as gauges                                        | Positive | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-91  | A device's phase gauge is 1 for its phase and 0 for every other                                      | Boundary | `TestTheCollectorPublishesEachDevicesSizeAndPhase`     |
+| U-92  | The per-node device count and failed count match the objects                                         | Positive | `TestTheCollectorCountsANodesDevicesAndItsFailedOnes`  |
+| U-93  | What a device holds is published from Prometheus, one query per cluster                              | Positive | `TestTheCollectorPublishesUsedBytesFromPrometheus`     |
+| U-94  | No Prometheus: no used-bytes series, and every other gauge still published                           | Negative | `TestWithoutPrometheusTheRestIsStillPublished`         |
+| U-95  | A Prometheus that errors: the gauges that do not come from it are unaffected                         | Negative | `TestABrokenPrometheusDoesNotStopTheOtherGauges`       |
+| U-96  | A device that went away leaves no series behind                                                      | Boundary | `TestTheCollectorDropsTheSeriesOfADeviceThatIsGone`    |
+| U-120 | A device that went away leaves no crossing behind, so a replacement of the same name is warned about | Boundary | `TestTheCollectorForgetsADeviceThatWentAway`           |
+| U-97  | A device over its cluster's warning threshold: `DeviceNearlyFull`, once                              | Positive | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-98  | A device that empties and fills again: a second crossing and a second event                          | Boundary | `TestADeviceOverItsClustersThresholdIsWarnedAboutOnce` |
+| U-99  | A device under the threshold: nothing is announced                                                   | Negative | `TestADeviceUnderTheThresholdIsNotWarnedAbout`         |
+| U-100 | A cluster declaring no threshold: the default applies rather than no warning                         | Boundary | `TestAClusterWithNoThresholdFallsBackToTheDefault`     |
+
+### The Readings (design §4.4)
+
+File: `operator/internal/metricsapi/devicestorage_test.go`
+
+| #     | Scenario                                                             | Type     | Test                                          |
+|-------|----------------------------------------------------------------------|----------|-----------------------------------------------|
+| U-101 | A device object with a sample: the reading joins the two             | Positive | `TestDeviceGetJoinsTheObjectWithItsSample`    |
+| U-102 | The reading's timestamp is the control plane's sample time           | Positive | `TestDeviceGetJoinsTheObjectWithItsSample`    |
+| U-103 | A device object with no sample: not found rather than zeros          | Boundary | `TestDeviceGetIsNotFoundWithoutASample`       |
+| U-104 | No capacity source at all: nothing is served, by name or by list     | Negative | `TestDeviceReadingsAreAbsentWithoutAProvider` |
+| U-105 | A name that is not a device's: not found, whatever Prometheus holds  | Negative | `TestDeviceGetIsNotFoundWithoutAnObject`      |
+| U-106 | A namespaced list answers with that namespace's devices only         | Positive | `TestDeviceListIsConfinedToItsNamespace`      |
+| U-107 | A cluster-wide list answers with every namespace's devices           | Positive | `TestDeviceListAcrossNamespaces`              |
+| U-108 | Four devices of one cluster: one capacity query, not four            | Boundary | `TestDeviceListQueriesEachClusterOnce`        |
+| U-109 | A Prometheus that errors: an empty list rather than a failed request | Negative | `TestDeviceListSurvivesABrokenProvider`       |
+| U-110 | `kubectl get sdm` renders a row per reading, with a cell per column  | Positive | `TestDeviceTableRendersTheReading`            |
+| U-111 | The resource is namespaced and answers to `sdm`                      | Positive | `TestDeviceStorageIdentity`                   |
+
+### The Served Version (design §4.4)
+
+File: `operator/internal/metricsapi/scheme_test.go`
+
+| #     | Scenario                                                                     | Type     | Test                                         |
+|-------|------------------------------------------------------------------------------|----------|----------------------------------------------|
+| U-112 | Every kind of the metrics group is registered at the version it is served at | Positive | `TestSchemeKnowsTheServedKinds`              |
+| U-113 | The group serves one version, and it is `v1alpha2`                           | Boundary | `TestTheGroupServesOneVersion`               |
+| U-114 | A reading round-trips through the codec with its kind intact                 | Positive | `TestCodecRoundTripsADeviceReading`          |
+| U-115 | The group installs with both resources under its version                     | Positive | `TestAPIGroupInstalls`                       |
+| U-116 | The OpenAPI definitions cover every served kind                              | Boundary | `TestOpenAPIDefinitionsCoverEveryServedKind` |
+| U-117 | Every served version has an `APIService` whose CA bundle is injected         | Boundary | `TestEveryServedVersionGetsItsCABundle`      |
 
 ### StorageDeviceOps: Restart and Test (design §6)
 
-File: `operator/internal/controllers/node/storagedeviceops_controller_unit_test.go`
+File: `operator/internal/controller/storagedeviceops_controller_unit_test.go`,
+which does not exist yet.
 
 | #    | Scenario                                                                   | Type     | Test |
 |------|----------------------------------------------------------------------------|----------|------|
@@ -140,22 +221,24 @@ File: `operator/internal/controllers/node/storagedeviceops_controller_unit_test.
 
 Full reconcile loop against a real Kubernetes API server via `envtest`.
 
-| #    | Scenario                                                                      | Type     | Test |
-|------|-------------------------------------------------------------------------------|----------|------|
-| I-01 | `spec.nodeRef` omitted: rejected as `Required`                                | Negative | —    |
-| I-02 | `spec.deviceID` omitted: rejected as `Required`                               | Negative | —    |
-| I-03 | `spec.nodeRef` changed after creation: rejected as immutable                  | Negative | —    |
-| I-04 | `spec.deviceID` changed after creation: rejected as immutable                 | Negative | —    |
-| I-05 | `spec.action` outside the enum: rejected                                      | Negative | —    |
-| I-06 | `spec.deviceRef` changed after creation: rejected as immutable                | Negative | —    |
-| I-07 | Short names `sd` and `sdops` resolve to the same lists as the full kinds      | Positive | —    |
-| I-08 | Deleting a `StorageNode` garbage-collects its device objects                  | Positive | —    |
-| I-09 | Deleting a `StorageCluster` cascades through its nodes to their devices       | Positive | —    |
-| I-10 | Selecting by the worker label returns that worker's devices only              | Positive | —    |
-| I-11 | Selecting by the node label returns that node's devices only                  | Positive | —    |
-| I-12 | Two nodes in two namespaces with the same device ID: neither collides         | Negative | —    |
-| I-13 | The print columns render node, phase, role, and capacity without a `describe` | Positive | —    |
-| I-14 | The controller's role covers creating and deleting device objects             | Positive | —    |
+| #    | Scenario                                                                          | Type     | Test |
+|------|-----------------------------------------------------------------------------------|----------|------|
+| I-01 | `spec.nodeRef` omitted: rejected as `Required`                                    | Negative | —    |
+| I-02 | `spec.deviceID` omitted: rejected as `Required`                                   | Negative | —    |
+| I-03 | `spec.nodeRef` changed after creation: rejected as immutable                      | Negative | —    |
+| I-04 | `spec.deviceID` changed after creation: rejected as immutable                     | Negative | —    |
+| I-05 | `spec.action` outside the enum: rejected                                          | Negative | —    |
+| I-15 | `metrics.simplyblock.io/v1alpha2` answers a `storagedevicemetrics` list           | Positive | —    |
+| I-16 | A `view` binding in the device's namespace can read the readings                  | Positive | —    |
+| I-06 | `spec.deviceRef` changed after creation: rejected as immutable                    | Negative | —    |
+| I-07 | Short names `sd` and `sdops` resolve to the same lists as the full kinds          | Positive | —    |
+| I-08 | Deleting a `StorageNode` garbage-collects its device objects                      | Positive | —    |
+| I-09 | Deleting a `StorageCluster` cascades through its nodes to their devices           | Positive | —    |
+| I-10 | Selecting by the worker label returns that worker's devices only                  | Positive | —    |
+| I-11 | Selecting by the node label returns that node's devices only                      | Positive | —    |
+| I-12 | Two nodes in two namespaces with the same device ID: neither collides             | Negative | —    |
+| I-13 | The print columns render node, phase, role, status, and size without a `describe` | Positive | —    |
+| I-14 | The controller's role covers creating and deleting device objects                 | Positive | —    |
 
 ---
 
@@ -168,8 +251,9 @@ marked accordingly.
 |------|------------------------------------------------------------------------------------|----------|------|
 | E-01 | A node comes up: one object appears per device, with capacity and hardware         | Positive | —    |
 | E-02 | The hardware fields match what the host reports for the same device                | Positive | —    |
-| E-03 | Writing to the cluster: `usedBytes` climbs on the devices holding the data         | Positive | —    |
+| E-03 | Writing to the cluster: the readings climb on the devices holding the data         | Positive | —    |
 | E-04 | Capacity is unevenly distributed: one device is near full while the cluster is not | Boundary | —    |
+| E-14 | A device crossing its cluster's threshold: `DeviceNearlyFull` on the device        | Positive | —    |
 | E-05 | A device is pulled from a running node: `DeviceDisappeared`, the object is deleted | Negative | —    |
 | E-06 | The node's own `3/4` summary and the four objects agree                            | Positive | —    |
 | E-07 | `action: Restart` on a wedged device: it recycles and rejoins                      | Positive | —    |
@@ -250,80 +334,104 @@ node down with it and costs the cluster a node's worth of redundancy.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 66        | 0       | 66          |
-| Integration | 14        | 0       | 14          |
-| E2E         | 13        | 0       | 13          |
+| Unit        | 108       | 75      | 33          |
+| Integration | 16        | 0       | 16          |
+| E2E         | 14        | 0       | 14          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **96**    | **0**   | **96**      |
+| **Total**   | **141**   | **75**  | **66**      |
 
-Nothing is covered, and nothing can be: neither kind exists. The device API it reads
-from does (design §7), so this plan is a specification of a kind that can be built
-rather than one that may turn out not to be, and the operation rows are the ones whose
-endpoints still have to appear.
+Superseded rows are excluded from the counts: their behavior is gone rather than
+untested.
+
+**What is covered is `StorageDevice` and what reads it, and what is not is
+`StorageDeviceOps`.** The unit rows for the mirror, the guard, the collector, and
+the readings name tests that run in the suite. Everything needing a cluster is
+uncovered for the reason it always was, and the operation rows wait on design §11
+Q1.
 
 ---
 
 ## 6. What Is Not Yet Covered
 
-| #                        | Gap                                                          | Reason                                                                                                                 |
-|--------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-10              | Object projection                                            | The kind does not exist. These are the rows to write first, because the projection is pure                             |
-| U-11 … U-22, U-63 … U-66 | Status mapping                                               | The kind does not exist. Design §7 confirms the hardware fields are reported, so `U-19` and `U-20` are unblocked       |
-| U-23 … U-29              | A device that stops being reported                           | The kind does not exist. `U-26` to `U-28` are the rows that keep a control-plane error from deleting a fleet's objects |
-| U-30 … U-33, U-61, U-62  | Deletion, the protection, and the cascade                    | The kind does not exist                                                                                                |
-| U-34 … U-46              | `Restart` and `Test`                                         | `StorageDeviceOps` does not exist, and design §7 records the endpoints as unverified                                   |
-| U-47 … U-57              | `Remove` and the redundancy check                            | The kind does not exist. `U-48` to `U-51` are the arithmetic that stands between a removal and data loss               |
-| I-01 … I-14              | Admission, cascade, and label selection                      | Needs `envtest`, because `Required`, immutability, and garbage collection are the API server's                         |
-| E-01 … E-13              | All end-to-end scenarios                                     | Needs a live cluster with real storage hardware. The e2e harness under `test/` is not committed yet                    |
-| E-02                     | Hardware fields matching the host                            | Design §7 confirms the fields are reported, so this row verifies they match reality kind is useful in an incident      |
-| E-10, E-11               | `Remove` end to end                                          | Destroys capacity. Needs hardware somebody is willing to lose                                                          |
-| M-01 … M-03              | A pulled drive, a removal at the limit, and a device restart | Need physical access, a cluster at its redundancy limit, and a sustained workload                                      |
-| Metrics                  | The seven metrics of design §8.2                             | Designed, not built                                                                                                    |
-| Events                   | The twelve reasons of design §8.1                            | Designed, not built                                                                                                    |
-| Q1                       | Whether the control plane exposes devices                    | Design §11 records it as unverified. Every row here assumes it does                                                    |
-| Q3                       | Whether `Remove` should rewrite the node's device list       | Design §11 leaves it open, so no row asserts what happens to `spec.config.deviceNames` after a removal                 |
-| Deletion                 | Objects survive an offline node                              | Design §5.2 settles it: they are kept and moved to `Unknown`, which `U-28` and `U-60` assert                           |
+| #                 | Gap                                                                 | Reason                                                                                                                                                     |
+|-------------------|---------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-01, U-07, U-08  | A whole node's devices at once, and a device id shared by two nodes | The mirror reconciles one object per device (design §5.1), so a node's four devices are four reconciles rather than one pass with a list to assert against |
+| U-06, U-09        | An empty list, and a list that has not moved                        | Both are the reconcile that does nothing, which is asserted by its absence rather than by an output                                                        |
+| U-10              | A device id long enough to overflow the name                        | `StorageDeviceShortIDLength` truncates to eight characters, and no row exercises two ids that agree in the first eight                                     |
+| U-29              | A device that reappears                                             | Needs the delete and the recreate in one case, which the per-object reconciler makes two reconciles with a cache change between them                       |
+| U-33, U-61, U-62  | The cascade, the absent finalizer, and what a delete does not call  | Garbage collection is the API server's, so `I-08` is where it belongs                                                                                      |
+| U-34 … U-57       | Every `StorageDeviceOps` row                                        | The kind does not exist (design §6), and design §11 Q1 records the endpoints as unconfirmed                                                                |
+| I-01 … I-16       | Admission, cascade, label selection, and the aggregated routes      | Needs `envtest`, because `Required`, immutability, and garbage collection are the API server's                                                             |
+| E-01 … E-14       | All end-to-end scenarios                                            | Needs a live cluster with real storage hardware. The e2e harness under `test/` is not committed yet                                                        |
+| E-02              | Hardware fields matching the host                                   | The fields are published from the stream, so this row is what checks they describe the drive somebody is holding                                           |
+| E-10, E-11        | `Remove` end to end                                                 | Destroys capacity. Needs hardware somebody is willing to lose                                                                                              |
+| M-01 … M-03       | A pulled drive, a removal at the limit, and a device restart        | Need physical access, a cluster at its redundancy limit, and a sustained workload                                                                          |
+| Operation metrics | The two `operations_*` metrics of design §8.2                       | They have an action and a result to report only once §6 exists                                                                                             |
+| Operation events  | Every `StorageDeviceOps` row of design §8.1                         | Same                                                                                                                                                       |
+| Q1                | Which per-action verbs the control plane offers                     | Design §11 records it as unconfirmed, and the operation rows assume all four                                                                               |
+| Q2                | Whether an operation may target a device in `Unknown`               | Design §11 leaves it open, so no row asserts what `Validating` does with one                                                                               |
+| Q3                | Whether the control plane can name the operation behind a removal   | Design §11 leaves it open. `U-23` and `U-24` assert the proxy the stream supports, which is the last status the device was reported in                     |
 
 ### Axis coverage
 
-| Axis                  | Value                               | Scenarios        |
-|-----------------------|-------------------------------------|------------------|
-| Devices per node      | Zero                                | U-06             |
-|                       | One                                 | U-07             |
-|                       | Four                                | U-01, E-01, M-03 |
-|                       | Eight hundred across a fleet        | E-13             |
-| Device state          | Online                              | U-11             |
-|                       | Degraded, testing or new            | U-13, U-14       |
-|                       | Failed                              | U-12, U-51       |
-|                       | Removed                             | U-15             |
-|                       | Unrecognized                        | U-16             |
-| Device role           | Storage                             | U-21             |
-|                       | Journal                             | U-57             |
-| Redundancy headroom   | Spare                               | U-47, E-10       |
-|                       | Exactly at the limit                | U-49, E-11, M-02 |
-|                       | One below the limit                 | U-50             |
-|                       | Forced past the check               | U-52, M-02       |
-|                       | Unreported                          | U-54             |
-| Disappearance cause   | Removed by an operation             | U-23             |
-|                       | Pulled physically                   | U-24, E-05, M-01 |
-|                       | Control-plane error                 | U-26, U-27       |
-|                       | Node offline                        | U-28, E-12       |
-| Capacity distribution | Even                                | E-03             |
-|                       | One device near full                | E-04             |
-| Capacity sampling     | A first reading, or a material move | U-63, U-65       |
-|                       | Below the write threshold           | U-64             |
-|                       | No reachable source                 | U-66             |
-| Namespace count       | Single                              | Most scenarios   |
-|                       | Multiple                            | I-12             |
+| Axis                  | Value                          | Scenarios        |
+|-----------------------|--------------------------------|------------------|
+| Devices per node      | Zero                           | U-06             |
+|                       | One                            | U-07             |
+|                       | Four                           | U-01, E-01, M-03 |
+|                       | Eight hundred across a fleet   | E-13             |
+| Device state          | Online                         | U-11             |
+|                       | Degraded, testing or new       | U-13, U-14       |
+|                       | Failed                         | U-12, U-51       |
+|                       | Removed                        | U-15             |
+|                       | Unrecognized                   | U-16             |
+| Device role           | Storage                        | U-71             |
+|                       | Journal                        | U-71, U-57       |
+| Redundancy headroom   | Spare                          | U-47, E-10       |
+|                       | Exactly at the limit           | U-49, E-11, M-02 |
+|                       | One below the limit            | U-50             |
+|                       | Forced past the check          | U-52, M-02       |
+|                       | Unreported                     | U-54             |
+| Disappearance cause   | Last reported as removed       | U-23             |
+|                       | Pulled physically              | U-24, E-05, M-01 |
+|                       | A cold cache                   | U-26, U-27       |
+|                       | Node unreachable               | U-28, E-12       |
+|                       | Node restarting                | U-78             |
+| Capacity distribution | Even                           | E-03             |
+|                       | One device near full           | E-04             |
+| Capacity sampling     | A device with a sample         | U-93, U-101      |
+|                       | A device with none             | U-103            |
+|                       | No reachable source            | U-94, U-104      |
+|                       | A source that errors           | U-95, U-109      |
+| Occupancy against the | Under it                       | U-99             |
+| cluster's threshold   | Over it, first crossing        | U-97             |
+|                       | Over it, still over            | U-98             |
+|                       | Over it, no threshold declared | U-100            |
+| Delete identity       | A user                         | U-30             |
+|                       | The operator's service account | U-31             |
+|                       | A service account elsewhere    | U-85             |
+|                       | The namespace controller       | U-32             |
+| Namespace state       | Live                           | U-30, U-31       |
+|                       | Terminating                    | U-32, U-86       |
+|                       | Unreadable                     | U-87             |
+| Namespace count       | Single                         | Most scenarios   |
+|                       | Multiple                       | I-12             |
 
 **The redundancy-headroom axis is the one that matters and it has five values,
-all covered.** `U-48` to `U-52` and `M-02` are the arithmetic and the act that
-stand between a device removal and losing data, and the row sitting exactly at the
-limit is the one an implementation is most likely to get wrong by using `>=` where
-it meant `>`.
+all specified and none covered.** `U-48` to `U-52` and `M-02` are the arithmetic
+and the act that stand between a device removal and losing data, and the row
+sitting exactly at the limit is the one an implementation is most likely to get
+wrong by using `>=` where it meant `>`. Every row of it waits on design §6.
 
-**The disappearance-cause axis exists because three of its four values look
-identical to the operator.** A device removed deliberately, a device pulled, and
-a control-plane error all present as a device missing from a list, and only the
-first should be silent. `U-26` and `U-27` are what stop one bad response deleting
-a fleet's worth of objects.
+**The disappearance-cause axis exists because four of its five values look
+identical to the operator.** A device removed deliberately, a device pulled, a
+cold cache, and a node that is unreachable or restarting all present as a device
+missing from a list, and only the first two are a device that is gone. `U-26`,
+`U-27`, `U-28`, and `U-78` are what stop the other three deleting a fleet's worth
+of objects.
+
+**The delete-identity and namespace-state axes are one guard read two ways.**
+Design §5.3 refuses a deletion by who asked and admits one by what is happening to
+the namespace, so the two axes cross: the namespace controller is admitted because
+of the namespace and the operator because of the identity, and a user is admitted
+only where the namespace is already going away.

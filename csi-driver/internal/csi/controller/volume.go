@@ -220,22 +220,31 @@ func (cs *Server) prepareCreateVolumeReq(
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
-	// QoS from StorageClass, overridable per-PVC via annotations.
-	maxRWIOPS := params["qos_rw_iops"]
-	maxRWmBytes := params["qos_rw_mbytes"]
-	maxRmBytes := params["qos_r_mbytes"]
-	maxWmBytes := params["qos_w_mbytes"]
+	// QoS from the StorageClass, overridable per claim by an annotation.
+	//
+	// Each ceiling is read through an ordered list of keys rather than one, and
+	// the first key that is set wins. Three generations of names are live at
+	// once and none of them can be retired: a StorageClass's parameters are
+	// immutable in the Kubernetes API, so a class an older operator generated
+	// can never be rewritten into the current vocabulary, and a claim somebody
+	// annotated long ago is still a claim. atlas-lib owns the lists, so the
+	// operator that writes a key and the driver that reads it cannot disagree
+	// about which spellings exist or which of them wins.
+	maxRWIOPS := kube.QoSParam(params, kube.CeilingIOPS)
+	maxRWmBytes := kube.QoSParam(params, kube.CeilingMBytesPerSec)
+	maxRmBytes := kube.QoSParam(params, kube.CeilingReadMBytesPerSec)
+	maxWmBytes := kube.QoSParam(params, kube.CeilingWriteMBytesPerSec)
 	if pvcNameSelected && pvcNamespaceSelected {
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWIOPS, deprecatedAnnotationQoSRWIOPS); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingIOPS); v != "" {
 			maxRWIOPS = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWMBps, deprecatedAnnotationQoSRWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingMBytesPerSec); v != "" {
 			maxRWmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRMBps, deprecatedAnnotationQoSRMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingReadMBytesPerSec); v != "" {
 			maxRmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSWMBps, deprecatedAnnotationQoSWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingWriteMBytesPerSec); v != "" {
 			maxWmBytes = v
 		}
 	}

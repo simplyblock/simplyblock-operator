@@ -95,24 +95,41 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 	}, nil
 }
 
+// qosFromParams reads the four ceilings through the generation-aware resolver in
+// qos.go, so a class written under either vocabulary parses the same. Which key
+// carried the value is not recorded: a Properties describes how a volume was
+// provisioned, and the spelling the class happened to use is not part of that.
 func qosFromParams(p map[string]string) (QoSLimits, error) {
-	rwIOPS, err := IntParam(p, ParamQoSRWIOPS, 0)
+	rwIOPS, err := qosCeilingFromParams(p, CeilingIOPS)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	rwMB, err := IntParam(p, ParamQoSRWMBytes, 0)
+	rwMB, err := qosCeilingFromParams(p, CeilingMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	rMB, err := IntParam(p, ParamQoSRMBytes, 0)
+	rMB, err := qosCeilingFromParams(p, CeilingReadMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
-	wMB, err := IntParam(p, ParamQoSWMBytes, 0)
+	wMB, err := qosCeilingFromParams(p, CeilingWriteMBytesPerSec)
 	if err != nil {
 		return QoSLimits{}, err
 	}
 	return QoSLimits{RWIOPS: rwIOPS, RWMBytes: rwMB, RMBytes: rMB, WMBytes: wMB}, nil
+}
+
+// qosCeilingFromParams parses one ceiling, naming the key the value actually
+// came from in an error. Reporting the newest spelling for a value that was
+// written under the oldest would send somebody to a key their class does not
+// have.
+func qosCeilingFromParams(p map[string]string, ceiling QoSCeiling) (int, error) {
+	for _, key := range qosParamKeys[ceiling] {
+		if v, ok := p[key]; ok && v != "" {
+			return IntParam(p, key, 0)
+		}
+	}
+	return 0, nil
 }
 
 // StorageClassNameFromPV returns the name of the StorageClass that provisioned

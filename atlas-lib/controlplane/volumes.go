@@ -33,6 +33,7 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 		Pool:      d.PoolName,
 		SizeBytes: uint64(d.Size),
 		NQN:       d.Nqn,
+		Status:    d.Status,
 	}, nil
 }
 

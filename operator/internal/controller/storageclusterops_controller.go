@@ -36,6 +36,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -57,7 +58,7 @@ type StorageClusterOpsReconciler struct {
 func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	var ops simplyblockv1alpha1.StorageClusterOps
+	var ops simplyblockv1alpha2.StorageClusterOps
 	if err := r.Get(ctx, req.NamespacedName, &ops); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -82,7 +83,7 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// after the terminal phase was persisted but before releaseClusterLock ran), then
 	// remove the finalizer so the CR can be GC'd.
 	switch ops.Status.Phase {
-	case simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded, simplyblockv1alpha1.StorageClusterOpsPhaseFailed:
+	case simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded, simplyblockv1alpha2.StorageClusterOpsPhaseFailed:
 		var cluster simplyblockv1alpha1.StorageCluster
 		if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}, &cluster); err == nil {
 			r.releaseClusterLock(ctx, &ops, &cluster)
@@ -127,10 +128,10 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Transition to Running if still Pending.
-	if ops.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhasePending || ops.Status.Phase == "" {
+	if ops.Status.Phase == simplyblockv1alpha2.StorageClusterOpsPhasePending || ops.Status.Phase == "" {
 		now := metav1.Now()
 		patch := client.MergeFrom(ops.DeepCopy())
-		ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+		ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseRunning
 		ops.Status.StartedAt = &now
 		if err := r.Status().Patch(ctx, &ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
@@ -139,17 +140,17 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Dispatch to operation handler.
 	switch ops.Spec.Action {
-	case utils.ClusterActionActivate:
+	case simplyblockv1alpha2.StorageClusterOpsActionActivate:
 		return r.reconcileActivate(ctx, &ops, &cluster)
-	case utils.ClusterActionExpand:
+	case simplyblockv1alpha2.StorageClusterOpsActionExpand:
 		return r.reconcileExpand(ctx, &ops, &cluster)
-	case utils.ClusterActionShutdown:
+	case simplyblockv1alpha2.StorageClusterOpsActionShutdown:
 		return r.reconcileShutdown(ctx, &ops, &cluster)
-	case utils.ClusterActionStart:
+	case simplyblockv1alpha2.StorageClusterOpsActionStart:
 		return r.reconcileStart(ctx, &ops, &cluster)
-	case utils.ClusterActionRestart:
+	case simplyblockv1alpha2.StorageClusterOpsActionRestart:
 		return r.reconcileRestart(ctx, &ops, &cluster)
-	case utils.ClusterActionNodeRollingRestart:
+	case simplyblockv1alpha2.StorageClusterOpsActionRollingRestart:
 		return r.reconcileNodeRollingRestart(ctx, &ops, &cluster)
 	default:
 		return r.failOps(ctx, &ops, &cluster, fmt.Sprintf("unknown action %q", ops.Spec.Action))
@@ -159,7 +160,7 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // reconcileActivate handles the activate operation: POST then poll until active.
 func (r *StorageClusterOpsReconciler) reconcileActivate(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -268,7 +269,7 @@ func (r *StorageClusterOpsReconciler) reconcileActivate(
 // reconcileExpand handles the expand operation: POST then poll until active.
 func (r *StorageClusterOpsReconciler) reconcileExpand(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -350,7 +351,7 @@ func (r *StorageClusterOpsReconciler) reconcileExpand(
 // reconcileShutdown sends POST /shutdown and polls until the cluster is no longer active.
 func (r *StorageClusterOpsReconciler) reconcileShutdown(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -406,7 +407,7 @@ func (r *StorageClusterOpsReconciler) reconcileShutdown(
 // reconcileStart sends POST /start and polls until the cluster is active.
 func (r *StorageClusterOpsReconciler) reconcileStart(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -464,7 +465,7 @@ func (r *StorageClusterOpsReconciler) reconcileStart(
 // to "active". The sub-phase is tracked in ops.Status.Message.
 func (r *StorageClusterOpsReconciler) reconcileRestart(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	const (
@@ -555,13 +556,13 @@ func (r *StorageClusterOpsReconciler) reconcileRestart(
 // succeedOps transitions ops to Succeeded and releases the cluster lock.
 func (r *StorageClusterOpsReconciler) succeedOps(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	message string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded
 	ops.Status.Message = message
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
@@ -574,13 +575,13 @@ func (r *StorageClusterOpsReconciler) succeedOps(
 // failOps transitions ops to Failed, emits an event, and releases the cluster lock.
 func (r *StorageClusterOpsReconciler) failOps(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	reason string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseFailed
+	ops.Status.Phase = simplyblockv1alpha2.StorageClusterOpsPhaseFailed
 	ops.Status.Message = reason
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
@@ -595,7 +596,7 @@ func (r *StorageClusterOpsReconciler) failOps(
 // releaseClusterLock clears activeOpsRef on the cluster if it still points to this ops.
 func (r *StorageClusterOpsReconciler) releaseClusterLock(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
+	ops *simplyblockv1alpha2.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) {
 	if cluster == nil {
@@ -613,7 +614,7 @@ func (r *StorageClusterOpsReconciler) releaseClusterLock(
 // targeting it, so they wake up immediately when the cluster lock is released.
 func (r *StorageClusterOpsReconciler) clusterToOpsRequests(ctx context.Context, obj client.Object) []ctrl.Request {
 	cluster := obj.(*simplyblockv1alpha1.StorageCluster)
-	var opsList simplyblockv1alpha1.StorageClusterOpsList
+	var opsList simplyblockv1alpha2.StorageClusterOpsList
 	if err := r.List(ctx, &opsList,
 		client.InNamespace(cluster.Namespace),
 		client.MatchingFields{"spec.clusterRef": cluster.Name},
@@ -622,8 +623,8 @@ func (r *StorageClusterOpsReconciler) clusterToOpsRequests(ctx context.Context, 
 	}
 	var reqs []ctrl.Request
 	for _, ops := range opsList.Items {
-		if ops.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhasePending ||
-			ops.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhaseRunning ||
+		if ops.Status.Phase == simplyblockv1alpha2.StorageClusterOpsPhasePending ||
+			ops.Status.Phase == simplyblockv1alpha2.StorageClusterOpsPhaseRunning ||
 			ops.Status.Phase == "" {
 			reqs = append(reqs, ctrl.Request{NamespacedName: types.NamespacedName{
 				Name:      ops.Name,
@@ -637,10 +638,10 @@ func (r *StorageClusterOpsReconciler) clusterToOpsRequests(ctx context.Context, 
 func (r *StorageClusterOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
-		&simplyblockv1alpha1.StorageClusterOps{},
+		&simplyblockv1alpha2.StorageClusterOps{},
 		"spec.clusterRef",
 		func(obj client.Object) []string {
-			ops := obj.(*simplyblockv1alpha1.StorageClusterOps)
+			ops := obj.(*simplyblockv1alpha2.StorageClusterOps)
 			return []string{ops.Spec.ClusterRef}
 		},
 	); err != nil {
@@ -648,7 +649,7 @@ func (r *StorageClusterOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageClusterOps{}).
+		For(&simplyblockv1alpha2.StorageClusterOps{}).
 		Named("storageclusterops").
 		Watches(
 			&simplyblockv1alpha1.StorageCluster{},

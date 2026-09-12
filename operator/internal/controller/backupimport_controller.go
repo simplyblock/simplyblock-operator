@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -248,7 +249,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 	importCR *simplyblockv1alpha1.BackupImport,
 	name, srcClusterUUID string,
 ) error {
-	existing := &simplyblockv1alpha1.StorageBackup{}
+	existing := &simplyblockv1alpha2.StorageBackup{}
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: importCR.Namespace}, existing)
 	if err == nil {
 		return nil // already exists
@@ -257,7 +258,7 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 		return fmt.Errorf("get StorageBackup %s: %w", name, err)
 	}
 
-	backupCR := &simplyblockv1alpha1.StorageBackup{
+	backupCR := &simplyblockv1alpha2.StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: importCR.Namespace,
@@ -265,9 +266,13 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 				*metav1.NewControllerRef(importCR, simplyblockv1alpha1.GroupVersion.WithKind("BackupImport")),
 			},
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName:       importCR.Spec.TargetClusterName,
-			SourceClusterUUID: srcClusterUUID,
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: importCR.Spec.TargetClusterName,
+			// The imported copy is addressed by the source's identifier, which
+			// the import does not change. The spec is identity and nothing else
+			// now (design-storagebackup.md §5.1), so where the copy came from
+			// is an observation and moves to status.source below.
+			BackupID: importCR.Spec.SourceBackupID,
 		},
 	}
 	if err := r.Create(ctx, backupCR); err != nil {
@@ -283,14 +288,16 @@ func (r *BackupImportReconciler) ensureStorageBackupCR(
 
 func (r *BackupImportReconciler) patchStorageBackupStatus(
 	ctx context.Context,
-	backupCR *simplyblockv1alpha1.StorageBackup,
+	backupCR *simplyblockv1alpha2.StorageBackup,
 	backupID, srcClusterUUID, targetClusterUUID string,
 ) error {
 	patch := client.MergeFrom(backupCR.DeepCopy())
-	backupCR.Status.Phase = simplyblockv1alpha1.BackupPhaseDone
-	backupCR.Status.BackupID = backupID
-	backupCR.Status.SourceClusterUUID = srcClusterUUID
-	backupCR.Status.ClusterUUID = targetClusterUUID
+	backupCR.Status.Phase = simplyblockv1alpha2.StorageBackupPhaseAvailable
+	backupCR.Status.ClusterID = targetClusterUUID
+	backupCR.Status.Backup = &simplyblockv1alpha2.BackupCopy{BackupID: backupID}
+	// The cluster that wrote the copy is what makes this an import, and it is
+	// the one thing a restore has to know in order to reach the right bucket.
+	backupCR.Status.Source = &simplyblockv1alpha2.BackupSource{ClusterUUID: srcClusterUUID}
 	backupCR.Status.Message = fmt.Sprintf("Imported from cluster %s", srcClusterUUID)
 	return r.Status().Patch(ctx, backupCR, patch)
 }

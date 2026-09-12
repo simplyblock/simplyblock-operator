@@ -1,0 +1,22 @@
+# Restoring one backup into a new claim.
+#
+# The claim named here must not already exist. A restore creates its claim and
+# never adopts one, because adopting it would replace that workload's data with
+# the backup's, and that is refused twice: once at admission, and once by the
+# operation's own first step, which catches a claim created in between.
+#
+# The pool is named rather than defaulted. A backup found in a store several
+# clusters share may have been written by another cluster, so the pool it came
+# from is not one this cluster is obliged to have, and which pool a volume lands
+# in is a tenancy decision nobody should make by omission.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupOps
+metadata:
+  name: storagebackupops-sample
+spec:
+  clusterRef: my-cluster
+  backupRef: storagebackup-sample
+  action: Restore
+  restore:
+    claimName: restored-claim
+    targetPool: my-pool
