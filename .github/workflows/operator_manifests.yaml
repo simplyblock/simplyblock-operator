@@ -55,6 +55,58 @@ jobs:
         run: |
           kubeconform -strict -summary -skip CustomResourceDefinition,Certificate,ClusterIssuer dist/install.yaml
 
+      - name: Check CSV's owned CRD list is complete and documented
+        run: |
+          pip install --quiet pyyaml
+          python3 - <<'EOF'
+          import glob
+          import sys
+
+          import yaml
+
+          crd_kinds = set()
+          for f in glob.glob("config/crd/bases/*.yaml"):
+              d = yaml.safe_load(open(f))
+              crd_kinds.add(d["spec"]["names"]["kind"])
+
+          csv = yaml.safe_load(
+              open("config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml")
+          )
+          owned = csv["spec"]["customresourcedefinitions"]["owned"]
+          owned_kinds = {o["kind"] for o in owned}
+
+          missing = crd_kinds - owned_kinds
+          stale = owned_kinds - crd_kinds
+          no_description = sorted(o["kind"] for o in owned if not o.get("description"))
+
+          errors = []
+          if missing:
+              errors.append(
+                  "CRDs with no entry in the CSV's customresourcedefinitions.owned list "
+                  f"(the 'Provided APIs' panel on the install page will be incomplete): {sorted(missing)}"
+              )
+          if stale:
+              errors.append(
+                  "CSV owned entries with no matching CRD under config/crd/bases/ "
+                  f"(stale, referencing a removed/renamed type): {sorted(stale)}"
+              )
+          if no_description:
+              errors.append(
+                  "CSV owned entries missing a 'description' (shows as 'Not available' "
+                  f"in the console's Provided APIs panel): {no_description}"
+              )
+
+          if errors:
+              print(
+                  "config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml "
+                  "is out of sync with config/crd/bases/. Fix it there — this file is "
+                  "hand-maintained and not covered by 'make manifests generate'.\n"
+              )
+              print("\n".join(errors))
+              sys.exit(1)
+          print("CSV owned CRDs match config/crd/bases/ and all have descriptions.")
+          EOF
+
   helm-sync:
     name: Check Helm chart is in sync with operator
     runs-on: ubuntu-latest
