@@ -211,7 +211,7 @@ jobs:
           title: "shared: sync openapi.json with the control plane"
           body-path: ${{ runner.temp }}/body.md
           commit-message: |
-            shared: sync openapi.json with the control plane
+            OpenAPI Specification: Sync openapi.json with the control plane
 
             Exported from simplyblock-io/sbcli@${{ steps.export.outputs.sbcli_sha }}.
           # Explicit, so the sbcli checkout in .sbcli and any dependency-file
@@ -223,6 +223,13 @@ jobs:
           labels: |
             dependencies
             openapi
+            atlas-lib
+          assignees: | 
+            noctarius
+          reviewers: |
+            noctarius
+            boddumanohar
+            geoffrey1330
 
       - name: Report what happened
         if: always()
