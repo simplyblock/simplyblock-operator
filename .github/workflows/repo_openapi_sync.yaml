@@ -50,7 +50,11 @@ jobs:
       # uv.lock, so uv is what installs them and brings its own interpreter. The
       # requirements.txt this job used to install from went away when sbcli moved
       # to PEP 621 packaging.
-      - uses: astral-sh/setup-uv@v10
+      #
+      # Pinned to an exact version rather than a major: setup-uv stopped
+      # publishing a moving major tag after v7, so `@v10` does not resolve and
+      # the job fails before it starts.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: .sbcli/uv.lock
