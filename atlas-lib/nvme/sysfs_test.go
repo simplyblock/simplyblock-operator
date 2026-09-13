@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/simplyblock/atlas/errs"
 )
@@ -200,4 +201,55 @@ func TestSysfsDeviceResolver(t *testing.T) {
 	if none, err := r.ListWithSelector(ctx, DeviceSelector{NQN: "nqn.does.not:exist"}); err != nil || len(none) != 0 {
 		t.Errorf("ListWithSelector(missing) = %v, %v; want empty, nil", none, err)
 	}
+}
+
+// TestScanControllers_CreatedAtIsTheDirectoryMtime pins the one property the
+// grace period in the CSI driver's repair policy rests on: a controller's age
+// comes from its sysfs directory, which the kernel stamps at creation.
+//
+// There is no "connected at" attribute on an NVMe controller -- verified
+// against a live 5.14 node, whose controller directory carries only address,
+// cntlid, state, transport and friends -- so the directory's own mtime is the
+// evidence. On that node it landed 2ms before `nvme connect` returned and was
+// unchanged 81s later, with the namespace attached and the volume mounted.
+func TestScanControllers_CreatedAtIsTheDirectoryMtime(t *testing.T) {
+	root := vm17Fixture(t)
+	dir := filepath.Join(root, "class/nvme/nvme0")
+	want := time.Date(2026, 9, 13, 10, 44, 15, 0, time.UTC)
+	if err := os.Chtimes(dir, want, want); err != nil {
+		t.Fatal(err)
+	}
+
+	ctrls, err := scanControllers(root, "/dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Controller
+	for _, c := range ctrls {
+		if c.ID == "nvme0" {
+			got = c
+		}
+	}
+	if got.ID == "" {
+		t.Fatal("nvme0 not scanned")
+	}
+	if !got.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %s, want the directory mtime %s", got.CreatedAt, want)
+	}
+
+	// A controller whose directory cannot be stat'd reports the zero time, which
+	// is what tells "young" from "unknown" apart at the policy layer.
+	missing := scanControllersAt(t, filepath.Join(root, "nonexistent"))
+	if len(missing) != 0 {
+		t.Errorf("scanned %d controllers from a missing root, want 0", len(missing))
+	}
+}
+
+func scanControllersAt(t *testing.T, root string) []Controller {
+	t.Helper()
+	ctrls, err := scanControllers(root, "/dev")
+	if err != nil {
+		return nil
+	}
+	return ctrls
 }
