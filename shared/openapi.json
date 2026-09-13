@@ -5,23 +5,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/_meta/metrics": {
-      "get": {
-        "summary": "Metrics",
-        "description": "Endpoint that serves Prometheus metrics.",
-        "operationId": "metrics__meta_metrics_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v2/clusters/": {
       "get": {
         "summary": "Clusters:List",
@@ -459,6 +442,18 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "watch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.",
+              "default": false,
+              "title": "Watch"
+            },
+            "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear."
           }
         ],
         "responses": {
@@ -466,7 +461,18 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterLogEntryDTO"
+                  },
+                  "title": "Response Clusters Logs Api V2 Clusters  Cluster Id  Logs Get"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -4379,7 +4385,7 @@
           "replication"
         ],
         "summary": "Clusters:Storage-Pools:Volumes:Replication:Failover",
-        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.",
+        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.",
         "operationId": "clusters_storage_pools_volumes_replication_failover_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failover_post",
         "security": [
           {
@@ -4415,6 +4421,16 @@
               "type": "string",
               "format": "uuid",
               "title": "Volume Id"
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Generation"
             }
           }
         ],
@@ -7281,6 +7297,18 @@
             "type": "boolean",
             "title": "Enable Failure Domain"
           },
+          "device_mode": {
+            "type": "string",
+            "title": "Device Mode"
+          },
+          "inline_checksum": {
+            "type": "boolean",
+            "title": "Inline Checksum"
+          },
+          "atomic_4k": {
+            "type": "boolean",
+            "title": "Atomic 4K"
+          },
           "secret": {
             "type": "string",
             "format": "password",
@@ -7321,6 +7349,9 @@
           "node_affinity",
           "anti_affinity",
           "enable_failure_domain",
+          "device_mode",
+          "inline_checksum",
+          "atomic_4k",
           "secret",
           "tls_enabled",
           "max_fault_tolerance",
@@ -7328,6 +7359,81 @@
           "capacity"
         ],
         "title": "ClusterDTO"
+      },
+      "ClusterLogEntryDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Date"
+          },
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "event": {
+            "type": "string",
+            "title": "Event"
+          },
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "storage_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Id"
+          },
+          "vuid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vuid"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "date",
+          "node_id",
+          "event",
+          "level",
+          "message",
+          "storage_id",
+          "vuid",
+          "status"
+        ],
+        "title": "ClusterLogEntryDTO"
       },
       "ClusterParams": {
         "properties": {
@@ -7516,6 +7622,25 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Spdk Vcpu Count"
+          },
+          "device_mode": {
+            "type": "string",
+            "enum": [
+              "nvme",
+              "lblk"
+            ],
+            "title": "Device Mode",
+            "default": "nvme"
+          },
+          "inline_checksum": {
+            "type": "boolean",
+            "title": "Inline Checksum",
+            "default": false
+          },
+          "atomic_4k": {
+            "type": "boolean",
+            "title": "Atomic 4K",
+            "default": false
           }
         },
         "type": "object",
@@ -7568,6 +7693,16 @@
           "pcie_address": {
             "type": "string",
             "title": "Pcie Address"
+          },
+          "bdev_type": {
+            "type": "string",
+            "title": "Bdev Type",
+            "default": "nvme"
+          },
+          "device_path": {
+            "type": "string",
+            "title": "Device Path",
+            "default": ""
           },
           "status": {
             "type": "string",
@@ -8150,6 +8285,11 @@
               }
             ],
             "title": "Keep Replicated"
+          },
+          "consistency_group": {
+            "type": "boolean",
+            "title": "Consistency Group",
+            "default": false
           }
         },
         "type": "object",
@@ -8232,6 +8372,33 @@
               "inactive"
             ],
             "title": "Status"
+          },
+          "consistency_group": {
+            "type": "boolean",
+            "title": "Consistency Group",
+            "default": false
+          },
+          "group_node_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Node Id"
+          },
+          "group_lvs_name": {
+            "type": "string",
+            "title": "Group Lvs Name",
+            "default": ""
+          },
+          "group_last_seq": {
+            "type": "integer",
+            "title": "Group Last Seq",
+            "default": 0
           }
         },
         "type": "object",
@@ -8940,6 +9107,11 @@
           "expand": {
             "type": "boolean",
             "title": "Expand",
+            "default": false
+          },
+          "force_format": {
+            "type": "boolean",
+            "title": "Force Format",
             "default": false
           }
         },
