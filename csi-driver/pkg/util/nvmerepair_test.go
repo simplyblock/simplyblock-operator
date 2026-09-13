@@ -442,3 +442,125 @@ func (f fakeDevs) ByNamespace(context.Context, string, nvme.NamespaceID) (nvme.D
 // subsystem is not attached", which is not a defect, and anything else as a
 // failure to diagnose.
 var errs404 = fmt.Errorf("subsystem: %w", errs.ErrNotFound)
+
+// orphanSubsystem returns the state the two regression tests below share: a
+// namespace served only by nvme0, and nvme1 live at a second published endpoint
+// contributing no path to it. That is what atlas diagnoses as
+// controller-not-contributing.
+func orphanSubsystem(orphanCreatedAt time.Time) (nvme.Namespace, nvme.Subsystem) {
+	ns := nvme.Namespace{
+		ID: 1, Name: "nvme0n1", DevicePath: "/dev/nvme0n1", UUID: volA,
+		Paths: []nvme.Path{{Controller: "nvme0", NSID: 1, ANAState: nvme.ANAOptimized}},
+	}
+	sub := nvme.Subsystem{
+		ID: "nvme-subsys0", NQN: repairTestNQN,
+		Controllers: []nvme.Controller{orphanCtrl("nvme0", "10.0.0.1", time.Time{}),
+			orphanCtrl("nvme1", "10.0.0.2", orphanCreatedAt)},
+		Namespaces: []nvme.Namespace{ns},
+	}
+	return ns, sub
+}
+
+// orphanCtrl is testCtrl with the kernel-reported creation time set.
+func orphanCtrl(id, addr string, createdAt time.Time) nvme.Controller {
+	c := testCtrl(id, addr)
+	c.CreatedAt = createdAt
+	return c
+}
+
+func orphanRepairer(t *testing.T, orphanCreatedAt time.Time) (*nvmeRepairer, *[]string) {
+	t.Helper()
+	ns, sub := orphanSubsystem(orphanCreatedAt)
+	r, torn := recordingRepairer(t)
+	r.subs = fakeSubs{sub: sub}
+	r.devs = fakeDevs{devices: []nvme.Device{{Namespace: ns, Subsystem: sub}}}
+	return r, torn
+}
+
+//nolint:unused // kept alongside orphanSubsystem for the healSubsystem cases.
+func orphanConns() []*LvolConnectResp {
+	return []*LvolConnectResp{
+		{Nqn: repairTestNQN, IP: "10.0.0.1", Port: 4420, TargetType: "tcp"},
+		{Nqn: repairTestNQN, IP: "10.0.0.2", Port: 4420, TargetType: "tcp"},
+	}
+}
+
+// Regression: 2026-09-13-nvmerepair-tears-down-its-own-connect — the monitor tick
+// connects a missing path and then, in the same pass, diagnoses that brand-new
+// controller as contributing no path and tears it down. A controller has not
+// attached its namespace to the head microseconds after connect, so it is
+// indistinguishable from the real defect.
+//
+// k8s_native_rapid_failover_no_gap 2026-09-12, lvol 9ab68184 on worker-3:
+// reconcileNonOptimizedPaths connected 192.168.10.12 at 05:10:42.422 and the
+// repair tore it down at 05:10:42.519, 97ms later. The volume ran at 2 of 3
+// paths. Nine seconds later its primary and secondary both went down and a write
+// blocked 41s, failing the run.
+func TestHealSubsystem_LeavesAJustConnectedControllerAlone(t *testing.T) {
+	base := time.Now()
+	// The kernel created this controller 97ms ago, as it had in the incident.
+	r, torn := orphanRepairer(t, base.Add(-97*time.Millisecond))
+	r.now = func() time.Time { return base }
+
+	_, actions := r.healSubsystem(context.Background(),
+		nvme.DeviceSelector{NQN: repairTestNQN, UUID: volA},
+		targetsFromConnections(repairTestNQN, orphanConns()))
+
+	if len(*torn) != 0 {
+		t.Fatalf("tore down %v; a controller connected 97ms ago must be left to attach", *torn)
+	}
+	if len(actions) != 1 || actions[0].skipped == "" {
+		t.Fatalf("actions = %v, want one skipped action naming the grace", actions)
+	}
+
+	// The grace defers the verdict, it does not abandon it: once the window has
+	// passed, a controller that still contributes nothing is still repaired.
+	r.now = func() time.Time { return base.Add(defaultConnectGrace + time.Second) }
+	if _, actions = r.healSubsystem(context.Background(),
+		nvme.DeviceSelector{NQN: repairTestNQN, UUID: volA},
+		targetsFromConnections(repairTestNQN, orphanConns())); len(actions) != 1 || !actions[0].repaired {
+		t.Fatalf("actions = %v, want the repair once the grace expired", actions)
+	}
+	if want := []string{"nvme1"}; !slices.Equal(*torn, want) {
+		t.Errorf("tore down %v, want %v after the grace", *torn, want)
+	}
+}
+
+// Regression: 2026-09-13-repaired-endpoint-stays-in-the-active-snapshot — the
+// reorder that puts the repair before the reconcile passes only restores the
+// path if the reconcile can see it is gone. activePaths is the snapshot the
+// monitor captured before recoverPathsWithANA ran, and missingEndpoints counts
+// an endpoint as attached on presence alone, regardless of state. So a
+// controller the repair had just torn down still looked attached, the reconcile
+// skipped its connect, and the volume stayed a path short until the next tick —
+// which is the whole failure the reorder exists to prevent.
+func TestWithoutEndpoints_RepairedPathIsSeenAsMissingAgain(t *testing.T) {
+	// The snapshot the monitor took before the repair: all three paths present.
+	active := []path{
+		{Name: "nvme0", Address: "traddr=10.0.0.1,trsvcid=4420", State: "live"},
+		{Name: "nvme1", Address: "traddr=10.0.0.2,trsvcid=4420", State: "live"},
+		{Name: "nvme2", Address: "traddr=10.0.0.3,trsvcid=4420", State: "live"},
+	}
+	conns := []*LvolConnectResp{
+		{Nqn: repairTestNQN, IP: "10.0.0.1", Port: 4420},
+		{Nqn: repairTestNQN, IP: "10.0.0.2", Port: 4420},
+		{Nqn: repairTestNQN, IP: "10.0.0.3", Port: 4420},
+	}
+
+	if got := missingEndpoints(conns, active); len(got) != 0 {
+		t.Fatalf("missingEndpoints on the untouched snapshot = %d, want 0", len(got))
+	}
+
+	// The repair tore down 10.0.0.2. The reconcile that follows in this same
+	// tick has to connect it, so it must no longer count as attached.
+	remaining := withoutEndpoints(active, []string{"10.0.0.2:4420"})
+	missing := missingEndpoints(conns, remaining)
+	if len(missing) != 1 || missing[0].IP != "10.0.0.2" {
+		t.Fatalf("missing = %v, want only the torn-down 10.0.0.2: otherwise the "+
+			"same-tick reconcile skips its connect and the volume stays short", missing)
+	}
+	// Paths the repair did not touch must be left alone.
+	if len(remaining) != 2 {
+		t.Errorf("remaining = %d paths, want the other two untouched", len(remaining))
+	}
+}
