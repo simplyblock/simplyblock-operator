@@ -1,0 +1,299 @@
+// ---------------------------------------------------------------------------
+// KUBERNETES — cluster, storage classes, PVCs.
+// A Kubernetes cluster spans one or more zones and provides the worker nodes
+// that become simplyblock hosts. Its storage classes point at pools in storage
+// clusters, so k8s ↔ storage cluster is many-to-many. Each PVC is provisioned
+// as one logical volume, which carries a back-reference to the PVC.
+// ---------------------------------------------------------------------------
+const annList = a => Object.entries(a || []);
+// StoragePool.spec.storageClassParameters (camelCase) -> CSI StorageClass parameter
+const SCP_FIELD = {qosRwIops: "qos_rw_iops", qosRwMbytes: "qos_rw_mbytes", qosRMbytes: "qos_r_mbytes",
+  qosWMbytes: "qos_w_mbytes", compression: "compression", encryption: "encryption",
+  fabric: "fabric", maxNamespacePerSubsys: "max_namespace_per_subsys",
+  tune2fsReservedBlocks: "tune2fs_reserved_blocks", filesystem: "csi.storage.k8s.io/fstype"};
+
+function K8sTile({k, nav}) {
+  return (
+    <div className="tile" style={{"--sc": STATUS_META[k.status].c}} onDoubleClick={() => nav.detail(k)}>
+      <TileHead obj={k} left={<><TrafficLight status={k.status} /><Name>{k.name}</Name></>}
+        right={<><span className="badge k8s">{k.environment}</span>{k.counts.workers ? <span className="badge" style={k.discovered ? {color: "var(--ok)", borderColor: "color-mix(in srgb,var(--ok) 40%,transparent)"} : {color: "var(--dim2)"}}>{k.discovered ? "discovered" : "not discovered"}</span> : null}</>} />
+      <div className="tsub" style={{marginTop: 2}}>{k.endpoint}</div>
+      <Uuid value={k.id} />
+      <div className="labels">
+        <span className="lab"><i>k8s</i>{k.version}</span>
+        <span className="lab"><i>csi</i>{k.csi.version}<Dot c={STATUS_META[k.csi.status === "online" ? "online" : k.csi.status === "degraded" ? "degraded" : "unreachable"].c} /></span>
+        <span className="lab"><i>namespaces</i>{k.namespaces.length || "—"}</span>
+      </div>
+      <div className="zonestrip">
+        {k.zoneIds.map(id => <button className="zonechip" key={id} onClick={e => {e.stopPropagation(); nav.openZone(id);}}><Icon n="zone" s={10} />{regName(id, "zone")}</button>)}
+      </div>
+      <div className="kv">
+        <div><span>Worker nodes</span><b>{k.counts.workers || "—"}</b></div>
+        <div><span>Prepared</span><b>{k.counts.prepared || "—"}</b></div>
+        <div><span>Storage clusters</span><b>{k.counts.storageClusters}</b></div>
+        <div><span>Provisioned</span><b>{fmtBytes(k.capacity.total)}</b></div>
+      </div>
+      {!k.counts.workers && <div className="nolim">Disaggregated — consumes storage over NVMe/TCP, runs no simplyblock storage node</div>}
+      {!!k.counts.workers && !k.discovered && <div className="prepbox">Worker nodes are listed, but their hardware is unknown. Run discovery before a storage cluster can be deployed here.</div>}
+      <Foot items={[
+        k.counts.workers && !k.discovered ? {label: "Discover", icon: "search", onClick: () => window.__ui.dialog(discoveryDialog(k), k)} : null,
+        k.discovered ? {label: "Deploy", icon: "plus", onClick: () => nav.deployWizard(k.id)} : null,
+        {label: "PVCs", count: k.counts.pvcs, icon: "volume", onClick: () => nav.layer(k, "pvcs")},
+        {label: "Classes", count: k.counts.storageClasses, icon: "pool", onClick: () => nav.layer(k, "storageclasses")},
+        {label: "Details", right: true, onClick: () => nav.detail(k)}
+      ]} />
+    </div>
+  );
+}
+
+function StorageClassTile({s, nav}) {
+  return (
+    <div className="tile" style={{"--sc": "var(--ok)"}} onDoubleClick={() => nav.detail(s)}>
+      <TileHead obj={s} left={<><TrafficLight status="active" /><Name>{s.name}</Name></>}
+        right={<>{s.variant !== "default" && <span className="badge">{s.variant}</span>}{s.isDefault ? <span className="badge k8s">default class</span> : <span className="badge">generated</span>}</>} />
+      <div className="tsub" style={{marginTop: 2}}>{s.provisioner}</div>
+      <Uuid value={s.id} />
+      <div className="labels">
+        <button className="lab link" onClick={e => {e.stopPropagation(); nav.openCluster(s.clusterId);}}><Icon n="cluster" s={10} />{regName(s.clusterId)}</button>
+        {s.poolId && <button className="lab link" onClick={e => {e.stopPropagation(); nav.openPool(s.clusterId, s.poolId);}}><Icon n="pool" s={10} />StoragePool {s.poolName}</button>}
+        {s.dhchap && <span className="lab" style={{color: "var(--ro)", borderColor: "color-mix(in srgb,var(--ro) 40%,transparent)"}}><Icon n="lock" s={10} />dhchap</span>}
+      </div>
+      <div className="labels">
+        {annList(s.parameters).filter(([k2]) => k2 !== "cluster_id" && k2 !== "pool_name")
+          .slice(0, 6).map(([k2, v2]) => <span className="lab" key={k2} title={k2 + "=" + v2}><i>{k2.replace("csi.storage.k8s.io/", "")}</i>{v2}</span>)}
+      </div>
+      <div className="nolim">Generated by the operator from the StoragePool — parameters are immutable</div>
+      <div className="kv">
+        <div><span>PVCs</span><b>{s.counts.pvcs}</b></div>
+        <div><span>Bound</span><b>{s.counts.bound}</b></div>
+        <div><span>Provisioned</span><b>{fmtBytes(s.capacity.total)}</b></div>
+        <div><span>Reclaim</span><b>{s.reclaim}</b></div>
+      </div>
+      <Foot items={[
+        {label: "PVCs", count: s.counts.pvcs, icon: "volume", onClick: () => nav.layer(s, "pvcs")},
+        {label: "Details", right: true, onClick: () => nav.detail(s)}
+      ]} />
+    </div>
+  );
+}
+
+function PvcTile({p, nav}) {
+  const anns = annList(p.annotations).filter(([k2]) => !k2.startsWith("volume.kubernetes.io"));
+  return (
+    <div className="tile" style={{"--sc": STATUS_META[p.status].c}} onDoubleClick={() => nav.detail(p)}>
+      <TileHead obj={p} left={<><TrafficLight status={p.status} /><Name>{p.name}</Name></>}
+        right={<span className="badge">{p.namespace}</span>} />
+      <Uuid value={p.id} />
+      <div className="labels">
+        <button className="lab link" onClick={e => {e.stopPropagation(); nav.openStorageClass(p.storageClassId);}}><Icon n="pool" s={10} />{p.storageClass}</button>
+        {p.volumeId
+          ? <button className="lab link" onClick={e => {e.stopPropagation(); nav.openVolumeById(p.volumeId);}}><Icon n="volume" s={10} />volume</button>
+          : <span className="lab" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 40%,transparent)"}}>no volume bound</span>}
+        <span className="lab"><i>{p.workloadKind.toLowerCase()}</i>{p.workload}</span>
+        {p.accessMode === "ReadWriteMany" && <span className="lab" style={{color: "var(--ro)", borderColor: "color-mix(in srgb,var(--ro) 40%,transparent)"}}
+          title="Served by pNFS — XFS only"><Icon n="folder" s={10} />RWX · pNFS</span>}
+      </div>
+      <div className="kv">
+        <div><span>Requested</span><b>{fmtBytes(p.requested)}</b></div>
+        <div><span>Access</span><b>{p.accessMode}</b></div>
+        <div><span>Filesystem</span><b>{p.filesystem || p.volumeMode.toLowerCase()}</b></div>
+        <div><span>Age</span><b>{fmtAgo(p.createdAt)}</b></div>
+      </div>
+      {anns.length > 0 && <div className="labels">
+        {anns.slice(0, 3).map(([k2, v2]) => <span className="lab" key={k2} title={`${k2}=${v2}`}><i>{k2.split("/").pop()}</i>{v2}</span>)}
+        {anns.length > 3 && <span className="lab">+{anns.length - 3}</span>}
+      </div>}
+      <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(p)}]} />
+    </div>
+  );
+}
+
+function K8sDetail({o: k, nav}) {
+  return (
+    <div>
+      <DetailHead obj={k} title={k.name}
+        badge={<><span className="badge k8s">kubernetes {k.version}</span><span className="badge">{k.environment}</span></>}
+        sub={<span className="mono" style={{fontSize: 11.5, color: "var(--dim)"}}>{k.endpoint}</span>} />
+      {k.csi.status !== "online" && <div className="banner"><Icon n="alert" s={15} />
+        <span><b>CSI driver {k.csi.status}.</b> Provisioning and attach operations in this cluster will fail until the driver recovers.</span></div>}
+      <div className="stats">
+        <Stat k="Worker nodes" v={k.counts.workers || "—"}
+          s={k.counts.workers ? `${k.counts.prepared} prepared as hosts` : "disaggregated deployment"} />
+        <Stat k="PVCs" v={k.counts.pvcs} s={`${k.counts.bound} bound`} />
+        <Stat k="Storage classes" v={k.counts.storageClasses} />
+        <Stat k="Storage clusters" v={k.counts.storageClusters} s="consumed" />
+        <Stat k="Zones" v={k.counts.zones} />
+        <Stat k="Provisioned" v={fmtBytes(k.capacity.total)} />
+      </div>
+      <div className="sech"><h2>Drill down</h2><span className="ln"></span></div>
+      <div className="navcards">
+        <NavCard icon="volume" title="Persistent volume claims" sub="filter by class or annotation" count={k.counts.pvcs} onClick={() => nav.layer(k, "pvcs")} />
+        <NavCard icon="pool" title="Storage classes" sub="provisioner parameters" count={k.counts.storageClasses} onClick={() => nav.layer(k, "storageclasses")} />
+        <NavCard icon="host" title="Worker nodes" sub={k.counts.workers ? "hosts provided to simplyblock" : "none — storage is disaggregated"} count={k.counts.workers} onClick={() => nav.layer(k, "hosts")} />
+        <NavCard icon="search" title="Discovery &amp; deployment" sub={k.discovered ? `discovered ${fmtAgo(k.discoveredAt)} · deploy a cluster` : "not discovered yet"} count="→" onClick={() => nav.discovery(k.id)} />
+        <NavCard icon="zone" title="Zones" sub="where this cluster runs" count={k.counts.zones} onClick={() => nav.layer(k, "zones")} />
+        <NavCard icon="k8s" title="Protected applications" sub="Ramen DR" count={k.counts.protectedApps} onClick={() => nav.drLayer("protectedapps")} />
+        <NavCard icon="cluster" title="Storage clusters" sub="serving this k8s cluster" count={k.counts.storageClusters} onClick={() => nav.layer(k, "clusters")} />
+      </div>
+      <div className="dcols">
+        <div className="card"><h3>Cluster properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
+          <Props rows={[
+            ["Name", k.name], ["Kubernetes", k.version], ["Environment", k.environment],
+            ["API endpoint", k.endpoint], ["Status", <TrafficLight status={k.status} />],
+            ["CSI driver", `${k.csi.version} · ${k.csi.status}`],
+            ["Operator namespace", k.operatorNamespace],
+            ["Zones", k.zoneIds.length
+              ? <span style={{display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap"}}>{k.zoneIds.map(id => <Ref key={id} onClick={() => nav.openZone(id)} label={regName(id, "zone")} />)}</span>
+              : null],
+            ["Storage clusters", k.storageClusterIds.length
+              ? <span style={{display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap"}}>{k.storageClusterIds.map(id => <Ref key={id} onClick={() => nav.openCluster(id)} label={regName(id)} />)}</span>
+              : null],
+            ["Namespaces with PVCs", k.namespaces.join(", ") || null],
+            ["Registered", fmtDate(k.createdAt)]
+          ]} /></div></div>
+        <div className="card"><h3>How this fits together</h3><div className="bd">
+          <p className="mdesc">The Kubernetes cluster runs in one or more <b>zones</b> and its worker nodes are the machines simplyblock prepares as <b>hosts</b>. A cluster with no worker nodes of its own is <b>disaggregated</b>: it consumes storage over NVMe/TCP from a storage cluster running elsewhere.</p>
+          <p className="mdesc">Each <b>storage class</b> points at a pool in a storage cluster, so this cluster can consume several storage clusters and one storage cluster can serve several Kubernetes clusters.</p>
+          <p className="mdesc" style={{marginBottom: 0}}>Every <b>PVC</b> is provisioned as one logical volume; the volume carries a back-reference to its claim.</p>
+        </div></div>
+      </div>
+    </div>
+  );
+}
+
+function StorageClassDetail({o: s, nav}) {
+  return (
+    <div>
+      <DetailHead obj={s} title={s.name}
+        badge={<><span className="badge">storage class</span>{s.isDefault && <span className="badge k8s">default</span>}</>}
+        sub={<span className="mono" style={{fontSize: 11.5, color: "var(--dim)"}}>{s.provisioner}</span>} />
+      <div className="banner" style={{color: "var(--dim)", background: "var(--panel2)", borderColor: "var(--line)"}}>
+        <Icon n="alert" s={15} /><span><b>Generated by the operator.</b> This StorageClass was created automatically when the StoragePool <b>{s.storagePoolRef || s.poolName}</b> became active. A class always belongs to exactly one pool, and a pool can back several classes offering different defaults over the same capacity. Kubernetes does not allow StorageClass parameters to change after creation, so they are immutable: to provision with different defaults, add another class or a new storage pool.</span></div>
+      <div className="stats">
+        <Stat k="PVCs" v={s.counts.pvcs} s={`${s.counts.bound} bound`} />
+        <Stat k="Provisioned" v={fmtBytes(s.capacity.total)} />
+        <Stat k="Reclaim policy" v={s.reclaim} />
+        <Stat k="Binding" v={s.binding === "Immediate" ? "Immediate" : "WaitForConsumer"} />
+        <Stat k="Expansion" v={s.expansion ? "allowed" : "blocked"} />
+        <Stat k="Fabric" v={(s.parameters || {}).fabric || "tcp"} s={(s.parameters || {})["csi.storage.k8s.io/fstype"] || "raw block"} />
+      </div>
+      <div className="sech"><h2>Drill down</h2><span className="ln"></span></div>
+      <div className="navcards">
+        <NavCard icon="volume" title="PVCs using this class" sub="all namespaces" count={s.counts.pvcs} onClick={() => nav.layer(s, "pvcs")} />
+        <NavCard icon="pool" title="Source StoragePool" sub={regName(s.clusterId)} count="→" onClick={() => nav.openPool(s.clusterId, s.poolId)} />
+        <NavCard icon="k8s" title="Kubernetes cluster" sub={regName(s.k8sClusterId, "cluster")} count="→" onClick={() => nav.openK8s(s.k8sClusterId)} />
+      </div>
+      <div className="dcols">
+        <div className="card"><h3>Class properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
+          <Props rows={[
+            ["Name", s.name], ["Provisioner", s.provisioner],
+            ["Source StoragePool", s.storagePoolRef], ["Variant", s.variant],
+            ["Kubernetes cluster", <Ref onClick={() => nav.openK8s(s.k8sClusterId)} label={regName(s.k8sClusterId, "cluster")} />],
+            ["Storage cluster", <Ref onClick={() => nav.openCluster(s.clusterId)} label={regName(s.clusterId)} />],
+            ["Pool", s.poolId ? <Ref onClick={() => nav.openPool(s.clusterId, s.poolId)} label={s.poolName} /> : null],
+            ["Reclaim policy", s.reclaim], ["Volume binding mode", s.binding],
+            ["Allow expansion", s.expansion ? "yes" : "no"],
+            ["Default class", s.isDefault ? "yes" : "no"],
+            ["DHCHAP", s.dhchap ? "enabled — restricted to the pool's allowed nodes" : "no"],
+            s.allowedTopology ? ["Allowed topology", s.allowedTopology] : null,
+            ["Created", fmtDate(s.createdAt)]
+          ]} /></div></div>
+        <div className="card"><h3>Topology-aware provisioning</h3><div className="bd">
+          {Object.keys(s.zoneClusterMap || {}).length || Object.keys(s.regionClusterMap || {}).length ? <>
+            <p className="mdesc">A PVC using this class is provisioned from the storage cluster mapped to the pod's <span className="mono">topology.kubernetes.io/zone</span> label, falling back to its region.</p>
+            <table className="dt"><thead><tr><th>Label</th><th>Value</th><th>Storage cluster</th></tr></thead><tbody>
+              {Object.entries(s.zoneClusterMap || {}).map(([z, cid]) => (
+                <tr key={"z" + z}><td className="mono" style={{color: "var(--dim)"}}>zone</td>
+                  <td className="mono">{z}</td>
+                  <td><Ref onClick={() => nav.openCluster(cid)} label={regName(cid)} /></td></tr>
+              ))}
+              {Object.entries(s.regionClusterMap || {}).map(([r, cid]) => (
+                <tr key={"r" + r}><td className="mono" style={{color: "var(--dim)"}}>region</td>
+                  <td className="mono">{r}</td>
+                  <td><Ref onClick={() => nav.openCluster(cid)} label={regName(cid)} /></td></tr>
+              ))}
+            </tbody></table>
+          </> : <div className="nolim">No zone or region map — every PVC lands on <b>{regName(s.clusterId)}</b> regardless of where the pod is scheduled.</div>}
+        </div></div>
+        <div className="card" style={{marginTop: 12}}><h3>StorageClass parameters · immutable</h3><div className="bd" style={{padding: 0}}>
+          <table className="dt">
+            <thead><tr><th>CSI parameter</th><th>Value</th><th>StoragePool field</th></tr></thead>
+            <tbody>
+              {annList(s.parameters).map(([k2, v2]) => {
+                const crd = Object.entries(SCP_FIELD).find(([, csi]) => csi === k2);
+                const fixed = k2 === "cluster_id" || k2 === "pool_name";
+                return (
+                  <tr key={k2}>
+                    <td className="mono" style={{color: "var(--dim)", overflowWrap: "anywhere", whiteSpace: "normal"}}>{k2}</td>
+                    <td className="mono" style={{overflowWrap: "anywhere", whiteSpace: "normal"}}>{v2}</td>
+                    <td className="mono" style={{color: fixed ? "var(--warn)" : "var(--dim2)", fontSize: 10.5}}>
+                      {fixed ? "set from the pool" : crd ? crd[0] : "operator"}</td>
+                  </tr>
+                );
+              })}
+            </tbody></table>
+        </div></div>
+      </div>
+    </div>
+  );
+}
+
+function PvcDetail({o: p, nav}) {
+  return (
+    <div>
+      <DetailHead obj={p} title={`${p.namespace}/${p.name}`}
+        badge={<><span className="badge">PVC</span><span className="badge">{p.accessMode}</span><span className="badge">{p.volumeMode}</span></>}
+        sub={<span style={{fontSize: 11.5, color: "var(--dim)"}}>
+          class <Ref onClick={() => nav.openStorageClass(p.storageClassId)} label={p.storageClass} /></span>} />
+      {p.status === "Lost" && <div className="banner"><Icon n="alert" s={15} />
+        <span><b>Claim lost.</b> The logical volume backing this PVC no longer exists, so the workload cannot mount it.</span></div>}
+      {p.status === "Pending" && <div className="banner" style={{color: "var(--warn)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)"}}>
+        <Icon n="clock" s={15} /><span><b>Pending.</b> No volume has been provisioned yet — with WaitForFirstConsumer binding this is normal until the pod is scheduled.</span></div>}
+      <div className="stats">
+        <Stat k="Requested" v={fmtBytes(p.requested)} />
+        <Stat k="Provisioned" v={p.volumeId ? fmtBytes(p.capacity.total) : "—"} />
+        <Stat k="Namespace" v={p.namespace} />
+        <Stat k="Access mode" v={p.accessMode === "ReadWriteMany" ? "RWX" : p.accessMode === "ReadWriteOnce" ? "RWO" : "RWOP"}
+          s={p.accessMode === "ReadWriteMany" ? "pNFS, XFS only" : p.accessMode} />
+        <Stat k="Age" v={fmtAgo(p.createdAt)} s={fmtDate(p.createdAt)} />
+        <Stat k="Status" v={p.status} c={STATUS_META[p.status].c} />
+      </div>
+      <div className="sech"><h2>Drill down</h2><span className="ln"></span></div>
+      <div className="navcards">
+        {p.volumeId && <NavCard icon="volume" title="Logical volume" sub="the volume behind this claim" count="→" onClick={() => nav.openVolumeById(p.volumeId)} />}
+        <NavCard icon="pool" title="Storage class" sub={p.storageClass} count="→" onClick={() => nav.openStorageClass(p.storageClassId)} />
+        <NavCard icon="k8s" title="Kubernetes cluster" sub={regName(p.k8sClusterId, "cluster")} count="→" onClick={() => nav.openK8s(p.k8sClusterId)} />
+      </div>
+      <div className="dcols">
+        <div className="card"><h3>Claim properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
+          <Props rows={[
+            ["Name", p.name], ["Namespace", p.namespace], ["Status", <TrafficLight status={p.status} />],
+            ["Storage class", <Ref onClick={() => nav.openStorageClass(p.storageClassId)} label={p.storageClass} />],
+            ["Logical volume", p.volumeId
+              ? <Ref onClick={() => nav.openVolumeById(p.volumeId)} label={regName(p.volumeId, shortId(p.volumeId))} /> : null],
+            ["Kubernetes cluster", <Ref onClick={() => nav.openK8s(p.k8sClusterId)} label={regName(p.k8sClusterId, "cluster")} />],
+            ["Requested", fmtBytes(p.requested)], ["Access mode", p.accessMode], ["Volume mode", p.volumeMode],
+            ["Filesystem", p.filesystem],
+            p.accessMode === "ReadWriteMany" ? ["Served by", "pNFS — the cluster's file storage. XFS is the only filesystem the Linux NFS server supports for pNFS."] : null,
+            ["Workload", `${p.workload} (${p.workloadKind})`],
+            ["Created", fmtDate(p.createdAt)]
+          ]} /></div></div>
+        <div>
+          <div className="card"><h3>Annotations</h3><div className="bd" style={{padding: 0}}>
+            <table className="dt"><tbody>
+              {annList(p.annotations).map(([k2, v2]) => (
+                <tr key={k2}><td className="mono" style={{color: "var(--dim)", overflowWrap: "anywhere", whiteSpace: "normal"}}>{k2}</td>
+                  <td className="mono" style={{textAlign: "right"}}>{v2}</td></tr>
+              ))}
+            </tbody></table>
+          </div></div>
+          <div className="card" style={{marginTop: 12}}><h3>Labels</h3><div className="bd">
+            <div className="labels">{annList(p.labels).map(([k2, v2]) => <span className="lab" key={k2}><i>{k2.split("/").pop()}</i>{v2}</span>)}</div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, {K8sTile, StorageClassTile, PvcTile, K8sDetail, StorageClassDetail, PvcDetail, SCP_FIELD});

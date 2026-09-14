@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-control-center
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simplyblock-control-center
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/part-of: simplyblock
+spec:
+  # The console holds no state of its own — its location lives in the browser's
+  # localStorage — so it scales horizontally and rolls without coordination.
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simplyblock-control-center
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simplyblock-control-center
+        app.kubernetes.io/component: ui
+        app.kubernetes.io/part-of: simplyblock
+    spec:
+      serviceAccountName: simplyblock-control-center
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread across nodes so a single worker loss does not take the console
+      # with it — it is the tool an operator reaches for during an incident.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: simplyblock-control-center
+      containers:
+        - name: ui
+          image: quay.io/simplyblock-io/control-center:26.3.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SB_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # serviceaccount: this pod attaches its own token to proxied
+            # requests and the browser never holds a credential. Authenticate
+            # the Ingress — the pod's authority is the ClusterRole.
+            - name: SB_AUTH_MODE
+              value: serviceaccount
+            - name: SB_K8S_API
+              value: https://kubernetes.default.svc
+            # SNI and Host for the API server: must be a name on its
+            # certificate. Both move if SB_K8S_API points elsewhere.
+            - name: SB_K8S_HOST
+              value: kubernetes.default.svc
+            - name: SB_K8S_CA_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - name: SB_OPERATOR_URL
+              value: http://simplyblock-operator:8080
+            - name: SB_HELM_URL
+              value: http://simplyblock-operator:8080
+            - name: SB_PROMETHEUS_URL
+              value: http://simplyblock-prometheus:9090
+            - name: SB_MOCK
+              value: "false"
+            - name: SB_LISTEN_PORT
+              value: "8080"
+          resources:
+            requests:
+              cpu: 20m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 2
+          volumeMounts:
+            # Under readOnlyRootFilesystem there are two writable paths: the
+            # scratch mount, which holds the generated config.js, the proxied
+            # token and nginx's temp files; and conf.d, because the image's
+            # entrypoint renders the server block from its template at startup.
+            - name: nginx-tmp
+              mountPath: /tmp/nginx
+            - name: nginx-confd
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: nginx-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: nginx-confd
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-control-center
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+    app.kubernetes.io/component: ui
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: simplyblock-control-center

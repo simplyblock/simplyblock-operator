@@ -1,0 +1,189 @@
+{{/*
+  Control Center — the simplyblock web UI.
+
+  Installs with the operator when controlCenter.enabled is true, so the console
+  arrives as part of the deployment rather than as a second thing to install.
+  Self-contained on purpose: it calls only its own `sbcc.*` helpers (in
+  _control_center_helpers.tpl), never this chart's. Sources and image build
+  live in control-center/ at the repository root.
+*/}}
+{{- if .Values.controlCenter.enabled }}
+{{- $cc := .Values.controlCenter }}
+{{- $name := include "sbcc.fullname" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+{{- with $cc.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $cc.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "sbcc.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "sbcc.selectorLabels" . | nindent 8 }}
+      {{- with $cc.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with $cc.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cc.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "sbcc.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: ui
+          image: {{ include "sbcc.image" . | quote }}
+          imagePullPolicy: {{ $cc.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SB_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SB_AUTH_MODE
+              value: {{ $cc.authMode | quote }}
+            {{- /* With the mock enabled every upstream is the sb-mock service:
+                   the console runs unmodified against generated data. */}}
+            {{- $mockURL := printf "http://%s-mock:8080" $name }}
+            - name: SB_K8S_API
+              value: {{ ternary $mockURL $cc.kubernetesApi $cc.mock.enabled | quote }}
+            # SNI and Host for the API server. Must match a name on the
+            # apiserver's certificate — see controlCenter.kubernetesApiHost.
+            # (Ignored for a plain-http upstream, i.e. in mock mode.)
+            - name: SB_K8S_HOST
+              value: {{ $cc.kubernetesApiHost | quote }}
+            - name: SB_K8S_CA_FILE
+              value: {{ $cc.kubernetesApiCaFile | quote }}
+            - name: SB_OPERATOR_URL
+              value: {{ ternary $mockURL (include "sbcc.operatorUrl" .) $cc.mock.enabled | quote }}
+            - name: SB_HELM_URL
+              value: {{ ternary $mockURL ($cc.helmUrl | default (include "sbcc.operatorUrl" .)) $cc.mock.enabled | quote }}
+            - name: SB_PROMETHEUS_URL
+              value: {{ ternary $mockURL (include "sbcc.prometheusUrl" .) $cc.mock.enabled | quote }}
+            - name: SB_MOCK
+              value: "false"
+            - name: SB_LISTEN_PORT
+              value: "8080"
+            - name: SB_TOKEN_REFRESH_SECONDS
+              value: {{ $cc.tokenRefreshSeconds | quote }}
+          resources: {{- toYaml $cc.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          volumeMounts:
+            # readOnlyRootFilesystem: the scratch mount holds the generated
+            # config.js, the proxied token and nginx's temp files; conf.d is
+            # writable because the image renders its server block at startup.
+            - name: nginx-tmp
+              mountPath: /tmp/nginx
+            - name: nginx-confd
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: nginx-tmp
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        - name: nginx-confd
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+spec:
+  type: {{ $cc.service.type }}
+  ports:
+    - name: http
+      port: {{ $cc.service.port }}
+      targetPort: http
+  selector:
+    {{- include "sbcc.selectorLabels" . | nindent 4 }}
+{{- if $cc.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+  {{- with $cc.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $cc.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $cc.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ required "controlCenter.ingress.host is required when the ingress is enabled" $cc.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

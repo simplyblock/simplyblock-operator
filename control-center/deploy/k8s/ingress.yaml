@@ -1,0 +1,122 @@
+# Ingress and network policy.
+#
+# READ THIS BEFORE EXPOSING THE CONSOLE.
+#
+# In SB_AUTH_MODE=serviceaccount the pod attaches its own ServiceAccount token
+# to every proxied request. That is what keeps a cluster credential out of the
+# browser — but it also means the console's authority is the ClusterRole in
+# rbac.yaml, for anyone who can reach the Service. There is no per-user identity
+# and no audit trail attributing an action to a person.
+#
+# So authentication in front of the Service is required, not optional. Pick one:
+#
+#   a) an OIDC/OAuth2 proxy in front (recommended) — real identity, real audit
+#   b) the basic-auth annotation below, as a stop-gap
+#   c) no Ingress at all: `kubectl port-forward svc/simplyblock-control-center
+#      8080:80`, which puts the console behind the operator's own kubeconfig
+#
+# For (c) — the safest default — delete this file entirely.
+#
+# If you need per-user authority rather than one shared role, run with
+# SB_AUTH_MODE=passthrough and have your auth proxy inject the user's own
+# bearer token. Kubernetes then enforces that user's RBAC, and the ClusterRole
+# here can be dropped to nothing.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: simplyblock-control-center
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: simplyblock-control-center
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Only the ingress controller reaches the console. Narrow the namespace
+    # selector to wherever your controller actually runs.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # The console has exactly three upstreams. Nothing else, and no internet:
+    # React and Babel are vendored into the image.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: simplyblock
+      ports:
+        - protocol: TCP
+          port: 8080   # operator API
+        - protocol: TCP
+          port: 9090   # Prometheus
+    # The Kubernetes API server.
+    #
+    # A rule with ports but no `to:` allows those ports to EVERY destination,
+    # including the public internet — which is not a cap at all. Scope it. The
+    # correct value is cluster-specific, so this ships as the RFC1918 ranges
+    # with public space excluded; replace it with your API server's actual
+    # endpoint (`kubectl get endpoints kubernetes -n default`) or your service
+    # CIDR, which is tighter still.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simplyblock-control-center
+  namespace: simplyblock
+  labels:
+    app.kubernetes.io/name: simplyblock-control-center
+  annotations:
+    # ---- authentication: replace this block, do not just delete it ----
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: simplyblock-control-center-auth
+    nginx.ingress.kubernetes.io/auth-realm: "simplyblock Control Center"
+    # The deployment wizard posts a large host and device selection.
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+    # Task lists, logs and SPDK thread utilisation stream.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["simplyblock.example.com"]
+      secretName: simplyblock-control-center-tls
+  rules:
+    - host: simplyblock.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: simplyblock-control-center
+                port:
+                  name: http

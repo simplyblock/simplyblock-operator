@@ -1,0 +1,96 @@
+{{/*
+  sb-mock — the Control Center's test backend (control-center/mock).
+
+  Deployed only for testing and demos: it impersonates the Kubernetes API,
+  the operator API and Prometheus with generated data, and the console's
+  Deployment points its proxy here when controlCenter.mock.enabled is true.
+  Writes persist into the mock's memory and perform no real change; nothing
+  in this pod touches the actual cluster, and it needs no RBAC at all.
+*/}}
+{{- if and .Values.controlCenter.enabled .Values.controlCenter.mock.enabled }}
+{{- $cc := .Values.controlCenter }}
+{{- $mock := $cc.mock }}
+{{- $name := printf "%s-mock" (include "sbcc.fullname" .) }}
+{{- $reg := $mock.image.registry | default "quay.io" }}
+{{- $tag := $mock.image.tag | default (.Chart.AppVersion | default "latest") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-mock
+spec:
+  # one replica on purpose: the world lives in this pod's memory
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sbcc.name" . }}-mock
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sbcc.name" . }}-mock
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with $cc.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cc.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mock
+          image: "{{ $reg }}/{{ $mock.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $mock.image.pullPolicy }}
+          args:
+            - --listen=:8080
+            - --dataset={{ $mock.dataset }}
+            {{- if $mock.seed }}
+            - --seed={{ $mock.seed }}
+            {{- end }}
+            - --sim-interval={{ $mock.simInterval }}
+            - --fail-rate={{ $mock.failRate }}
+            - --namespace={{ .Release.Namespace }}
+          ports:
+            - name: http
+              containerPort: 8080
+          resources: {{- toYaml $mock.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui-mock
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: {{ include "sbcc.name" . }}-mock
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,76 @@
+{{/*
+  NetworkPolicy for the Control Center.
+
+  The console has exactly three upstreams — the Kubernetes API, the operator
+  API and Prometheus — and no route to the internet: React, Babel, the
+  typefaces and the brand mark are vendored into the image. This caps egress
+  to those upstreams plus DNS.
+
+  Off by default because the API-server rule is cluster-specific: it ships as
+  the RFC1918 ranges, and you should narrow controlCenter.networkPolicy
+  .apiServerCidrs to your API server endpoint (`kubectl get endpoints
+  kubernetes -n default`) or your service CIDR. A rule with ports but no `to:`
+  would allow 443 to the whole internet, which is why one is never rendered.
+*/}}
+{{- if and .Values.controlCenter.enabled .Values.controlCenter.networkPolicy.enabled }}
+{{- $cc := .Values.controlCenter }}
+{{- $name := include "sbcc.fullname" . }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sbcc.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Who may reach the console. Defaults to the release namespace (which
+    # covers kubectl port-forward); add your ingress controller's namespace
+    # when the Ingress is enabled.
+    - from:
+        {{- range $ns := $cc.networkPolicy.ingressFromNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns }}
+        {{- end }}
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # The operator API and Prometheus, inside the release namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # The Kubernetes API server. Narrow these CIDRs — see the header comment.
+    - to:
+        {{- range $cidr := $cc.networkPolicy.apiServerCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

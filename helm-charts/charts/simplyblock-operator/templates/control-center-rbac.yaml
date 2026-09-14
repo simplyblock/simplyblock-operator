@@ -1,0 +1,147 @@
+{{/*
+  RBAC for the Control Center.
+
+  In serviceaccount mode this role IS the console's authority, for anyone who
+  can reach the Service. In passthrough mode the pod needs nothing at all —
+  Kubernetes enforces each user's own RBAC — so set controlCenter.rbac.create
+  to false there.
+
+  Kept in step with control-center/deploy/k8s/rbac.yaml; that file is the
+  plain-manifest equivalent of this one.
+*/}}
+{{- if and .Values.controlCenter.enabled .Values.controlCenter.rbac.create }}
+{{- $name := include "sbcc.fullname" . }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+rules:
+  # ---- simplyblock entities: read ----
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusters
+      - storagenodes
+      - storagenodesets
+      - storagedevices
+      - storagepools
+      - storagebackups
+      - backuppolicies
+      - backuprestores
+      - backupimports
+      - controlplanes
+      - replicationpairs
+      - replicationpolicies
+      - replicationslots
+      - volumemigrations
+      - tasks
+      - simplyblockdrivers
+      - clusterdeploymentconfigs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusters/status
+      - storagenodes/status
+      - storagepools/status
+      - replicationpolicies/status
+      - replicationslots/status
+    verbs: ["get"]
+
+  # ---- day-2 operations ----
+  # An action is not a verb against an entity: it is an Ops object the operator
+  # reconciles. The console creates one, reads its phase, patches spec.abort to
+  # unwind it, and deletes it only to abort.
+  - apiGroups: ["storage.simplyblock.io"]
+    resources:
+      - storageclusterops
+      - storagenodeops
+      - storagedeviceops
+      - storagepoolops
+      - storagebackupops
+      - controlplaneops
+      - persistentvolumeops
+      - operatorops
+      - replicationops
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+
+  # ---- resources the console authors ----
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["replicationpairs", "replicationpolicies"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["storagebackups", "backuppolicies", "backuprestores", "backupimports", "volumemigrations"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["storageclusters", "storagepools", "storagenodesets"]
+    verbs: ["update", "patch"]
+
+  # ---- core Kubernetes ----
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes", "persistentvolumeclaims", "pods", "events", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # A PVC annotation is the whole membership model for replication and for
+  # backup policies, so patching one is how a volume is attached.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+
+  # ---- workloads, read only, for the Ramen recipe editor ----
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list"]
+
+  # ---- Ramen: instances only, never the CRDs ----
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["drpolicies", "drclusters", "drclusterconfigs", "volumereplicationgroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["drplacementcontrols"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["ramendr.openshift.io"]
+    resources: ["recipes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclusters"]
+    verbs: ["get", "list"]
+
+  # ---- Helm release view ----
+  # Helm stores releases as Secrets. This is the only reason the console reads a
+  # Secret, and a backup credentialsSecretRef is only ever shown by name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sbcc.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
