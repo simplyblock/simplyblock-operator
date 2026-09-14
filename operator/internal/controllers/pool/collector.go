@@ -34,7 +34,6 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/prometheus"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -228,7 +227,7 @@ func (c *Collector) reportExhaustion(
 // deployment has few clusters and the manager's cache answers it without a round
 // trip.
 func (c *Collector) clusterUUID(ctx context.Context, p *simplyblockv1alpha2.StoragePool) string {
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	key := client.ObjectKey{Namespace: p.Namespace, Name: p.Spec.ClusterRef}
 	if err := c.Get(ctx, key, &cluster); err != nil {
 		return ""

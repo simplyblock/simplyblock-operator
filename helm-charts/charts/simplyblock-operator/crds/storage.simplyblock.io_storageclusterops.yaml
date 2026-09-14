@@ -163,8 +163,12 @@ spec:
         - jsonPath: .status.phase
           name: Phase
           type: string
+        - jsonPath: .status.step.state
+          name: Step
+          type: string
         - jsonPath: .status.message
           name: Message
+          priority: 1
           type: string
         - jsonPath: .metadata.creationTimestamp
           name: Age
@@ -173,10 +177,11 @@ spec:
       schema:
         openAPIV3Schema:
           description: |-
-            StorageClusterOps is a one-shot operational CR targeting a single StorageCluster.
-            Analogous to a Kubernetes Job — it drives a cluster-level operation (Activate, Expand,
-            Shutdown, Restart, RollingRestart) to completion and records the result. Only one
-            StorageClusterOps can be active per cluster at a time.
+            StorageClusterOps is a single operation performed against one StorageCluster.
+            It runs to a terminal phase and stays afterward as the audit record of what
+            was done, to which cluster, with which parameters, and how it ended. Only one
+            operation acts on a cluster at a time; a second is admitted, waits at
+            Pending, and runs when the lock frees.
           properties:
             apiVersion:
               description: |-
@@ -196,10 +201,16 @@ spec:
             metadata:
               type: object
             spec:
-              description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+              description: StorageClusterOpsSpec is one operation to perform against one StorageCluster.
               properties:
+                abort:
+                  description: |-
+                    Abort asks a running operation to stop at its next step and unwind.
+                    Whether an abort is expressible from the current step is declared by that
+                    action's graph rather than checked here.
+                  type: boolean
                 action:
-                  description: Action is the operation to perform. Immutable.
+                  description: Action is the operation to perform.
                   enum:
                     - Activate
                     - Expand
@@ -207,26 +218,45 @@ spec:
                     - Start
                     - Restart
                     - RollingRestart
+                    - CancelTask
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                cancelTask:
+                  description: CancelTask parameterizes action CancelTask and is ignored by the others.
+                  properties:
+                    taskID:
+                      description: |-
+                        TaskID names the entry of StorageCluster.status.tasks to cancel, by the
+                        control plane's identifier for it rather than by its position in the
+                        list.
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                  required:
+                    - taskID
+                  type: object
                 clusterRef:
-                  description: ClusterRef is the name of the target StorageCluster. Immutable.
+                  description: |-
+                    ClusterRef names the StorageCluster this operation acts on. The operation
+                    never owns its target, because deleting the record of an operation must
+                    not delete the cluster it operated on.
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
                 rollingRestart:
                   description: |-
-                    RollingRestart configures behavior specific to the RollingRestart action.
-                    Ignored for all other actions.
+                    RollingRestart parameterizes action RollingRestart and is ignored by the
+                    others.
                   properties:
                     refreshSNodeAPI:
                       description: |-
-                        RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                        after the backend node is shut down and before it is restarted, ensuring
-                        the latest image is running before the node comes back online.
+                        RefreshSNodeAPI restarts each node's storage-node DaemonSet pod between
+                        its shutdown and its restart, so the latest image is running when the
+                        node returns.
                       type: boolean
                   type: object
               required:
@@ -234,56 +264,86 @@ spec:
                 - clusterRef
               type: object
             status:
-              description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+              description: StorageClusterOpsStatus is the observed state of one cluster operation.
               properties:
                 completedAt:
-                  description: CompletedAt is when the operation finished (successfully or not).
+                  description: CompletedAt is when it reached a terminal phase.
                   format: date-time
                   type: string
                 message:
-                  description: Message is a human-readable description of the current state or failure reason.
+                  description: |-
+                    Message is the reason the phase is what it is: one sentence, replaced as
+                    the operation moves, and never a log.
                   type: string
+                observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
+                  format: int64
+                  type: integer
                 phase:
-                  description: Phase is the high-level lifecycle phase.
+                  description: Phase is the operation's own progress.
                   enum:
                     - Pending
                     - Running
                     - Succeeded
                     - Failed
+                    - Aborted
                   type: string
                 rollingRestart:
                   description: |-
-                    RollingRestart tracks per-node progress for the RollingRestart action.
-                    Nil for all other actions.
+                    RollingRestart is the walk's position, set only for action
+                    RollingRestart.
                   properties:
-                    nodePhase:
+                    nodeIndex:
                       description: |-
-                        NodePhase is the current step for the node being restarted:
-                        "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-                      type: string
-                    pendingNodes:
-                      description: PendingNodes is the ordered list of node UUIDs still to be restarted.
+                        NodeIndex is the position in Nodes of the node being restarted. Advancing
+                        the walk increments it, and the walk is complete when it reaches
+                        len(Nodes).
+
+                        No omitempty: zero is a valid index, and a field that disappears at zero
+                        makes "the first node" and "unset" the same wire value.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    nodes:
+                      description: |-
+                        Nodes is the ordered list of storage node UUIDs this action covers,
+                        written once when the walk starts and not modified afterward, so a node
+                        added mid-walk is not restarted and one removed mid-walk is skipped when
+                        the walk reaches it.
                       items:
                         type: string
                       type: array
-                    phaseTriggered:
-                      description: PhaseTriggered indicates the API call for the current NodePhase was already sent.
-                      type: boolean
-                    processedNodes:
-                      description: ProcessedNodes is the list of node UUIDs already restarted.
-                      items:
-                        type: string
-                      type: array
+                  required:
+                    - nodeIndex
                   type: object
                 startedAt:
-                  description: StartedAt is when the operation began.
+                  description: StartedAt is when the operation acquired its target's lock.
                   format: date-time
                   type: string
-                triggered:
+                step:
                   description: |-
-                    Triggered indicates the backend POST has been sent for this operation.
-                    Guards against duplicate backend calls on retry.
-                  type: boolean
+                    Step is the position of the running action's state machine, as the shared
+                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                    marker could reach a field of a shared type.
+                  properties:
+                    deadline:
+                      description: |-
+                        Deadline is when that state expires, absent when it has none. It is an
+                        absolute instant, so a state whose deadline passed while the controller
+                        was down restores as already expired.
+                      format: date-time
+                      type: string
+                    state:
+                      description: |-
+                        State is the state the machine was in. Empty means the resource has not
+                        been reconciled yet, and restores to the graph's initial state.
+                      type: string
+                  type: object
+                  x-kubernetes-validations:
+                    - message: unknown step
+                      rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'']'
               type: object
           type: object
       served: true

@@ -32,6 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -164,8 +165,8 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	}
 	clusterUUID, poolUUID, volumeUUID := parts[0], parts[1], parts[2]
 
-	if err := checkVolumeMigrationEnabled(ctx, r.Client, vm.Namespace, clusterUUID); err != nil {
-		return r.setFailed(ctx, vm, fmt.Sprintf("volume migration not enabled/configured for cluster %q: %v", clusterUUID, err))
+	if err := requireStorageCluster(ctx, r.Client, vm.Namespace, clusterUUID); err != nil {
+		return r.setFailed(ctx, vm, fmt.Sprintf("no StorageCluster accounts for cluster %q: %v", clusterUUID, err))
 	}
 
 	// The storage API migrates a whole NVMe subsystem, addressed by its NQN, so
@@ -417,8 +418,8 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Verify migration is enabled and the StorageCluster is known before doing any work.
-	if err := checkVolumeMigrationEnabled(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID); err != nil {
+	// Verify the StorageCluster is known before doing any work.
+	if err := requireStorageCluster(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID); err != nil {
 		log.Error(err, "Cannot start validation jobs; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
@@ -1236,7 +1237,7 @@ func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 
 	var name string
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var clusters simplyblockv1alpha1.StorageClusterList
+		var clusters simplyblockv1alpha2.StorageClusterList
 		if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 			return err
 		}

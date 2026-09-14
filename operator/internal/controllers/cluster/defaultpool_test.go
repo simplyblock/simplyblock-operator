@@ -9,7 +9,7 @@
 // csi.storage.k8s.io/fstype, and the node plugin formats ext4 instead. Nothing
 // in the operator says ext4 anywhere, so the only place that shows up is a
 // mounted volume.
-package controller
+package cluster
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 )
@@ -34,15 +33,12 @@ import (
 // that the pool the operator writes picks the defaults up, and a copy of the
 // spec here would keep passing after the operator stopped writing it that way.
 func TestTheDefaultPoolIsFormattedXFS(t *testing.T) {
-	if err := simplyblockv1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		t.Fatalf("adding the v1alpha1 scheme: %v", err)
-	}
 	if err := simplyblockv1alpha2.AddToScheme(scheme.Scheme); err != nil {
 		t.Fatalf("adding the v1alpha2 scheme: %v", err)
 	}
 
 	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 		BinaryAssetsDirectory: getFirstFoundEnvTestBinaryDir(),
 	}
@@ -62,9 +58,9 @@ func TestTheDefaultPoolIsFormattedXFS(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			MaxSubsystemCount: ptr.To(int32(10)),
 			VCPUCount:         ptr.To(int32(6)),
 		},

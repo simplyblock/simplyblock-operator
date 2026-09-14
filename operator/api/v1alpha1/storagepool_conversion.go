@@ -44,6 +44,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"reflect"
 	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -285,19 +286,20 @@ func unstash(meta *metav1.ObjectMeta, key string, target any) error {
 // all "the hub did not state this," and an annotation for each would be nine
 // keys on every pool that set none of them.
 func isAbsent(value any) bool {
-	switch v := value.(type) {
-	case *bool:
-		return v == nil
-	case string:
-		return v == ""
-	case []string:
-		return len(v) == 0
-	case []map[string]string:
-		return len(v) == 0
-	case int64:
-		return v == 0
+	if value == nil {
+		return true
 	}
-	return false
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Slice, reflect.Map:
+		// An empty slice and a nil one are the same statement here, and
+		// IsZero would separate them.
+		return v.Len() == 0
+	default:
+		// A nil pointer, an empty string, a zero count, and the zero value of
+		// a struct are all "the hub did not state this."
+		return v.IsZero()
+	}
 }
 
 func clear(meta *metav1.ObjectMeta, keys ...string) {
@@ -467,11 +469,17 @@ func formatInt32(v *int32) string {
 	return strconv.FormatInt(int64(*v), 10)
 }
 
-// stashRemoved records a field this version has and the hub does not. An empty
-// value writes no annotation, so an object that set neither removed field is not
-// given metadata it never had.
+// stashRemoved records a field this version has and the hub does not.
+//
+// An empty value removes the annotation rather than leaving the last one that
+// was written, which is the same rule stash keeps for the hub's own fields and
+// for the same reason: the note exists to say what the field said, so a note
+// that outlived its field states something nobody wrote. Callers evaluate every
+// key on every pass, including the keys whose parent block is gone, because a
+// key nothing looked at is a key nothing can clear.
 func stashRemoved(meta *metav1.ObjectMeta, key, value string) {
 	if value == "" {
+		clear(meta, key)
 		return
 	}
 	if meta.Annotations == nil {

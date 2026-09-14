@@ -335,7 +335,7 @@ func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *TaskRec
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.Task{},
-		&simplyblockv1alpha1.StorageCluster{},
+		&simplyblockv1alpha2.StorageCluster{},
 		&simplyblockv1alpha2.StoragePool{},
 	}, objects...)
 

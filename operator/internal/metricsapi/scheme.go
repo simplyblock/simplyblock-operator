@@ -56,6 +56,8 @@ func addToScheme(scheme *runtime.Scheme) error {
 			&metricsv1alpha2.StorageDeviceMetricsList{},
 			&metricsv1alpha2.StoragePoolMetrics{},
 			&metricsv1alpha2.StoragePoolMetricsList{},
+			&metricsv1alpha2.StorageClusterMetrics{},
+			&metricsv1alpha2.StorageClusterMetricsList{},
 		)
 	}
 	// The meta kinds are registered twice as well, and for a reason that is not

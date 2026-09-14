@@ -30,7 +30,6 @@ import (
 
 	"github.com/simplyblock/atlas/prometheus"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -298,7 +297,7 @@ func (c *StorageDeviceCollector) nearlyFullPercent(
 		return DefaultNearlyFullPercent
 	}
 
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	key := client.ObjectKey{Namespace: device.Namespace, Name: name}
 	if err := c.Get(ctx, key, &cluster); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -306,10 +305,10 @@ func (c *StorageDeviceCollector) nearlyFullPercent(
 		}
 		return DefaultNearlyFullPercent
 	}
-	if cluster.Spec.WarningThresholdSpec == nil {
+	if cluster.Spec.WarningThreshold == nil {
 		return DefaultNearlyFullPercent
 	}
-	if percent := ptr.IntFromOrZero(cluster.Spec.WarningThresholdSpec.Capacity); percent > 0 {
+	if percent := ptr.IntFromOrZero(cluster.Spec.WarningThreshold.Capacity); percent > 0 {
 		return float64(percent)
 	}
 	return DefaultNearlyFullPercent

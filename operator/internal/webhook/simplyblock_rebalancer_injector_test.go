@@ -49,18 +49,18 @@ func newScheme(t *testing.T) *runtime.Scheme {
 
 const testClusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
 
-func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			VolumeMigrationSettings: &simplyblockv1alpha2.VolumeMigrationSettings{
 				RebalancerImage: ptr.To(image),
 			},
-			VolumeAutoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{
-				LatencyBenchmarkEnabled: ptr.To(benchmarkEnabled),
+			VolumeAutoPlacement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{
+				EnableLatencyBenchmark: ptr.To(benchmarkEnabled),
 			},
 		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
 	}
 }
 
@@ -128,7 +128,7 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 	cases := []struct {
 		name        string
 		pod         *corev1.Pod
-		cluster     *simplyblockv1alpha1.StorageCluster
+		cluster     *simplyblockv1alpha2.StorageCluster
 		wantAllowed bool
 		wantPatch   bool
 	}{

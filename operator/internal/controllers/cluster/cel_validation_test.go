@@ -1,0 +1,335 @@
+// Validation of the CEL rules compiled into the StorageCluster CRD schema, run
+// against a real apiserver. It lives here rather than under internal/webhook
+// because there is no webhook involved: the rules are enforced by the apiserver
+// itself, and envtest is the only place in the tree that starts one.
+//
+// The suite installs CRDs and nothing else — no webhook server, no
+// ValidatingWebhookConfiguration — so a rejection here can only have come from
+// the schema. That is the point of the test: it is what lets the
+// enableAtomic4kWrites-requires-enableChecksumValidation rule live in the CRD
+// instead of in a validating webhook of its own.
+//
+// Every case is written against v1alpha2, which is the storage version. The
+// same rules are declared on v1alpha1 and cannot be exercised here, because a
+// read at a non-storage version goes through a conversion webhook envtest does
+// not run.
+
+package cluster
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/atlas/ptr"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+// TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation covers
+// every combination of the top-level checksum validation fields.
+// enableAtomic4kWrites is only meaningful as an inline-checksum fallback-path
+// escape hatch, so it requires enableChecksumValidation. Every other
+// combination is legal.
+func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name                     string
+		enableChecksumValidation *bool
+		enableAtomic4kWrites     *bool
+		wantDenied               bool
+	}{
+		{name: "both unset"},
+		{name: "both false", enableChecksumValidation: ptr.To(false), enableAtomic4kWrites: ptr.To(false)},
+		{name: "enableChecksumValidation alone", enableChecksumValidation: ptr.To(true), enableAtomic4kWrites: ptr.To(false)},
+		{name: "both true", enableChecksumValidation: ptr.To(true), enableAtomic4kWrites: ptr.To(true)},
+		{name: "enableAtomic4kWrites alone", enableChecksumValidation: ptr.To(false), enableAtomic4kWrites: ptr.To(true), wantDenied: true},
+		{name: "enableAtomic4kWrites with nil enableChecksumValidation", enableAtomic4kWrites: ptr.To(true), wantDenied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// vcpuCount and maxSubsystemCount are the spec's only required
+			// fields, and vcpuCount carries a minimum of its own.
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "cel-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount:        ptr.To(int32(10)),
+					VCPUCount:                ptr.To(int32(6)),
+					EnableChecksumValidation: tc.enableChecksumValidation,
+					EnableAtomic4kWrites:     tc.enableAtomic4kWrites,
+				},
+			}
+
+			err := apiClient.Create(context.Background(), cluster)
+			if tc.wantDenied {
+				if err == nil {
+					t.Fatal("expected the apiserver to reject the cluster, but it was accepted")
+				}
+				if !strings.Contains(err.Error(),
+					"enableAtomic4kWrites requires enableChecksumValidation to be true") {
+					t.Fatalf("rejected for the wrong reason: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected the apiserver to accept the cluster, got: %v", err)
+			}
+			if err := apiClient.Delete(context.Background(), cluster); err != nil {
+				t.Errorf("cleaning up the cluster: %v", err)
+			}
+		})
+	}
+}
+
+// TestStorageClusterChecksumValidationFieldsAreImmutable pins what
+// k8s:immutable covers on the top-level checksum fields.
+func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name                        string
+		initialEnableAtomic4kWrites *bool
+		// mutate changes an admitted cluster in the way the test expects the
+		// apiserver to refuse.
+		mutate  func(*simplyblockv1alpha2.StorageCluster)
+		wantErr string
+	}{
+		{
+			name: "changing enableChecksumValidation",
+			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.EnableChecksumValidation = ptr.To(false)
+			},
+			wantErr: "field is immutable",
+		},
+		{
+			name: "removing enableChecksumValidation",
+			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.EnableChecksumValidation = nil
+			},
+			wantErr: "field is immutable",
+		},
+		{
+			name: "changing enableAtomic4kWrites",
+			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.EnableAtomic4kWrites = ptr.To(true)
+			},
+			wantErr: "field is immutable",
+		},
+		{
+			name:                        "removing enableAtomic4kWrites",
+			initialEnableAtomic4kWrites: ptr.To(true),
+			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.EnableAtomic4kWrites = nil
+			},
+			wantErr: "field is immutable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableAtomic4kWrites := ptr.To(false)
+			if tc.initialEnableAtomic4kWrites != nil {
+				enableAtomic4kWrites = tc.initialEnableAtomic4kWrites
+			}
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "immutable-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount:        ptr.To(int32(10)),
+					VCPUCount:                ptr.To(int32(6)),
+					EnableChecksumValidation: ptr.To(true),
+					EnableAtomic4kWrites:     enableAtomic4kWrites,
+				},
+			}
+			if err := apiClient.Create(context.Background(), cluster); err != nil {
+				t.Fatalf("creating the cluster: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = apiClient.Delete(context.Background(), cluster)
+			})
+
+			tc.mutate(cluster)
+			err := apiClient.Update(context.Background(), cluster)
+			if err == nil {
+				t.Fatal("expected the apiserver to reject the update, but it was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("rejected for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// TestStorageClusterKMSIsImmutableOnceSet pins the rule the CRD redesign moved
+// from spec.hashicorpVaultSettings up to the block that now holds every
+// provider (design-storagecluster.md §3.1).
+//
+// The block rather than its members is what carries the rule, because
+// switching providers on a live cluster is at least as unsupportable as
+// changing one provider's endpoint. A first assignment is allowed, which is the
+// once-set semantics §3.2 describes.
+func TestStorageClusterKMSIsImmutableOnceSet(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "kms-", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(10)),
+			VCPUCount:         ptr.To(int32(6)),
+		},
+	}
+	if err := apiClient.Create(ctx, cluster); err != nil {
+		t.Fatalf("creating the cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+
+	// Filling it in later is the case the rule allows.
+	cluster.Spec.KMS = &simplyblockv1alpha2.KMSSpec{
+		Vault: &simplyblockv1alpha2.VaultKMS{BaseURL: "https://vault.example.com:8200"},
+	}
+	if err := apiClient.Update(ctx, cluster); err != nil {
+		t.Fatalf("a first assignment of spec.kms should be accepted, got: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*simplyblockv1alpha2.StorageCluster){
+		"changing the endpoint": func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.KMS.Vault.BaseURL = "https://vault.elsewhere.com:8200"
+		},
+		"clearing the block": func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.KMS = nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stored simplyblockv1alpha2.StorageCluster
+			if err := apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), &stored); err != nil {
+				t.Fatalf("reading the cluster back: %v", err)
+			}
+			mutate(&stored)
+			err := apiClient.Update(ctx, &stored)
+			if err == nil {
+				t.Fatal("expected the apiserver to reject the update, but it was accepted")
+			}
+			if !strings.Contains(err.Error(), "kms is immutable once set") {
+				t.Fatalf("rejected for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// TestStorageClusterDeviceClassIsImmutableFromCreation pins the ninth
+// immutable field (§3.2). It is defaulted rather than optional, so it is never
+// absent, and the field rule applies from creation with no first assignment to
+// allow.
+func TestStorageClusterDeviceClassIsImmutableFromCreation(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "class-", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(10)),
+			VCPUCount:         ptr.To(int32(6)),
+		},
+	}
+	if err := apiClient.Create(ctx, cluster); err != nil {
+		t.Fatalf("creating the cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+
+	// The default describes the fleet that exists: NVMe is the only class the
+	// backend accepted before 26.4.
+	if got := cluster.Spec.DeviceClass; got != simplyblockv1alpha2.StorageClusterDeviceClassNVMe {
+		t.Fatalf("spec.deviceClass defaulted to %q, want NVMe", got)
+	}
+
+	cluster.Spec.DeviceClass = simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
+	if err := apiClient.Update(ctx, cluster); err == nil {
+		t.Fatal("expected the apiserver to refuse a change of device class under a live cluster")
+	}
+}
+
+// TestStorageClusterVCPUCountMinimum pins the schema floor on spec.vcpuCount
+// (test plan I-09).
+//
+// The floor is a generated value: it lives as a kubebuilder marker on the Go
+// field and reaches the apiserver only through config/crd/bases, which the
+// four committed copies of the CRD are in turn derived from. Nothing else in
+// the tree fails when the marker and the generated schema disagree, so this
+// asserts against the CRD an apiserver actually loads rather than against the
+// constant.
+func TestStorageClusterVCPUCountMinimum(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name       string
+		vcpuCount  int32
+		wantDenied bool
+	}{
+		{name: "one below the floor", vcpuCount: 3, wantDenied: true},
+		{name: "at the floor", vcpuCount: 4},
+		{name: "above the floor", vcpuCount: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "vcpumin-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(tc.vcpuCount),
+				},
+			}
+
+			err := apiClient.Create(context.Background(), cluster)
+			if tc.wantDenied {
+				if err == nil {
+					t.Fatalf("expected the apiserver to reject vcpuCount %d, but it was accepted",
+						tc.vcpuCount)
+				}
+				if !strings.Contains(err.Error(), "should be greater than or equal to 4") {
+					t.Fatalf("rejected for the wrong reason: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected the apiserver to accept vcpuCount %d, got: %v", tc.vcpuCount, err)
+			}
+			if err := apiClient.Delete(context.Background(), cluster); err != nil {
+				t.Errorf("cleaning up the cluster: %v", err)
+			}
+		})
+	}
+}
+
+// TestStorageClusterStepRejectsAnUnknownValue pins the CEL rule that stands in
+// for an Enum marker on status.step, which is a field of a type another module
+// declares (design-crd-model.md §3.1).
+func TestStorageClusterStepRejectsAnUnknownValue(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "step-", Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(10)),
+			VCPUCount:         ptr.To(int32(6)),
+		},
+	}
+	if err := apiClient.Create(ctx, cluster); err != nil {
+		t.Fatalf("creating the cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+
+	cluster.Status.Step.State = "Persisting"
+	if err := apiClient.Status().Update(ctx, cluster); err != nil {
+		t.Fatalf("a declared step should be accepted, got: %v", err)
+	}
+
+	cluster.Status.Step.State = "Teleporting"
+	err := apiClient.Status().Update(ctx, cluster)
+	if err == nil {
+		t.Fatal("expected the apiserver to reject a step no graph declares")
+	}
+	if !strings.Contains(err.Error(), "unknown step") {
+		t.Fatalf("rejected for the wrong reason: %v", err)
+	}
+}

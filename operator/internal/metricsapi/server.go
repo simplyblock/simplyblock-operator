@@ -95,6 +95,7 @@ func NewServer(
 	capacity CapacitySource,
 	deviceCapacity DeviceCapacitySource,
 	poolCapacity PoolCapacitySource,
+	clusterCapacity ClusterCapacitySource,
 	log logr.Logger,
 ) (*Server, error) {
 	opts.withDefaults()
@@ -152,9 +153,10 @@ func NewServer(
 
 	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha2.GroupName, Scheme, ParameterCodec, Codecs)
 	group.VersionedResourcesStorageMap[metricsv1alpha2.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName:       NewStorage(volumes, reader, capacity),
-		DeviceResourceName: NewDeviceStorage(reader, deviceCapacity),
-		PoolResourceName:   NewPoolStorage(reader, poolCapacity),
+		ResourceName:        NewStorage(volumes, reader, capacity),
+		DeviceResourceName:  NewDeviceStorage(reader, deviceCapacity),
+		PoolResourceName:    NewPoolStorage(reader, poolCapacity),
+		ClusterResourceName: NewClusterStorage(reader, clusterCapacity),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		return nil, fmt.Errorf("metricsapi: install api group: %w", err)

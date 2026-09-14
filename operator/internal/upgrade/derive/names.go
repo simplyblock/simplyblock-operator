@@ -186,7 +186,7 @@ func apiEndpointSliceNameTarget() Rule {
 }
 
 // clusterSecretName is simplyblock-cluster-<cluster>, holding the cluster's
-// control-plane credentials (simplyblockstoragecluster_controller.go).
+// control-plane credentials (controllers/cluster/storagecluster_controller.go).
 func clusterSecretName() Rule {
 	return Rule{
 		RuleID:     IDClusterSecret,
@@ -202,7 +202,7 @@ func clusterSecretName() Rule {
 
 // upgradeSecretName is simplyblock-<cluster>-upgrade, which marks a cluster as
 // being adopted by an upgrade rather than created
-// (simplyblockstoragecluster_controller.go, storagenode_controller.go).
+// (controllers/cluster/storagecluster_controller.go, storagenode_controller.go).
 func upgradeSecretName() Rule {
 	return Rule{
 		RuleID:     IDUpgradeSecret,

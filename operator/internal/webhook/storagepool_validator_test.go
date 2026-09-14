@@ -59,10 +59,10 @@ const (
 	testValidatorPool    = "tenant-a"
 )
 
-func testStorageCluster(namespace, uuid string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func testStorageCluster(namespace, uuid string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: testValidatorCluster, Namespace: namespace},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: uuid},
 	}
 }
 

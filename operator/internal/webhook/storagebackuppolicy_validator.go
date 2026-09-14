@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -72,7 +71,7 @@ func (v *StorageBackupPolicyValidator) Handle(ctx context.Context, req admission
 func clusterMustExist(
 	ctx context.Context, c client.Client, namespace, clusterRef string,
 ) *admission.Response {
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	err := c.Get(ctx, client.ObjectKey{Name: clusterRef, Namespace: namespace}, &cluster)
 	if apierrors.IsNotFound(err) {
 		denied := admission.Denied(fmt.Sprintf(

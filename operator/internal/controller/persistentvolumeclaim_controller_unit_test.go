@@ -16,6 +16,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -35,10 +36,10 @@ const (
 // pinClusterCR is the StorageCluster CR whose reported UUID matches the PV's
 // cluster. It lives in pinClusterNS, distinct from the PVC namespace, to prove
 // the migration is created alongside the cluster CR rather than the PVC.
-func pinClusterCR() *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func pinClusterCR() *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: pinClusterName, Namespace: pinClusterNS},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: pinCluster},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: pinCluster},
 	}
 }
 

@@ -71,14 +71,14 @@ func contains(items []string, want string) bool {
 	return false
 }
 
-func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterName,
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{},
-		Status: simplyblockv1alpha1.StorageClusterStatus{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{},
+		Status: simplyblockv1alpha2.StorageClusterStatus{
 			UUID: uuid,
 		},
 	}

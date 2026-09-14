@@ -345,7 +345,7 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 }
 
 // isUpgradeAdoption reports whether the "simplyblock-<cluster>-upgrade"
-// secret exists — the same signal simplyblockstoragecluster_controller.go
+// secret exists — the same signal controllers/cluster/storagecluster_controller.go
 // uses to adopt the StorageCluster instead of creating a new one.
 func (r *StorageNodeReconciler) isUpgradeAdoption(ctx context.Context, namespace, clusterName string) bool {
 	secretName := fmt.Sprintf("simplyblock-%s-upgrade", clusterName)
@@ -891,7 +891,7 @@ func (r *StorageNodeReconciler) checkFailureDomain(
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 ) error {
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      sns.Spec.ClusterName,
 		Namespace: sn.Namespace,

@@ -44,6 +44,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -1107,7 +1108,7 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	}, &sns); err != nil {
 		return "", fmt.Errorf("fetching StorageNodeSet %s: %w", sn.Spec.StorageNodeSetRef, err)
 	}
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      sns.Spec.ClusterName,
 		Namespace: sn.Namespace,
@@ -1117,7 +1118,7 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	if !ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
 		return "", nil
 	}
-	hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName)
+	hostDomains, err := clustercontroller.FailureDomainHosts(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName)
 	if err != nil {
 		return "", fmt.Errorf("computing failure-domain host map: %w", err)
 	}
@@ -1133,7 +1134,7 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	}
 	if sn.Status.Ports != nil {
 		if removedDomain, ok := hostDomains[sn.Status.Ports.Management]; ok &&
-			!hostHasSurvivingSibling(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName, sn.Status.Ports.Management, sn.Status.UUID) {
+			!clustercontroller.HostHasSurvivingSibling(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName, sn.Status.Ports.Management, sn.Status.UUID) {
 			// Multi-node hosts (spec.socketsToUse / spec.nodesPerSocket > 1)
 			// run more than one StorageNode per physical host, all sharing
 			// this management IP -- only decrement the domain's count when
@@ -1143,7 +1144,7 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 			counts[removedDomain]--
 		}
 	}
-	return fdRemovalBalanceViolation(counts), nil
+	return clustercontroller.RemovalBalanceViolation(counts), nil
 }
 
 func (r *StorageNodeOpsReconciler) drainSuspend(

@@ -121,14 +121,17 @@ spec:
                     description: Stripe is the erasure-coding layout.
                     properties:
                       dataChunks:
-                        description: DataChunks defines the number of data chunks
-                          in the erasure-coding layout.
+                        description: DataChunks is the number of data chunks per stripe
+                          (ndcs).
                         format: int32
+                        minimum: 1
                         type: integer
                       parityChunks:
-                        description: ParityChunks defines the number of parity chunks
-                          in the erasure-coding layout.
+                        description: |-
+                          ParityChunks is the number of parity chunks per stripe (npcs), and
+                          therefore how many chunk losses a stripe survives.
                         format: int32
+                        minimum: 0
                         type: integer
                     type: object
                   vcpuCount:

@@ -51,15 +51,15 @@ func TestShouldActivateCluster(t *testing.T) {
 }
 
 func TestClusterStatusHelpers(t *testing.T) {
-	active := &simplyblockv1alpha1.StorageCluster{
-		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "active"},
+	active := &simplyblockv1alpha2.StorageCluster{
+		Status: simplyblockv1alpha2.StorageClusterStatus{Status: "active"},
 	}
 	if !ClusterAlreadyActive(active) {
 		t.Fatalf("ClusterAlreadyActive should be true")
 	}
 
-	expanding := &simplyblockv1alpha1.StorageCluster{
-		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "in_expansion"},
+	expanding := &simplyblockv1alpha2.StorageCluster{
+		Status: simplyblockv1alpha2.StorageClusterStatus{Status: "in_expansion"},
 	}
 	if !ClusterInExpansion(expanding) {
 		t.Fatalf("ClusterInExpansion should be true")
@@ -77,14 +77,14 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		t.Fatalf("add scheme: %v", err)
 	}
 
-	clusterA := &simplyblockv1alpha1.StorageCluster{
+	clusterA := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "uuid-a"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "uuid-a"},
 	}
-	clusterNoUUID := &simplyblockv1alpha1.StorageCluster{
+	clusterNoUUID := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
 	}
 
 	poolA := &simplyblockv1alpha2.StoragePool{

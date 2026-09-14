@@ -46,7 +46,7 @@ func newSNReconciler(t *testing.T, objects ...client.Object) *StorageNodeReconci
 		WithStatusSubresource(
 			&simplyblockv1alpha1.StorageNode{},
 			&simplyblockv1alpha2.StorageNodeOps{},
-			&simplyblockv1alpha1.StorageCluster{},
+			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha1.StorageNodeSet{},
 		).
 		WithObjects(objects...).
@@ -266,9 +266,9 @@ func TestEffectiveFailureDomainPtr_NonNilForNonZeroDomain(t *testing.T) {
 
 func TestCheckFailureDomain_BlocksWhenEnabledAndNotSet(t *testing.T) {
 	enabled := true
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: snTestCluster, Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{EnableFailureDomains: &enabled},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{EnableFailureDomains: &enabled},
 	}
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
@@ -283,9 +283,9 @@ func TestCheckFailureDomain_BlocksWhenEnabledAndNotSet(t *testing.T) {
 func TestCheckFailureDomain_AllowsWhenFailureDomainSet(t *testing.T) {
 	enabled := true
 	fd := int32(1)
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: snTestCluster, Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{EnableFailureDomains: &enabled},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{EnableFailureDomains: &enabled},
 	}
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
@@ -299,9 +299,9 @@ func TestCheckFailureDomain_AllowsWhenFailureDomainSet(t *testing.T) {
 
 func TestCheckFailureDomain_SkipsWhenFeatureDisabled(t *testing.T) {
 	disabled := false
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: snTestCluster, Namespace: snTestNS},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{EnableFailureDomains: &disabled},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{EnableFailureDomains: &disabled},
 	}
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker) // no failureDomain

@@ -12,11 +12,14 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -143,6 +146,10 @@ func TestStorageBackupRoundTripsFromTheHub(t *testing.T) {
 
 func TestStorageClusterOpsRoundTripsFromTheHub(t *testing.T) {
 	started := metav1.Now()
+	// Truncated to the second because that is the only precision a
+	// metav1.Time has on the wire, so a deadline stored in a resource is
+	// already second-resolution before this conversion sees it.
+	deadline := metav1.NewTime(started.Add(10 * time.Minute).Truncate(time.Second))
 
 	hub := &v1alpha2.StorageClusterOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
@@ -152,15 +159,17 @@ func TestStorageClusterOpsRoundTripsFromTheHub(t *testing.T) {
 			RollingRestart: &v1alpha2.RollingRestartSpec{RefreshSNodeAPI: true},
 		},
 		Status: v1alpha2.StorageClusterOpsStatus{
-			Phase:     v1alpha2.StorageClusterOpsPhaseRunning,
-			Triggered: true,
-			Message:   "restarting node-b",
-			StartedAt: &started,
+			Phase: v1alpha2.StorageClusterOpsPhaseRunning,
+			Step: statemachine.KubeSnapshot{
+				State:    string(v1alpha2.StorageClusterOpsStepRestartingNode),
+				Deadline: &deadline,
+			},
+			Message:            "Node 2/2 (node-b): RestartingNode",
+			ObservedGeneration: 1,
+			StartedAt:          &started,
 			RollingRestart: &v1alpha2.RollingRestartStatus{
-				PendingNodes:   []string{"node-b"},
-				ProcessedNodes: []string{"node-a"},
-				NodePhase:      "restarting",
-				PhaseTriggered: true,
+				Nodes:     []string{"node-a", "node-b"},
+				NodeIndex: 1,
 			},
 		},
 	}
@@ -310,5 +319,71 @@ func TestStoragePoolEmptyGroupsRoundTripAsAbsent(t *testing.T) {
 	}
 	if back.Spec.VolumeDefaults != nil {
 		t.Errorf("spec.volumeDefaults = %+v, want nil", back.Spec.VolumeDefaults)
+	}
+}
+
+// The cluster's round trip is the other wide one. Its spec is renamed,
+// regrouped, widened, and stripped of four fields at once, and its status gains
+// a phase, a step, a task window, and a generation this version has nowhere to
+// put. Every one of those has to survive being stored as v1alpha1 and read
+// back, because while v1alpha1 is the storage version that is what every write
+// costs.
+func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
+	// Truncated to the second, because that is the only precision a
+	// metav1.Time has on the wire: the deadline passes through an annotation
+	// on the way down, and a stored resource would already have lost the rest.
+	deadline := metav1.NewTime(metav1.Now().Add(5 * time.Minute).Truncate(time.Second))
+
+	hub := &v1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(20)),
+			VCPUCount:         ptr.To(int32(8)),
+			MinHugePagesSize:  "100G",
+			DeviceClass:       v1alpha2.StorageClusterDeviceClassLogicalBlock,
+			KMS: &v1alpha2.KMSSpec{
+				Vault: &v1alpha2.VaultKMS{BaseURL: "https://vault.example.com:8200"},
+			},
+			Backup: &v1alpha2.BackupStoreSpec{
+				Endpoint:             "https://s3.example.com",
+				Bucket:               "simplyblock-backups",
+				Prefix:               "production/",
+				Region:               "eu-central-1",
+				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+			},
+			EnableDataRealignment:     ptr.To(true),
+			EnableVolumeAutoPlacement: ptr.To(true),
+			VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
+				DisableMigration: ptr.To(true),
+				MetricsBackend:   ptr.To(v1alpha2.MetricsBackendPrometheus),
+			},
+		},
+		Status: v1alpha2.StorageClusterStatus{
+			Phase:               v1alpha2.StorageClusterPhaseCreating,
+			Step:                statemachine.KubeSnapshot{State: "Creating", Deadline: &deadline},
+			UUID:                "8f3c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
+			ClusterName:         "production",
+			Status:              "active",
+			ErasureCodingScheme: "2x1",
+			Configured:          true,
+			Tasks: []v1alpha2.ClusterTask{
+				{ID: "task-1", Type: "node_restart", Status: "running", Retry: 2},
+			},
+			Message:            "creating the backend cluster",
+			ObservedGeneration: 7,
+		},
+	}
+
+	var stored StorageCluster
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageCluster
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
 	}
 }
