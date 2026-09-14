@@ -1,0 +1,6 @@
+# The add-on's hub-side objects. Both are cluster-scoped and both are applied to
+# the hub, never to a member: what a member receives is what OCM's addon-manager
+# renders out of the template.
+resources:
+- clustermanagementaddon.yaml
+- addontemplate.yaml
