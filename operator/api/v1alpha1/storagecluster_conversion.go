@@ -108,6 +108,25 @@ const (
 	annoClusterCriticalThreshold = "storage.simplyblock.io/conversion-spec.criticalThreshold"
 )
 
+// creationStepToHub maps this version's creation sub-phase onto the hub's
+// step. There is one value to map: `creating` is the only sub-phase the
+// registered controller ever wrote, and the hub spells it `Creating`.
+//
+// A value in neither the table is dropped rather than passed through, which is
+// the one place this file departs from the enum rule in
+// controlplane_conversion.go. That rule holds where each version's own Enum
+// marker rejects what it does not accept; here the target is a field of a
+// shared type carrying a CEL rule instead, and a step no graph declares fails
+// the machine's restore rather than the object's admission. An empty step
+// restores to the graph's initial state, which is where a creation with an
+// unrecognizable position should begin again.
+var creationStepToHub = map[string]string{
+	"creating": string(v1alpha2.StorageClusterStepCreating),
+}
+
+// creationStepFromHub is the inverse, derived so the two cannot disagree.
+var creationStepFromHub = invertStringMap(creationStepToHub)
+
 // metricsBackendToHub recases the rebalancer's metrics source
 // (design-property-renames.md §2.5). Every value is listed, because the field
 // is user-authored and appears in deployment manifests.
@@ -191,11 +210,17 @@ func (src *StorageCluster) ConvertTo(dstRaw conversion.Hub) error {
 	// status.subPhase was a string and status.step is an object
 	// (design-property-renames.md §2.7, design-crd-model.md §9.5): the old
 	// value reads into step.state and leaves step.deadline absent, so an
-	// operation in flight across the upgrade keeps running rather than expiring
-	// immediately. The stash wins where there is one, because only it can carry
-	// a deadline.
-	if src.Status.SubPhase != "" {
-		dst.Status.Step = statemachine.KubeSnapshot{State: src.Status.SubPhase}
+	// operation in flight across the upgrade keeps running rather than
+	// expiring immediately. The stash wins where there is one, because only it
+	// can carry a deadline.
+	//
+	// It is mapped rather than copied. This version's one value is lowercase
+	// and the hub's steps are PascalCase, so a verbatim copy would produce a
+	// step no graph declares and the CEL rule on status.step rejects — a
+	// cluster part-way through its creation when the upgrade ran would become
+	// unreadable rather than resuming.
+	if step, ok := creationStepToHub[src.Status.SubPhase]; ok {
+		dst.Status.Step = statemachine.KubeSnapshot{State: step}
 	}
 
 	return restoreClusterHubOnly(&dst.ObjectMeta, dst)
@@ -279,7 +304,7 @@ func (dst *StorageCluster) ConvertFrom(srcRaw conversion.Hub) error {
 
 	dst.Status = StorageClusterStatus{
 		UUID:                        src.Status.UUID,
-		SubPhase:                    src.Status.Step.State,
+		SubPhase:                    mapOrPassThrough(creationStepFromHub, src.Status.Step.State),
 		ClusterName:                 src.Status.ClusterName,
 		NQN:                         src.Status.NQN,
 		Status:                      src.Status.Status,
@@ -344,11 +369,19 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 		clear(meta, annoClusterStatusStep)
 	}
 
+	// Only a class that is not the default is recorded. An absent annotation
+	// already reads as NVMe on the way up, so stashing NVMe would put a note
+	// on every cluster that predates the field and say nothing.
+	deviceClass := string(src.Spec.DeviceClass)
+	if src.Spec.DeviceClass == v1alpha2.StorageClusterDeviceClassNVMe {
+		deviceClass = ""
+	}
+
 	for _, field := range []struct {
 		key   string
 		value any
 	}{
-		{annoClusterDeviceClass, string(src.Spec.DeviceClass)},
+		{annoClusterDeviceClass, deviceClass},
 		{annoClusterStatusPhase, string(src.Status.Phase)},
 		{annoClusterStatusTasks, src.Status.Tasks},
 		{annoClusterStatusMessage, src.Status.Message},
@@ -394,6 +427,15 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 	var deviceClass, phase string
 	if err := unstash(meta, annoClusterDeviceClass, &deviceClass); err != nil {
 		return err
+	}
+	if deviceClass == "" {
+		// This version has no such field and a CRD default is applied on a
+		// write rather than on a conversion, so an object still stored as
+		// v1alpha1 would otherwise read back with no class at all. NVMe is the
+		// only class the backend accepted before 26.4, so the default
+		// describes the fleet that exists (§3.1). A class the hub chose
+		// survives because it was stashed on the way down.
+		deviceClass = string(v1alpha2.StorageClusterDeviceClassNVMe)
 	}
 	dst.Spec.DeviceClass = v1alpha2.StorageClusterDeviceClass(deviceClass)
 	if err := unstash(meta, annoClusterStatusPhase, &phase); err != nil {

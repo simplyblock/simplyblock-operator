@@ -86,6 +86,13 @@ const (
 	// control plane that never becomes ready is a step that expires rather
 	// than a reconcile that repeats forever.
 	creationStepDeadline = 10 * time.Minute
+
+	// annotationBackupBucket is where a bucket lives on an object still
+	// authored as v1alpha1, which cannot express the field. It is the
+	// conversion key of design-api-upgrade.md §6.2, named here only so the
+	// event that reports an empty bucket can tell an administrator where to
+	// put one; nothing in this package reads it.
+	annotationBackupBucket = "storage.simplyblock.io/conversion-spec.backup.bucket"
 )
 
 // StorageClusterReconciler reconciles a StorageCluster.
@@ -549,6 +556,21 @@ func (r *StorageClusterReconciler) persist(
 	found adoption,
 	adopted bool,
 ) (ctrl.Result, error) {
+	// A credential is the one thing this step cannot invent, and the one the
+	// name lookup cannot supply: ClusterDTO.secret is write-only in the
+	// control plane's own schema, so the cluster list carries none. Writing
+	// the empty value onward would overwrite the entry the CSI driver reaches
+	// the cluster through and then mark the cluster configured, so a cluster
+	// nothing can provision from would look finished.
+	secret, err := r.credentialFor(ctx, cluster, found)
+	if err != nil {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			BackupCredentialsError, InvalidConfig,
+			"The cluster was adopted but its secret is not known: %v", err)
+		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
+	}
+	found.Secret = secret
+
 	if err := r.writeClusterSecret(ctx, cluster, found); err != nil {
 		return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
 	}
@@ -557,7 +579,7 @@ func (r *StorageClusterReconciler) persist(
 	}
 
 	ftt := int32(found.FTT) //nolint:gosec // a fault tolerance is a small count
-	err := r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
+	err = r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
 		status.UUID = found.UUID
 		status.ClusterName = cluster.Name
 		status.NQN = found.NQN
@@ -584,6 +606,36 @@ func (r *StorageClusterReconciler) persist(
 	logf.FromContext(ctx).Info("the cluster is in steady state",
 		"cluster", cluster.Name, "uuid", found.UUID, "adopted", adopted)
 	return ctrl.Result{RequeueAfter: clusterResync}, nil
+}
+
+// credentialFor is the cluster's secret, and it reports rather than guesses
+// when there is none.
+//
+// Three sources, in the order they can be trusted. A creation response carries
+// the secret the control plane just minted. An adoption through the upgrade
+// Secret carries the one an administrator supplied. An adoption by name
+// carries nothing at all, because the list endpoint's secret is write-only, so
+// the only remaining source is a per-cluster Secret an earlier pass already
+// wrote — which is exactly the case a retried creation is in.
+//
+// Failing here holds the cluster at Persisting rather than finishing it. That
+// is the right side to err on: a cluster recorded as configured with an empty
+// credential is one whose CSI driver cannot reach it, and nothing afterward
+// revisits the decision.
+func (r *StorageClusterReconciler) credentialFor(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, found adoption,
+) (string, error) {
+	if found.Secret != "" {
+		return found.Secret, nil
+	}
+	recorded, err := r.clusterSecret(ctx, cluster)
+	if err == nil && recorded != "" {
+		return recorded, nil
+	}
+	return "", fmt.Errorf(
+		"the control plane reports cluster %s but returns no secret for it, and none is "+
+			"recorded: supply it in a Secret named simplyblock-%s-upgrade to adopt the cluster",
+		found.UUID, cluster.Name)
 }
 
 // restartCreation puts the machine back at Claiming, which is the only
@@ -866,6 +918,22 @@ func (r *StorageClusterReconciler) backupConfig(
 	}
 	if store.CredentialsSecretRef.Name == "" {
 		return nil, errors.New("spec.backup.credentialsSecretRef.name is required")
+	}
+	// A store with no bucket is not a location. The registered v1alpha1 type
+	// had no bucket at all, so a cluster converted from one arrives with an
+	// empty bucket unless somebody supplied it, and sending that onward asks
+	// the control plane to write copies nowhere in particular (§12).
+	//
+	// The message names the remedy rather than only the problem. A field this
+	// version cannot express is carried in the conversion annotation
+	// design-api-upgrade.md §6.2 defines, so an administrator still on
+	// v1alpha1 sets it there and the conversion restores it into the field.
+	if store.Bucket == "" {
+		return nil, fmt.Errorf(
+			"spec.backup.bucket is required and is empty: a store authored against "+
+				"v1alpha1 has none, because that version cannot express one. Set it on "+
+				"the v1alpha2 object, or on a v1alpha1 one through the conversion "+
+				"annotation %s", annotationBackupBucket)
 	}
 
 	var secret corev1.Secret

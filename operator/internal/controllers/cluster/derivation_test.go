@@ -235,7 +235,11 @@ func TestReconcilingAClusterThatIsGoneDoesNothing(t *testing.T) {
 func TestAnIncompleteUpgradeSecretFallsThroughToCreation(t *testing.T) {
 	api := &fakeControlPlane{
 		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return activeCluster(), nil
+			// A creation response carries the secret the control plane just
+			// minted for the cluster. Only the list response omits it.
+			reading := activeCluster()
+			reading.Secret = testClusterSecret
+			return reading, nil
 		},
 		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
 	}
@@ -268,7 +272,7 @@ func TestTheClusterSecretIsOwnedByTheCluster(t *testing.T) {
 	cluster := newTestCluster()
 	r := newClusterReconciler(t, api, &recorder{}, cluster)
 
-	found := adoption{UUID: testClusterUUID, Secret: "cluster-secret"}
+	found := adoption{UUID: testClusterUUID, Secret: testClusterSecret}
 	if err := r.writeClusterSecret(context.Background(), cluster, found); err != nil {
 		t.Fatalf("writeClusterSecret: %v", err)
 	}
@@ -285,7 +289,7 @@ func TestTheClusterSecretIsOwnedByTheCluster(t *testing.T) {
 		t.Errorf("ownerReferences = %v, want the cluster to own its Secret",
 			secret.OwnerReferences)
 	}
-	if string(secret.Data["secret"]) != "cluster-secret" {
+	if string(secret.Data["secret"]) != testClusterSecret {
 		t.Errorf("the Secret does not carry the cluster's secret")
 	}
 }

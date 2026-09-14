@@ -93,7 +93,7 @@ func TestACreatedClusterReachesSteadyState(t *testing.T) {
 	api := &fakeControlPlane{
 		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
 			reading := activeCluster()
-			reading.Secret = "cluster-secret"
+			reading.Secret = testClusterSecret
 			return reading, nil
 		},
 		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
@@ -136,7 +136,11 @@ func TestACreatedClusterReachesSteadyState(t *testing.T) {
 func TestAStaleReconcilerCannotClaimTheCreationTwice(t *testing.T) {
 	api := &fakeControlPlane{
 		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			return activeCluster(), nil
+			// A creation response carries the secret the control plane just
+			// minted for the cluster. Only the list response omits it.
+			reading := activeCluster()
+			reading.Secret = testClusterSecret
+			return reading, nil
 		},
 		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
 	}
@@ -201,7 +205,7 @@ func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 		ObjectMeta: objectMeta("simplyblock-" + testClusterName + "-upgrade"),
 		Data: map[string][]byte{
 			"uuid":   []byte(testClusterUUID),
-			"secret": []byte("cluster-secret"),
+			"secret": []byte(testClusterSecret),
 		},
 	}
 	rec := &recorder{}
@@ -232,7 +236,7 @@ func TestAFailedPostAdoptsAClusterThatAlreadyExists(t *testing.T) {
 		},
 		byName: func(string) (utils.ClusterListEntry, bool, error) {
 			return utils.ClusterListEntry{
-				UUID: testClusterUUID, Secret: "cluster-secret",
+				UUID: testClusterUUID, Secret: testClusterSecret,
 				Name: testClusterName, Status: utils.ClusterStatusActive,
 				NDCS: 2, NPCS: 1,
 			}, true, nil

@@ -38,7 +38,12 @@ const (
 	testClusterName = "production"
 	testClusterUUID = "4f2c8a11-6b3d-4e19-9a55-0c7e1d8f2b34"
 	testOpsName     = "operation-1"
-	otherOpsName    = "somebody-elses-operation"
+
+	// testClusterSecret is what a creation response carries. The control
+	// plane mints it and never returns it again, which is why an adoption by
+	// name has to find it elsewhere.
+	testClusterSecret = "cluster-secret"
+	otherOpsName      = "somebody-elses-operation"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {

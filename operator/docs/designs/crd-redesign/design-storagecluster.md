@@ -1495,6 +1495,24 @@ deadline, and the `Aborted` phase are conventions of
 
 ### 12.1 What the rework did not reach
 
+**A cluster adopted by name has no credential, and the adoption holds rather
+than finishing.** `ClusterDTO.secret` is write-only in the control plane's own
+schema, so the cluster list carries none, and the two routes that read it — a
+`POST` that lost its race and a name lookup — have nothing to write into the
+per-cluster Secret or the CSI credentials entry. Persisting an empty one would
+mark a cluster configured that the CSI driver cannot reach, so the step reports
+instead, and the remedy is the upgrade Secret of §4.3. What would remove the
+hold is a control-plane call that returns the secret for an existing cluster.
+
+**Deleting a running operation removes its finalizer.** §8 gives the finalizer
+one job, which is releasing the lock, and it does that on every path. What it
+does not do is refuse the delete: a `kubectl delete` on an operation part-way
+through a shutdown discards the record while the cluster is still moving, and
+nothing afterward is driving it. `StorageBackupOps` refuses such a delete at
+admission, and the same treatment here would need a validating webhook this
+kind does not have and this document does not ask for. It is left as a
+question rather than answered quietly: see §13, Q3.
+
 Five things this document specifies are not in the shipped kinds, and each is
 waiting on something outside it rather than on a decision.
 
@@ -1601,6 +1619,21 @@ are two operations somebody performs together, and nothing here says whether `Ex
 implies the second, takes a parameter asking for it, or leaves it to the auto-rebalancer
 to notice. The last is what happens today by default, which means the answer is
 currently "whenever the rebalancer next runs" rather than a decision this design made.
+
+**Q3: Whether a running operation may be deleted.** The finalizer releases the
+cluster's lock on every path, so a deleted operation never wedges its target.
+What is unresolved is whether the delete should be refused at all while the
+operation is mid-flight. A `Shutdown` at its `Awaiting` step has told the
+control plane to shut the cluster down; deleting the record then leaves the
+cluster moving with nothing tracking it, and the next operation to take the
+lock inherits a cluster in a state its own first predicate did not expect.
+[`design-storagebackup.md`](design-storagebackup.md) answers the same question
+for its own `Ops` kind by refusing the delete at admission from the steps whose
+work cannot be taken back, which is the shape available here too. Against it:
+an operation that cannot be deleted is one an administrator cannot get rid of
+when the control plane is wedged, and every step here already carries a
+deadline that ends it. The choice is between the two, and it is a decision
+about what an administrator is allowed to do rather than about mechanism.
 
 **Q2: Whether this kind adopts the shared retention setting.** Nothing deletes a
 terminal `StorageClusterOps`, so the audit record grows without bound.

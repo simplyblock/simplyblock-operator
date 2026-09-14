@@ -198,6 +198,12 @@ File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 | U-85     | The walk reads the storage-node stream's cache rather than the control plane                  | Positive | `TestTheWalkReadsTheNodeStreamRatherThanTheControlPlane` |
 | U-86     | An unsynced node cache is not read: the control plane answers until the snapshot lands        | Boundary | `TestAnUnsyncedNodeCacheFallsBackToTheControlPlane`      |
 | U-87     | The rebalancing wait reads the cluster stream rather than the node list                       | Positive | `TestTheRebalancingWaitReadsTheClusterStream`            |
+| U-88     | No step between a node's shutdown and its restart is abortable                                | Negative | `TestAnAbortIsRefusedWhileTheNodeIsDown`                 |
+| U-89     | A step that has taken nothing down is abortable                                               | Positive | `TestAnAbortIsHonoredWhereNothingIsDown`                 |
+| U-90     | A conflicted lock release is reported rather than swallowed                                   | Negative | `TestAConflictedReleaseIsReportedRatherThanSwallowed`    |
+| U-91     | Adoption by name does not persist an empty credential or mark the cluster configured          | Negative | `TestAdoptionByNameDoesNotPersistAnEmptyCredential`      |
+| U-92     | A backup store with no bucket is refused, naming the conversion annotation                    | Negative | `TestABackupStoreWithNoBucketIsRefused`                  |
+| U-93     | The creation machine resumes from every step it declares, and from no other                   | Boundary | `TestTheCreationMachineRestoresFromEveryDeclaredStep`    |
 
 ### Creation State Machine (design §4.2)
 
@@ -265,26 +271,30 @@ test files beside it.
 File: `operator/api/v1alpha1/storagecluster_conversion_test.go`, with the
 hub-first direction in `operator/api/v1alpha1/hub_roundtrip_test.go`.
 
-| #       | Scenario                                                                                       | Type     | Test                                                          |
-|---------|------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-CV-01 | `maxHugePagesSize`, `hashicorpVaultSettings`, and `backup.localEndpoint` reach their new names | Positive | `TestStorageClusterConvertToRenamesAndRegroups`               |
-| U-CV-02 | An absent key store stays absent rather than becoming an empty, immutable block                | Boundary | `TestStorageClusterConvertToLeavesAnAbsentKMSAbsent`          |
-| U-CV-03 | `migrationEnabled` inverts into `disableMigration`, and an unstated value stays unstated       | Boundary | `TestStorageClusterMigrationToggleInverts`                    |
-| U-CV-04 | The two block-level switches move up to the spec and back down again                           | Positive | `TestStorageClusterSwitchesMoveUpAndBackDown`                 |
-| U-CV-05 | A spec that states nothing gains no empty blocks                                               | Boundary | `TestStorageClusterAnEmptySpecGainsNoBlocks`                  |
-| U-CV-06 | `MetricsBackend`'s three values recase in both directions                                      | Positive | `TestStorageClusterMetricsBackendConvertsBothWays`            |
-| U-CV-07 | The four removed fields survive a round trip through the hub                                   | Positive | `TestStorageClusterRemovedFieldsSurviveTheHub`                |
-| U-CV-08 | A threshold beyond `int32` is stashed whole rather than truncated                              | Boundary | `TestStorageClusterAWideThresholdIsNotTruncated`              |
-| U-CV-09 | A threshold that fits costs no annotation                                                      | Boundary | `TestStorageClusterANarrowThresholdIsNotStashed`              |
-| U-CV-10 | Realignment stays on for a cluster that never turned it off                                    | Positive | `TestStorageClusterRealignmentStaysOnForAClusterNobodyEdited` |
-| U-CV-11 | Realignment turned off stays off, and a hub object's own absence is kept                       | Negative | `TestStorageClusterRealignmentRespectsWhatWasStated`          |
-| U-CV-12 | A whole cluster round-trips spoke to hub to spoke                                              | Positive | `TestStorageClusterRoundTripsThroughTheHub`                   |
-| U-CV-13 | A whole cluster round-trips hub to spoke to hub, which is what storage costs today             | Positive | `TestStorageClusterRoundTripsFromTheHub`                      |
-| U-CV-14 | The seven action values recase in both directions                                              | Positive | `TestStorageClusterOpsActionConvertsBothWays`                 |
-| U-CV-15 | The walk's two shapes convert by arithmetic, both directions                                   | Positive | `TestStorageClusterOpsConvertToRenamesRollingRestart`         |
-| U-CV-16 | A finished walk reads back with nothing pending                                                | Boundary | `TestStorageClusterOpsAFinishedWalkHasNothingPending`         |
-| U-CV-17 | `Aborted` narrows to `Failed` on the way down and is restored on the way up                    | Boundary | `TestStorageClusterOpsAbortedNarrowsAndIsRestored`            |
-| U-CV-18 | `CancelTask` and its parameter block survive being stored as `v1alpha1`                        | Boundary | `TestStorageClusterOpsCancelTaskSurvivesStorage`              |
+| #       | Scenario                                                                                              | Type     | Test                                                          |
+|---------|-------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
+| U-CV-01 | `maxHugePagesSize`, `hashicorpVaultSettings`, and `backup.localEndpoint` reach their new names        | Positive | `TestStorageClusterConvertToRenamesAndRegroups`               |
+| U-CV-02 | An absent key store stays absent rather than becoming an empty, immutable block                       | Boundary | `TestStorageClusterConvertToLeavesAnAbsentKMSAbsent`          |
+| U-CV-03 | `migrationEnabled` inverts into `disableMigration`, and an unstated value stays unstated              | Boundary | `TestStorageClusterMigrationToggleInverts`                    |
+| U-CV-04 | The two block-level switches move up to the spec and back down again                                  | Positive | `TestStorageClusterSwitchesMoveUpAndBackDown`                 |
+| U-CV-05 | A spec that states nothing gains no empty blocks                                                      | Boundary | `TestStorageClusterAnEmptySpecGainsNoBlocks`                  |
+| U-CV-06 | `MetricsBackend`'s three values recase in both directions                                             | Positive | `TestStorageClusterMetricsBackendConvertsBothWays`            |
+| U-CV-07 | The four removed fields survive a round trip through the hub                                          | Positive | `TestStorageClusterRemovedFieldsSurviveTheHub`                |
+| U-CV-08 | A threshold beyond `int32` is stashed whole rather than truncated                                     | Boundary | `TestStorageClusterAWideThresholdIsNotTruncated`              |
+| U-CV-09 | A threshold that fits costs no annotation                                                             | Boundary | `TestStorageClusterANarrowThresholdIsNotStashed`              |
+| U-CV-10 | Realignment stays on for a cluster that never turned it off                                           | Positive | `TestStorageClusterRealignmentStaysOnForAClusterNobodyEdited` |
+| U-CV-11 | Realignment turned off stays off, and a hub object's own absence is kept                              | Negative | `TestStorageClusterRealignmentRespectsWhatWasStated`          |
+| U-CV-12 | A whole cluster round-trips spoke to hub to spoke                                                     | Positive | `TestStorageClusterRoundTripsThroughTheHub`                   |
+| U-CV-13 | A whole cluster round-trips hub to spoke to hub, which is what storage costs today                    | Positive | `TestStorageClusterRoundTripsFromTheHub`                      |
+| U-CV-14 | The seven action values recase in both directions                                                     | Positive | `TestStorageClusterOpsActionConvertsBothWays`                 |
+| U-CV-15 | The walk's two shapes convert by arithmetic, both directions                                          | Positive | `TestStorageClusterOpsConvertToRenamesRollingRestart`         |
+| U-CV-16 | A finished walk reads back with nothing pending                                                       | Boundary | `TestStorageClusterOpsAFinishedWalkHasNothingPending`         |
+| U-CV-17 | `Aborted` narrows to `Failed` on the way down and is restored on the way up                           | Boundary | `TestStorageClusterOpsAbortedNarrowsAndIsRestored`            |
+| U-CV-18 | `CancelTask` and its parameter block survive being stored as `v1alpha1`                               | Boundary | `TestStorageClusterOpsCancelTaskSurvivesStorage`              |
+| U-CV-19 | The legacy lowercase `subPhase` is mapped onto the hub's step rather than copied                      | Positive | `TestStorageClusterTheLegacySubPhaseIsNormalized`             |
+| U-CV-20 | A `subPhase` no graph declares is dropped rather than carried through                                 | Negative | `TestStorageClusterAnUndeclaredSubPhaseIsDropped`             |
+| U-CV-21 | `spec.deviceClass` defaults to `NVMe` on the way up, since a CRD default does not run on a conversion | Boundary | `TestStorageClusterTheDeviceClassDefaultsOnTheWayUp`          |
+| U-CV-22 | A deliberate `LogicalBlock` survives being stored and read back                                       | Positive | `TestStorageClusterADeliberateDeviceClassSurvives`            |
 
 `U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for.
 `enableDataRealignment` is the one row in the whole migration whose default
@@ -440,17 +450,17 @@ against a real API server under real concurrency.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 153       | 137     | 16          |
+| Unit        | 163       | 147     | 16          |
 | Integration | 29        | 10      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **198**   | **147** | **51**      |
+| **Total**   | **208**   | **157** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and
 `U-CV-` blocks, none of which is future work any more.
 
-One hundred distinct test functions cover those scenarios, because a
+One hundred and ten distinct test functions cover those scenarios, because a
 table-driven test satisfies one ID per subtest and several scenarios are two
 assertions of one test. Every name this plan cites exists: a row pointing at a
 test that does not is worse than a row pointing at nothing.

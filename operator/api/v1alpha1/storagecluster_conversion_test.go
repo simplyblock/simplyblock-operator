@@ -312,15 +312,20 @@ func TestStorageClusterANarrowThresholdIsNotStashed(t *testing.T) {
 // (design-crd-model.md §9.5): the old value reads into step.state and leaves
 // the deadline absent, so an operation in flight across the upgrade keeps
 // running rather than expiring immediately.
+//
+// The value is this version's own lowercase spelling, because that is the only
+// one a stored object holds. Which step it becomes is
+// TestStorageClusterTheLegacySubPhaseIsNormalized; what this asserts is that
+// no deadline is invented for it.
 func TestStorageClusterSubPhaseReadsIntoTheStep(t *testing.T) {
-	src := &StorageCluster{Status: StorageClusterStatus{SubPhase: "Creating"}}
+	src := &StorageCluster{Status: StorageClusterStatus{SubPhase: "creating"}}
 
 	var dst v1alpha2.StorageCluster
 	if err := src.ConvertTo(&dst); err != nil {
 		t.Fatalf("ConvertTo: %v", err)
 	}
-	if got := dst.Status.Step.State; got != "Creating" {
-		t.Errorf("status.step.state = %q, want %q", got, "Creating")
+	if got := dst.Status.Step.State; got == "" {
+		t.Error("status.step.state is empty, so the creation cannot resume")
 	}
 	if dst.Status.Step.Deadline != nil {
 		t.Errorf("status.step.deadline = %v, want absent", dst.Status.Step.Deadline)
@@ -377,7 +382,7 @@ func TestStorageClusterRoundTripsThroughTheHub(t *testing.T) {
 		},
 		Status: StorageClusterStatus{
 			UUID:                        "8f3c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
-			SubPhase:                    "Persisting",
+			SubPhase:                    "creating",
 			ClusterName:                 "production",
 			NQN:                         "nqn.2023-02.io.simplyblock:8f3c1e70",
 			Status:                      "active",
@@ -488,4 +493,85 @@ func TestStorageClusterRealignmentRespectsWhatWasStated(t *testing.T) {
 				*back.Spec.EnableDataRealignment)
 		}
 	})
+}
+
+// The two findings of the review on #536 that land in the conversion, each as
+// the test that would have caught it. Both are the same mistake: a value this
+// version spells differently, or does not carry at all, reaching the hub as
+// something the hub cannot use.
+
+// status.subPhase is lowercase here and the hub's step values are PascalCase,
+// so copying it verbatim produces a step no graph declares and no CEL rule
+// accepts. A cluster part-way through its creation when the upgrade runs would
+// become unreadable at v1alpha2 rather than resuming.
+func TestStorageClusterTheLegacySubPhaseIsNormalized(t *testing.T) {
+	src := &StorageCluster{Status: StorageClusterStatus{SubPhase: "creating"}}
+
+	var dst v1alpha2.StorageCluster
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	want := string(v1alpha2.StorageClusterStepCreating)
+	if got := dst.Status.Step.State; got != want {
+		t.Errorf("status.step.state = %q, want %q: the hub's steps are PascalCase and "+
+			"this version's only value is not", got, want)
+	}
+}
+
+// A step the hub does not declare is dropped rather than carried through. It
+// can only come from a hand-edited object, and passing it on would make the
+// object fail its own validation on the next write.
+func TestStorageClusterAnUndeclaredSubPhaseIsDropped(t *testing.T) {
+	src := &StorageCluster{Status: StorageClusterStatus{SubPhase: "teleporting"}}
+
+	var dst v1alpha2.StorageCluster
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if got := dst.Status.Step.State; got != "" {
+		t.Errorf("status.step.state = %q, want it dropped: no graph declares it", got)
+	}
+}
+
+// spec.deviceClass does not exist in this version, and a CRD default is
+// applied on a write rather than on a conversion, so an object still stored as
+// v1alpha1 would read back with no class at all. The default describes the
+// fleet that exists — NVMe is the only class the backend accepted before 26.4
+// — so the conversion is where it has to be applied.
+func TestStorageClusterTheDeviceClassDefaultsOnTheWayUp(t *testing.T) {
+	src := &StorageCluster{Spec: StorageClusterSpec{
+		MaxSubsystemCount: ptr.To(int32(20)),
+		VCPUCount:         ptr.To(int32(8)),
+	}}
+
+	var dst v1alpha2.StorageCluster
+	if err := src.ConvertTo(&dst); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if got := dst.Spec.DeviceClass; got != v1alpha2.StorageClusterDeviceClassNVMe {
+		t.Errorf("spec.deviceClass = %q, want NVMe for a cluster that predates the field", got)
+	}
+}
+
+// A class the hub deliberately chose survives being stored and read back. The
+// default must not overwrite it, which is the whole reason the value is
+// stashed rather than recomputed.
+func TestStorageClusterADeliberateDeviceClassSurvives(t *testing.T) {
+	hub := &v1alpha2.StorageCluster{Spec: v1alpha2.StorageClusterSpec{
+		MaxSubsystemCount: ptr.To(int32(20)),
+		VCPUCount:         ptr.To(int32(8)),
+		DeviceClass:       v1alpha2.StorageClusterDeviceClassLogicalBlock,
+	}}
+
+	var stored StorageCluster
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageCluster
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if got := back.Spec.DeviceClass; got != v1alpha2.StorageClusterDeviceClassLogicalBlock {
+		t.Errorf("spec.deviceClass = %q, want the class the hub chose to survive", got)
+	}
 }

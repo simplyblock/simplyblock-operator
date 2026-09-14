@@ -601,7 +601,14 @@ func (r *StorageClusterOpsReconciler) releaseLock(
 
 	patch := client.MergeFromWithOptions(cluster.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	cluster.Status.ActiveOpsRef = ""
-	if err := r.Status().Patch(ctx, &cluster, patch); err != nil && !apierrors.IsConflict(err) {
+	if err := r.Status().Patch(ctx, &cluster, patch); err != nil {
+		// A conflict is reported rather than swallowed, and that is the whole
+		// point of returning an error here. Somebody else wrote the cluster's
+		// status between the read and the write, so the lock this operation
+		// still holds was not cleared; treating that as a release lets the
+		// caller reach a terminal phase and the finalizer go, and the cluster
+		// stays locked by an object that no longer exists. Reporting it
+		// retries the read and the release on the next pass.
 		return fmt.Errorf("release the lock on cluster %s: %w", cluster.Name, err)
 	}
 	operationActiveState.WithLabelValues(cluster.Name).Set(0)

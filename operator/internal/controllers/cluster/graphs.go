@@ -158,24 +158,30 @@ var initialDeadlines = map[statemachine.Action]time.Duration{
 
 // abortableSteps are the steps from which an abort stops the operation cleanly.
 //
-// The line is where the control plane has been asked for something it is
-// half-way through. Requesting, CheckingPeers, and Rebalancing have either
-// issued nothing or are waiting on work that finishes on its own, so stopping
-// there leaves the cluster in a state somebody can reason about. Awaiting,
-// ShuttingDown, Starting, ShuttingDownNode, and RestartingNode are mid-flight:
-// a cluster told to shut down is shutting down whatever this object says, and
-// abandoning the operation would leave nothing driving it back up.
+// The line is whether anything is currently down or half-done. Requesting has
+// issued nothing. CheckingPeers performs no side effect at all and is the step
+// before the walk touches a node. Rebalancing is after the node is back online
+// and the cluster is settling on its own, which it will finish whether or not
+// this operation is watching.
+//
+// Everything else is mid-flight, and the rolling restart's four middle steps
+// are the sharpest case: from ShuttingDownNode to RestartingNode the node is
+// offline, and this operation is the only thing that will bring it back.
+// Honoring an abort there would leave a storage node down with nothing driving
+// it up, so the walk runs on to the restart and the abort is refused until
+// then. Awaiting, ShuttingDown, and Starting are the same rule at cluster
+// scale: a cluster told to shut down is shutting down whatever this object
+// says.
 //
 // It is a table beside the graph rather than an edge in it, because a terminal
 // Aborted step would be an eleventh value in the API and the phase already
 // carries that meaning. A test asserts every step here is one some graph
-// declares, so the two cannot drift.
+// declares, and another asserts that no step between a node's shutdown and its
+// restart appears, so the two cannot drift.
 var abortableSteps = map[step]bool{
 	stepRequesting:    true,
 	stepCheckingPeers: true,
 	stepRebalancing:   true,
-	stepRefreshingPod: true,
-	stepAwaitingPod:   true,
 }
 
 // abortable reports whether an abort asked for while the operation sits on this
