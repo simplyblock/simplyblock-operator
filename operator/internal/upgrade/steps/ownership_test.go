@@ -23,6 +23,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
 )
 
@@ -111,6 +112,11 @@ func migration(t *testing.T, objects ...client.Object) *upgrade.Scope {
 	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("registering v1alpha1: %v", err)
 	}
+	// §16.2's renames create v1alpha2 kinds, so the steps that perform them read
+	// and write objects of a version the source kinds never had.
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering v1alpha2: %v", err)
+	}
 	// The CRD kind is in the scheme because the upgrade stage applies the CRDs
 	// this binary carries (§11), and a plan of that stage reads every one of
 	// them out of the cluster.
@@ -118,7 +124,14 @@ func migration(t *testing.T, objects ...client.Object) *upgrade.Scope {
 		t.Fatalf("registering apiextensions: %v", err)
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	// The fake client routes a status write through the subresource tracker only
+	// for a kind it was told has one, and §16.2's absorbed operation carries its
+	// outcome in status. A real cluster has it from the CRD's marker.
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha2.StorageBackupOps{}).
+		WithObjects(objects...).
+		Build()
 	scope := upgrade.NewScope(c, "simplyblock", upgrade.StageMigrate,
 		upgrade.Options{}, logf.Log, upgrade.DiscardReporter{})
 	scope.Adopt(objects...)

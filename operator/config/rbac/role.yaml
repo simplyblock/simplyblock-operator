@@ -32,6 +32,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - nodes
   verbs:
   - get
@@ -71,12 +78,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - pods/log
-  verbs:
-  - get
-- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
@@ -101,6 +102,7 @@ rules:
   - storagebackups.storage.simplyblock.io
   - storageclusterops.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
+  - storagepools.storage.simplyblock.io
   resources:
   - customresourcedefinitions
   verbs:
@@ -268,6 +270,8 @@ rules:
   - replicationpolicies
   - replicationslots
   - simplyblockdrivers
+  - storagebackupops
+  - storagebackuppolicies
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -275,6 +279,7 @@ rules:
   - storagenodeops
   - storagenodes
   - storagenodesets
+  - storagepoolops
   - storagepools
   - tasks
   - volumemigrations
@@ -298,12 +303,14 @@ rules:
   - replicationpolicies/finalizers
   - replicationslots/finalizers
   - simplyblockdrivers/finalizers
-  - storagebackups/finalizers
+  - storagebackupops/finalizers
+  - storagebackuppolicies/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagenodesets/finalizers
+  - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -323,6 +330,8 @@ rules:
   - replicationpolicies/status
   - replicationslots/status
   - simplyblockdrivers/status
+  - storagebackupops/status
+  - storagebackuppolicies/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
@@ -330,6 +339,7 @@ rules:
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
+  - storagepoolops/status
   - storagepools/status
   - tasks/status
   - volumegroupsnapshotops/status

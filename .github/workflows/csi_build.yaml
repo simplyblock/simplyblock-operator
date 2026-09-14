@@ -86,13 +86,24 @@ jobs:
         cache-to: type=gha,mode=max
 
     # Which of the tags just pushed the integration suite should run in. The
-    # branch tag is the one that exists for every push, and metadata-action
-    # renders a ref into it by replacing the slashes a Docker tag cannot hold,
-    # so the same substitution is made here rather than assuming a flat name.
+    # branch tag is the one that exists for every push, so the name is derived
+    # the same way metadata-action derived the tag it pushed: every character a
+    # Docker tag cannot hold becomes a dash, not only the slash.
+    #
+    # Matching it exactly is the whole point. Replacing slashes alone agreed with
+    # metadata-action for every branch anybody had used, and disagreed the first
+    # time one carried a "+": the suite was handed an image reference that was
+    # both invalid and not the tag that had just been pushed, and it failed
+    # fifteen minutes later on a kubelet that could not parse the name.
     - name: Name the image the integration suite runs
       id: image
       run: |
-        tag="$(printf %s '${{ github.ref_name }}' | tr '/' '-')"
+        tag="$(printf %s '${{ github.ref_name }}' | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
+        tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
+        if [ -z "$tag" ]; then
+          echo "::error::branch name ${{ github.ref_name }} sanitizes to an empty image tag"
+          exit 1
+        fi
         echo "ref=${QUAY_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
 
   # Ordered after the build so the stack is exercised in the image this run

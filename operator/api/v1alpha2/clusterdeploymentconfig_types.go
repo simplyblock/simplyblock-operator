@@ -229,7 +229,10 @@ type ClusterTemplate struct {
 	// into every StorageNode.spec.config.sizing it writes. Required, because the
 	// StorageCluster's own field is.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// beyond this budget for the system, and the control plane's core layout
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node of

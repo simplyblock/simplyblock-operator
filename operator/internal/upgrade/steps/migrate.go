@@ -47,12 +47,7 @@ func Migrate() []upgrade.Step {
 	return []upgrade.Step{
 		rewriteKeys{},
 		deleteBackupImports{},
-		renameKind{
-			described: described{id: IDCopyBackupPolicies, blocked: needsTargetTypes},
-			summary:   "copies each BackupPolicy to a StorageBackupPolicy of the same name",
-			from:      "BackupPolicy",
-			to:        "StorageBackupPolicy",
-		},
+		copyBackupPolicies{},
 		renameKind{
 			described: described{id: IDAbsorbMigrations, blocked: needsTargetTypes},
 			summary:   "absorbs each VolumeMigration into a cluster-scoped PersistentVolumeOps",
@@ -60,13 +55,7 @@ func Migrate() []upgrade.Step {
 			to:        "PersistentVolumeOps",
 			as:        "Migrate",
 		},
-		renameKind{
-			described: described{id: IDAbsorbRestores, blocked: needsTargetTypes},
-			summary:   "absorbs each BackupRestore into a StorageBackupOps",
-			from:      "BackupRestore",
-			to:        "StorageBackupOps",
-			as:        "Restore",
-		},
+		absorbBackupRestores{},
 		normalizeHandles{
 			described: described{id: IDNormalizeHandles, blocked: needsResolver},
 		},

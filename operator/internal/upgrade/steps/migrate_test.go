@@ -68,23 +68,27 @@ const (
 	modernHandleValue = "2f4f0300-9993-4289-be95-59414fc8a54d:1c2c0300-9993-4289-be95-59414fc8a54d:8b1f0300-9993-4289-be95-59414fc8a54d"
 )
 
+// testPolicyName is the policy the key-rewrite tests carry, named once
+// because it appears as an annotation value on both spellings of the key.
+const testPolicyName = "nightly"
+
 func TestMigrate_AnUnimplementedStepStillNamesEveryObject(t *testing.T) {
 	// The whole point of splitting Describe from Apply. Saying that a
-	// BackupPolicy becomes a StorageBackupPolicy needs the BackupPolicy, which
-	// discovery has, and not the target type, which §29.1 has not written.
+	// VolumeMigration becomes a PersistentVolumeOps needs the VolumeMigration,
+	// which discovery has, and not the target type, which §29.1 has not written.
 	plan := migratePlan(t,
-		&simplyblockv1alpha1.BackupPolicy{ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "simplyblock"}},
-		&simplyblockv1alpha1.BackupPolicy{ObjectMeta: metav1.ObjectMeta{Name: "hourly", Namespace: "simplyblock"}},
+		&simplyblockv1alpha1.VolumeMigration{ObjectMeta: metav1.ObjectMeta{Name: "migrate-pv-1", Namespace: "simplyblock"}},
+		&simplyblockv1alpha1.VolumeMigration{ObjectMeta: metav1.ObjectMeta{Name: "migrate-pv-2", Namespace: "simplyblock"}},
 	)
 
-	task := taskFor(t, plan, IDCopyBackupPolicies)
+	task := taskFor(t, plan, IDAbsorbMigrations)
 	if task.Blocked == "" {
 		t.Error("the task is not marked, and it cannot be performed")
 	}
 	if len(task.Subtasks) != 2 {
-		t.Fatalf("described %d subtasks, want one per policy:\n%v", len(task.Subtasks), task.Subtasks)
+		t.Fatalf("described %d subtasks, want one per migration:\n%v", len(task.Subtasks), task.Subtasks)
 	}
-	if !strings.Contains(task.Subtasks[0].String(), "StorageBackupPolicy/") {
+	if !strings.Contains(task.Subtasks[0].String(), "PersistentVolumeOps/") {
 		t.Errorf("the subtask does not name what it would create:\n%s", task.Subtasks[0])
 	}
 }
@@ -104,7 +108,7 @@ func TestMigrate_RewritesAKeyAnObjectCarriesUnderTheOldPrefix(t *testing.T) {
 	// Done rather than described, because it needs nothing that does not
 	// exist: the inventory is data and the write is additive.
 	scope := migration(t, claim("team-a", "data", map[string]string{
-		"simplyblock.io/backup-policy": "nightly",
+		"simplyblock.io/backup-policy": testPolicyName,
 	}))
 
 	catalog := upgrade.NewCatalog()
@@ -119,12 +123,12 @@ func TestMigrate_RewritesAKeyAnObjectCarriesUnderTheOldPrefix(t *testing.T) {
 		t.Fatalf("re-reading the claim: %v", err)
 	}
 
-	if got := written.Annotations["storage.simplyblock.io/backup-policy"]; got != "nightly" {
+	if got := written.Annotations["storage.simplyblock.io/backup-policy"]; got != testPolicyName {
 		t.Errorf("the new key holds %q, want the value preserved verbatim", got)
 	}
 	// §16.3 leaves the old key for the deprecation window, so an operator
 	// still reading it keeps working.
-	if got := written.Annotations["simplyblock.io/backup-policy"]; got != "nightly" {
+	if got := written.Annotations["simplyblock.io/backup-policy"]; got != testPolicyName {
 		t.Errorf("the old key was removed, and the release that still reads it is running")
 	}
 }
@@ -133,8 +137,8 @@ func TestMigrate_TheRewriteIsIdempotent(t *testing.T) {
 	// An object carrying both spellings describes nothing, so a second run of
 	// a finished migration plans no work.
 	plan := migratePlan(t, claim("team-a", "data", map[string]string{
-		"simplyblock.io/backup-policy":         "nightly",
-		"storage.simplyblock.io/backup-policy": "nightly",
+		"simplyblock.io/backup-policy":         testPolicyName,
+		"storage.simplyblock.io/backup-policy": testPolicyName,
 	}))
 
 	for _, task := range plan.Tasks {

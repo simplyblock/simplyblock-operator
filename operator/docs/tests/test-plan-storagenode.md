@@ -180,20 +180,21 @@ File: `operator/internal/webhook/storagenode_validator_test.go`
 Files: `operator/internal/controllers/node/storagenodeset_controller_unit_test.go`,
 `operator/internal/utils/storage_nodeset_ds_test.go`
 
-| #    | Scenario                                                                         | Type     | Test                                                                     |
-|------|----------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------|
-| U-65 | No DaemonSet present: one is created                                             | Positive | `TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing`                 |
-| U-66 | A DaemonSet present: it is updated in place rather than recreated                | Positive | `TestStorageNodeSetDaemonSetReconcileUpdatesExisting`                    |
-| U-67 | TLS disabled: the pod template carries no serving-certificate mount              | Negative | `TestStorageNodeSetDaemonSetReconcileTLSDisabled`                        |
-| U-68 | TLS enabled: the pod template mounts the serving certificate                     | Positive | `TestStorageNodeSetDaemonSetReconcileTLSEnabled`                         |
-| U-69 | The cert-manager provider: the Certificate is created alongside                  | Positive | `TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider`             |
-| U-70 | User-supplied container resources override the defaults                          | Positive | `TestBuildStorageNodeSetDaemonSetUserResourcesOverrideDefaults`          |
-| U-71 | The ServiceAccount carries an owner reference to its parent                      | Positive | `TestStorageNodeSetReconcileServiceAccountHasOwnerReference`             |
-| U-72 | ClusterRoleBinding names include the namespace, so two namespaces do not collide | Positive | `TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace`         |
-| U-73 | Namespace-specific ClusterRoleBindings are created                               | Positive | `TestStorageNodeSetReconcileCreatesNamespaceSpecificClusterRoleBindings` |
-| U-74 | The SPDK proxy Service is created                                                | Positive | `TestReconcileSpdkProxyService`                                          |
-| U-75 | Every workload object carries an owner reference to the `StorageCluster`         | Positive | —                                                                        |
-| U-76 | Deleting the `StorageCluster` cascades to every workload object                  | Positive | —                                                                        |
+| #     | Scenario                                                                                            | Type       | Test                                                                     |
+|-------|-----------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------|
+| U-65  | No DaemonSet present: one is created                                                                | Positive   | `TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing`                 |
+| U-66  | A DaemonSet present: it is updated in place rather than recreated                                   | Positive   | `TestStorageNodeSetDaemonSetReconcileUpdatesExisting`                    |
+| U-67  | TLS disabled: the pod template carries no serving-certificate mount                                 | Negative   | `TestStorageNodeSetDaemonSetReconcileTLSDisabled`                        |
+| U-68  | TLS enabled: the pod template mounts the serving certificate                                        | Positive   | `TestStorageNodeSetDaemonSetReconcileTLSEnabled`                         |
+| U-69  | The cert-manager provider: the Certificate is created alongside                                     | Positive   | `TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider`             |
+| U-70  | User-supplied container resources override the defaults                                             | Positive   | `TestBuildStorageNodeSetDaemonSetUserResourcesOverrideDefaults`          |
+| U-71  | The ServiceAccount carries an owner reference to its parent                                         | Positive   | `TestStorageNodeSetReconcileServiceAccountHasOwnerReference`             |
+| U-72  | ClusterRoleBinding names include the namespace, so two namespaces do not collide                    | Positive   | `TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace`         |
+| U-73  | Namespace-specific ClusterRoleBindings are created                                                  | Positive   | `TestStorageNodeSetReconcileCreatesNamespaceSpecificClusterRoleBindings` |
+| U-74  | The SPDK proxy Service is created                                                                   | Positive   | `TestReconcileSpdkProxyService`                                          |
+| U-75  | Every workload object carries an owner reference to the `StorageCluster`                            | Positive   | —                                                                        |
+| U-76  | Deleting the `StorageCluster` cascades to every workload object                                     | Positive   | —                                                                        |
+| U-264 | No `clusterImage`: the image is taken from the singleton `ControlPlane`, read at the stored version | Regression | `TestStorageNodeSetDaemonSetImageFallsBackToControlPlane`                |
 
 ### Workload: Storage-Plane Labels (design §5.2)
 

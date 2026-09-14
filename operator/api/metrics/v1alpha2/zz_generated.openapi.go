@@ -37,6 +37,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceCapacity":    schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceCapacity(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics":     schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetricsList": schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity":      schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolCapacity(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics":       schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetricsList":   schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref),
 		resource.Quantity{}.OpenAPIModelName():                                                      schema_apimachinery_pkg_api_resource_Quantity(ref),
 		v1.APIGroup{}.OpenAPIModelName():                                                            schema_pkg_apis_meta_v1_APIGroup(ref),
 		v1.APIGroupList{}.OpenAPIModelName():                                                        schema_pkg_apis_meta_v1_APIGroupList(ref),
@@ -428,6 +431,170 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(r
 		},
 		Dependencies: []string{
 			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics", v1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolCapacity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StoragePoolCapacity is what one pool holds and what it has promised. Every size is in bytes and is quoted as a resource.Quantity so that kubectl prints it the way it prints a PersistentVolumeClaim's capacity.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Total is the capacity the pool is charged against.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"used": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Used is the space the pool's volumes actually occupy, after thin provisioning, compression, and deduplication.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"free": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Free is the pool's unallocated remainder as the control plane accounts for it. It is reported rather than derived, so it need not equal Total minus Used.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"provisioned": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Provisioned is the sum of what the pool's volumes were promised, which on a thin-provisioned pool legitimately exceeds Used and may exceed Total. Against the pool's own spec.limits.capacity it is the tenancy signal.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"utilizationPercent": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UtilizationPercent is the control plane's own utilization figure, from 0 to 100. It is taken verbatim rather than recomputed from Used and Total, so that it agrees with what the control plane's own interfaces report.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+				Required: []string{"total", "used", "free", "provisioned", "utilizationPercent"},
+			},
+		},
+		Dependencies: []string{
+			resource.Quantity{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StoragePoolMetrics is one storage pool's capacity reading.\n\nThe object is named after the StoragePool it measures and lives in that object's namespace, so an administrator who has the pool's name needs to learn nothing else to ask for it, and ordinary namespaced RBAC confines a reader to the namespaces they already have. A control-plane pool with no StoragePool object is therefore not listed: it has no name in this API and no namespace to be authorized against.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "metadata is standard object metadata. Name and namespace are the StoragePool's. The creationTimestamp is the pool object's rather than the reading's.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"timestamp": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Timestamp is when the control plane sampled these values, which is older than the moment the request was served. The control plane exports no sample date for a pool, unlike a volume or a device, so it is the zero time on every reading this API serves today rather than a date that is sometimes absent.",
+							Ref:         ref(v1.Time{}.OpenAPIModelName()),
+						},
+					},
+					"poolID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolID is the control plane's identifier for the pool. It is the join key back to the control plane's own exporter and to its API.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"clusterID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterID is the control plane's identifier for the cluster the pool is carved out of, so a reading says which cluster it is about without a second lookup.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"capacity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Capacity is the reading itself.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity"),
+						},
+					},
+				},
+				Required: []string{"timestamp", "poolID", "clusterID", "capacity"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StoragePoolMetricsList is a list of readings. It carries no continue token: the whole set is served from memory in one pass, so there is nothing to page through.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 

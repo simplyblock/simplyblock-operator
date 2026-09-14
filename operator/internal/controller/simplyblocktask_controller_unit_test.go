@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
@@ -335,7 +336,7 @@ func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *TaskRec
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.Task{},
 		&simplyblockv1alpha1.StorageCluster{},
-		&simplyblockv1alpha1.StoragePool{},
+		&simplyblockv1alpha2.StoragePool{},
 	}, objects...)
 
 	return &TaskReconciler{

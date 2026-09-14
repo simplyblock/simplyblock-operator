@@ -26,6 +26,29 @@ import (
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagedevice,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=storagedevices,verbs=delete,versions=v1alpha2,name=vstoragedevice.simplyblock.io,admissionReviewVersions=v1
 
+// cascadeUsernames are the identities Kubernetes cascades an owner reference
+// under, either of which may be the one a given cluster uses.
+//
+// A device object carries a controller reference to the StorageNode it was found
+// on, so deleting the node is meant to take its devices with it. Kubernetes
+// performs that cascade through the garbage collector, and the collector's
+// deletes arrive as the control plane rather than as the operator: the reference
+// was written by the operator, but the delete is Kubernetes' own request. A guard
+// that reads only the caller therefore refuses the one path its own contract
+// relies on.
+//
+// Which of the two arrives is a flag on the controller manager rather than
+// anything this operator can require. The --use-service-account-credentials gives
+// each controller its own service account, which is what a kubeadm cluster
+// defaults to, and the garbage collector's is the first below. Without it every
+// controller shares the controller manager's own identity, which is the second.
+// A cluster answering with one of them is not a cluster misconfigured for the
+// other, so both are admitted.
+var cascadeUsernames = map[string]bool{
+	"system:serviceaccount:kube-system:generic-garbage-collector": true,
+	"system:kube-controller-manager":                              true,
+}
+
 // StorageDeviceValidator refuses a StorageDevice deletion that is not the
 // operator's own.
 //
@@ -53,11 +76,20 @@ func (v *StorageDeviceValidator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("")
 	}
 
-	// The operator deletes a device object for two reasons and no others: the
-	// device stopped being reported, and the owning node was deleted, which
-	// garbage-collects them.
+	// A device object is deleted for two reasons and no others: the device
+	// stopped being reported, which the operator does itself, and the owning node
+	// was deleted, which Kubernetes cascades.
 	if strings.HasPrefix(req.UserInfo.Username, "system:serviceaccount:"+v.OperatorNamespace+":") {
 		return admission.Allowed("operator-driven deletion")
+	}
+
+	// The second of those two reasons is carried out by Kubernetes rather than by
+	// the operator, so it needs its own exemption. The identities are matched
+	// exactly rather than by prefix: what cascades is the control plane itself,
+	// and every other account in kube-system is as much a stranger to a device
+	// record as a user is.
+	if cascadeUsernames[req.UserInfo.Username] {
+		return admission.Allowed("owner cascade")
 	}
 
 	// Deleting a namespace makes Kubernetes delete the objects in it, and those

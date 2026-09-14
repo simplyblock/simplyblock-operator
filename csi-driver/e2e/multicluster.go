@@ -33,26 +33,33 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 		clusterRefs := envList("MULTI_CLUSTER_REFS", []string{"simplyblock-cluster-a", "simplyblock-cluster-b"})
 		zones := envList("MULTI_CLUSTER_ZONES", []string{"multi-cluster-a", "multi-cluster-b"})
 		poolName := envOrDefault("MULTI_CLUSTER_POOL_NAME", "pool1")
-		storageClassNames := envList("MULTI_CLUSTER_STORAGE_CLASS_NAMES", nil)
 
 		if len(clusterRefs) != 2 || len(zones) != 2 {
 			ginkgo.Fail(
 				"MULTI_CLUSTER_REFS and MULTI_CLUSTER_ZONES must each contain exactly two comma-separated values",
 			)
 		}
-		if len(storageClassNames) == 0 {
-			storageClassNames = deriveMultiClusterStorageClassNames(clusterRefs, poolName)
-		}
-		if len(storageClassNames) != 2 {
-			ginkgo.Fail("MULTI_CLUSTER_STORAGE_CLASS_NAMES must contain exactly two comma-separated values when set")
-		}
 
+		// One class per cluster, written here. This spec is the one place in the
+		// suite where the class cannot come from specStorageClass: what it
+		// asserts is that a claim lands on the backend cluster its pod's zone
+		// names, so the two classes have to carry two different cluster_ids and
+		// specStorageClass writes one, for the cluster the suite was pointed at.
 		clusterIDs := make([]string, len(clusterRefs))
+		storageClassNames := make([]string, len(clusterRefs))
 		for i, clusterRef := range clusterRefs {
 			clusterNamespace, clusterName := splitNamespacedRef(clusterRef, nameSpace)
 			clusterID, err := waitForStorageClusterUUID(clusterNamespace, clusterName, 10*time.Minute)
 			framework.ExpectNoError(err, "resolve cluster UUID for %s", clusterRef)
 			clusterIDs[i] = clusterID
+
+			scName := fmt.Sprintf("%s-%s", ns, clusterName)
+			createStorageClass(f, scName, map[string]string{
+				scParamClusterID: clusterID,
+				scParamPool:      poolName,
+			}, nil)
+			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+			storageClassNames[i] = scName
 		}
 
 		for i, zone := range zones {
@@ -118,15 +125,6 @@ func envList(key string, fallback []string) []string {
 		}
 	}
 	return values
-}
-
-func deriveMultiClusterStorageClassNames(clusterRefs []string, poolName string) []string {
-	names := make([]string, 0, len(clusterRefs))
-	for _, clusterRef := range clusterRefs {
-		ns, clusterName := splitNamespacedRef(clusterRef, nameSpace)
-		names = append(names, fmt.Sprintf("simplyblock-%s-%s-%s", ns, clusterName, poolName))
-	}
-	return names
 }
 
 func splitNamespacedRef(ref, fallbackNamespace string) (string, string) {

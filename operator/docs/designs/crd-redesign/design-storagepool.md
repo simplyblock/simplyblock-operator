@@ -1,14 +1,25 @@
 # Design Document: The StoragePool and Its Operations
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-08)  
+**Date:** 2026-08-29 (last updated 2026-09-11)  
 **Test Plan:** [`tests/test-plan-storagepool.md`](../../tests/test-plan-storagepool.md)
 
-This document specifies the target model. `StoragePool` is registered and in a
-shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), `StoragePoolOps` does not exist,
-and §11 is the single record of what the rework changes against what ships.
+Both kinds are built at `storage.simplyblock.io/v1alpha2`, with a `v1alpha1`
+spoke converting the shape that shipped. §11 is the record of what moved.
+
+What exists: the regrouped spec and its conversion (§3), the controller with its
+creation claim, its resolved node list, and its class index (§4), the label
+assignment (§5), the deletion holds and the owner reference (§6), the
+`StoragePoolOps` lock and its phases (§7), the validator (§3.4), the events and
+the gauges (§9), and `StoragePoolMetrics` in `metrics.simplyblock.io/v1alpha2`.
+
+What does not: the `Rebalance` action, which §7 marks provisional and which the
+controller refuses at run time until `PersistentVolumeOps` exists to fan out
+into; the pool stream of §4.2 and §8, which waits on the control plane's SSE
+work, so status is polled; and the driver's half of `QoSParameterConflict`
+(§5.1), which needs an event recorder the CSI driver does not have — the pool's
+half, which §9.1 specifies, is emitted.
 
 ---
 
@@ -117,7 +128,7 @@ rather than a switch.
 
 ## 3. StoragePool: API
 
-Declared in `operator/api/v1alpha1/storagepool_types.go`, short name `sp`. The
+Declared in `operator/api/v1alpha2/storagepool_types.go`, short name `sp`. The
 type is Appendix A. What follows quotes the field an argument turns on and no
 more.
 
@@ -261,7 +272,7 @@ resolved creates an object that can only be deleted.
 The smallest useful pool:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: tenant-a
@@ -705,7 +716,7 @@ delete a pool with volumes in it, so the failure surfaces as a
 
 ## 7. StoragePoolOps
 
-Declared in `operator/api/v1alpha1/storagepoolops_types.go`, short name `spops`,
+Declared in `operator/api/v1alpha2/storagepoolops_types.go`, short name `spops`,
 and reconciled by `StoragePoolOpsReconciler` in
 `operator/internal/controllers/pool/storagepoolops_controller.go`, beside the
 entity's own. The type is Appendix B.
@@ -847,6 +858,7 @@ first indexed, which is usually well before anybody's claim reaches it.
 |------------------------------------------------------|---------------------------------------|--------------------------------------------------------------------------------|
 | `simplyblock_storagepool_capacity_bytes`             | `cluster`, `pool`                     | Gauge of the pool's capacity limit                                             |
 | `simplyblock_storagepool_used_bytes`                 | `cluster`, `pool`                     | Gauge of what it has allocated, so the ratio is the tenancy alert              |
+| `simplyblock_storagepool_provisioned_bytes`          | `cluster`, `pool`                     | Gauge of what its volumes were promised, which is what fills a pool first      |
 | `simplyblock_storagepool_volumes_count`              | `cluster`, `pool`                     | Gauge of logical volumes in the pool                                           |
 | `simplyblock_storagepool_bound_volumes_count`        | `cluster`, `pool`                     | Gauge of `PersistentVolume` objects bound to its class (§6)                    |
 | `simplyblock_storagepool_phase_state`                | `cluster`, `pool`, `phase`            | Gauge, 1 for the current phase, so a pool stuck in `Deleting` is alertable     |
@@ -855,8 +867,13 @@ first indexed, which is usually well before anybody's claim reaches it.
 | `simplyblock_storagepool_operation_duration_seconds` | `cluster`, `pool`, `action`           | Histogram of operation durations                                               |
 
 **`used_bytes` against `capacity_bytes` is the one a tenant operator watches**,
-and it is the only metric in this group that answers a capacity-planning question
+and it is the only pair in this group that answers a capacity-planning question
 rather than a health one.
+
+**`provisioned_bytes` is what the limit is actually enforced against**, and it
+sits beside `used_bytes` because the two diverge on a thin-provisioned pool: a
+pool can be nearly empty and fully committed at the same time, and only the
+second number says so. `CapacityExhausted` (§9.1) fires on this one.
 
 **Which volume in a pool is the one filling it up is not answered here.** A pool
 reports its own totals, and the per-volume breakdown behind them is served from
@@ -866,12 +883,42 @@ list on the pool or as a series per volume
 volumes there without being granted anything on the pool, and the cardinality of
 the workload stays out of both etcd and the scrape.
 
-**`storageclass_missing` and the gap between `volumes` and `bound_volumes` are
-the two integrity signals.** The first says the join's forward half is broken. The
-second says the control plane holds volumes Kubernetes does not account for,
-which is the unmanaged-volume condition that blocks a node drain
+**`storageclasses_count` at zero and the gap between `volumes` and
+`bound_volumes` are the two integrity signals.** The first says the join has no
+forward half: a pool nothing can consume, which is a valid state for a freshly
+created cluster (§4.4) and a broken one for anything else. The second says the
+control plane holds volumes Kubernetes does not account for, which is the
+unmanaged-volume condition that blocks a node drain
 ([`design-storagenode.md`](design-storagenode.md) §8.1) and is better noticed
 before somebody tries to drain.
+
+### 9.3 `StoragePoolMetrics`
+
+The gauges above are what a dashboard scrapes. `StoragePoolMetrics`, in
+`metrics.simplyblock.io/v1alpha2` beside `LogicalVolumeMetrics` and
+`StorageDeviceMetrics`, is the same numbers as an API resource a tenancy
+administrator can ask for by name: `kubectl get spm tenant-a`.
+
+**It is served rather than stored, for the reason the two readings beside it
+are.** What a pool holds moves with every volume written to it, and putting that
+in a custom resource would charge one etcd write and one wake-up of every
+watcher of the kind for a number nothing reconciles toward. So it is computed
+from the control plane's exported metrics when a client asks and never
+persisted, which is the trade `metrics.k8s.io` makes for `PodMetrics`.
+
+**The object is named after its `StoragePool` and lives in that namespace**, so
+ordinary namespaced RBAC confines a reader to the pools they already administer,
+and the aggregation into the built-in `view` role is what makes that work without
+a per-tenant dashboard. A control-plane pool with no `StoragePool` is not served:
+it has no name in this API and no namespace to be authorized against.
+
+**One asymmetry is the control plane's rather than a choice here.** It exports no
+`pool_date`, unlike the volume and device families, so a pool's reading carries no
+sample time and whether a pool has a reading is decided by its presence in the
+query's result rather than by asking the sample. A deployment with no reachable
+Prometheus serves no pool readings at all, because every field of one is a
+measurement: the pool's own limit is in its spec and is not a reading of
+anything.
 
 ---
 
@@ -927,8 +974,12 @@ volume keeps serving I/O after its class is gone needs a real data path.
 and `spec.status` are in a shipped CRD, so removing them is breaking in the
 narrow sense that an object setting them stops being accepted. Both are marked
 `FIXME: Unused for now` and neither has ever had an effect, so nothing that set
-them got any behavior from doing so. The group is at `v1alpha1`, which is the
-version where that argument is available.
+them got any behavior from doing so. The kind is at `v1alpha1`, which is the
+version where that argument is available. What was built keeps them anyway: the
+conversion stashes each in a `storage.simplyblock.io/v1alpha1-*` annotation and
+reads it back on the way down, which is the convention §3.3 of
+[`design-property-renames.md`](design-property-renames.md) sets for a lossy
+conversion, and it costs nothing to preserve text nobody acted on.
 
 **The two regroupings are the breaking rows to sequence carefully.** A renamed
 spec field is silently ignored on an object that still sets the old name, so a
@@ -936,6 +987,36 @@ pool whose `capacityLimit` moved to `limits.capacity` loses its limit rather tha
 failing to apply. `spec.volumeDefaults` is worse, because it is immutable once
 set: a pool that applies with the old spelling gets an empty
 `volumeDefaults`, which then cannot be corrected without deleting the pool.
+
+**Neither regrouping breaks, because the kind gained a version rather than
+changing one.** `v1alpha1` keeps every name that shipped and the conversion
+webhook translates, so a pool applied with `capacityLimit` still has a limit and
+a pool applied with `storageClassParameters` still has its defaults. The
+conversion is what makes the regrouping affordable, and it is also why
+`spec.limits` and `spec.volumeDefaults` are left absent rather than empty when
+their source is: an empty immutable block is a value nobody could correct.
+
+**Nine fields have no `v1alpha1` spelling at all, and they are stashed rather
+than added to it.** `volumeDefaults.enableCompression`, `.enableReplication`,
+and `.priorityClass` are new, and so are six of the status fields. While
+`v1alpha1` is the storage version, anything the hub can express and the spoke
+cannot is dropped on *every write* rather than once at upgrade time — a
+controller writing `status.phase` would read back a pool that never had one — so
+the conversion writes each to
+`storage.simplyblock.io/conversion-<field>` on the way down and restores it on
+the way up ([`design-api-upgrade.md`](design-api-upgrade.md) §6.2). That is the
+opposite direction from `spec.action` and `spec.status`, which are this version's
+and stash under `storage.simplyblock.io/v1alpha1-<field>`, and the two keys are
+separate because the two problems are.
+
+**Growing `v1alpha1` instead would have been the wrong trade.** A field added
+there is a field a `v1alpha1` client can set, which makes it a compatibility
+surface that has to be honored for as long as the version is served; an
+annotation is conversion state that nothing else reads and that goes when
+`v1alpha1` does. The cost is that the stash is not a schema, so a hand-edited
+value is dropped rather than rejected, which is the same trade the QoS ceilings'
+parsing takes and for the same reason: a conversion that errors makes the whole
+object unreadable.
 
 ---
 
@@ -973,11 +1054,10 @@ const (
 	StoragePoolPhaseDeleting StoragePoolPhase = "Deleting"
 )
 
-// ThroughputLimits are throughput ceilings in MiB/s. Zero is unlimited, which is
-// the control plane's own convention for these values.
-// ThroughputLimits are throughput ceilings in megabytes per second. The unit is
-// the field's, not the value's, which is why the class keys these reach spell it
-// out: a parameter map has no type to carry it (§5.1).
+// ThroughputLimits are throughput ceilings in megabytes per second. Zero is
+// unlimited, which is the control plane's own convention for these values. The
+// unit is the field's, not the value's, which is why the class keys these reach
+// spell it out: a parameter map has no type to carry it (§5.1).
 type ThroughputLimits struct {
 	// Read is the read-only ceiling, written as max_read_mbytes_per_sec.
 	// +kubebuilder:validation:Minimum=0
@@ -1183,6 +1263,9 @@ type StoragePoolStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
+// v1alpha2 is the storage version in the manifests this repository ships, and
+// v1alpha1 is the spoke that keeps the shape which shipped (§11).
+// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sp
@@ -1205,6 +1288,9 @@ type StoragePool struct {
 	Spec   StoragePoolSpec   `json:"spec,omitempty"`
 	Status StoragePoolStatus `json:"status,omitempty"`
 }
+
+// Hub marks this version as the conversion hub for StoragePool.
+func (*StoragePool) Hub() {}
 
 // +kubebuilder:object:root=true
 

@@ -140,6 +140,67 @@ func TestManagerRoleNamesOnlyTheConvertedCRDs(t *testing.T) {
 	}
 }
 
+// The conversion webhook runs as its own Deployment with its own ClusterRole, so
+// the manager's role passing says nothing about whether the webhook can reach
+// the CRDs it serves.
+//
+// This is the list that drifted: adding a kind means touching conversion.go,
+// converted-kinds.txt, the marker in conversion_trust.go, and this role, and the
+// only one with a compiler or a test behind it was the first. A kind missing
+// here is a CRD whose CA bundle the webhook cannot inject, which makes every
+// read of that kind fail once it is installed.
+func TestConversionWebhookRoleNamesEveryConvertedCRD(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "conversion-webhook", "rbac.yaml"))
+	if err != nil {
+		t.Fatalf("read the conversion webhook's rbac.yaml: %v", err)
+	}
+
+	writeVerbs := map[string]bool{"create": true, "delete": true, "deletecollection": true,
+		"patch": true, "update": true}
+
+	var named []string
+	// The file holds a ClusterRole, a ClusterRoleBinding, and a ServiceAccount,
+	// so each document is decoded on its own and the ones with no rules
+	// contribute nothing.
+	for _, document := range strings.Split(string(raw), "\n---") {
+		var role struct {
+			Rules []struct {
+				APIGroups     []string `json:"apiGroups"`
+				Resources     []string `json:"resources"`
+				ResourceNames []string `json:"resourceNames"`
+				Verbs         []string `json:"verbs"`
+			} `json:"rules"`
+		}
+		if err := yaml.Unmarshal([]byte(document), &role); err != nil {
+			t.Fatalf("parse the conversion webhook's rbac.yaml: %v", err)
+		}
+		for _, rule := range role.Rules {
+			if !slices.Contains(rule.APIGroups, "apiextensions.k8s.io") ||
+				!slices.Contains(rule.Resources, "customresourcedefinitions") {
+				continue
+			}
+			writes := false
+			for _, verb := range rule.Verbs {
+				if writeVerbs[verb] {
+					writes = true
+				}
+			}
+			if writes {
+				named = append(named, rule.ResourceNames...)
+			}
+		}
+	}
+
+	want := append([]string(nil), ConvertedKindCRDNames()...)
+	sort.Strings(want)
+	sort.Strings(named)
+
+	if !slices.Equal(named, want) {
+		t.Errorf("the conversion webhook's writable CRDs disagree with the converted kinds:\n"+
+			"  rbac.yaml:      %v\n  conversion.go:  %v", named, want)
+	}
+}
+
 func TestConvertedKindCRDNamesIsNotEmpty(t *testing.T) {
 	names := ConvertedKindCRDNames()
 	if len(names) == 0 {

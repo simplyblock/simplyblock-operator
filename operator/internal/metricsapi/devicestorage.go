@@ -183,9 +183,9 @@ func matchesDeviceFieldSelector(
 	for _, req := range options.FieldSelector.Requirements() {
 		var actual string
 		switch req.Field {
-		case "metadata.name":
+		case fieldSelectorName:
 			actual = reading.Name
-		case "metadata.namespace":
+		case fieldSelectorNamespace:
 			actual = reading.Namespace
 		default:
 			return false

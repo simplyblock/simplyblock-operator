@@ -51,9 +51,6 @@ const (
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
 
-	ClusterPhaseInitializing = "Initializing"
-	ClusterPhaseReady        = "Ready"
-
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
 	NodeStatusSuspended   = "suspended"

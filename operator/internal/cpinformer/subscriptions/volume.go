@@ -95,4 +95,24 @@ func (s *VolumeSubscription) Get(volumeID string) (VolumeDTO, bool) {
 	return dto, ok
 }
 
+// PoolVolumeCounts returns how many cached volumes each pool holds, keyed by
+// control-plane pool id.
+//
+// It counts what the control plane reports rather than what Kubernetes accounts
+// for, and that is the point: the gap between this number and the pool's bound
+// PersistentVolumes is the unmanaged-volume condition, which blocks a node drain
+// and is better noticed before somebody tries to drain.
+//
+// A pool whose stream has not been opened is absent from the result rather than
+// present and zero, so an unopened subscription is not reported as an empty pool.
+func (s *VolumeSubscription) PoolVolumeCounts() map[string]int {
+	counts := map[string]int{}
+	for _, v := range s.All() {
+		if v.PoolID != "" {
+			counts[v.PoolID]++
+		}
+	}
+	return counts
+}
+
 var _ cpinformer.Subscription = (*VolumeSubscription)(nil)

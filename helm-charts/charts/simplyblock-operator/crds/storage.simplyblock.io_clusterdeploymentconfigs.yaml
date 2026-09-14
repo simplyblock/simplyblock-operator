@@ -138,8 +138,11 @@ spec:
                       plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
                       into every StorageNode.spec.config.sizing it writes. Required, because the
                       StorageCluster's own field is.
+                      The floor is 4 rather than a hardware limit: a node must carry one core
+                      beyond this budget for the system, and the control plane's core layout
+                      assigns no NVMe-oF poller core at all for a 2-vCPU budget.
                     format: int32
-                    minimum: 6
+                    minimum: 4
                     type: integer
                 required:
                 - maxSubsystemCount

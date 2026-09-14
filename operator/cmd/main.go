@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/simplyblock/atlas/controlplane"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -46,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
@@ -55,8 +57,10 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -351,6 +355,13 @@ func main() {
 	// backend-id-to-object mapping the events are named by.
 	nodeSubscription := subscriptions.NewNodeSubscription()
 	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
+	// The data-protection band's two streams, both scoped per cluster. The
+	// backup stream is the only source of a StorageBackup object, so the cluster
+	// that opens it is also what registers the namespace its objects belong in.
+	backupSubscription := subscriptions.NewBackupSubscription()
+	backupScopes := cpSubscriptions.AddSubscription(backupSubscription)
+	backupPolicySubscription := subscriptions.NewBackupPolicySubscription()
+	backupPolicyScopes := cpSubscriptions.AddSubscription(backupPolicySubscription)
 	// How full a node is exists only in the metrics the control plane exports,
 	// so it comes from Prometheus rather than from the API or the stream. An
 	// endpoint that cannot be reached leaves the capacity absent from the
@@ -411,6 +422,35 @@ func main() {
 		}
 	}
 
+	// A pool's occupancy is the same kind of number as a device's, read one
+	// level up: it moves with every volume written to the pool, comes from the
+	// same Prometheus, and is worth neither an etcd write nor a reconcile. The
+	// collector also raises CapacityExhausted, which is the one pool event that
+	// needs a measurement to decide.
+	//
+	// It is registered after the volume stream because it reads that cache for
+	// the pool's logical-volume count, and the field is left unset when the
+	// stream is not running: a typed nil put into the interface would be a
+	// non-nil interface over a nil cache, which panics on the first pass.
+	var poolCapacity pool.CapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-pool capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		poolCapacity = provider
+	}
+	poolCollector := &pool.Collector{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("storagepool-collector"),
+		Capacity: poolCapacity,
+	}
+	if volumeSubscription != nil {
+		poolCollector.Volumes = volumeSubscription
+	}
+	if err := mgr.Add(poolCollector); err != nil {
+		setupLog.Error(err, "unable to add the storage pool collector")
+		os.Exit(1)
+	}
+
 	if err := (&controller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -420,11 +460,16 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorder("storagecluster-controller"),
-		Namespace:  operatorNamespace,
-		NodeScopes: nodeScopes,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
+		Namespace:    operatorNamespace,
+		NodeScopes:   nodeScopes,
+		BackupScopes: []*cpinformer.ScopeSet{backupScopes, backupPolicyScopes},
+		BackupRegistrars: []controller.ClusterRegistrar{
+			&backupSubscription.ClusterRegistry,
+			&backupPolicySubscription.ClusterRegistry,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
@@ -441,13 +486,21 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
 		os.Exit(1)
 	}
-	if err := (&controller.StoragePoolReconciler{
+	if err := (&pool.StoragePoolReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
 		VolumeScopes: volumeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
+		os.Exit(1)
+	}
+	if err := (&pool.StoragePoolOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagepoolops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StoragePoolOps")
 		os.Exit(1)
 	}
 	if err := (&controller.TaskReconciler{
@@ -467,12 +520,44 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageBackupReconciler{
+	// The data-protection band. The mirror is what creates every StorageBackup
+	// object, so nothing here takes a backup: a policy tells the control plane
+	// to, and the operations kind reads one back into a claim.
+	backupAPIConfig, err := webapi.ControlPlaneConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve the control plane the backup band writes to")
+		os.Exit(1)
+	}
+	backupAPI, err := controlplane.New(backupAPIConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to build the control-plane client the backup band writes through")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
+		Backups:  backupSubscription,
 		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupPolicyReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackuppolicy-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupPolicy")
+		os.Exit(1)
+	}
+	if err := (&backupcontrollers.StorageBackupOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackupops-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupOps")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupRestoreReconciler{
@@ -481,14 +566,6 @@ func main() {
 		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
-		os.Exit(1)
-	}
-	if err := (&controller.StorageBackupSyncReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagebackupsync-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupSync")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupPolicyReconciler{
@@ -698,6 +775,28 @@ func main() {
 				OperatorNamespace: operatorNamespace,
 			}})
 		setupLog.Info("registered storagedevice validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagepool",
+			&webhook.Admission{Handler: &internalwebhook.StoragePoolValidator{
+				Client:  mgr.GetClient(),
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			}})
+		setupLog.Info("registered storagepool validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackup",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
+		setupLog.Info("registered storagebackup validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackuppolicy",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupPolicyValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagebackuppolicy validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
+			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storagebackupops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{

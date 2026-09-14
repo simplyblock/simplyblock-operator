@@ -14,6 +14,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -75,13 +76,13 @@ func ResolvePoolUUID(
 	poolName string,
 ) (string, error) {
 
-	var pools simplyblockv1alpha1.StoragePoolList
+	var pools simplyblockv1alpha2.StoragePoolList
 	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
 
 	for _, p := range pools.Items {
-		if p.Spec.ClusterName == clusterName &&
+		if p.Spec.ClusterRef == clusterName &&
 			p.Name == poolName &&
 			p.Status.UUID != "" {
 			return p.Status.UUID, nil
@@ -137,7 +138,7 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 }
 
 // ResolveClusterCRByUUID finds the StorageCluster CR in namespace whose backend
-// UUID matches uuid. Used to go from a cross-cluster reference (which only
+// UUID matches the given one. Used to go from a cross-cluster reference (which only
 // carries the backend UUID) back to the CR, to read config the backend doesn't
 // expose, such as a cluster's backup credentials secret.
 func ResolveClusterCRByUUID(
@@ -488,7 +489,7 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 }
 
 // ParityChunksFromErasureCodingScheme returns just npcs (the parity-chunk
-// count, e.g. "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
+// count: `2x1` yields 1) from a StorageCluster's erasureCodingScheme. This
 // is the failure-domain risk budget the drain coordinator's fdDrainGate
 // spends against — see RequiredNodesFromErasureCodingScheme for the sibling
 // ndcs+npcs total.

@@ -14,7 +14,6 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/nqn"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -87,11 +86,11 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			// subsystem, so its NQN (and the PV's "model" attribute) carry this
 			// volume's own lvol id rather than a shared subsystem's master lvol
 			// id. See the same rationale in setupManagedWorkload.
-			createStorageClassWithParams(f.ClientSet, scName, map[string]string{
+			createStorageClass(f, scName, map[string]string{
 				scParamClusterID:             clusterID,
-				"pool_name":                  poolName,
+				scParamPool:                  poolName,
 				scParamMaxNamespacePerSubsys: "1",
-			})
+			}, nil)
 			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create DHCHAP PVC")
 			ginkgo.DeferCleanup(func() {
@@ -132,16 +131,10 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 			unauthorizedNQN := "nqn.2014-08.io.simplyblock:uuid:00000000-0000-0000-0000-000000000000"
 			status, body := connectAsHost(f, pluginPod, pluginContainer, clusterID, poolID, lvolID, unauthorizedNQN)
-			// Accept 404 (backend returned "not found in allowed hosts") or 0
-			// (backend dropped the TCP connection before sending an HTTP response:
-			// also a valid transport-level rejection, seen when the backend's DHCHAP
-			// gate closes the socket rather than returning a 4xx).
-			gomega.Expect(status).To(gomega.Or(gomega.Equal(404), gomega.Equal(0)),
-				"connect with an unauthorized host NQN should be rejected (404 or connection drop), got %d: %s", status, body)
-			if status == 404 {
-				gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
-					"rejection reason should name the allowed-hosts gate, got: %s", body)
-			}
+			gomega.Expect(status).To(gomega.Equal(404),
+				"connect with an unauthorized host NQN should be rejected, got %d: %s", status, body)
+			gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
+				"rejection reason should name the allowed-hosts gate, got: %s", body)
 
 			ginkgo.By("drop one NVMe path and confirm the guardian reconnects using the authorized identity")
 			sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID)
@@ -209,34 +202,51 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			createDHCHAPStoragePool(nameSpace, poolName, clusterName, workerNode)
 			ginkgo.DeferCleanup(func() { deleteStoragePool(nameSpace, poolName) })
 
-			// Everything below reads what the operator produced instead of
-			// rebuilding it: the node label, the backend allowed-host entry and
-			// the StorageClass all come from the StoragePool reconciler. This
-			// spec used to hand-build its own class, which is exactly why #484
-			// — a broken allowedTopologies term on the generated class — passed
-			// CI for a whole release: the class users actually get was never
-			// exercised by any test.
-			scName := operatorStorageClassName(nameSpace, clusterName, poolName)
-			sc := waitForStorageClass(f.ClientSet, scName, 3*time.Minute)
-
-			// The label key comes from the class the operator generated, not from a
-			// copy of its derivation. That parameter is the contract CreateVolume
-			// reads, so taking the key from it is what proves the two components
-			// agree; a mirrored formula here would only prove this file agrees with
-			// itself.
-			nodeLabelKey := sc.Parameters[dhchapNodeSelectorParam]
-			gomega.Expect(nodeLabelKey).To(gomega.HavePrefix(kube.LabelPoolPrefix),
-				"generated DHCHAP StorageClass %s must carry %s — it is the only thing CreateVolume turns "+
-					"into the PV's nodeAffinity (#403), and with allowedTopologies gone it is the sole "+
-					"allowed-node gate", scName, dhchapNodeSelectorParam)
+			// The node label and the backend allowed-host entry still come from
+			// the reconciler and are read rather than rebuilt. The class does
+			// not: #525 made the assignment an authored one, so the operator now
+			// writes exactly one class — for the pool a StorageCluster creates —
+			// and this pool is not that pool. Authoring it here is what a user
+			// has to do, which keeps the spec on the path users are actually on.
+			//
+			// The pool's UUID is the one thing the DHCHAP gate is derived from,
+			// so nothing about the class can be written before the reconciler
+			// reports it.
+			poolUUID := waitForStoragePoolUUID(nameSpace, poolName, 3*time.Minute)
+			nodeLabelKey := kube.PoolNodeLabelKey(poolUUID)
 			waitForNodeLabel(f.ClientSet, workerNode, nodeLabelKey, dhchapAllowedLabelValue, 3*time.Minute)
 
-			ginkgo.By("verify the generated StorageClass can actually provision and carries the DHCHAP gate")
-			gomega.Expect(sc.AllowedTopologies).To(gomega.BeEmpty(),
-				"generated DHCHAP StorageClass %s must not carry allowedTopologies: external-provisioner "+
-					"matches those terms against the CSINode topology keys frozen at csi-node registration, "+
-					"so a pool label written afterwards makes every PVC fail with "+
-					"\"is not in requisite\" (#484)", scName)
+			ginkgo.By("assign a StorageClass to the pool and verify it can provision")
+			// The three labels are the assignment (design-storagepool.md §5).
+			// They are what makes this a class the pool knows about — it
+			// publishes the name in status.storageClassNames and holds its own
+			// deletion while the class is there — rather than one that merely
+			// names the pool in a parameter. Spelled out because the csi-driver
+			// module does not depend on the operator's, the same reason
+			// dhchapNodeSelectorParam is.
+			scName := "dhchap-sched-" + ns
+			createStorageClass(f, scName,
+				map[string]string{
+					scParamPool: poolName,
+					// The sole allowed-node gate: CreateVolume turns this key
+					// into the PV's nodeAffinity (#403). Deliberately not paired
+					// with an allowedTopologies term, which external-provisioner
+					// matches against the CSINode topology keys frozen at
+					// csi-node registration, so a pool label written afterwards
+					// would fail every claim with "is not in requisite" (#484).
+					dhchapNodeSelectorParam: nodeLabelKey,
+					// One NVMe-oF subsystem per volume, matching the pool's
+					// volumeDefaults so its NQN carries its own lvol id.
+					scParamMaxNamespacePerSubsys: "1",
+				},
+				map[string]string{
+					"storage.simplyblock.io/namespace": nameSpace,
+					"storage.simplyblock.io/cluster":   clusterName,
+					"storage.simplyblock.io/pool":      poolName,
+				})
+			// Registered after the pool's cleanup and therefore run before it:
+			// the pool's deletion is held while a class is assigned to it.
+			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, 1<<30), "create PVC")
 			ginkgo.DeferCleanup(func() {
 				framework.ExpectNoError(
@@ -347,6 +357,15 @@ func sbctlPoolIDByName(f *framework.Framework, name string) string {
 // backend's authorization decision for an arbitrary host NQN without going
 // through the Go CSI client or the Kubernetes scheduler. Returns the HTTP
 // status code and response body.
+//
+// secret.json's cluster_endpoint is always recorded as a plain "http://" URL:
+// the chart's simplyblock.controlPlaneAddr renders it that way regardless of
+// tls.enabled. Whether the connection is actually TLS is a transport decision
+// made from this pod's own SB_TLS_* environment, the same environment
+// internal/controlplane/cluster.go's NewConnection reads. This script mirrors
+// that rewrite so the request reaches the control plane the way the driver
+// itself would, instead of a plaintext request a TLS-only listener drops
+// mid-handshake.
 func connectAsHost(
 	f *framework.Framework,
 	pluginPod, pluginContainer, clusterID, poolID, lvolID, hostNQN string,
@@ -358,6 +377,7 @@ func connectAsHost(
 	script := env + ` python3 - <<'PYEOF'
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -377,9 +397,26 @@ if token_path:
     except OSError:
         pass
 
+endpoint = cluster["cluster_endpoint"].rstrip("/")
+# Mirrors NewConnection's TLS handling in internal/controlplane/cluster.go:
+# SB_TLS_CONNECT of "disabled" (the default) leaves the endpoint as recorded;
+# anything else means the control plane is TLS-only, so the scheme is
+# rewritten and the CA (and, for "authenticated", the client keypair) this
+# same pod already mounts for the node plugin's own connections are used.
+ssl_context = None
+tls_mode = os.environ.get("SB_TLS_CONNECT", "disabled")
+if tls_mode != "disabled":
+    endpoint = endpoint.replace("http://", "https://", 1)
+    ca_file = os.environ.get("SB_TLS_CERTIFICATE_AUTHORITY", "/etc/simplyblock/tls/ca.crt")
+    ssl_context = ssl.create_default_context(cafile=ca_file)
+    if tls_mode == "authenticated":
+        cert_file = os.environ.get("SB_TLS_CERTIFICATE", "/etc/simplyblock/tls/tls.crt")
+        key_file = os.environ.get("SB_TLS_KEY", "/etc/simplyblock/tls/tls.key")
+        ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+
 query = urllib.parse.urlencode({"host_nqn": os.environ["HOST_NQN"]})
 url = (
-    cluster["cluster_endpoint"].rstrip("/")
+    endpoint
     + "/api/v2/clusters/" + os.environ["CLUSTER_ID"]
     + "/storage-pools/" + os.environ["POOL_ID"]
     + "/volumes/" + os.environ["LVOL_ID"]
@@ -387,19 +424,12 @@ url = (
 )
 req = urllib.request.Request(url, headers={"Authorization": "Bearer " + credential})
 try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10, context=ssl_context) as resp:
         print(resp.status)
         print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print(e.code)
     print(e.read().decode())
-except OSError as e:
-    # Backend closed the connection before sending an HTTP response
-    # (e.g. http.client.RemoteDisconnected). Treat as a transport-level
-    # rejection: print status 0 so the caller can distinguish it from a
-    # success without crashing the script.
-    print(0)
-    print("connection dropped: " + str(e))
 PYEOF`
 	out := execInPod(f, driverNamespace(), pluginPod, pluginContainer, script)
 	lines := strings.SplitN(strings.TrimLeft(out, "\n"), "\n", 2)
@@ -433,21 +463,26 @@ func storageClusterNameForPools() string {
 // createDHCHAPStoragePool applies a StoragePool CR with DHCHAP enabled and a
 // single allowed node, then leaves the operator to do the rest: register that
 // node's NQN on the backend, label the node, and generate the StorageClass.
-// maxNamespacePerSubsys=1 gives each volume its own NVMe-oF subsystem so its
+// maxNamespacesPerSubsystem=1 gives each volume its own NVMe-oF subsystem so its
 // NQN carries its own lvol id — same rationale as setupManagedWorkload.
+//
+// The manifest is authored at v1alpha2 because that is the storage version, and
+// StoragePool is served through a conversion webhook that only an upgrade
+// deploys. At v1alpha1 this apply asks the API server to dial a service that is
+// not there on a fresh install, and the spec never reaches the reconciler.
 func createDHCHAPStoragePool(ns, poolName, clusterName, allowedNode string) {
-	manifest := fmt.Sprintf(`apiVersion: storage.simplyblock.io/v1alpha1
+	manifest := fmt.Sprintf(`apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: %s
   namespace: %s
 spec:
-  clusterName: %s
-  dhchap: true
+  clusterRef: %s
   allowedNodes:
   - %s
-  storageClassParameters:
-    maxNamespacePerSubsys: "1"
+  volumeDefaults:
+    enableDHCHAP: true
+    maxNamespacesPerSubsystem: 1
 `, poolName, ns, clusterName, allowedNode)
 
 	tmp, err := os.CreateTemp("", "e2e-storagepool-*.yaml")
@@ -483,11 +518,6 @@ func deleteStoragePool(ns, poolName string) {
 		"StoragePool %s/%s should be fully reclaimed once its PVC is gone", ns, poolName)
 }
 
-// operatorStorageClassName mirrors simplyblockStorageClassName in the operator.
-func operatorStorageClassName(ns, clusterName, poolName string) string {
-	return fmt.Sprintf("simplyblock-%s-%s-%s", ns, clusterName, poolName)
-}
-
 // waitForNodeLabel waits for the operator's syncNodeLabels to put key=value on
 // nodeName.
 func waitForNodeLabel(c kubernetes.Interface, nodeName, key, value string, timeout time.Duration) {
@@ -503,21 +533,32 @@ func waitForNodeLabel(c kubernetes.Interface, nodeName, key, value string, timeo
 	framework.ExpectNoError(err, "operator should label node %s with %s=%s", nodeName, key, value)
 }
 
-// waitForStorageClass waits for the operator to create scName and returns it.
-func waitForStorageClass(c kubernetes.Interface, scName string, timeout time.Duration) *storagev1.StorageClass {
-	var sc *storagev1.StorageClass
+// waitForStoragePoolUUID waits for the reconciler to create the pool on the
+// backend and report the UUID back. Every per-pool identity is derived from it,
+// the DHCHAP allowed-node label key included, so nothing about the pool can be
+// authored before it lands.
+func waitForStoragePoolUUID(ns, poolName string, timeout time.Duration) string {
+	return waitForJSONPath(ns, "storagepools.storage.simplyblock.io", poolName,
+		"{.status.uuid}", timeout)
+}
+
+// waitForJSONPath polls one object's field until it reports a non-empty value.
+// A field a controller fills in is absent rather than empty until it does, and
+// kubectl reports both the same way, so the emptiness is the wait.
+func waitForJSONPath(ns, resource, name, jsonPath string, timeout time.Duration) string {
+	var value string
 	err := wait.PollUntilContextTimeout(context.Background(), 5*time.Second, timeout, true,
-		func(ctx context.Context) (bool, error) {
-			got, err := c.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
+		func(_ context.Context) (bool, error) {
+			out, err := e2ekubectl.RunKubectl(ns, "get", resource, name, "-o", "jsonpath="+jsonPath)
 			if err != nil {
-				framework.Logf("waiting for StorageClass %s: %v", scName, err)
+				framework.Logf("waiting for %s %s/%s %s: %v", resource, ns, name, jsonPath, err)
 				return false, nil
 			}
-			sc = got
-			return true, nil
+			value = strings.TrimSpace(out)
+			return value != "", nil
 		})
-	framework.ExpectNoError(err, "operator should create StorageClass %s for the pool", scName)
-	return sc
+	framework.ExpectNoError(err, "%s %s/%s should report %s", resource, ns, name, jsonPath)
+	return value
 }
 
 // pvForPVC resolves the bound PersistentVolume for a PVC.

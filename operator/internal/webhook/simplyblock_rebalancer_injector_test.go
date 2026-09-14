@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -33,6 +34,10 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
+	}
+	// The kinds the data-protection band's validators read are all v1alpha2.
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add the v1alpha2 simplyblock scheme: %v", err)
 	}
 	// The conversion webhook's CA bundle is injected into CRDs, so the fake
 	// client has to know that kind too.

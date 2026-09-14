@@ -1,0 +1,23 @@
+# A backup policy covering the claims labeled for it.
+#
+# The selector is the half worth reading. An absent claimSelector selects
+# nothing, which is the opposite of what an empty selector means in most
+# Kubernetes APIs: backing up more than was intended is a bill nobody sees,
+# while backing up less is an error somebody does.
+#
+# There is no sample of a StorageBackup beside this one, and that is deliberate.
+# A backup object records a copy the operator found in the cluster's store, so
+# nothing can be created by hand and a validating webhook refuses one that is.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupPolicy
+metadata:
+  name: storagebackuppolicy-sample
+spec:
+  clusterRef: my-cluster
+  claimSelector:
+    matchLabels:
+      backup: nightly
+  # Four quarter-hourly copies, eleven hourly, and seven daily.
+  schedule: 15m,4 60m,11 24h,7
+  maxVersions: 22
+  maxAge: 30d

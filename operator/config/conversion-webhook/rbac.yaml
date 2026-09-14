@@ -35,6 +35,7 @@ rules:
       - storagebackups.storage.simplyblock.io
       - storageclusterops.storage.simplyblock.io
       - storagenodeops.storage.simplyblock.io
+      - storagepools.storage.simplyblock.io
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

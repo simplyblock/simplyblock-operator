@@ -1,7 +1,9 @@
-// Capacity samples for logical volumes, devices, and storage nodes. The three
-// share this file because they share a shape: the control plane exports the same
-// five size gauges and a sample date under each prefix, so the only thing that
-// differs is the prefix and the label naming the entity.
+// Capacity samples for logical volumes, devices, storage nodes, and storage
+// pools. The four share this file because they share a shape: the control plane
+// exports the same five size gauges under each prefix, so the only thing that
+// differs is the prefix and the label naming the entity. Three of them also
+// export a sample date; the pool family does not, which is the one asymmetry and
+// is noted on PoolCapacity.
 
 package prometheus
 
@@ -10,8 +12,8 @@ import (
 	"time"
 )
 
-// Capacity is one capacity sample for a logical volume, a device, or a storage
-// node. Every size is in bytes.
+// Capacity is one capacity sample for a logical volume, a device, a storage
+// node, or a storage pool. Every size is in bytes.
 //
 // Provisioned against Used is the distinction the type exists for. A logical
 // volume is thin-provisioned, so the size it was asked for and the space it has
@@ -52,6 +54,8 @@ const (
 	deviceIDLabel      = "device"
 	nodeMetricPrefix   = "snode"
 	nodeIDLabel        = "snode"
+	poolMetricPrefix   = "pool"
+	poolIDLabel        = "pool"
 )
 
 // VolumeCapacity returns the capacity sample for every logical volume in the
@@ -95,6 +99,26 @@ func (p *Provider) NodeCapacity(
 	clusterUUID string,
 ) (map[string]Capacity, error) {
 	return p.capacity(ctx, nodeMetricPrefix, nodeIDLabel, clusterUUID)
+}
+
+// PoolCapacity returns the capacity sample for every storage pool in the
+// cluster, keyed by pool UUID. A pool Prometheus has no sample for is absent
+// from the result rather than present and zero.
+//
+// A pool's total is what its cluster has given it and its provisioned figure is
+// the sum of what the volumes in it were promised, so the two answer the
+// tenancy question the other families cannot: whether a pool is over-committed
+// against the capacity limit it was carved out with.
+//
+// Unlike the other three families the control plane exports no pool_date, so a
+// pool's sample carries no SampledAt and [Capacity.Sampled] is false for every
+// one of them. A caller therefore decides a pool has a reading by its presence
+// in this map rather than by asking the sample.
+func (p *Provider) PoolCapacity(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]Capacity, error) {
+	return p.capacity(ctx, poolMetricPrefix, poolIDLabel, clusterUUID)
 }
 
 // capacity assembles the samples for one entity kind. The metric names are

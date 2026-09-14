@@ -40,6 +40,14 @@ type objectNames struct {
 	secretV2                 string
 	snapshotClass            string
 
+	// controllerClientSecret and nodeClientSecret name each plugin's TLS
+	// client certificate, mounted by tls.go's tlsVolume and never applied by
+	// this controller: cert-manager mode has this chart's
+	// controlplane_certificates.yaml write it, and OpenShift mode has an
+	// administrator provision it, the same as before spec.tls existed.
+	controllerClientSecret string
+	nodeClientSecret       string
+
 	// csiDriver is spec.driverName rather than a derived string. It is the name
 	// every PersistentVolume records in spec.csi.driver, so it is the cluster's
 	// to know and not this object's to pick.
@@ -59,6 +67,8 @@ func names(d *simplyblockv1alpha2.SimplyblockDriver) objectNames {
 		secret:                   p + "secret",
 		secretV2:                 p + "secret-v2",
 		snapshotClass:            p + "snapshotclass",
+		controllerClientSecret:   p + "controller-client-tls",
+		nodeClientSecret:         p + "node-client-tls",
 		csiDriver:                driverName(d),
 	}
 }

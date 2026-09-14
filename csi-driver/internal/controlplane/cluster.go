@@ -197,24 +197,43 @@ func (c *ClusterClient) GetRelationship(ctx context.Context, lvolID string) (*Re
 
 // CreateLVolData is the data structure for creating a logical volume
 type CreateLVolData struct {
-	LvolName     string `json:"name"`
-	Size         string `json:"size"`
-	LvsName      string `json:"pool"`
-	Fabric       string `json:"fabric"`
+	LvolName string `json:"name"`
+	Size     string `json:"size"`
+	LvsName  string `json:"pool"`
+
+	// Every optional string below omits itself when empty, and that is load
+	// bearing rather than tidiness. None of these has an empty value that means
+	// anything: an unstated ceiling is no ceiling, an unstated fabric is the
+	// cluster's, an unstated host is any host. The control plane says so too —
+	// each one is declared with a default, or read behind a falsy check — but a
+	// default only applies to a key that is absent, and a key present with ""
+	// is a value somebody chose.
+	//
+	// What that costs is exact. The API validates the ceilings as integers, so
+	// "" is a 422 and the claim never binds; "" for the fabric parses and is
+	// worse, reaching add_lvol_ha to build the attribute name active_<fabric>,
+	// which names nothing.
+	//
+	// None of it was reachable until recently. Every class the operator
+	// generated carried all four ceilings as "0" and the fabric as tcp, because
+	// v1alpha1's StorageClassParameters defaulted them on a block that was
+	// always materialized. v1alpha2 made them optional, which is the first time
+	// a class could state nothing and mean it.
+	//
+	// The numbers and booleans deliberately keep theirs: false and 0 are values
+	// here, not absences, and omitempty cannot tell the two apart.
+	Fabric       string `json:"fabric,omitempty"`
 	Encryption   bool   `json:"encrypt"`
-	MaxRWIOPS    string `json:"max_rw_iops"`
-	MaxRWmBytes  string `json:"max_rw_mbytes"`
-	MaxRmBytes   string `json:"max_r_mbytes"`
-	MaxWmBytes   string `json:"max_w_mbytes"`
-	MaxSize      string `json:"max_size"`
+	MaxRWIOPS    string `json:"max_rw_iops,omitempty"`
+	MaxRWmBytes  string `json:"max_rw_mbytes,omitempty"`
+	MaxRmBytes   string `json:"max_r_mbytes,omitempty"`
+	MaxWmBytes   string `json:"max_w_mbytes,omitempty"`
+	MaxSize      string `json:"max_size,omitempty"`
 	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	HostID       string `json:"host_id"`
-	LvolID       string `json:"uid"`
+	HostID       string `json:"host_id,omitempty"`
+	LvolID       string `json:"uid,omitempty"`
 	Namespaced   bool   `json:"namespaced"`
-	PvcName      string `json:"pvc_name"`
-	// ConsistencyGroup, when set, joins the volume to that consistency group at
-	// creation (the PVC's storage.simplyblock.io/consistency-group label). Omit
-	// for a non-member volume so the control plane treats it as ungrouped.
+	PvcName      string `json:"pvc_name,omitempty"`
 	ConsistencyGroup string `json:"consistency_group,omitempty"`
 }
 

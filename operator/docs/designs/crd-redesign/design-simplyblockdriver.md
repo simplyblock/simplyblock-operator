@@ -195,6 +195,21 @@ deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
 neither (§4.1). False applies none of them, which is the chart's
 `snapshotclass.create` and `snapshotcontroller.create` as one field.
 
+**`tls` decides whether both plugins reach the control plane over TLS**, the
+`tls.enabled`, `tls.mutual_enabled`, and `tls.provider` Helm values as one
+nested struct: `enableTLS`, `enableMutualTLS`, and `provider`. Unset is a
+plaintext data path, which is what every deployment measured before this field
+existed ran as. `enableTLS` alone is an encrypted connection with no client
+identity; `enableMutualTLS` on top of it additionally has each plugin present
+the client certificate its own `<object name>-csi-{controller,node}-client-tls`
+Secret carries — the same name derived everywhere else in this document, so
+naming it again in the spec would be a second place for the two to disagree.
+`provider` exists because the two providers mount a differently shaped volume:
+OpenShift's service-ca ConfigMap plus an administrator-provisioned Secret, or
+cert-manager's Certificate, and neither shape is inferable from anything else
+on the object. This is the field the TODO in workloads.go asked for, and §4.3
+below is what changed once it existed.
+
 ### 3.2 Immutability
 
 **`driverName` is immutable, and it is the field most likely to be edited by
@@ -373,6 +388,15 @@ Secret and never writes it, because two controllers writing one object alternate
 its contents. What it does own is the pair of `ConfigMaps` beside it, which carry
 no cluster state at all (§4.3).
 
+**With `spec.tls.enableMutualTLS`, each plugin also mounts a client-certificate
+Secret this deployment does not own**, at the name `names.go` derives for it:
+`<object name>-csi-controller-client-tls` and `<object name>-csi-node-client-tls`.
+cert-manager mode has this chart's `controlplane_certificates.yaml` write it
+already; OpenShift mode has an administrator provision it, the same requirement
+as before `spec.tls` existed. Deriving rather than naming it in the spec is what
+lets an object named `simplyblock` land on exactly the Secret the chart already
+writes, with no field for the two to disagree over.
+
 **One control plane is not one backend cluster.** That Secret carries a
 `clusters` list of `cluster_id`, `cluster_endpoint`, and `cluster_secret` triples,
 one entry per `StorageCluster` the control plane fronts, and every entry names the
@@ -550,22 +574,33 @@ already serves the API, which every adopted deployment does.
 7. Remove the Helm labels and annotations, keeping the resource policy
 ```
 
-**Step 2 is where adoption can refuse, and it has one comparison to make.**
-`driverName` is the only thing the spec cannot change, and the name a deployment
-is actually registered under is read from the running node plugin's kubelet
-registration path rather than from the registration object, because that path is
-where the name takes effect. A mismatch holds the phase at `Installing` with
-`status.message` naming both values, emits `AdoptionRefused` (§6.1), and changes
-nothing. The counts of §4.2 are still published, because the plugins are running
-and what is blocked is the handover rather than the driver.
+**Step 2 is where adoption can refuse, and it has three comparisons to make.**
+An inexpressible configuration (csi-link) is refused outright, the same as
+before `spec.tls` existed. `driverName` is compared against the name a
+deployment is actually registered under, read from the running node plugin's
+kubelet registration path rather than from the registration object, because
+that path is where the name takes effect — the one comparison this spec can
+never resolve, since `driverName` is immutable. TLS is now a third comparison
+rather than an unconditional refusal: the running node plugin's
+`SB_TLS_CONNECT` (`disabled`, `anonymous`, or `authenticated`, reading its
+absence as `disabled`) is compared against what `spec.tls` would produce, and
+the two are expected to already agree, the same reasoning as `driverName` —
+adoption reconciles toward the spec, so a spec that does not yet describe the
+running TLS mode is one the next reconcile would silently change. Any
+disagreement holds the phase at `Installing` with `status.message` naming both
+values, emits `AdoptionRefused` (§6.1), and changes nothing. The counts of §4.2
+are still published, because the plugins are running and what is blocked is
+the handover rather than the driver.
 
-**Upgrade tool:** refuse the upgrade for a deployment configured with TLS or
-csi-link, before anything is annotated or applied. This kind has no field for
-either, so the controller refuses the handover when it meets one, and a refusal
-discovered at that point is a cluster whose chart has already stopped rendering
-the driver. Both are off by default, so the check is cheap and the answer is
-usually yes. `tls.enabled` and `csiLink.enabled` in the deployed release's values
-are what to read.
+**Upgrade tool:** refuse the upgrade for a deployment configured with csi-link,
+before anything is annotated or applied. This kind has no field for it, so the
+controller refuses the handover when it meets one, and a refusal discovered at
+that point is a cluster whose chart has already stopped rendering the driver.
+It is off by default, so the check is cheap and the answer is usually yes.
+`csiLink.enabled` in the deployed release's values is what to read. TLS no
+longer needs this check: `spec.tls` set to describe the deployment's actual
+`tls.enabled` / `tls.mutual_enabled` / `tls.provider` values lets the handover
+proceed, per the comparison above.
 
 **The endpoint and the credentials are not compared here, because they are not
 this deployment's to write.** They live in the credentials `Secret` the
@@ -802,17 +837,18 @@ The objects do not change and their owner does. Every cluster running
 simplyblock has the deployment already, applied by the chart, and §4.3 is the
 reconcile that takes it over in place.
 
-| Today                                               | After                                                       |
-|-----------------------------------------------------|-------------------------------------------------------------|
-| The chart renders the node `DaemonSet`              | The controller applies it (§4.1)                            |
-| The chart renders the controller `StatefulSet`      | The controller applies it (§4.1)                            |
-| The chart renders the `CSIDriver` registration      | The controller applies it, owned by the `SimplyblockDriver` |
-| The driver's version is a Helm release's            | `spec.image`, compared against the control plane's (§5)     |
-| The snapshot controller is a chart value            | `spec.enableVolumeSnapshots` (§3.1)                         |
-| Nothing compares driver and control-plane versions  | `VersionSkew` and the two gauges (§6)                       |
-| The RBAC and the snapshot class belong to a release | The `managed-by` label and a finalizer (§4.1, §4.3)         |
-| `helm uninstall` removes the driver                 | It leaves it running, and deleting the object removes it    |
-| Seven chart values pin the sidecar images           | The operator's release, or `spec.sidecarImages` (§3.1)      |
+| Today                                                       | After                                                              |
+|-------------------------------------------------------------|--------------------------------------------------------------------|
+| The chart renders the node `DaemonSet`                      | The controller applies it (§4.1)                                   |
+| The chart renders the controller `StatefulSet`              | The controller applies it (§4.1)                                   |
+| The chart renders the `CSIDriver` registration              | The controller applies it, owned by the `SimplyblockDriver`        |
+| The driver's version is a Helm release's                    | `spec.image`, compared against the control plane's (§5)            |
+| The snapshot controller is a chart value                    | `spec.enableVolumeSnapshots` (§3.1)                                |
+| Nothing compares driver and control-plane versions          | `VersionSkew` and the two gauges (§6)                              |
+| The RBAC and the snapshot class belong to a release         | The `managed-by` label and a finalizer (§4.1, §4.3)                |
+| `helm uninstall` removes the driver                         | It leaves it running, and deleting the object removes it           |
+| Seven chart values pin the sidecar images                   | The operator's release, or `spec.sidecarImages` (§3.1)             |
+| `tls.enabled`/`mutual_enabled`/`provider` gate both plugins | `spec.tls` (§3.1), compared rather than refused on adoption (§4.3) |
 
 **Upgrade tool:** apply the `SimplyblockDriver` CRD before the chart upgrade
 that expects it. The chart ships CRDs in `crds/`, which Helm applies on install
@@ -974,6 +1010,63 @@ type SidecarImages struct {
 	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
 }
 
+// DriverTLSProvider is where the TLS certificate on this connection comes
+// from. The values are not this group's to spell: OpenShift and cert-manager
+// are the two products, and the operator's own internal/utils package already
+// carries these exact strings for the control plane's own SB_TLS_PROVIDER, so
+// a driver and a control plane in the same namespace agree on the same word
+// without a translation table between them.
+// +kubebuilder:validation:Enum=OpenShift;cert-manager
+type DriverTLSProvider string
+
+const (
+	// DriverTLSProviderOpenShift is OpenShift's service-ca operator: a
+	// ConfigMap carrying the cluster CA, and a Secret an administrator
+	// provisions for each plugin's client certificate.
+	DriverTLSProviderOpenShift DriverTLSProvider = "OpenShift"
+	// DriverTLSProviderCertManager is cert-manager: a ClusterIssuer already
+	// installed by this chart mints a Certificate per plugin, and the Secret
+	// it writes carries the CA bundle alongside the client keypair.
+	DriverTLSProviderCertManager DriverTLSProvider = "cert-manager"
+)
+
+// DriverTLS configures whether this deployment's two plugins reach the
+// control plane over TLS. Unset (every field at its zero value) is a
+// plaintext data path, which is what every deployment measured before this
+// field existed ran as — the chart rendered `simplyblock.tlsEnv`,
+// `simplyblock.tlsVolumeMount`, and `simplyblock.clientTlsVolume`
+// unconditionally on both plugins, gated on the same three Helm values these
+// fields replace.
+//
+// The client-certificate Secret each plugin mounts is not named here: it is
+// `<object name>-csi-controller-client-tls` and
+// `<object name>-csi-node-client-tls`, the same names names.go derives for
+// every other object, and the same ones this chart's
+// controlplane_certificates.yaml already writes for cert-manager. A field
+// naming them again would be a second place for the two to disagree.
+type DriverTLS struct {
+	// EnableTLS turns on TLS between both plugins and the control plane.
+	// +kubebuilder:default=false
+	// +optional
+	EnableTLS *bool `json:"enableTLS,omitempty"`
+
+	// EnableMutualTLS additionally requires each plugin to present a client
+	// certificate, rather than dialing the control plane anonymously over
+	// the encrypted connection EnableTLS alone provides. Ignored when
+	// EnableTLS is false, the same as the Helm value it replaces.
+	// +kubebuilder:default=false
+	// +optional
+	EnableMutualTLS *bool `json:"enableMutualTLS,omitempty"`
+
+	// Provider selects where the CA bundle (and, with EnableMutualTLS, the
+	// client certificate) comes from. Required reading whenever EnableTLS is
+	// true: the two providers mount a differently shaped volume, and neither
+	// shape can be inferred from anything else on this object.
+	// +kubebuilder:default=cert-manager
+	// +optional
+	Provider DriverTLSProvider `json:"provider,omitempty"`
+}
+
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
 type SimplyblockDriverSpec struct {
@@ -1058,6 +1151,14 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`
+
+	// TLS configures whether both plugins reach the control plane over TLS.
+	// Unset is plaintext, the shape every deployment ran before this field
+	// existed, so adoption of a deployment already running TLS needs this to
+	// already agree with what the plugins are configured for rather than
+	// reading it off a live object the way spec.driverName's default cannot be.
+	// +optional
+	TLS DriverTLS `json:"tls,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from.
