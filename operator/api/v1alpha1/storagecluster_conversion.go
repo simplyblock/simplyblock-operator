@@ -179,16 +179,24 @@ func (src *StorageCluster) ConvertTo(dstRaw conversion.Hub) error {
 	}
 	dst.Spec.EnableDataRealignment = realignmentToHub(&dst.ObjectMeta, src.Spec.VolumeMigrationSettings)
 
-	// The removals of §2.3, kept as the text that was applied.
-	if s := src.Spec.VolumeMigrationSettings; s != nil {
-		stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1MigrationEnabled, s.Enabled)
+	// The removals of §2.3, kept as the text that was applied. Every key is
+	// written on every pass, and an absent block is read as absent fields
+	// rather than skipped: a note left behind by a field that is gone is a
+	// value the next read down would put back into an object nobody wrote it
+	// into.
+	migration := src.Spec.VolumeMigrationSettings
+	if migration == nil {
+		migration = &VolumeMigrationSettings{}
 	}
-	if b := src.Spec.Backup; b != nil {
-		stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1SnapshotBackups, b.SnapshotBackups)
-		stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1WithCompression, b.WithCompression)
-		stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1LocalTesting, b.LocalTesting)
-		stashRemoved(&dst.ObjectMeta, annoV1Alpha1SecondaryTarget, formatInt32(b.SecondaryTarget))
+	backup := src.Spec.Backup
+	if backup == nil {
+		backup = &BackupSpec{}
 	}
+	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1MigrationEnabled, migration.Enabled)
+	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1SnapshotBackups, backup.SnapshotBackups)
+	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1WithCompression, backup.WithCompression)
+	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1LocalTesting, backup.LocalTesting)
+	stashRemoved(&dst.ObjectMeta, annoV1Alpha1SecondaryTarget, formatInt32(backup.SecondaryTarget))
 
 	dst.Status = v1alpha2.StorageClusterStatus{
 		UUID:                        src.Status.UUID,
@@ -795,6 +803,7 @@ func rebalancingMetricsFromHub(m *v1alpha2.RebalancingMetrics) *RebalancingMetri
 // the removed fields is not given metadata it never had.
 func stashRemovedBool(meta *metav1.ObjectMeta, key string, value *bool) {
 	if value == nil {
+		clear(meta, key)
 		return
 	}
 	if *value {

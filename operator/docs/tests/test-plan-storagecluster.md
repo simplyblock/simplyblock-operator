@@ -204,6 +204,7 @@ File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 | U-91     | Adoption by name does not persist an empty credential or mark the cluster configured          | Negative | `TestAdoptionByNameDoesNotPersistAnEmptyCredential`      |
 | U-92     | A backup store with no bucket is refused, naming the conversion annotation                    | Negative | `TestABackupStoreWithNoBucketIsRefused`                  |
 | U-93     | The creation machine resumes from every step it declares, and from no other                   | Boundary | `TestTheCreationMachineRestoresFromEveryDeclaredStep`    |
+| U-94     | A step is never persisted without the deadline that bounds it                                 | Negative | `TestAStepIsNeverPersistedWithoutItsDeadline`            |
 
 ### Creation State Machine (design §4.2)
 
@@ -295,6 +296,8 @@ hub-first direction in `operator/api/v1alpha1/hub_roundtrip_test.go`.
 | U-CV-20 | A `subPhase` no graph declares is dropped rather than carried through                                 | Negative | `TestStorageClusterAnUndeclaredSubPhaseIsDropped`             |
 | U-CV-21 | `spec.deviceClass` defaults to `NVMe` on the way up, since a CRD default does not run on a conversion | Boundary | `TestStorageClusterTheDeviceClassDefaultsOnTheWayUp`          |
 | U-CV-22 | A deliberate `LogicalBlock` survives being stored and read back                                       | Positive | `TestStorageClusterADeliberateDeviceClassSurvives`            |
+| U-CV-23 | A removed-field annotation is cleared when the field it notes states nothing                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsValueDoes`    |
+| U-CV-24 | A removed-field annotation is cleared when the block it belongs to is absent                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsBlockDoes`    |
 
 `U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for.
 `enableDataRealignment` is the one row in the whole migration whose default
@@ -450,17 +453,17 @@ against a real API server under real concurrency.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 163       | 147     | 16          |
+| Unit        | 179       | 163     | 16          |
 | Integration | 29        | 10      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **208**   | **157** | **51**      |
+| **Total**   | **224**   | **173** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and
 `U-CV-` blocks, none of which is future work any more.
 
-One hundred and ten distinct test functions cover those scenarios, because a
+One hundred and twenty distinct test functions cover those scenarios, because a
 table-driven test satisfies one ID per subtest and several scenarios are two
 assertions of one test. Every name this plan cites exists: a row pointing at a
 test that does not is worse than a row pointing at nothing.

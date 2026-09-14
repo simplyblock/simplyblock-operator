@@ -575,3 +575,95 @@ func TestStorageClusterADeliberateDeviceClassSurvives(t *testing.T) {
 		t.Errorf("spec.deviceClass = %q, want the class the hub chose to survive", got)
 	}
 }
+
+// A note about a removed field tracks that field, including when the field
+// stops having a value.
+//
+// The stash family that carries the hub's own fields holds this already: an
+// absent value clears the annotation rather than leaving the last one that was
+// written. The family that carries this version's removed fields did not, and
+// the two are read by the same conversion, so the pair disagreed about what an
+// absent value means. Where the annotation survives a field that does not, the
+// value comes back on the next read down and the object states something
+// nobody wrote.
+func TestStorageClusterARemovedFieldsNoteGoesWhenItsValueDoes(t *testing.T) {
+	// An object carrying the notes, whose fields are all absent.
+	src := &StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "production",
+			Namespace: "sb",
+			Annotations: map[string]string{
+				annoV1Alpha1SnapshotBackups:  "true",
+				annoV1Alpha1WithCompression:  "true",
+				annoV1Alpha1LocalTesting:     "true",
+				annoV1Alpha1SecondaryTarget:  "2",
+				annoV1Alpha1MigrationEnabled: "false",
+			},
+		},
+		Spec: StorageClusterSpec{
+			VolumeMigrationSettings: &VolumeMigrationSettings{},
+			Backup: &BackupSpec{
+				LocalEndpoint:        "https://s3.example.com",
+				CredentialsSecretRef: BackupCredentialsSecretRef{Name: "backup-credentials"},
+			},
+		},
+	}
+
+	var hub v1alpha2.StorageCluster
+	if err := src.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	for _, key := range []string{
+		annoV1Alpha1SnapshotBackups, annoV1Alpha1WithCompression,
+		annoV1Alpha1LocalTesting, annoV1Alpha1SecondaryTarget,
+		annoV1Alpha1MigrationEnabled,
+	} {
+		if got, ok := hub.Annotations[key]; ok {
+			t.Errorf("%s = %q, want it gone: the field it notes states nothing", key, got)
+		}
+	}
+
+	// And nothing comes back on the way down.
+	var back StorageCluster
+	if err := back.ConvertFrom(&hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if b := back.Spec.Backup; b != nil {
+		if b.SnapshotBackups != nil || b.WithCompression != nil ||
+			b.LocalTesting != nil || b.SecondaryTarget != nil {
+			t.Errorf("a backup field nobody set was restored from a stale note: %+v", b)
+		}
+	}
+	if v := back.Spec.VolumeMigrationSettings; v != nil && v.Enabled != nil {
+		t.Errorf("a migration toggle nobody set was restored from a stale note: %v", *v.Enabled)
+	}
+}
+
+// The same rule with the parent gone rather than the field. A note about a
+// block that no longer exists is a note about nothing, and leaving it writes
+// the block back on the way down.
+func TestStorageClusterARemovedFieldsNoteGoesWhenItsBlockDoes(t *testing.T) {
+	src := &StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "production",
+			Namespace: "sb",
+			Annotations: map[string]string{
+				annoV1Alpha1SnapshotBackups:  "true",
+				annoV1Alpha1SecondaryTarget:  "2",
+				annoV1Alpha1MigrationEnabled: "false",
+			},
+		},
+	}
+
+	var hub v1alpha2.StorageCluster
+	if err := src.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	for _, key := range []string{
+		annoV1Alpha1SnapshotBackups, annoV1Alpha1SecondaryTarget, annoV1Alpha1MigrationEnabled,
+	} {
+		if got, ok := hub.Annotations[key]; ok {
+			t.Errorf("%s = %q, want it gone: the block it belongs to is not there", key, got)
+		}
+	}
+}

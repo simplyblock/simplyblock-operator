@@ -302,19 +302,26 @@ func (r *StorageClusterOpsReconciler) advance(
 	return r.enterStep(ctx, ops, machine, next)
 }
 
-// enterStep writes the next step down before entering it, and writes the
-// deadline the entry hook armed afterward. The first write is the write-ahead
-// record: a crash between the two leaves a record that the step was attempted
-// rather than a record that it was not.
+// enterStep moves the machine into the next step and writes the step and the
+// deadline its entry hook armed in one patch.
+//
+// The two go together because a step with no deadline is a step nothing can
+// ever time out: TimeoutReached reads the stored deadline, so a crash between
+// a patch carrying the state and a later one carrying the deadline would
+// restore an operation that retries on the fallback interval for good and
+// never reports the failure its budget exists to produce.
+//
+// Writing after the transition rather than before it costs nothing, because
+// every OnEnter in graphs.go returns a duration and performs nothing. The
+// side effect of a step is performed on the pass that follows, against the
+// step this patch persisted, which is where the write-ahead record is needed
+// and what it records.
 func (r *StorageClusterOpsReconciler) enterStep(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,
 	machine *statemachine.Machine[step],
 	next step,
 ) (ctrl.Result, error) {
-	if err := r.recordStep(ctx, ops, next, nil); err != nil {
-		return ctrl.Result{}, err
-	}
 	if err := machine.TransitionTo(ctx, next); err != nil {
 		return ctrl.Result{}, fmt.Errorf("enter step %s: %w", next, err)
 	}

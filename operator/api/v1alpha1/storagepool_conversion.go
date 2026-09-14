@@ -469,11 +469,17 @@ func formatInt32(v *int32) string {
 	return strconv.FormatInt(int64(*v), 10)
 }
 
-// stashRemoved records a field this version has and the hub does not. An empty
-// value writes no annotation, so an object that set neither removed field is not
-// given metadata it never had.
+// stashRemoved records a field this version has and the hub does not.
+//
+// An empty value removes the annotation rather than leaving the last one that
+// was written, which is the same rule stash keeps for the hub's own fields and
+// for the same reason: the note exists to say what the field said, so a note
+// that outlived its field states something nobody wrote. Callers evaluate every
+// key on every pass, including the keys whose parent block is gone, because a
+// key nothing looked at is a key nothing can clear.
 func stashRemoved(meta *metav1.ObjectMeta, key, value string) {
 	if value == "" {
+		clear(meta, key)
 		return
 	}
 	if meta.Annotations == nil {

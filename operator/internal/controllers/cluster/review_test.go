@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -227,5 +228,68 @@ func TestTheCreationMachineRestoresFromEveryDeclaredStep(t *testing.T) {
 		machine.Close()
 		t.Error("the creation machine accepted the legacy lowercase step, so the " +
 			"conversion's normalization is untested")
+	}
+}
+
+// A step is persisted together with the deadline that bounds it.
+//
+// Writing the state and then the deadline is two patches with a window
+// between them, and a process that dies in that window restores a step with
+// no deadline at all. TimeoutReached is false for such a step forever, so the
+// operation neither advances on its own nor ever reports the deadline failure
+// that is the only thing standing between a wedged control plane and an
+// operation that runs for good. The hook that sets the deadline is pure:
+// every OnEnter in the graphs returns a duration and does nothing else, so
+// there is nothing here for a first patch to run ahead of, and the
+// write-ahead record the next pass needs is the step itself.
+//
+// Seeing the window takes looking at every write rather than at the last one,
+// which is what the interceptor is for.
+func TestAStepIsNeverPersistedWithoutItsDeadline(t *testing.T) {
+	var unbounded []string
+	watching := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithStatusSubresource(
+			&simplyblockv1alpha2.StorageCluster{},
+			&simplyblockv1alpha2.StorageClusterOps{},
+		).
+		WithObjects(newTestCluster(), newTestOps(
+			simplyblockv1alpha2.StorageClusterOpsActionActivate)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context, c client.Client, subResource string,
+				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption,
+			) error {
+				if ops, ok := obj.(*simplyblockv1alpha2.StorageClusterOps); ok {
+					if s := ops.Status.Step; s.State != "" && s.Deadline == nil {
+						unbounded = append(unbounded, s.State)
+					}
+				}
+				return c.SubResource(subResource).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	r := &StorageClusterOpsReconciler{
+		Client:   watching,
+		Scheme:   testScheme(t),
+		Recorder: &recorder{},
+		API: &fakeControlPlane{
+			t:       t,
+			cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+		},
+	}
+
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: testNamespace, Name: testOpsName}
+	for i := 0; i < 6; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile pass %d: %v", i+1, err)
+		}
+	}
+
+	if len(unbounded) > 0 {
+		t.Errorf("a step was persisted with no deadline (%v); a crash there restores an "+
+			"operation nothing can ever time out", unbounded)
 	}
 }
