@@ -54,7 +54,7 @@ type nodePool struct {
 // ensure boots the cluster on the first call and returns it on every one. The
 // error is remembered: once the boot has failed, every waiting spec should hear
 // about that rather than queue up behind another attempt at it.
-func (p *nodePool) ensure(ctx context.Context, t *testing.T) (*cluster.Cluster, error) {
+func (p *nodePool) ensure(ctx context.Context) (*cluster.Cluster, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.booted {
@@ -65,10 +65,6 @@ func (p *nodePool) ensure(ctx context.Context, t *testing.T) (*cluster.Cluster, 
 
 	c, err := cluster.Create(ctx, cluster.Config{
 		Name: clusterName(),
-		// Attributed to the spec that is waiting for the boot, which is the one
-		// holding the lock here. Every other spec blocks on it rather than
-		// logging, so the narration lands once and in the right place.
-		Logf: func(format string, args ...any) { t.Logf("  talos: "+format, args...) },
 		// One controlplane comes for free; the rest are workers.
 		Workers: clusterNodes - 1,
 	})
@@ -254,7 +250,7 @@ func leaseNodes(ctx context.Context, t *testing.T, n int) (*cluster.Cluster, []s
 		t.Fatalf("this spec asks for %d nodes and the shared cluster carries %d; "+
 			"raise clusterNodes", n, clusterNodes)
 	}
-	c, err := shared.ensure(ctx, t)
+	c, err := shared.ensure(ctx)
 	if err != nil {
 		t.Fatalf("bring up the shared cluster: %v", err)
 	}

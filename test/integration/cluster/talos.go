@@ -77,10 +77,15 @@ type Config struct {
 	// the same, and the first instinct is to interrupt the one that was working.
 	//
 	// Nil narrates to standard error. Silence is the wrong default for something
-	// this slow, and a caller that wants it passes a function that discards. A
-	// test should pass t.Logf instead, which attributes the output to the spec
-	// that is waiting for it. The output is captured either way, because a
-	// failure needs it.
+	// this slow, and a caller that wants it passes a function that discards. The
+	// output is captured either way, because a failure needs it.
+	//
+	// A test may pass t.Logf to attribute the narration to a spec, but only when
+	// the cluster does not outlive that spec. A Cluster keeps this function and
+	// calls it again from Destroy, so a shared cluster torn down after the tests
+	// have run panics with "Log in goroutine after Test ... has completed." A
+	// cluster created and destroyed inside one test is safe, because t.Cleanup
+	// runs while the test still accepts output. A shared one leaves this nil.
 	Logf func(format string, args ...any)
 }
 
