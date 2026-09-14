@@ -15,10 +15,12 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +68,20 @@ type Config struct {
 	// WorkDir holds the kubeconfig and talosconfig. Empty means a temp dir
 	// removed with the cluster.
 	WorkDir string
+
+	// Logf receives talosctl's own output, one line at a time, while it runs.
+	//
+	// Creating a cluster is minutes of image download, boot, and health checks,
+	// and talosctl narrates all of it. Without somewhere to send that narration
+	// the call is silent until it returns, so a slow create and a wedged one look
+	// the same, and the first instinct is to interrupt the one that was working.
+	//
+	// Nil narrates to standard error. Silence is the wrong default for something
+	// this slow, and a caller that wants it passes a function that discards. A
+	// test should pass t.Logf instead, which attributes the output to the spec
+	// that is waiting for it. The output is captured either way, because a
+	// failure needs it.
+	Logf func(format string, args ...any)
 }
 
 func (c *Config) applyDefaults() {
@@ -90,6 +106,11 @@ func (c *Config) applyDefaults() {
 	if c.Sudo == nil {
 		needed := os.Geteuid() != 0
 		c.Sudo = &needed
+	}
+	if c.Logf == nil {
+		c.Logf = func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "talos: "+format+"\n", args...)
+		}
 	}
 }
 
@@ -230,8 +251,10 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		// is iso, which needs more host plumbing.
 		"--presets", "disk-image",
 		"--config-patch", "@" + patch,
-		// The talosconfig and kubeconfig are redirected because they disturb the
-		// developer's own; cluster state deliberately is not. It stays where
+		// The talosconfig is redirected because it disturbs the developer's own.
+		// The kubeconfig is redirected too, by KUBECONFIG in the environment and
+		// by merge=false on the fetch, because this command takes no flag for
+		// it. Cluster state deliberately is not redirected. It stays where
 		// talosctl looks for it by default, so `talosctl cluster destroy --name`
 		// can find and clean a cluster left behind by an interrupted run. State
 		// in a per-run temp directory makes that impossible, which turns a
@@ -257,8 +280,11 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 	}
 	c.addresses = nodes
 
+	// merge=false writes the file outright. It defaults to true, and a merge
+	// with no destination of its own is how a context reaches a kubeconfig
+	// nobody pointed at.
 	if out, err := c.run(ctx, 2*time.Minute, "--talosconfig", c.talosconfig,
-		"kubeconfig", c.kubeconfig, "--nodes", nodes[0], "--force"); err != nil {
+		"kubeconfig", c.kubeconfig, "--nodes", nodes[0], "--merge=false", "--force"); err != nil {
 		down := c.Destroy(context.WithoutCancel(ctx))
 		return nil, withTeardown(
 			fmt.Errorf("fetch kubeconfig for %s: %w\n%s", cfg.Name, err, out), down)
@@ -509,7 +535,25 @@ func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string
 		bin, full = "sudo", append([]string{"-E", c.cfg.TalosctlPath}, args...)
 	}
 	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
-	out, err := cmd.CombinedOutput()
+
+	// talosctl merges what it fetches into the caller's own kubeconfig unless it
+	// is pointed somewhere else, and sudo here preserves HOME, so the caller it
+	// means is the developer. Left alone, every run leaves an admin@<cluster>
+	// context behind in a file the tests have no business writing. Naming the
+	// cluster's own file sends any such merge there instead.
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.kubeconfig)
+
+	var captured bytes.Buffer
+	sink := io.Writer(&captured)
+	if c.cfg.Logf != nil {
+		lines := &lineWriter{emit: c.cfg.Logf}
+		defer lines.flush()
+		sink = io.MultiWriter(&captured, lines)
+	}
+	cmd.Stdout, cmd.Stderr = sink, sink
+
+	err := cmd.Run()
+	out := captured.Bytes()
 	// CommandContext kills on deadline, and what surfaces is "signal: killed" —
 	// which reads as a crash rather than as the timeout it is.
 	if err != nil && ctx.Err() != nil {
@@ -517,4 +561,38 @@ func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string
 			args[0], timeout, ctx.Err())
 	}
 	return string(out), err
+}
+
+// lineWriter turns a stream into whole lines and hands each to a logger.
+//
+// talosctl redraws its progress in place, so a carriage return ends a line here
+// as much as a newline does. Without that the whole of a create arrives as one
+// enormous line at the end, which is the problem this exists to solve.
+type lineWriter struct {
+	emit    func(format string, args ...any)
+	partial []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.partial = append(w.partial, p...)
+	for {
+		i := bytes.IndexAny(w.partial, "\n\r")
+		if i < 0 {
+			return len(p), nil
+		}
+		w.line(w.partial[:i])
+		w.partial = w.partial[i+1:]
+	}
+}
+
+// flush emits whatever the stream ended on without a terminator.
+func (w *lineWriter) flush() {
+	w.line(w.partial)
+	w.partial = nil
+}
+
+func (w *lineWriter) line(b []byte) {
+	if line := strings.TrimSpace(string(b)); line != "" {
+		w.emit("%s", line)
+	}
 }

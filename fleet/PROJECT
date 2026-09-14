@@ -1,0 +1,66 @@
+# The kubebuilder project configuration for the fleet component, which builds
+# both of a fleet's binaries: the manager that runs on the hub, and the agent
+# that runs in each member. The domain is shared with the operator and the group
+# is not: fleet.simplyblock.io is installed on a hub, and storage.simplyblock.io
+# is installed in every member.
+domain: simplyblock.io
+layout:
+- go.kubebuilder.io/v4
+projectName: fleet
+repo: github.com/simplyblock/fleet
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: StorageFleet
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: FleetMember
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: ClusterDeployment
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: DriverDeployment
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: StorageClassDeployment
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: fleet
+  kind: FleetOperation
+  path: github.com/simplyblock/fleet/api/v1alpha1
+  version: v1alpha1
+version: "3"

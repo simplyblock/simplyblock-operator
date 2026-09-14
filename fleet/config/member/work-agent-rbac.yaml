@@ -1,0 +1,37 @@
+# What a member must be granted before the fleet can guard it.
+#
+# The admission guard is delivered as a ManifestWork, and Open Cluster
+# Management's work agent applies it under its own identity. That identity is
+# deliberately bounded: it holds the built-in admin role and OCM's own two, none
+# of which reaches admissionregistration.k8s.io, so every policy and binding in
+# the add-on's payload is refused with "cannot get resource
+# validatingadmissionpolicies at the cluster scope" and the guard never arrives.
+#
+# The work agent cannot be given this by the fleet. A ClusterRole conferring
+# permissions its creator does not hold is refused by Kubernetes' escalation
+# prevention, so a payload cannot carry the grant that would let the payload be
+# applied. It is applied once, in the member, by whoever enrolls it.
+#
+# That is the right shape rather than a workaround. Installing admission policy
+# in a cluster is a privilege that cluster grants, and this object is where a
+# member's administrator reads exactly what the fleet may do to its admission
+# configuration. Removing it stops the fleet replacing the guard,
+# which is the same ceiling design-management-hub.md section 10.2 describes.
+#
+# The label is OCM's aggregation point: a ClusterRole carrying it has its rules
+# aggregated into the work agent's permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-fleet-work-agent
+  labels:
+    open-cluster-management.io/aggregate-to-work: "true"
+rules:
+  # The guard is two policies and two bindings. The work agent reads before it
+  # applies, so get and list are as necessary as create, and it removes what a
+  # withdrawn add-on leaves behind, so delete is too.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
