@@ -44,5 +44,8 @@ spec:
             # VolumeGroupSnapshot support (design §9, P0-4): reconcile
             # VolumeGroupSnapshot / VolumeGroupSnapshotContent objects.
             - "--feature-gates=CSIVolumeGroupSnapshot=true"
+            - "--worker-threads=10"
+            - "--kube-api-qps=50"
+            - "--kube-api-burst=100"
 
 {{- end -}}
