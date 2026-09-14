@@ -70,6 +70,24 @@ func (e ClusterParamsBlkSize) Valid() bool {
 	}
 }
 
+// Defines values for ClusterParamsDeviceMode.
+const (
+	Lblk ClusterParamsDeviceMode = "lblk"
+	Nvme ClusterParamsDeviceMode = "nvme"
+)
+
+// Valid indicates whether the value is a known member of the ClusterParamsDeviceMode enum.
+func (e ClusterParamsDeviceMode) Valid() bool {
+	switch e {
+	case Lblk:
+		return true
+	case Nvme:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterParamsHaType.
 const (
 	ClusterParamsHaTypeHa     ClusterParamsHaType = "ha"
@@ -684,14 +702,17 @@ type CapacityStatDTO struct {
 // ClusterDTO defines model for ClusterDTO.
 type ClusterDTO struct {
 	AntiAffinity                bool               `json:"anti_affinity"`
+	Atomic4k                    bool               `json:"atomic_4k"`
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
 	Capacity                    CapacityStatDTO    `json:"capacity"`
+	DeviceMode                  string             `json:"device_mode"`
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
 	EnableFailureDomain         bool               `json:"enable_failure_domain"`
 	Ha                          bool               `json:"ha"`
 	Id                          openapi_types.UUID `json:"id"`
+	InlineChecksum              bool               `json:"inline_checksum"`
 	IsReBalancing               bool               `json:"is_re_balancing"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	Name                        *string            `json:"name"`
@@ -709,44 +730,64 @@ type ClusterDTO struct {
 // ClusterDTOStatus defines model for ClusterDTO.Status.
 type ClusterDTOStatus string
 
+// ClusterLogEntryDTO defines model for ClusterLogEntryDTO.
+type ClusterLogEntryDTO struct {
+	ClusterId openapi_types.UUID `json:"cluster_id"`
+	Date      time.Time          `json:"date"`
+	Event     string             `json:"event"`
+	Id        openapi_types.UUID `json:"id"`
+	Level     string             `json:"level"`
+	Message   string             `json:"message"`
+	NodeId    string             `json:"node_id"`
+	Status    string             `json:"status"`
+	StorageId *int               `json:"storage_id"`
+	Vuid      *int               `json:"vuid"`
+}
+
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	BackupConfig           *BackupConfigParams     `json:"backup_config,omitempty"`
-	BlkSize                *ClusterParamsBlkSize   `json:"blk_size,omitempty"`
-	CapCrit                *int                    `json:"cap_crit,omitempty"`
-	CapWarn                *int                    `json:"cap_warn,omitempty"`
-	ClientDataNic          *string                 `json:"client_data_nic,omitempty"`
-	CrName                 *string                 `json:"cr_name,omitempty"`
-	CrNamespace            *string                 `json:"cr_namespace,omitempty"`
-	CrPlural               *string                 `json:"cr_plural,omitempty"`
-	DistrBs                *int                    `json:"distr_bs,omitempty"`
-	DistrChunkBs           *int                    `json:"distr_chunk_bs,omitempty"`
-	DistrNdcs              *int                    `json:"distr_ndcs,omitempty"`
-	DistrNpcs              *int                    `json:"distr_npcs,omitempty"`
-	EnableFailureDomain    *bool                   `json:"enable_failure_domain,omitempty"`
-	EnableNodeAffinity     *bool                   `json:"enable_node_affinity,omitempty"`
-	Fabric                 *string                 `json:"fabric,omitempty"`
-	HaType                 *ClusterParamsHaType    `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorp_vault_settings,omitempty"`
-	HugepagesMem           *int                    `json:"hugepages_mem,omitempty"`
-	InflightIoThreshold    *int                    `json:"inflight_io_threshold,omitempty"`
-	IsSingleNode           *bool                   `json:"is_single_node,omitempty"`
-	MaxQueueSize           *int                    `json:"max_queue_size,omitempty"`
-	MaxSubsys              int                     `json:"max_subsys"`
-	Name                   *string                 `json:"name,omitempty"`
-	NvmfBasePort           *int                    `json:"nvmf_base_port,omitempty"`
-	PageSizeInBlocks       *int                    `json:"page_size_in_blocks,omitempty"`
-	ProvCapCrit            *int                    `json:"prov_cap_crit,omitempty"`
-	ProvCapWarn            *int                    `json:"prov_cap_warn,omitempty"`
-	QpairCount             *int                    `json:"qpair_count,omitempty"`
-	RpcBasePort            *int                    `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           *int                    `json:"snode_api_port,omitempty"`
-	SpdkVcpuCount          int                     `json:"spdk_vcpu_count"`
-	StrictNodeAntiAffinity *bool                   `json:"strict_node_anti_affinity,omitempty"`
+	Atomic4k               *bool                    `json:"atomic_4k,omitempty"`
+	BackupConfig           *BackupConfigParams      `json:"backup_config,omitempty"`
+	BlkSize                *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
+	CapCrit                *int                     `json:"cap_crit,omitempty"`
+	CapWarn                *int                     `json:"cap_warn,omitempty"`
+	ClientDataNic          *string                  `json:"client_data_nic,omitempty"`
+	CrName                 *string                  `json:"cr_name,omitempty"`
+	CrNamespace            *string                  `json:"cr_namespace,omitempty"`
+	CrPlural               *string                  `json:"cr_plural,omitempty"`
+	DeviceMode             *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
+	DistrBs                *int                     `json:"distr_bs,omitempty"`
+	DistrChunkBs           *int                     `json:"distr_chunk_bs,omitempty"`
+	DistrNdcs              *int                     `json:"distr_ndcs,omitempty"`
+	DistrNpcs              *int                     `json:"distr_npcs,omitempty"`
+	EnableFailureDomain    *bool                    `json:"enable_failure_domain,omitempty"`
+	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
+	Fabric                 *string                  `json:"fabric,omitempty"`
+	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
+	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
+	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
+	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
+	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
+	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
+	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
+	MaxSubsys              int                      `json:"max_subsys"`
+	Name                   *string                  `json:"name,omitempty"`
+	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
+	PageSizeInBlocks       *int                     `json:"page_size_in_blocks,omitempty"`
+	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
+	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
+	QpairCount             *int                     `json:"qpair_count,omitempty"`
+	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
+	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
+	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.
 type ClusterParamsBlkSize int
+
+// ClusterParamsDeviceMode defines model for ClusterParams.DeviceMode.
+type ClusterParamsDeviceMode string
 
 // ClusterParamsHaType defines model for ClusterParams.HaType.
 type ClusterParamsHaType string
@@ -758,9 +799,11 @@ type CommitParams struct {
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
+	BdevType           *string            `json:"bdev_type,omitempty"`
 	Capacity           CapacityStatDTO    `json:"capacity"`
 	ClusterDeviceOrder int                `json:"cluster_device_order"`
 	ClusterId          openapi_types.UUID `json:"cluster_id"`
+	DevicePath         *string            `json:"device_path,omitempty"`
 	HealthCheck        *bool              `json:"health_check"`
 	Id                 openapi_types.UUID `json:"id"`
 	IoError            bool               `json:"io_error"`
@@ -883,11 +926,12 @@ type NvmeConnectEntry struct {
 
 // PolicyParams defines model for PolicyParams.
 type PolicyParams struct {
-	IntervalMin    *int               `json:"interval_min,omitempty"`
-	KeepReplicated *int               `json:"keep_replicated,omitempty"`
-	Mode           *PolicyParamsMode  `json:"mode,omitempty"`
-	PolicyName     string             `json:"policy_name"`
-	TargetId       openapi_types.UUID `json:"target_id"`
+	ConsistencyGroup *bool              `json:"consistency_group,omitempty"`
+	IntervalMin      *int               `json:"interval_min,omitempty"`
+	KeepReplicated   *int               `json:"keep_replicated,omitempty"`
+	Mode             *PolicyParamsMode  `json:"mode,omitempty"`
+	PolicyName       string             `json:"policy_name"`
+	TargetId         openapi_types.UUID `json:"target_id"`
 }
 
 // PolicyParamsMode defines model for PolicyParams.Mode.
@@ -905,14 +949,18 @@ type ReplicateLVolParams struct {
 
 // ReplicationPolicyDTO defines model for ReplicationPolicyDTO.
 type ReplicationPolicyDTO struct {
-	ClusterId      openapi_types.UUID         `json:"cluster_id"`
-	Id             openapi_types.UUID         `json:"id"`
-	IntervalMin    int                        `json:"interval_min"`
-	KeepReplicated int                        `json:"keep_replicated"`
-	Mode           ReplicationPolicyDTOMode   `json:"mode"`
-	PolicyName     string                     `json:"policy_name"`
-	Status         ReplicationPolicyDTOStatus `json:"status"`
-	TargetId       openapi_types.UUID         `json:"target_id"`
+	ClusterId        openapi_types.UUID         `json:"cluster_id"`
+	ConsistencyGroup *bool                      `json:"consistency_group,omitempty"`
+	GroupLastSeq     *int                       `json:"group_last_seq,omitempty"`
+	GroupLvsName     *string                    `json:"group_lvs_name,omitempty"`
+	GroupNodeId      *openapi_types.UUID        `json:"group_node_id,omitempty"`
+	Id               openapi_types.UUID         `json:"id"`
+	IntervalMin      int                        `json:"interval_min"`
+	KeepReplicated   int                        `json:"keep_replicated"`
+	Mode             ReplicationPolicyDTOMode   `json:"mode"`
+	PolicyName       string                     `json:"policy_name"`
+	Status           ReplicationPolicyDTOStatus `json:"status"`
+	TargetId         openapi_types.UUID         `json:"target_id"`
 }
 
 // ReplicationPolicyDTOMode defines model for ReplicationPolicyDTO.Mode.
@@ -1031,6 +1079,7 @@ type StorageNodeParams struct {
 	DataNics            *[]string `json:"data_nics,omitempty"`
 	Expand              *bool     `json:"expand,omitempty"`
 	FailureDomain       *int      `json:"failure_domain,omitempty"`
+	ForceFormat         *bool     `json:"force_format,omitempty"`
 	Format4k            *bool     `json:"format_4k,omitempty"`
 	HaJm                *bool     `json:"ha_jm,omitempty"`
 	HaJmCount           *int      `json:"ha_jm_count,omitempty"`
@@ -1380,6 +1429,9 @@ type ClustersIostatsApiV2ClustersClusterIdIostatsGetParams struct {
 // ClustersLogsApiV2ClustersClusterIdLogsGetParams defines parameters for ClustersLogsApiV2ClustersClusterIdLogsGet.
 type ClustersLogsApiV2ClustersClusterIdLogsGetParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
 // ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams defines parameters for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost.
@@ -1558,6 +1610,11 @@ type ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdV
 
 // ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost.
 type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody = CommitParams
+
+// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
+type ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams struct {
+	Generation *int `form:"generation,omitempty" json:"generation,omitempty"`
+}
 
 // ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost.
 type ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody = ReplicationStartParams
@@ -1942,9 +1999,6 @@ func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMi
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// MetricsMetaMetricsGet Metrics
-	// (GET /_meta/metrics)
-	MetricsMetaMetricsGet(w http.ResponseWriter, r *http.Request)
 	// HealthApiV2MetaHealthGet Health
 	// (GET /api/v2/_meta/health)
 	HealthApiV2MetaHealthGet(w http.ResponseWriter, r *http.Request)
@@ -2231,7 +2285,7 @@ type ServerInterface interface {
 	ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost Clusters:Storage-Pools:Volumes:Replication:Failover
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover)
-	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams)
 	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost Clusters:Storage-Pools:Volumes:Replication:Start
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start)
 	ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
@@ -2293,20 +2347,6 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
-
-// MetricsMetaMetricsGet operation middleware
-func (siw *ServerInterfaceWrapper) MetricsMetaMetricsGet(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.MetricsMetaMetricsGet(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
 
 // HealthApiV2MetaHealthGet operation middleware
 func (siw *ServerInterfaceWrapper) HealthApiV2MetaHealthGet(w http.ResponseWriter, r *http.Request) {
@@ -3165,6 +3205,19 @@ func (siw *ServerInterfaceWrapper) ClustersLogsApiV2ClustersClusterIdLogsGet(w h
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
 		}
 		return
 	}
@@ -6236,8 +6289,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationFailove
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams
+
+	// ------------- Optional query parameter "generation" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "generation", r.URL.Query(), &params.Generation, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "generation"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "generation", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w, r, clusterId, poolId, volumeId)
+		siw.Handler.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w, r, clusterId, poolId, volumeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7087,7 +7156,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/_meta/metrics", wrapper.MetricsMetaMetricsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/_meta/health", wrapper.HealthApiV2MetaHealthGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/_meta/ready", wrapper.ReadyApiV2MetaReadyGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{$}", wrapper.ClustersListApiV2ClustersGet)

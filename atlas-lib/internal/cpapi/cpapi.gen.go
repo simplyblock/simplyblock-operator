@@ -72,6 +72,24 @@ func (e ClusterParamsBlkSize) Valid() bool {
 	}
 }
 
+// Defines values for ClusterParamsDeviceMode.
+const (
+	Lblk ClusterParamsDeviceMode = "lblk"
+	Nvme ClusterParamsDeviceMode = "nvme"
+)
+
+// Valid indicates whether the value is a known member of the ClusterParamsDeviceMode enum.
+func (e ClusterParamsDeviceMode) Valid() bool {
+	switch e {
+	case Lblk:
+		return true
+	case Nvme:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterParamsHaType.
 const (
 	ClusterParamsHaTypeHa     ClusterParamsHaType = "ha"
@@ -686,14 +704,17 @@ type CapacityStatDTO struct {
 // ClusterDTO defines model for ClusterDTO.
 type ClusterDTO struct {
 	AntiAffinity                bool               `json:"anti_affinity"`
+	Atomic4k                    bool               `json:"atomic_4k"`
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
 	Capacity                    CapacityStatDTO    `json:"capacity"`
+	DeviceMode                  string             `json:"device_mode"`
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
 	EnableFailureDomain         bool               `json:"enable_failure_domain"`
 	Ha                          bool               `json:"ha"`
 	Id                          openapi_types.UUID `json:"id"`
+	InlineChecksum              bool               `json:"inline_checksum"`
 	IsReBalancing               bool               `json:"is_re_balancing"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	Name                        *string            `json:"name"`
@@ -711,44 +732,64 @@ type ClusterDTO struct {
 // ClusterDTOStatus defines model for ClusterDTO.Status.
 type ClusterDTOStatus string
 
+// ClusterLogEntryDTO defines model for ClusterLogEntryDTO.
+type ClusterLogEntryDTO struct {
+	ClusterId openapi_types.UUID `json:"cluster_id"`
+	Date      time.Time          `json:"date"`
+	Event     string             `json:"event"`
+	Id        openapi_types.UUID `json:"id"`
+	Level     string             `json:"level"`
+	Message   string             `json:"message"`
+	NodeId    string             `json:"node_id"`
+	Status    string             `json:"status"`
+	StorageId *int               `json:"storage_id"`
+	Vuid      *int               `json:"vuid"`
+}
+
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	BackupConfig           *BackupConfigParams     `json:"backup_config,omitempty"`
-	BlkSize                *ClusterParamsBlkSize   `json:"blk_size,omitempty"`
-	CapCrit                *int                    `json:"cap_crit,omitempty"`
-	CapWarn                *int                    `json:"cap_warn,omitempty"`
-	ClientDataNic          *string                 `json:"client_data_nic,omitempty"`
-	CrName                 *string                 `json:"cr_name,omitempty"`
-	CrNamespace            *string                 `json:"cr_namespace,omitempty"`
-	CrPlural               *string                 `json:"cr_plural,omitempty"`
-	DistrBs                *int                    `json:"distr_bs,omitempty"`
-	DistrChunkBs           *int                    `json:"distr_chunk_bs,omitempty"`
-	DistrNdcs              *int                    `json:"distr_ndcs,omitempty"`
-	DistrNpcs              *int                    `json:"distr_npcs,omitempty"`
-	EnableFailureDomain    *bool                   `json:"enable_failure_domain,omitempty"`
-	EnableNodeAffinity     *bool                   `json:"enable_node_affinity,omitempty"`
-	Fabric                 *string                 `json:"fabric,omitempty"`
-	HaType                 *ClusterParamsHaType    `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorp_vault_settings,omitempty"`
-	HugepagesMem           *int                    `json:"hugepages_mem,omitempty"`
-	InflightIoThreshold    *int                    `json:"inflight_io_threshold,omitempty"`
-	IsSingleNode           *bool                   `json:"is_single_node,omitempty"`
-	MaxQueueSize           *int                    `json:"max_queue_size,omitempty"`
-	MaxSubsys              int                     `json:"max_subsys"`
-	Name                   *string                 `json:"name,omitempty"`
-	NvmfBasePort           *int                    `json:"nvmf_base_port,omitempty"`
-	PageSizeInBlocks       *int                    `json:"page_size_in_blocks,omitempty"`
-	ProvCapCrit            *int                    `json:"prov_cap_crit,omitempty"`
-	ProvCapWarn            *int                    `json:"prov_cap_warn,omitempty"`
-	QpairCount             *int                    `json:"qpair_count,omitempty"`
-	RpcBasePort            *int                    `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           *int                    `json:"snode_api_port,omitempty"`
-	SpdkVcpuCount          int                     `json:"spdk_vcpu_count"`
-	StrictNodeAntiAffinity *bool                   `json:"strict_node_anti_affinity,omitempty"`
+	Atomic4k               *bool                    `json:"atomic_4k,omitempty"`
+	BackupConfig           *BackupConfigParams      `json:"backup_config,omitempty"`
+	BlkSize                *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
+	CapCrit                *int                     `json:"cap_crit,omitempty"`
+	CapWarn                *int                     `json:"cap_warn,omitempty"`
+	ClientDataNic          *string                  `json:"client_data_nic,omitempty"`
+	CrName                 *string                  `json:"cr_name,omitempty"`
+	CrNamespace            *string                  `json:"cr_namespace,omitempty"`
+	CrPlural               *string                  `json:"cr_plural,omitempty"`
+	DeviceMode             *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
+	DistrBs                *int                     `json:"distr_bs,omitempty"`
+	DistrChunkBs           *int                     `json:"distr_chunk_bs,omitempty"`
+	DistrNdcs              *int                     `json:"distr_ndcs,omitempty"`
+	DistrNpcs              *int                     `json:"distr_npcs,omitempty"`
+	EnableFailureDomain    *bool                    `json:"enable_failure_domain,omitempty"`
+	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
+	Fabric                 *string                  `json:"fabric,omitempty"`
+	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
+	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
+	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
+	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
+	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
+	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
+	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
+	MaxSubsys              int                      `json:"max_subsys"`
+	Name                   *string                  `json:"name,omitempty"`
+	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
+	PageSizeInBlocks       *int                     `json:"page_size_in_blocks,omitempty"`
+	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
+	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
+	QpairCount             *int                     `json:"qpair_count,omitempty"`
+	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
+	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
+	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.
 type ClusterParamsBlkSize int
+
+// ClusterParamsDeviceMode defines model for ClusterParams.DeviceMode.
+type ClusterParamsDeviceMode string
 
 // ClusterParamsHaType defines model for ClusterParams.HaType.
 type ClusterParamsHaType string
@@ -760,9 +801,11 @@ type CommitParams struct {
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
+	BdevType           *string            `json:"bdev_type,omitempty"`
 	Capacity           CapacityStatDTO    `json:"capacity"`
 	ClusterDeviceOrder int                `json:"cluster_device_order"`
 	ClusterId          openapi_types.UUID `json:"cluster_id"`
+	DevicePath         *string            `json:"device_path,omitempty"`
 	HealthCheck        *bool              `json:"health_check"`
 	Id                 openapi_types.UUID `json:"id"`
 	IoError            bool               `json:"io_error"`
@@ -885,11 +928,12 @@ type NvmeConnectEntry struct {
 
 // PolicyParams defines model for PolicyParams.
 type PolicyParams struct {
-	IntervalMin    *int               `json:"interval_min,omitempty"`
-	KeepReplicated *int               `json:"keep_replicated,omitempty"`
-	Mode           *PolicyParamsMode  `json:"mode,omitempty"`
-	PolicyName     string             `json:"policy_name"`
-	TargetId       openapi_types.UUID `json:"target_id"`
+	ConsistencyGroup *bool              `json:"consistency_group,omitempty"`
+	IntervalMin      *int               `json:"interval_min,omitempty"`
+	KeepReplicated   *int               `json:"keep_replicated,omitempty"`
+	Mode             *PolicyParamsMode  `json:"mode,omitempty"`
+	PolicyName       string             `json:"policy_name"`
+	TargetId         openapi_types.UUID `json:"target_id"`
 }
 
 // PolicyParamsMode defines model for PolicyParams.Mode.
@@ -907,14 +951,18 @@ type ReplicateLVolParams struct {
 
 // ReplicationPolicyDTO defines model for ReplicationPolicyDTO.
 type ReplicationPolicyDTO struct {
-	ClusterId      openapi_types.UUID         `json:"cluster_id"`
-	Id             openapi_types.UUID         `json:"id"`
-	IntervalMin    int                        `json:"interval_min"`
-	KeepReplicated int                        `json:"keep_replicated"`
-	Mode           ReplicationPolicyDTOMode   `json:"mode"`
-	PolicyName     string                     `json:"policy_name"`
-	Status         ReplicationPolicyDTOStatus `json:"status"`
-	TargetId       openapi_types.UUID         `json:"target_id"`
+	ClusterId        openapi_types.UUID         `json:"cluster_id"`
+	ConsistencyGroup *bool                      `json:"consistency_group,omitempty"`
+	GroupLastSeq     *int                       `json:"group_last_seq,omitempty"`
+	GroupLvsName     *string                    `json:"group_lvs_name,omitempty"`
+	GroupNodeId      *openapi_types.UUID        `json:"group_node_id,omitempty"`
+	Id               openapi_types.UUID         `json:"id"`
+	IntervalMin      int                        `json:"interval_min"`
+	KeepReplicated   int                        `json:"keep_replicated"`
+	Mode             ReplicationPolicyDTOMode   `json:"mode"`
+	PolicyName       string                     `json:"policy_name"`
+	Status           ReplicationPolicyDTOStatus `json:"status"`
+	TargetId         openapi_types.UUID         `json:"target_id"`
 }
 
 // ReplicationPolicyDTOMode defines model for ReplicationPolicyDTO.Mode.
@@ -1033,6 +1081,7 @@ type StorageNodeParams struct {
 	DataNics            *[]string `json:"data_nics,omitempty"`
 	Expand              *bool     `json:"expand,omitempty"`
 	FailureDomain       *int      `json:"failure_domain,omitempty"`
+	ForceFormat         *bool     `json:"force_format,omitempty"`
 	Format4k            *bool     `json:"format_4k,omitempty"`
 	HaJm                *bool     `json:"ha_jm,omitempty"`
 	HaJmCount           *int      `json:"ha_jm_count,omitempty"`
@@ -1382,6 +1431,9 @@ type ClustersIostatsApiV2ClustersClusterIdIostatsGetParams struct {
 // ClustersLogsApiV2ClustersClusterIdLogsGetParams defines parameters for ClustersLogsApiV2ClustersClusterIdLogsGet.
 type ClustersLogsApiV2ClustersClusterIdLogsGetParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
 // ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams defines parameters for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost.
@@ -1560,6 +1612,11 @@ type ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdV
 
 // ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost.
 type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody = CommitParams
+
+// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
+type ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams struct {
+	Generation *int `form:"generation,omitempty" json:"generation,omitempty"`
+}
 
 // ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost.
 type ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody = ReplicationStartParams
@@ -2015,13 +2072,6 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
-
-	// MetricsMetaMetricsGet Metrics
-	//
-	// Endpoint that serves Prometheus metrics.
-	//
-	// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
-	MetricsMetaMetricsGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// HealthApiV2MetaHealthGet Health
 	//
@@ -2783,8 +2833,14 @@ type ClientInterface interface {
 	// The counterpart's id is read back from this volume's replication
 	// relationship, its connection paths from the target volume's `connect`.
 	//
+	// ``generation`` selects WHICH retained point-in-time to come up on: 0 (the
+	// default) is the newest, 1 the one before it, and so on through the
+	// history a retention schedule keeps. Failing over to an older generation
+	// is the recovery path for a logical corruption, which the newest copy has
+	// faithfully replicated.
+	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
-	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostWithBody Clusters:Storage-Pools:Volumes:Replication:Start
 	//
@@ -2938,23 +2994,6 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/{management_node_id}/ (the `ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet` operationId).
 	ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet(ctx context.Context, managementNodeId openapi_types.UUID, params *ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
-}
-
-// MetricsMetaMetricsGet Metrics
-//
-// Endpoint that serves Prometheus metrics.
-//
-// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
-func (c *Client) MetricsMetaMetricsGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewMetricsMetaMetricsGetRequest(c.Server)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
 }
 
 // HealthApiV2MetaHealthGet Health
@@ -4906,9 +4945,15 @@ func (c *Client) ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClus
 // The counterpart's id is read back from this volume's replication
 // relationship, its connection paths from the target volume's `connect`.
 //
+// “generation“ selects WHICH retained point-in-time to come up on: 0 (the
+// default) is the newest, 1 the one before it, and so on through the
+// history a retention schedule keeps. Failing over to an older generation
+// is the recovery path for a logical corruption, which the newest copy has
+// faithfully replicated.
+//
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
-func (c *Client) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostRequest(c.Server, clusterId, poolId, volumeId)
+func (c *Client) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostRequest(c.Server, clusterId, poolId, volumeId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -5290,33 +5335,6 @@ func (c *Client) ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet(ctx
 		return nil, err
 	}
 	return c.Client.Do(req)
-}
-
-// NewMetricsMetaMetricsGetRequest constructs an http.Request for the MetricsMetaMetricsGet method
-func NewMetricsMetaMetricsGetRequest(server string) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/_meta/metrics")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
 }
 
 // NewHealthApiV2MetaHealthGetRequest constructs an http.Request for the HealthApiV2MetaHealthGet method
@@ -6603,6 +6621,18 @@ func NewClustersLogsApiV2ClustersClusterIdLogsGetRequest(server string, clusterI
 		if params.Limit != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Watch != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "watch", *params.Watch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -10522,7 +10552,7 @@ func NewClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStor
 }
 
 // NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostRequest constructs an http.Request for the ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost method
-func NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID) (*http.Request, error) {
+func NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -10559,6 +10589,33 @@ func NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStor
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Generation != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "generation", *params.Generation, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
@@ -11537,15 +11594,6 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
-	// MetricsMetaMetricsGetWithResponse Metrics
-	//
-	// Endpoint that serves Prometheus metrics.
-	//
-	// Returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
-	MetricsMetaMetricsGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MetricsMetaMetricsGetResponse, error)
-
 	// HealthApiV2MetaHealthGetWithResponse Health
 	//
 	// Liveness probe: succeeds whenever the process can serve requests.
@@ -12444,10 +12492,16 @@ type ClientWithResponsesInterface interface {
 	// The counterpart's id is read back from this volume's replication
 	// relationship, its connection paths from the target volume's `connect`.
 	//
+	// ``generation`` selects WHICH retained point-in-time to come up on: 0 (the
+	// default) is the newest, 1 the one before it, and so on through the
+	// history a retention schedule keeps. Failing over to an older generation
+	// is the recovery path for a logical corruption, which the newest copy has
+	// faithfully replicated.
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
-	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostResponse, error)
+	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostResponse, error)
 
 	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostWithBodyWithResponse Clusters:Storage-Pools:Volumes:Replication:Start
 	//
@@ -12625,47 +12679,6 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/{management_node_id}/ (the `ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet` operationId).
 	ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetWithResponse(ctx context.Context, managementNodeId openapi_types.UUID, params *ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams, reqEditors ...RequestEditorFn) (*ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse, error)
-}
-
-type MetricsMetaMetricsGetResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r MetricsMetaMetricsGetResponse) GetJSON200() *interface{} {
-	return r.JSON200
-}
-
-// GetBody returns the raw response body bytes
-func (r MetricsMetaMetricsGetResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r MetricsMetaMetricsGetResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r MetricsMetaMetricsGetResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r MetricsMetaMetricsGetResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
 }
 
 type HealthApiV2MetaHealthGetResponse struct {
@@ -13822,13 +13835,13 @@ type ClustersLogsApiV2ClustersClusterIdLogsGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
+	JSON200 *[]ClusterLogEntryDTO
 	// JSON422 the response for an HTTP 422 `application/json` response
 	JSON422 *HTTPValidationError
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersLogsApiV2ClustersClusterIdLogsGetResponse) GetJSON200() *interface{} {
+func (r ClustersLogsApiV2ClustersClusterIdLogsGetResponse) GetJSON200() *[]ClusterLogEntryDTO {
 	return r.JSON200
 }
 
@@ -17659,21 +17672,6 @@ func (r ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse) Con
 	return ""
 }
 
-// MetricsMetaMetricsGetWithResponse Metrics
-//
-// Endpoint that serves Prometheus metrics.
-//
-// Returns a wrapper object for the known response body format(s).
-//
-// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
-func (c *ClientWithResponses) MetricsMetaMetricsGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MetricsMetaMetricsGetResponse, error) {
-	rsp, err := c.MetricsMetaMetricsGet(ctx, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseMetricsMetaMetricsGetResponse(rsp)
-}
-
 // HealthApiV2MetaHealthGetWithResponse Health
 //
 // Liveness probe: succeeds whenever the process can serve requests.
@@ -19286,11 +19284,17 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationFailbackApiV
 // The counterpart's id is read back from this volume's replication
 // relationship, its connection paths from the target volume's `connect`.
 //
+// “generation“ selects WHICH retained point-in-time to come up on: 0 (the
+// default) is the newest, 1 the one before it, and so on through the
+// history a retention schedule keeps. Failing over to an older generation
+// is the recovery path for a logical corruption, which the newest copy has
+// faithfully replicated.
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
-func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostResponse, error) {
-	rsp, err := c.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx, clusterId, poolId, volumeId, reqEditors...)
+func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostResponse, error) {
+	rsp, err := c.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx, clusterId, poolId, volumeId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -19604,32 +19608,6 @@ func (c *ClientWithResponses) ManagementNodeDetailApiV2ManagementNodesManagement
 		return nil, err
 	}
 	return ParseManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse(rsp)
-}
-
-// ParseMetricsMetaMetricsGetResponse parses an HTTP response from a MetricsMetaMetricsGetWithResponse call
-func ParseMetricsMetaMetricsGetResponse(rsp *http.Response) (*MetricsMetaMetricsGetResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &MetricsMetaMetricsGetResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	}
-
-	return response, nil
 }
 
 // ParseHealthApiV2MetaHealthGetResponse parses an HTTP response from a HealthApiV2MetaHealthGetWithResponse call
@@ -20437,7 +20415,7 @@ func ParseClustersLogsApiV2ClustersClusterIdLogsGetResponse(rsp *http.Response) 
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
+		var dest []ClusterLogEntryDTO
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -20449,6 +20427,9 @@ func ParseClustersLogsApiV2ClustersClusterIdLogsGetResponse(rsp *http.Response) 
 			return nil, err
 		}
 		response.JSON422 = &dest
+
+	case rsp.StatusCode == 200:
+		// Content-type (text/event-stream) unsupported
 
 	}
 
