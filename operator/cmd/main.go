@@ -36,6 +36,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -82,6 +83,11 @@ type serverGroupsGetter interface {
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// The cert-manager webhook provisioner injects its CA bundle into the
+	// converting kinds' CRDs (internal/webhook/conversion_trust.go), so this
+	// process has to know that kind too — the same registration
+	// cmd/conversion-webhook/main.go already carries for the same reason.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
 	// v1alpha2 is the shape every controller reads for the kinds that have one.
 	// v1alpha1 stays registered because it is still the storage version and still
