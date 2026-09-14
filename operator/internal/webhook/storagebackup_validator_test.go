@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -134,8 +133,8 @@ func createRequest(t *testing.T, object runtime.Object) admission.Request {
 	}}
 }
 
-func clusterObject() *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func clusterObject() *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: backupNamespace},
 	}
 }

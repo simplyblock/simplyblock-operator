@@ -1,15 +1,16 @@
 # Design Document: The StorageCluster and Its Operations
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §12.1 records  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageClusterOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-08)  
+**Date:** 2026-08-28 (last updated 2026-09-14)  
 **Supersedes:** `design-storageclusterops.md`, removed in the same change  
 **Test Plan:** [`tests/test-plan-storagecluster.md`](../../tests/test-plan-storagecluster.md)
 
-This document specifies the target model. Both kinds and both controllers exist in
-a shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), and §12 is the single record of what
-the rework changes against them.
+This document specifies the model both kinds now carry. Both moved to
+`storage.simplyblock.io/v1alpha2` with a `v1alpha1` spoke and a conversion
+between them, and both controllers were rewritten against this specification in
+`operator/internal/controllers/cluster/`. §12 remains the record of what the
+rework changed, and §12.1 is what it did not reach.
 
 ---
 
@@ -454,6 +455,12 @@ control plane. The
 cap is what keeps an object bounded whose subject is not, which is the constraint any
 status list has to answer to
 ([`design-crd-model.md`](design-crd-model.md) §3.1).
+
+**Newest first is the one part of this section the control plane cannot
+support**, and §12.1 records what was done instead: its `TaskDTO` carries no
+creation date, so the shipped window keeps the control plane's own order and
+`ClusterTask` carries neither `createdAt` nor the `progress` the schema also
+lacks.
 
 **Only running and pending tasks appear.** A completed or canceled task is not
 current state, so it leaves the list, and the object stops describing it. That is what
@@ -1247,13 +1254,16 @@ makes that wait a measurement rather than an anecdote.
 | `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`  | Per-node, in the rolling restart walk                                                                                                                 |
 
 **The three `?watch=true` rows are Server-Sent-Events subscriptions rather than
-requests that return**, and they arrive with the control plane's SSE work rather
-than with this design. `design-sse-push-notifications.md`, on the `sse` branch,
-owns the wire contract and the subscription manager, and
-[`design-crd-model.md`](design-crd-model.md) §7.7 is the rule that makes every
-controller here read streamed state rather than poll for it. They are the external
-dependency this design cannot satisfy on its own, and §12 records them against the
-polling they replace.
+requests that return**, and all three are served.
+`design-sse-push-notifications.md` owns the wire contract and the subscription
+manager, `internal/cpinformer/subscriptions` holds one subscription per row,
+and [`design-crd-model.md`](design-crd-model.md) §7.7 is the rule that makes
+every controller here read streamed state rather than poll for it. §12.1 is
+what each replaced.
+
+The plain `GET` beside each of them is still made, and not as a leftover: a
+cache is read only once its scope reports synced, and until then the same route
+without `?watch=true` is what answers.
 
 **Two calls the control plane does not provide at all.** There is no cluster
 restart, which is why `Restart` is a client-side sequence (§6.4). A server-side
@@ -1342,6 +1352,45 @@ measurement rather than an anecdote, which is what decides whether it should
 eventually carry a timeout. `step_deadline_exceeded_total` is the counter that
 distinguishes an operation still working from one that stopped, which is the
 distinction `status.message` cannot express.
+
+### 10.3 `StorageClusterMetrics`, the reading served on demand
+
+The gauges of §10.2 are about the operator: what it did to a cluster and how
+long it took. How full the cluster is, is about the cluster, and it is served
+as a resource rather than exported as a gauge.
+
+**It is an aggregated API kind and not a status field**, for the reason
+[`design-storagepool.md`](design-storagepool.md) §9.2 gives for the pool's:
+occupancy moves with every write to every volume, and putting it in `status`
+charges one etcd write and one wake-up of every watcher of the kind for a
+number nothing reconciles toward. So it is computed from Prometheus when a
+client asks and never persisted. `metrics.simplyblock.io/v1alpha2` already
+serves the volume's, the device's, and the pool's, and this is the fourth.
+
+**What it answers that the other three cannot is the whole-cluster question.** A
+pool's reading is bounded by the capacity that pool was carved out with, and a
+device's by one device; neither says whether the cluster underneath them is
+about to run out, which is the number a capacity plan is made against. The
+reading carries the cluster's erasure-coding scheme beside its total for the
+same reason: a raw total means something different at `2x1` than at `4x2`, and
+reading one without the other invites the wrong plan.
+
+**The confinement is ordinary namespaced RBAC.** The object is named after the
+`StorageCluster` it measures and lives in that object's namespace, so a backend
+cluster with no object is not listed: it has no name in this API and no
+namespace to be authorized against. The kind joins the three already aggregated
+into the built-in `view` ClusterRole, which reaches whoever administers the
+namespace the cluster's own resources are in rather than a tenant.
+
+**A deployment with no reachable Prometheus serves no cluster readings at all**,
+rather than readings of zero. Every field of this one is a measurement, unlike
+a volume's, which keeps its provisioned size because that is known without
+measuring.
+
+The samples are `atlas-lib`'s `prometheus.ClusterCapacity`, which is the same
+five gauges the other three families export under their own prefixes. It is the
+one of the four that returns a single sample rather than a map, because the
+cluster is the scope every one of those queries is already narrowed to.
 
 ---
 
@@ -1443,6 +1492,81 @@ The rows above are audited by
 `--kind StorageClusterOps` where a checker covers them. The step machine, the
 deadline, and the `Aborted` phase are conventions of
 [`design-crd-model.md`](design-crd-model.md) §3.1 that no checker covers.
+
+### 12.1 What the rework did not reach
+
+Five things this document specifies are not in the shipped kinds, and each is
+waiting on something outside it rather than on a decision.
+
+**`spec.storageNodes` is absent.** Its type is
+[`design-storagenode.md`](design-storagenode.md) Appendix C, and that kind has
+not moved: `StorageNode` is still `v1alpha1` and `StorageNodeSet` still owns the
+workload. The field lands with that move rather than here, where it could only
+be an empty block.
+
+**All three `?watch=true` subscriptions of §9 are served by the control-plane
+informer.** The storage-node stream was already there; the cluster stream and
+the task stream arrive with this work, as `ClusterSubscription` and
+`TaskSubscription` in `internal/cpinformer/subscriptions`.
+
+**The cluster stream is the only subscription in the group with no scope.** The
+control plane serves every cluster from one route, so one stream covers the
+whole installation and serves every `StorageCluster` in every namespace. That
+is what `cpinformer.Scope`'s own documentation already reserved the empty scope
+for, and it is the reason no reconciler opens it: there is no object whose
+arrival would. It is added once at startup. The task stream is scoped per
+cluster and is opened and closed with the node stream, by the `StorageCluster`
+reconciler, for the reason that one is: a task belongs to a cluster, and the
+cluster is the only object that knows when one exists.
+
+**Every read the two replace was asked once per pass.** A steady-state
+reconcile read the cluster and its tasks; an operation read the cluster on
+every pass of every step, so a shutdown that takes twenty minutes was eighty
+reads of one object. Both controllers now read the caches, and both attach the
+streams' trigger channels, so a cluster whose status moved is reconciled when
+it moves rather than within the next interval.
+
+**A cache is read only once its scope reports synced**, and the control plane
+answers until then. An unsynced cache is empty, and empty is not the same
+statement as an answer: read as one it would report a live cluster gone, a
+shutdown complete, and — worst of the three — every `CancelTask` finished the
+moment it was issued, because that action's completion condition is the task's
+absence.
+
+**What the streams did not change is any predicate.** A step completes on
+current state rather than on an observed transition (§6.3), which reads the
+same whichever way the state arrived, so each stream replaced one read function
+and no step.
+
+One thing the task stream settles rather than provides. The control plane's
+`TaskDTO` carries no creation date and no progress figure, so §3.4's
+"newest first" is not achievable and Appendix A's `progress` and `createdAt`
+cannot be written. `ClusterTask` therefore carries neither — a field declared
+and never written reports a definite-looking nothing, which is what
+[`design-crd-model.md`](design-crd-model.md) §7.9 rules out and what §3.3
+removed four registered fields for. What it carries instead is `retry`, which
+the schema does report and which is the one number separating a task that is
+slow from one that is failing. The window's order is the control plane's own.
+
+**`CancelTask` has nothing to call.** The v2 API lists tasks and reads one by
+ID, and offers no cancel (§9). The action is served — it takes the lock, waits
+for the task to leave the window, and treats a task already gone as success —
+and its one call reports whatever the control plane answers, which today is a
+refusal. `status.tasks` is filled from `GET /tasks/` on the steady-state pass,
+so the ID the action names is addressable before the endpoint exists.
+
+**`Expand` skips nothing.** Every other action's call is skipped when the
+cluster is already where the call would put it, and an expansion has no such
+state: a cluster is active before it and active after it, so the persisted step
+is the only guard. That is §13, Q1 unanswered rather than a gap in the
+implementation.
+
+**Two fields of the shipped spec are not in Appendix A**, because they were
+added after it was written: `enableChecksumValidation` and
+`enableAtomic4kWrites`. Both describe on-disk layout — the control plane bakes
+the checksum method into each device at creation and never re-applies it — so
+both joined the immutable group of §3.2, and a CEL rule on the spec keeps the
+second meaningless without the first.
 
 ---
 
@@ -1815,16 +1939,17 @@ type ClusterTask struct {
 	// +optional
 	Status string `json:"status,omitempty"`
 
-	// Progress is how far along the task is, where the control plane reports it.
+	// Retry is how many times the control plane has restarted this task, and
+	// it is the one number that separates a task that is slow from one that is
+	// failing.
+	//
+	// It stands where a progress figure and a creation date were specified.
+	// The control plane's TaskDTO carries neither, so neither could ever be
+	// written, and a field declared and never written is what §7.9 of
+	// design-crd-model.md rules out (§12.1).
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=100
 	// +optional
-	Progress *int32 `json:"progress,omitempty"`
-
-	// CreatedAt is when the control plane started the task, which is what the
-	// list is ordered by, newest first.
-	// +optional
-	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+	Retry int32 `json:"retry,omitempty"`
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
@@ -1900,10 +2025,10 @@ type StorageClusterStatus struct {
 	// +optional
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
-	// Tasks are the control plane's running and pending jobs, newest first and
-	// capped at twenty (§3.4). Completed and canceled tasks are not here: they
-	// leave the list and become events, so the length tracks concurrency rather
-	// than history.
+	// Tasks are the control plane's running and pending jobs, capped at twenty
+	// and in the order the control plane reports them (§3.4). Completed and
+	// canceled tasks are not here: they leave the list and become events, so
+	// the length tracks concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`

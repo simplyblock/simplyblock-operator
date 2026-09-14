@@ -34,7 +34,6 @@ import (
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -203,7 +202,7 @@ func (r *StorageBackupReconciler) upsert(
 func (r *StorageBackupReconciler) ensureObject(
 	ctx context.Context,
 	key types.NamespacedName,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	dto subscriptions.BackupDTO,
 	taken simplyblockv1alpha2.BackupSource,
 ) (bool, error) {
@@ -248,7 +247,7 @@ func (r *StorageBackupReconciler) ensureObject(
 func (r *StorageBackupReconciler) reconcileLabels(
 	ctx context.Context,
 	sb *simplyblockv1alpha2.StorageBackup,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	taken simplyblockv1alpha2.BackupSource,
 ) error {
 	want := backupLabels(cluster, taken)
@@ -275,7 +274,7 @@ func (r *StorageBackupReconciler) reconcileLabels(
 // backupLabels are the labels a backup object carries, which is how it is found
 // by the thing somebody knows: the cluster, and the claim whose data is in it.
 func backupLabels(
-	cluster *simplyblockv1alpha1.StorageCluster, taken simplyblockv1alpha2.BackupSource,
+	cluster *simplyblockv1alpha2.StorageCluster, taken simplyblockv1alpha2.BackupSource,
 ) map[string]string {
 	labels := map[string]string{simplyblockv1alpha2.BackupLabelCluster: cluster.Name}
 	if taken.ClaimName != "" {
@@ -310,7 +309,7 @@ func labelsMatch(have, want map[string]string) bool {
 func (r *StorageBackupReconciler) writeStatus(
 	ctx context.Context,
 	key types.NamespacedName,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	scope cpinformer.Scope,
 	dto subscriptions.BackupDTO,
 	taken simplyblockv1alpha2.BackupSource,
@@ -361,7 +360,7 @@ func (r *StorageBackupReconciler) writeStatus(
 func (r *StorageBackupReconciler) announce(
 	ctx context.Context,
 	key types.NamespacedName,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	previous, current simplyblockv1alpha2.StorageBackupPhase,
 	dto subscriptions.BackupDTO,
 ) {
@@ -465,7 +464,7 @@ func (r *StorageBackupReconciler) unreported(
 func (r *StorageBackupReconciler) clusterIDFor(
 	ctx context.Context, sb *simplyblockv1alpha2.StorageBackup,
 ) (string, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := r.List(ctx, &clusters, client.InNamespace(sb.Namespace)); err != nil {
 		return "", err
 	}
@@ -497,8 +496,8 @@ func (r *StorageBackupReconciler) discardUnbacked(
 // the one given, or nil when the namespace has none.
 func (r *StorageBackupReconciler) clusterFor(
 	ctx context.Context, namespace, clusterID string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
+) (*simplyblockv1alpha2.StorageCluster, error) {
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}

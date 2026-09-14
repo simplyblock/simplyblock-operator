@@ -50,7 +50,6 @@ import (
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/ptr"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -271,8 +270,8 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // owner the pool is held by and the source of the UUID every backend call needs.
 func (r *StoragePoolReconciler) resolveCluster(
 	ctx context.Context, p *simplyblockv1alpha2.StoragePool,
-) (*simplyblockv1alpha1.StorageCluster, string, error) {
-	var cluster simplyblockv1alpha1.StorageCluster
+) (*simplyblockv1alpha2.StorageCluster, string, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
 	err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.Spec.ClusterRef}, &cluster)
 	switch {
 	case apierrors.IsNotFound(err):
@@ -295,7 +294,7 @@ func (r *StoragePoolReconciler) resolveCluster(
 func (r *StoragePoolReconciler) ensureFinalizerAndOwner(
 	ctx context.Context,
 	p *simplyblockv1alpha2.StoragePool,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 ) (bool, error) {
 	base := p.DeepCopy()
 

@@ -41,7 +41,7 @@ func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsRec
 			&simplyblockv1alpha1.StorageNode{},
 			&simplyblockv1alpha2.StorageNodeOps{},
 			&simplyblockv1alpha1.StorageNodeSet{},
-			&simplyblockv1alpha1.StorageCluster{},
+			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha1.VolumeMigration{},
 		},
 		objects...,
@@ -147,10 +147,10 @@ func newTestStorageNodeSet(name, ns, clusterName string, nodes ...simplyblockv1a
 }
 
 //nolint:unparam
-func newTestStorageClusterWithFD(name, ns string, enableFD bool) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func newTestStorageClusterWithFD(name, ns string, enableFD bool) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{EnableFailureDomains: &enableFD},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{EnableFailureDomains: &enableFD},
 	}
 }
 

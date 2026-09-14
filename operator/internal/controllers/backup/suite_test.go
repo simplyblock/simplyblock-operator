@@ -84,10 +84,10 @@ func objectMeta(name string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{Name: name, Namespace: testNamespace}
 }
 
-func testClusterObject() *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func testClusterObject() *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: objectMeta(testClusterCR),
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterID},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterID},
 	}
 }
 

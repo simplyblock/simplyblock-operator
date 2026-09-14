@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -195,22 +196,22 @@ func consumerPod(name, nodeName, pvcName string, phase corev1.PodPhase) *corev1.
 
 // clusterWithSettings returns a StorageCluster matching testClusterUUID with the given
 // volume-migration settings (pass nil for "not configured").
-func clusterWithSettings(s *simplyblockv1alpha1.VolumeMigrationSettings) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func clusterWithSettings(s *simplyblockv1alpha2.VolumeMigrationSettings) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: testVMNamespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeMigrationSettings: s},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{VolumeMigrationSettings: s},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
 	}
 }
 
-// migrationCluster returns a StorageCluster with volume migration enabled and a
-// rebalancer image set — the precondition reconcileStart's enablement check
-// (resolveRebalancerImage) requires before starting a migration.
-func migrationCluster() *simplyblockv1alpha1.StorageCluster {
-	enabled := true
+// migrationCluster returns a StorageCluster with a rebalancer image set, which
+// is the precondition resolveRebalancerImage needs before a migration starts.
+//
+// There is no enablement flag to set beside it any more: migration cannot be
+// turned off (design-storagecluster.md §12).
+func migrationCluster() *simplyblockv1alpha2.StorageCluster {
 	image := "rebalancer:test"
-	return clusterWithSettings(&simplyblockv1alpha1.VolumeMigrationSettings{
-		Enabled:         &enabled,
+	return clusterWithSettings(&simplyblockv1alpha2.VolumeMigrationSettings{
 		RebalancerImage: &image,
 	})
 }
@@ -316,25 +317,27 @@ func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	}
 }
 
-// TestReconcileStart_Disabled_NeverMigrates guards the safety invariant: an explicit
-// Enabled=false must block migration — CreateMigration is never called (the fake API
-// fails the test if its migrations endpoint is hit) and the CR ends Failed with no
-// MigrationUUID.
-func TestReconcileStart_Disabled_NeverMigrates(t *testing.T) {
-	disabled := false
-	image := "rebalancer:test"
-
+// TestReconcileStart_UnknownCluster_NeverMigrates guards the safety invariant
+// that survived the removal of volumeMigrationSettings.enabled: a volume whose
+// cluster no StorageCluster accounts for must not be migrated. CreateMigration
+// is never called — the fake API fails the test if its migrations endpoint is
+// hit — and the CR ends Failed with no MigrationUUID.
+//
+// The toggle it replaces is gone because migration cannot be turned off
+// (design-storagecluster.md §12): a drain, a rebalance, and a device
+// replacement are all performed by moving volumes.
+func TestReconcileStart_UnknownCluster_NeverMigrates(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations/") {
-			t.Errorf("CreateMigration must not be called when migration is disabled")
+			t.Errorf("CreateMigration must not be called for a cluster nothing accounts for")
 		}
 		w.WriteHeader(http.StatusNotFound)
 	})
 
 	vm := baseVM()
 	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
-	cluster := clusterWithSettings(&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled, RebalancerImage: &image})
-	r, cl := newVMReconciler(t, srv.URL, vm, pv, cluster)
+	// No StorageCluster is handed to the reconciler at all.
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -349,22 +352,22 @@ func TestReconcileStart_Disabled_NeverMigrates(t *testing.T) {
 	if got.Status.StartedAt != nil {
 		t.Errorf("StartedAt should be nil when no migration is started")
 	}
-	if !strings.Contains(got.Status.ErrorMessage, "disabled") {
-		t.Errorf("ErrorMessage = %q, want contains %q", got.Status.ErrorMessage, "disabled")
+	if !strings.Contains(got.Status.ErrorMessage, testClusterUUID) {
+		t.Errorf("ErrorMessage = %q, want it to name the cluster", got.Status.ErrorMessage)
 	}
 }
 
-// TestReconcileStart_DefaultsToEnabled verifies volume migration is enabled by default:
-// an omitted VolumeMigrationSettings block, or one that enables migration without pinning
-// an image, still proceeds (using the default rebalancer image) and reaches Validating.
+// TestReconcileStart_DefaultsToEnabled verifies that a cluster which configures
+// nothing still migrates: an omitted VolumeMigrationSettings block, or one that
+// pins no image, proceeds on the default rebalancer image and reaches
+// Validating.
 func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
-	enabled := true
 	cases := []struct {
 		name     string
-		settings *simplyblockv1alpha1.VolumeMigrationSettings
+		settings *simplyblockv1alpha2.VolumeMigrationSettings
 	}{
 		{name: "settings block omitted", settings: nil},
-		{name: "enabled without pinned image", settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled}},
+		{name: "settings block with no pinned image", settings: &simplyblockv1alpha2.VolumeMigrationSettings{}},
 	}
 
 	for _, tc := range cases {

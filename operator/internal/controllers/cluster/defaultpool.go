@@ -21,7 +21,7 @@
 //
 // design-storagepool.md §4.4 is the specification.
 
-package controller
+package cluster
 
 import (
 	"context"
@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 )
@@ -53,7 +52,7 @@ const annotationDefaultPool = "storage.simplyblock.io/default-pool"
 // cluster somebody can author a pool in; failing the cluster's reconcile over it
 // would hold up everything else the cluster does.
 func (r *StorageClusterReconciler) ensureDefaultPool(
-	ctx context.Context, cluster *simplyblockv1alpha1.StorageCluster,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) {
 	log := logf.FromContext(ctx)
 
@@ -78,7 +77,7 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 			// carries no csi.storage.k8s.io/fstype, and the node plugin falls
 			// back to ext4 — which is neither what the CRD declares nor what
 			// every release before this one formatted with. Writing the block
-			// empty asks for exactly the declared defaults: xfs, and no ceiling
+			// empty asks for exactly the declared defaults: XFS, and no ceiling
 			// of any kind, since filesystem is the only field that has one.
 			VolumeDefaults: &simplyblockv1alpha2.VolumeDefaults{},
 		},
@@ -124,7 +123,7 @@ func (r *StorageClusterReconciler) ensureDefaultPool(
 }
 
 func (r *StorageClusterReconciler) markDefaultPoolWritten(
-	ctx context.Context, cluster *simplyblockv1alpha1.StorageCluster, name string,
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, name string,
 ) error {
 	base := cluster.DeepCopy()
 	if cluster.Annotations == nil {

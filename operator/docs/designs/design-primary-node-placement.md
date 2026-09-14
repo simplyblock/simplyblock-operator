@@ -367,7 +367,7 @@ which Kubernetes mechanism put the Pod there:
 (`operator/api/v1alpha1/storagecluster_types.go`) and is **already wired up
 end-to-end** — but it means something else entirely. It's forwarded to `sbcli`
 as `enable_node_affinity` at cluster-creation time
-(`simplyblockstoragecluster_controller.go` →
+(`controllers/cluster/storagecluster_controller.go` →
 `utils.ClusterAddParams.EnableNodeAffinity` → `cluster_ops.py` →
 `cluster.enable_node_affinity`), and consumed in `distr_controller.py`
 (`build_cluster_map`) to set `ppln1`/`local_node_index` on an erasure-coded

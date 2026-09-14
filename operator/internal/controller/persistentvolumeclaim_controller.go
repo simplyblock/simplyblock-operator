@@ -25,6 +25,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -180,7 +181,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 // retried reconcile is idempotent (AlreadyExists is tolerated).
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	pvName, target string,
 ) error {
 	vm := &simplyblockv1alpha1.VolumeMigration{
@@ -236,8 +237,8 @@ func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 func (r *PersistentVolumeClaimReconciler) resolveClusterCR(
 	ctx context.Context,
 	clusterUUID string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
+) (*simplyblockv1alpha2.StorageCluster, error) {
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := r.List(ctx, &clusters); err != nil {
 		return nil, fmt.Errorf("list StorageClusters: %w", err)
 	}

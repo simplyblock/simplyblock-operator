@@ -794,14 +794,17 @@ spec:
                     description: Stripe is the erasure-coding layout.
                     properties:
                       dataChunks:
-                        description: DataChunks defines the number of data chunks
-                          in the erasure-coding layout.
+                        description: DataChunks is the number of data chunks per stripe
+                          (ndcs).
                         format: int32
+                        minimum: 1
                         type: integer
                       parityChunks:
-                        description: ParityChunks defines the number of parity chunks
-                          in the erasure-coding layout.
+                        description: |-
+                          ParityChunks is the number of parity chunks per stripe (npcs), and
+                          therefore how many chunk losses a stripe survives.
                         format: int32
+                        minimum: 0
                         type: integer
                     type: object
                   vcpuCount:
@@ -3850,8 +3853,12 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
     - jsonPath: .status.message
       name: Message
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -3860,10 +3867,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          StorageClusterOps is a one-shot operational CR targeting a single StorageCluster.
-          Analogous to a Kubernetes Job — it drives a cluster-level operation (Activate, Expand,
-          Shutdown, Restart, RollingRestart) to completion and records the result. Only one
-          StorageClusterOps can be active per cluster at a time.
+          StorageClusterOps is a single operation performed against one StorageCluster.
+          It runs to a terminal phase and stays afterward as the audit record of what
+          was done, to which cluster, with which parameters, and how it ended. Only one
+          operation acts on a cluster at a time; a second is admitted, waits at
+          Pending, and runs when the lock frees.
         properties:
           apiVersion:
             description: |-
@@ -3883,10 +3891,17 @@ spec:
           metadata:
             type: object
           spec:
-            description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+            description: StorageClusterOpsSpec is one operation to perform against
+              one StorageCluster.
             properties:
+              abort:
+                description: |-
+                  Abort asks a running operation to stop at its next step and unwind.
+                  Whether an abort is expressible from the current step is declared by that
+                  action's graph rather than checked here.
+                type: boolean
               action:
-                description: Action is the operation to perform. Immutable.
+                description: Action is the operation to perform.
                 enum:
                 - Activate
                 - Expand
@@ -3894,27 +3909,46 @@ spec:
                 - Start
                 - Restart
                 - RollingRestart
+                - CancelTask
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              cancelTask:
+                description: CancelTask parameterizes action CancelTask and is ignored
+                  by the others.
+                properties:
+                  taskID:
+                    description: |-
+                      TaskID names the entry of StorageCluster.status.tasks to cancel, by the
+                      control plane's identifier for it rather than by its position in the
+                      list.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                required:
+                - taskID
+                type: object
               clusterRef:
-                description: ClusterRef is the name of the target StorageCluster.
-                  Immutable.
+                description: |-
+                  ClusterRef names the StorageCluster this operation acts on. The operation
+                  never owns its target, because deleting the record of an operation must
+                  not delete the cluster it operated on.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
               rollingRestart:
                 description: |-
-                  RollingRestart configures behavior specific to the RollingRestart action.
-                  Ignored for all other actions.
+                  RollingRestart parameterizes action RollingRestart and is ignored by the
+                  others.
                 properties:
                   refreshSNodeAPI:
                     description: |-
-                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      after the backend node is shut down and before it is restarted, ensuring
-                      the latest image is running before the node comes back online.
+                      RefreshSNodeAPI restarts each node's storage-node DaemonSet pod between
+                      its shutdown and its restart, so the latest image is running when the
+                      node returns.
                     type: boolean
                 type: object
             required:
@@ -3922,61 +3956,88 @@ spec:
             - clusterRef
             type: object
           status:
-            description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+            description: StorageClusterOpsStatus is the observed state of one cluster
+              operation.
             properties:
               completedAt:
-                description: CompletedAt is when the operation finished (successfully
-                  or not).
+                description: CompletedAt is when it reached a terminal phase.
                 format: date-time
                 type: string
               message:
-                description: Message is a human-readable description of the current
-                  state or failure reason.
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the operation moves, and never a log.
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
               phase:
-                description: Phase is the high-level lifecycle phase.
+                description: Phase is the operation's own progress.
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Aborted
                 type: string
               rollingRestart:
                 description: |-
-                  RollingRestart tracks per-node progress for the RollingRestart action.
-                  Nil for all other actions.
+                  RollingRestart is the walk's position, set only for action
+                  RollingRestart.
                 properties:
-                  nodePhase:
+                  nodeIndex:
                     description: |-
-                      NodePhase is the current step for the node being restarted:
-                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-                    type: string
-                  pendingNodes:
-                    description: PendingNodes is the ordered list of node UUIDs still
-                      to be restarted.
+                      NodeIndex is the position in Nodes of the node being restarted. Advancing
+                      the walk increments it, and the walk is complete when it reaches
+                      len(Nodes).
+
+                      No omitempty: zero is a valid index, and a field that disappears at zero
+                      makes "the first node" and "unset" the same wire value.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  nodes:
+                    description: |-
+                      Nodes is the ordered list of storage node UUIDs this action covers,
+                      written once when the walk starts and not modified afterward, so a node
+                      added mid-walk is not restarted and one removed mid-walk is skipped when
+                      the walk reaches it.
                     items:
                       type: string
                     type: array
-                  phaseTriggered:
-                    description: PhaseTriggered indicates the API call for the current
-                      NodePhase was already sent.
-                    type: boolean
-                  processedNodes:
-                    description: ProcessedNodes is the list of node UUIDs already
-                      restarted.
-                    items:
-                      type: string
-                    type: array
+                required:
+                - nodeIndex
                 type: object
               startedAt:
-                description: StartedAt is when the operation began.
+                description: StartedAt is when the operation acquired its target's
+                  lock.
                 format: date-time
                 type: string
-              triggered:
+              step:
                 description: |-
-                  Triggered indicates the backend POST has been sent for this operation.
-                  Guards against duplicate backend calls on retry.
-                type: boolean
+                  Step is the position of the running action's state machine, as the shared
+                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                  marker could reach a field of a shared type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''ShuttingDown'',''Starting'',''CheckingPeers'',''ShuttingDownNode'',''RefreshingPod'',''AwaitingPod'',''RestartingNode'',''Rebalancing'']'
             type: object
         type: object
     served: true
@@ -3991,11 +4052,23 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusters.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageCluster
     listKind: StorageClusterList
     plural: storageclusters
+    shortNames:
+    - stc
     singular: storagecluster
   scope: Namespaced
   versions:
@@ -4593,6 +4666,752 @@ spec:
             type: object
         required:
         - spec
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.erasureCodingScheme
+      name: EC
+      type: string
+    - jsonPath: .status.maxFaultTolerance
+      name: FTT
+      priority: 1
+      type: integer
+    - jsonPath: .status.uuid
+      name: UUID
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageCluster is one simplyblock backend cluster. It owns the storage nodes
+          beneath it, the pools carved out of it, and the Kubernetes workload its nodes
+          run as.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageClusterSpec is the desired state of one simplyblock
+              backend cluster.
+            properties:
+              backup:
+                description: |-
+                  Backup is the S3 location this cluster's backups live in, and it is both
+                  the target copies are written to and the inventory the operator walks to
+                  produce StorageBackup objects. Mutable: a cluster that has never had a
+                  store gains one by acquiring the field, and every backup already in that
+                  bucket becomes visible.
+                properties:
+                  bucket:
+                    description: Bucket is the bucket backups are written to and read
+                      from.
+                    type: string
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names the Secret holding the access key and the
+                      secret key. It is a reference rather than the values, because a spec is
+                      readable by anybody who can read the object.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  endpoint:
+                    description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
+                    pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                    type: string
+                  prefix:
+                    description: |-
+                      Prefix narrows the store to one key prefix, so that several clusters can
+                      share a bucket without each walking the others' backups.
+                    type: string
+                  region:
+                    description: Region is the bucket's region, for endpoints that
+                      do not imply one.
+                    type: string
+                required:
+                - bucket
+                - credentialsSecretRef
+                - endpoint
+                type: object
+              clientDataIfname:
+                description: |-
+                  ClientDataIfname is the network interface clients reach the data plane
+                  on.
+                type: string
+              criticalThreshold:
+                description: CriticalThreshold is the capacity level at which the
+                  cluster alarms.
+                properties:
+                  capacity:
+                    description: Capacity is the used-capacity threshold.
+                    format: int64
+                    type: integer
+                  provisionedCapacity:
+                    description: ProvisionedCapacity is the provisioned-capacity threshold.
+                    format: int64
+                    type: integer
+                type: object
+              deviceClass:
+                default: NVMe
+                description: |-
+                  DeviceClass is the class of backend storage every node in this cluster
+                  hands over: NVMe devices named by PCI address, or logical block devices
+                  named by path. A cluster is built out of one of them, because an
+                  erasure-coding stripe placed across both is written and rebuilt at the
+                  slower class's rate. It describes on-disk layout, so it cannot change
+                  under a live cluster, and it defaults to NVMe because that is the only
+                  class the backend accepted before 26.4.
+                enum:
+                - NVMe
+                - LogicalBlock
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableAtomic4kWrites:
+                default: false
+                description: |-
+                  EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
+                  write atomicity even with a smaller logical block size, as AWS NVMe does
+                  at 512 bytes, which lets checksum fallback mode run on them despite the
+                  data plane's usual 4K minimum. It means nothing unless
+                  EnableChecksumValidation is set, and it cannot change under a live
+                  cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableChecksumValidation:
+                default: false
+                description: |-
+                  EnableChecksumValidation turns on inline CRC validation of every I/O, for
+                  silent-data-error protection. The backend bakes the checksum method into
+                  each device at cluster-create time and never re-applies it, so it cannot
+                  change under a live cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableDataRealignment:
+                description: |-
+                  EnableDataRealignment turns on the post-migration data realignment. It is
+                  a field of the spec rather than of the block it governs, because
+                  volumeMigrationSettings.dataRealignment.enableDataRealignment says the
+                  same word twice. There is no EnableVolumeMigration beside it: migration
+                  cannot be turned off, since a drain, a rebalance, and a device
+                  replacement are all performed by moving volumes.
+                type: boolean
+              enableFailureDomains:
+                description: |-
+                  EnableFailureDomains opts the cluster into failure-domain mode, where
+                  every node must label the fault group it belongs to so the control plane
+                  can spread erasure-coding chunks across independent ones.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableNodeAffinity:
+                description: |-
+                  EnableNodeAffinity selects affinity-based placement for storage
+                  components.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              enableVolumeAutoPlacement:
+                description: EnableVolumeAutoPlacement turns on automatic, latency-driven
+                  rebalancing.
+                type: boolean
+              fabricType:
+                description: |-
+                  FabricType is the storage fabric the cluster serves volumes over. It
+                  describes on-wire layout, so it cannot change under a live cluster.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              kms:
+                description: |-
+                  KMS selects where the cluster stores volume encryption keys. Switching
+                  providers on a live cluster is at least as unsupportable as changing one
+                  provider's endpoint, which is why the whole block is immutable rather
+                  than its members.
+                properties:
+                  vault:
+                    description: Vault stores keys in HashiCorp Vault.
+                    properties:
+                      baseURL:
+                        description: |-
+                          BaseURL is the Vault endpoint, for example, https://vault.example.com:8200.
+                          Rejected unless it resolves to an external address.
+                        pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                        type: string
+                    required:
+                    - baseURL
+                    type: object
+                type: object
+              maxConcurrentWorkerRestarts:
+                default: 1
+                description: |-
+                  MaxConcurrentWorkerRestarts caps how many Kubernetes workers the operator
+                  may drain and restart at once. The effective value is the smaller of this
+                  and status.maxFaultTolerance, published as
+                  status.maxConcurrentWorkerRestarts so tooling reads one authoritative
+                  number rather than recomputing it.
+                format: int32
+                minimum: 1
+                type: integer
+              maxSubsystemCount:
+                description: |-
+                  MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
+                  node. It is the cluster's and no node carries a copy: every node's
+                  configuration is generated from this field, so changing it reaches the
+                  nodes that already exist as each of them next restarts.
+                  Required: it sizes huge pages, and a node that receives no value fails
+                  config generation outright rather than falling back to a default.
+                format: int32
+                maximum: 75
+                minimum: 10
+                type: integer
+              minHugePagesSize:
+                description: |-
+                  MinHugePagesSize is the smallest huge-page allocation each storage node
+                  makes, as a size string such as 100G or 1T, where a bare number is
+                  gigabytes. It is a floor and not a limit: the effective allocation is the
+                  larger of this value and the minimum the node's device and subsystem
+                  count requires, so simplyblock takes more when it needs more. Omitted,
+                  the computed minimum is used.
+                type: string
+              nvmfBasePort:
+                description: NvmfBasePort is the base of the NVMe-oF port range every
+                  node binds.
+                format: int32
+                maximum: 65535
+                minimum: 1024
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              rpcBasePort:
+                description: RpcBasePort is the base of the RPC port range every node
+                  binds.
+                format: int32
+                maximum: 65535
+                minimum: 1024
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              snodeApiPort:
+                description: SnodeApiPort is the port each node's storage-node API
+                  listens on.
+                format: int32
+                maximum: 65535
+                minimum: 1024
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              stripe:
+                description: |-
+                  Stripe is the erasure-coding layout every volume in the cluster is
+                  written with. It describes on-disk layout, so it cannot change under a
+                  live cluster.
+                properties:
+                  dataChunks:
+                    description: DataChunks is the number of data chunks per stripe
+                      (ndcs).
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  parityChunks:
+                    description: |-
+                      ParityChunks is the number of parity chunks per stripe (npcs), and
+                      therefore how many chunk losses a stripe survives.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              vcpuCount:
+                description: |-
+                  VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
+                  as an explicit core count rather than a percentage. Unlike
+                  MaxSubsystemCount it is stamped onto a node when the node is created,
+                  because it describes the host that node runs on. Required: the core
+                  layout it produces must match across the cluster in steady state, so it
+                  is stated rather than left to a per-node heuristic.
+
+                  The floor is 4 rather than a hardware limit: a node must carry one core
+                  beyond this budget for the system, and the control plane's core layout
+                  assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+                format: int32
+                minimum: 4
+                type: integer
+              volumeAutoPlacement:
+                description: VolumeAutoPlacement configures automatic, latency-driven
+                  rebalancing.
+                properties:
+                  baselineColdStart:
+                    description: |-
+                      BaselineColdStart selects what happens to an under-sampled node. Defaults
+                      to partialWindow.
+                    enum:
+                    - defer
+                    - partialWindow
+                    type: string
+                  baselineMinSamples:
+                    description: |-
+                      BaselineMinSamples is the sample count below which a node counts as
+                      under-sampled. Defaults to 6.
+                    format: int32
+                    type: integer
+                  baselineOutlierK:
+                    description: |-
+                      BaselineOutlierK is the Hampel-identifier threshold: a sample is rejected
+                      when it lies more than k·1.4826·MAD from the window median, so a lower
+                      value rejects more. Defaults to 3.0.
+                    type: number
+                  baselineStrategy:
+                    description: |-
+                      BaselineStrategy selects how the per-node baseline is derived. Defaults
+                      to rollingWindow.
+                    enum:
+                    - benchmark
+                    - rollingWindow
+                    type: string
+                  baselineWindow:
+                    description: |-
+                      BaselineWindow is the look-back the rollingWindow strategy reduces.
+                      Defaults to 6h.
+                    type: string
+                  defaultCoolDownSeconds:
+                    description: |-
+                      DefaultCoolDownSeconds is how long a volume is left alone after it has
+                      been migrated. Defaults to 600.
+                    format: int32
+                    type: integer
+                  disableMigration:
+                    description: |-
+                      DisableMigration stops the rebalancer creating PersistentVolume
+                      migrations while leaving every other part of a cycle running: load is
+                      evaluated, deviations are computed, candidates are selected, and metrics
+                      are emitted, and the migrations are discarded rather than created. It is
+                      the dry run, and it is spelled as a disable because the behavior it
+                      governs is on by default.
+                    type: boolean
+                  enableLatencyBenchmark:
+                    description: |-
+                      EnableLatencyBenchmark turns on fio-based NVMe-oF latency measurement
+                      through Kubernetes Jobs. It is off unless a RebalancerImage is
+                      configured.
+                    type: boolean
+                  evaluationInterval:
+                    description: |-
+                      EvaluationInterval is how often the rebalancer evaluates load. Defaults
+                      to 60s.
+                    type: string
+                  imbalanceThreshold:
+                    description: |-
+                      ImbalanceThreshold is the latency deviation from baseline, in percent, a
+                      node must exceed before it is considered a rebalancing source. Defaults
+                      to 80.
+                    format: int32
+                    type: integer
+                  iopsWeight:
+                    description: |-
+                      IOPSWeight weights per-volume IOPS in the volume I/O score. Defaults to
+                      1.0.
+                    type: number
+                  latencyBenchmarkInterval:
+                    description: |-
+                      LatencyBenchmarkInterval is how often those Jobs run against each storage
+                      node. It also sets the step of the rolling-window baseline query, which
+                      is the cadence at which the probe sidecar publishes samples. Defaults to
+                      5m.
+                    type: string
+                  maxVolumeMigrationsPerCycle:
+                    description: |-
+                      MaxVolumeMigrationsPerCycle caps how many volumes one cycle moves.
+                      Defaults to 10.
+                    format: int32
+                    type: integer
+                  metricsBackend:
+                    description: MetricsBackend selects the source of I/O metrics.
+                      Defaults to Prometheus.
+                    enum:
+                    - ControlPlane
+                    - Prometheus
+                    - Uniform
+                    type: string
+                  minHotColdDifferencePct:
+                    description: |-
+                      MinHotColdDifferencePct is how far below the hot source, in percentage
+                      points of deviation, a candidate target must be before a volume is moved.
+                      It is what stops a migration between two near-equally loaded nodes.
+                      Defaults to 20.
+                    format: int32
+                    type: integer
+                  prometheusURL:
+                    description: PrometheusURL is required when MetricsBackend is
+                      Prometheus.
+                    type: string
+                  storageNodeCandidateCount:
+                    description: |-
+                      StorageNodeCandidateCount is how many of the most loaded nodes are
+                      evaluated each cycle to find the best source. Defaults to 3.
+                    format: int32
+                    type: integer
+                  throughputWeight:
+                    description: |-
+                      ThroughputWeight weights per-volume throughput, in MB/s, in the volume
+                      I/O score. Defaults to 0.1.
+                    type: number
+                type: object
+              volumeMigrationSettings:
+                description: |-
+                  VolumeMigrationSettings controls how volume migration and the
+                  post-migration realignment behave, not whether they happen. It is
+                  separate from volumeAutoPlacement because realignment applies to every
+                  volume move, whatever asked for it.
+                properties:
+                  dataRealignment:
+                    description: DataRealignment tunes the post-migration realignment.
+                    properties:
+                      interval:
+                        description: |-
+                          Interval is a floor on the spacing between realignment requests, and not
+                          a ceiling on how long one takes: a realignment blocks every volume
+                          migration for as long as the control plane needs, measured at tens of
+                          minutes on a loaded cluster. The trigger annotation bypasses it. Defaults
+                          to 10m.
+                        type: string
+                      minMoves:
+                        description: |-
+                          MinMoves is how many volume moves accumulate before a realignment is
+                          requested. It defaults to 1, which makes migration and realignment
+                          alternate, and is the field to raise in order to batch: a higher value
+                          trades how promptly the structures are realigned for migration
+                          throughput. The trigger annotation bypasses it.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
+                  rebalancerImage:
+                    description: |-
+                      RebalancerImage is the container image the migration path-validation Job
+                      and the rebalancer's latency and baseline Jobs run. It must carry
+                      nvme-cli, and for rebalancing also fio and jq.
+                    type: string
+                type: object
+              warningThreshold:
+                description: WarningThreshold is the capacity level at which the cluster
+                  warns.
+                properties:
+                  capacity:
+                    description: Capacity is the used-capacity threshold.
+                    format: int64
+                    type: integer
+                  provisionedCapacity:
+                    description: ProvisionedCapacity is the provisioned-capacity threshold.
+                    format: int64
+                    type: integer
+                type: object
+            required:
+            - maxSubsystemCount
+            - vcpuCount
+            type: object
+            x-kubernetes-validations:
+            - message: field stripe is immutable once set
+              rule: '!has(oldSelf.stripe) || has(self.stripe)'
+            - message: field fabricType is immutable once set
+              rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
+            - message: field nvmfBasePort is immutable once set
+              rule: '!has(oldSelf.nvmfBasePort) || has(self.nvmfBasePort)'
+            - message: field rpcBasePort is immutable once set
+              rule: '!has(oldSelf.rpcBasePort) || has(self.rpcBasePort)'
+            - message: field snodeApiPort is immutable once set
+              rule: '!has(oldSelf.snodeApiPort) || has(self.snodeApiPort)'
+            - message: field enableFailureDomains is immutable once set
+              rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field enableNodeAffinity is immutable once set
+              rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
+            - message: field enableChecksumValidation is immutable once set
+              rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
+            - message: field enableAtomic4kWrites is immutable once set
+              rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
+            - message: field deviceClass is immutable once set
+              rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
+            - message: kms is immutable once set
+              rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
+            - message: enableAtomic4kWrites requires enableChecksumValidation to be
+                true
+              rule: '!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites)
+                || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+          status:
+            description: StorageClusterStatus is the observed state of one backend
+              cluster.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the StorageClusterOps currently allowed to operate on
+                  this cluster. Empty when none is running.
+                type: string
+              clusterName:
+                description: ClusterName is the resolved backend name.
+                type: string
+              configured:
+                description: Configured records that initial setup completed.
+                type: boolean
+              erasureCodingScheme:
+                description: |-
+                  ErasureCodingScheme is the active layout, rendered as ndcs, an x, and
+                  npcs: a two-plus-one cluster reads 2x1.
+                type: string
+              lastDataRealignmentAt:
+                description: |-
+                  LastDataRealignmentAt is when a realignment was last requested, and it is
+                  what the configured interval spaces requests against.
+                format: date-time
+                type: string
+              maxConcurrentWorkerRestarts:
+                description: |-
+                  MaxConcurrentWorkerRestarts is the effective limit, the smaller of
+                  spec.maxConcurrentWorkerRestarts and maxFaultTolerance.
+                format: int32
+                type: integer
+              maxFaultTolerance:
+                description: |-
+                  MaxFaultTolerance is how many nodes may be simultaneously offline without
+                  violating redundancy, as the control plane reports it.
+                format: int32
+                type: integer
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the cluster moves, and never a log.
+                type: string
+              nqn:
+                description: NQN is the cluster subsystem qualified name.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of this cluster.
+                enum:
+                - Pending
+                - Creating
+                - Online
+                - Degraded
+                - Unavailable
+                - Suspended
+                type: string
+              realignedGeneration:
+                description: |-
+                  RealignedGeneration is the generation the last successfully requested
+                  realignment covers. A realignment is outstanding while
+                  volumeMoveGeneration exceeds it. The value recorded is the one read
+                  before the request was sent, which is what that realignment can actually
+                  account for: a migration completing while the request is in flight raises
+                  volumeMoveGeneration past it and correctly leaves another realignment
+                  outstanding.
+                format: int64
+                type: integer
+              rebalancing:
+                description: |-
+                  Rebalancing is the control plane's report that a rebalance is in
+                  progress, which is one of the two conditions that hold a node operation.
+                type: boolean
+              rebalancingMetrics:
+                description: |-
+                  RebalancingMetrics is written by the auto-rebalancer each evaluation
+                  cycle.
+                properties:
+                  avgDeviationPct:
+                    description: AvgDeviationPct is the mean latency deviation across
+                      the cluster's nodes.
+                    type: number
+                  coolestNodeUUID:
+                    type: string
+                  hottestNodeUUID:
+                    type: string
+                  imbalancePercent:
+                    type: number
+                  lastEvaluatedAt:
+                    format: date-time
+                    type: string
+                  lastMigrationAt:
+                    format: date-time
+                    type: string
+                  maxDeviationPct:
+                    description: |-
+                      MaxDeviationPct is the highest per-node latency deviation, which is what
+                      ImbalancePercent reports.
+                    type: number
+                  nodeMetrics:
+                    items:
+                      description: |-
+                        NodeLoadMetrics is one storage node's latency deviation, as the last
+                        evaluation cycle measured it.
+                      properties:
+                        lastUpdated:
+                          format: date-time
+                          type: string
+                        latencyDeviationPct:
+                          type: number
+                        nodeUUID:
+                          type: string
+                        volumeCount:
+                          type: integer
+                      required:
+                      - lastUpdated
+                      - latencyDeviationPct
+                      - nodeUUID
+                      - volumeCount
+                      type: object
+                    type: array
+                required:
+                - avgDeviationPct
+                - coolestNodeUUID
+                - hottestNodeUUID
+                - imbalancePercent
+                - maxDeviationPct
+                type: object
+              status:
+                description: |-
+                  Status is the lifecycle the control plane reports, and its values are the
+                  control plane's, which is why they are neither PascalCase nor constrained
+                  by an Enum here.
+                type: string
+              step:
+                description: |-
+                  Step is the position of the creation machine, as the shared
+                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                  marker could reach a field of a shared type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Claiming'',''CheckingControlPlane'',''ResolvingConfig'',''Creating'',''Adopting'',''Persisting'']'
+              tasks:
+                description: |-
+                  Tasks are the control plane's running and pending jobs, newest first and
+                  capped at twenty. Completed and canceled tasks are not here: they leave
+                  the list and become events, so the length tracks concurrency rather than
+                  history.
+                items:
+                  description: |-
+                    ClusterTask is one asynchronous job the control plane is running, as of the
+                    last frame of the task stream. It is a window rather than a record: a task
+                    that reaches a terminal outcome leaves status.tasks, and what remains of it
+                    is an event.
+
+                    It carries what the control plane's own TaskDTO carries and nothing more.
+                    The design's Appendix A also declares a progress figure and a creation date,
+                    and that schema has neither, so both are absent rather than declared and
+                    never written (design-crd-model.md §7.9). Their absence is what makes the
+                    list's order the control plane's own rather than newest first.
+                  properties:
+                    id:
+                      description: |-
+                        ID is the control plane's identifier, and it is how a CancelTask
+                        operation names the task. A position in the list is not an identity,
+                        because the next frame may order it differently.
+                      type: string
+                    retry:
+                      description: |-
+                        Retry is how many times the control plane has restarted this task. It is
+                        the one number that separates a task that is slow from one that is
+                        failing, and it is the closest thing the schema has to progress.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    status:
+                      description: |-
+                        Status is the control plane's own status string, and it is why this entry
+                        carries no phase: the operator adds nothing to what the backend reports.
+                        Its values are new, running, suspended, and done, of which only the
+                        first three appear here.
+                      type: string
+                    type:
+                      description: |-
+                        Type is what kind of job it is, in the control plane's own spelling for
+                        the reason design-crd-model.md §7.8 gives: the value is the backend's
+                        rather than this group's.
+                      type: string
+                  required:
+                  - id
+                  type: object
+                maxItems: 20
+                type: array
+              uuid:
+                description: |-
+                  UUID is the backend cluster UUID. Empty means the cluster has not been
+                  created or adopted, and non-empty means steady state.
+                type: string
+              volumeMoveGeneration:
+                description: |-
+                  VolumeMoveGeneration is incremented by every migration reaching its
+                  successful terminal phase and by nothing else, so it only grows.
+                format: int64
+                type: integer
+            type: object
         type: object
     served: true
     storage: true
@@ -7496,6 +8315,7 @@ rules:
   - controlplanes.storage.simplyblock.io
   - storagebackups.storage.simplyblock.io
   - storageclusterops.storage.simplyblock.io
+  - storageclusters.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
   - storagepools.storage.simplyblock.io
   resources:
@@ -7832,6 +8652,7 @@ rules:
   - logicalvolumemetrics
   - storagedevicemetrics
   - storagepoolmetrics
+  - storageclustermetrics
   verbs:
   - get
   - list

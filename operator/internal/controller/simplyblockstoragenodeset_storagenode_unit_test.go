@@ -14,6 +14,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -113,13 +114,13 @@ func TestSanitiseDNSLabel_StripsLeadingTrailingHyphens(t *testing.T) {
 
 // newSizingStorageCluster returns a StorageCluster carrying the cluster-scoped
 // node sizing values that buildPerNodeEnvFile reads.
-func newSizingStorageCluster(maxSubsys, vcpuCount *int32, maxHugePages string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func newSizingStorageCluster(maxSubsys, vcpuCount *int32, maxHugePages string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: snsTestCluster, Namespace: snsTestNS},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			MaxSubsystemCount: maxSubsys,
 			VCPUCount:         vcpuCount,
-			MaxHugePagesSize:  maxHugePages,
+			MinHugePagesSize:  maxHugePages,
 		},
 	}
 }
@@ -175,7 +176,7 @@ func TestBuildPerNodeEnvFile_ClusterSizingIdenticalAcrossWorkers(t *testing.T) {
 // node_configure.py.
 func TestReconcilePerNodeConfigMap_RejectsClusterMissingRequiredSizing(t *testing.T) {
 	vcpuCount := int32(8)
-	cases := map[string]*simplyblockv1alpha1.StorageCluster{
+	cases := map[string]*simplyblockv1alpha2.StorageCluster{
 		"both unset":        newSizingStorageCluster(nil, nil, ""),
 		"maxSubsystemCount": newSizingStorageCluster(nil, &vcpuCount, ""),
 		"vcpuCount":         newSizingStorageCluster(ptr.To(int32(20)), nil, ""),

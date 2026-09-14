@@ -1,9 +1,9 @@
-// Capacity samples for logical volumes, devices, storage nodes, and storage
-// pools. The four share this file because they share a shape: the control plane
-// exports the same five size gauges under each prefix, so the only thing that
-// differs is the prefix and the label naming the entity. Three of them also
-// export a sample date; the pool family does not, which is the one asymmetry and
-// is noted on PoolCapacity.
+// Capacity samples for clusters, logical volumes, devices, storage nodes, and
+// storage pools. The five share this file because they share a shape: the
+// control plane exports the same five size gauges under each prefix, so the
+// only thing that differs is the prefix and the label naming the entity. Four
+// of them also export a sample date; the pool family does not, which is the one
+// asymmetry and is noted on PoolCapacity.
 
 package prometheus
 
@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// Capacity is one capacity sample for a logical volume, a device, a storage
-// node, or a storage pool. Every size is in bytes.
+// Capacity is one capacity sample for a cluster, a logical volume, a device, a
+// storage node, or a storage pool. Every size is in bytes.
 //
 // Provisioned against Used is the distinction the type exists for. A logical
 // volume is thin-provisioned, so the size it was asked for and the space it has
@@ -56,7 +56,34 @@ const (
 	nodeIDLabel        = "snode"
 	poolMetricPrefix   = "pool"
 	poolIDLabel        = "pool"
+
+	// A cluster is the one entity whose identifying label is the same one every
+	// query already filters on, because every series in this exporter carries
+	// the cluster it belongs to. So the cluster family groups by `cluster` and
+	// yields exactly one entry.
+	clusterMetricPrefix = "cluster"
+	clusterIDLabel      = "cluster"
 )
+
+// ClusterCapacity returns the capacity sample for one cluster, and whether
+// there is one. A cluster Prometheus has no sample for yields false rather than
+// a zero sample, because zeros are the reading of an empty cluster.
+//
+// It differs from the other four in returning a single sample rather than a
+// map. The cluster is the scope every one of those queries is already narrowed
+// to, so grouping by the cluster label yields the one entry the caller asked
+// for, and handing back a map of size one would make every caller unwrap it.
+func (p *Provider) ClusterCapacity(
+	ctx context.Context,
+	clusterUUID string,
+) (Capacity, bool, error) {
+	samples, err := p.capacity(ctx, clusterMetricPrefix, clusterIDLabel, clusterUUID)
+	if err != nil {
+		return Capacity{}, false, err
+	}
+	sample, ok := samples[clusterUUID]
+	return sample, ok, nil
+}
 
 // VolumeCapacity returns the capacity sample for every logical volume in the
 // cluster, keyed by volume UUID. A volume Prometheus has no sample for is

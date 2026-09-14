@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -81,7 +80,7 @@ func (v *StoragePoolValidator) Handle(ctx context.Context, req admission.Request
 		namespace = req.Namespace
 	}
 
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	err := v.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: pool.Spec.ClusterRef}, &cluster)
 	switch {
 	case apierrors.IsNotFound(err):

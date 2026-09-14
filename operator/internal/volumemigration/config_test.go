@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func TestDefaultRebalancerImage(t *testing.T) {
@@ -32,9 +32,6 @@ func TestGetConfig(t *testing.T) {
 		if cfg.RebalancerImage == nil || *cfg.RebalancerImage != DefaultRebalancerImage {
 			t.Errorf("RebalancerImage = %v, want the default", cfg.RebalancerImage)
 		}
-		if cfg.Enabled != nil {
-			t.Errorf("Enabled = %v, want unset (enabled by default)", *cfg.Enabled)
-		}
 	})
 
 	t.Run("nil settings pick up the environment override", func(t *testing.T) {
@@ -46,19 +43,19 @@ func TestGetConfig(t *testing.T) {
 	})
 
 	// A provided spec is returned as-is: the default must not overwrite what the
-	// StorageCluster asked for, including an explicit disable.
+	// StorageCluster asked for.
 	t.Run("provided settings are returned unchanged", func(t *testing.T) {
 		t.Setenv(RebalancerImageEnvVar, "registry.example.com/ignored:v9")
-		spec := &simplyblockv1alpha1.VolumeMigrationSettings{
-			Enabled:         ptr.To(false),
+		spec := &simplyblockv1alpha2.VolumeMigrationSettings{
 			RebalancerImage: ptr.To("pinned:v1"),
+			DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{MinMoves: ptr.To(int32(4))},
 		}
 		cfg := GetConfig(spec)
 		if cfg.RebalancerImage == nil || *cfg.RebalancerImage != "pinned:v1" {
 			t.Errorf("RebalancerImage = %v, want pinned:v1", cfg.RebalancerImage)
 		}
-		if cfg.Enabled == nil || *cfg.Enabled {
-			t.Errorf("Enabled = %v, want false to be preserved", cfg.Enabled)
+		if cfg.DataRealignment == nil || ptr.From(cfg.DataRealignment.MinMoves, 0) != 4 {
+			t.Errorf("DataRealignment = %+v, want the minMoves it asked for", cfg.DataRealignment)
 		}
 	})
 }

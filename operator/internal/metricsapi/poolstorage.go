@@ -38,7 +38,6 @@ import (
 	"github.com/simplyblock/atlas/prometheus"
 
 	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -265,7 +264,7 @@ func (l *poolCapacityLookup) resolveCluster(
 	if uuid, ok := l.clusterUUID[key]; ok {
 		return uuid
 	}
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	objectKey := client.ObjectKey{Namespace: p.Namespace, Name: p.Spec.ClusterRef}
 	if err := l.reader.Get(ctx, objectKey, &cluster); err != nil {
 		l.clusterUUID[key] = ""

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
@@ -460,9 +461,9 @@ func TestNodeDrainReconcileNoClusterCRRequeues(t *testing.T) {
 func TestNodeDrainReconcileSkipsWhenClusterUnready(t *testing.T) {
 	const clusterName = "cluster-unready"
 
-	clusterCR := &simplyblockv1alpha1.StorageCluster{
+	clusterCR := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageClusterStatus{
+		Status: simplyblockv1alpha2.StorageClusterStatus{
 			Status: utils.ClusterStatusUnready,
 		},
 	}
@@ -1053,9 +1054,9 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 		snsName     = "sn-drain-409"
 	)
 
-	clusterCR := &simplyblockv1alpha1.StorageCluster{
+	clusterCR := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
-		Status: simplyblockv1alpha1.StorageClusterStatus{
+		Status: simplyblockv1alpha2.StorageClusterStatus{
 			Status: utils.ClusterStatusActive,
 			UUID:   clusterUUID,
 		},
@@ -1097,7 +1098,7 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha1.StorageNodeSet{}, &simplyblockv1alpha1.StorageCluster{}).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageNodeSet{}, &simplyblockv1alpha2.StorageCluster{}).
 		WithObjects(clusterCR, snCR).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(
@@ -1305,7 +1306,7 @@ func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDra
 	)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNodeSet{},
-		&simplyblockv1alpha1.StorageCluster{},
+		&simplyblockv1alpha2.StorageCluster{},
 	}, objects...)
 
 	return &NodeDrainCoordinatorReconciler{

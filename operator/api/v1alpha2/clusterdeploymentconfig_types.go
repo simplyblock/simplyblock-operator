@@ -41,16 +41,10 @@ type JournalManagerSpec struct {
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
 }
 
-// StripeSpec is the erasure-coding layout. Declared here for the reason
-// JournalManagerSpec is.
-type StripeSpec struct {
-	// DataChunks defines the number of data chunks in the erasure-coding layout.
-	// +optional
-	DataChunks *int32 `json:"dataChunks,omitempty"`
-	// ParityChunks defines the number of parity chunks in the erasure-coding layout.
-	// +optional
-	ParityChunks *int32 `json:"parityChunks,omitempty"`
-}
+// StripeSpec, the erasure-coding layout this document's template states, is
+// StorageCluster's own type in storagecluster_types.go. It was declared here
+// while that kind was still v1alpha1, for the reason JournalManagerSpec is, and
+// moved to the kind that owns the concept once it arrived.
 
 // ClusterDeploymentConfigPhase is where the operator has got to with this
 // document.
