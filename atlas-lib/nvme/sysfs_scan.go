@@ -199,6 +199,7 @@ func scanControllers(sysRoot, devRoot string) ([]Controller, error) {
 		out = append(out, Controller{
 			ID:                ControllerID(name),
 			SysfsPath:         base,
+			CreatedAt:         sysfs.ModTime(base),
 			DevicePath:        filepath.Join(devRoot, name),
 			Dev:               sysfs.String(base, "dev"),
 			NQN:               sysfs.String(base, "subsysnqn"),

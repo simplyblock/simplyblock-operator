@@ -1345,6 +1345,31 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 	optConn := expectedConns[0]
 	nonOptConns := expectedConns[1:]
 
+	// Repair first, connect second, and the order is the point.
+	//
+	// A reconcile can only connect what is missing, and the failure that matters
+	// most is not a missing controller: it is a controller that exists, is live,
+	// and contributes no path to this namespace. `nvme connect` refuses it with
+	// "already connected", so a reconcile alone re-issues a connect that never
+	// reaches the target and the volume stays below its published redundancy
+	// indefinitely. Repairing that needs a teardown.
+	//
+	// Running the teardown here rather than after the reconciles is what makes
+	// the teardown a repair instead of a hole: whatever it removes, the two
+	// passes below connect again in this same tick. It also stops the repair
+	// diagnosing a controller a reconcile created microseconds earlier, which is
+	// how a healthy path came to be destroyed on 2026-09-12 (see
+	// defaultConnectGrace, which covers the same race across ticks).
+	//
+	// What it tears down has to come out of activePaths before the passes run.
+	// That slice is the snapshot the monitor took before this function was
+	// called, and missingEndpoints counts an endpoint as attached on presence
+	// alone, regardless of state -- so a controller just torn down would still
+	// look attached, the connect would be skipped, and the reorder would buy
+	// nothing.
+	tornDown := healMonitoredVolume(context.Background(), nqn, lvolID, expectedConns)
+	activePaths = withoutEndpoints(activePaths, tornDown)
+
 	activeOpt := filterByANA(activePaths, anaStateOptimized)
 
 	var activeNonOpt []path
@@ -1356,14 +1381,6 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 
 	reconcileOptimizedPath(sbcClient, nodeInfo, devicePath, optConn, activeOpt, ctrlLossTmo)
 	reconcileNonOptimizedPaths(sbcClient, nodeInfo, devicePath, nonOptConns, activeNonOpt, ctrlLossTmo)
-
-	// The reconciles above can only connect what is missing, and the failure that
-	// matters most is not a missing controller: it is a controller that exists,
-	// is live, and contributes no path to this namespace. `nvme connect` refuses
-	// it with "already connected", so the reconcile re-issues a connect that never
-	// reaches the target and the volume stays below its published redundancy
-	// indefinitely. Repairing that needs a teardown, which is what this does.
-	healMonitoredVolume(context.Background(), nqn, lvolID, expectedConns)
 
 	return nil
 }
@@ -1521,4 +1538,27 @@ func filterByANA(paths []path, anaState string) []path {
 		}
 	}
 	return result
+}
+
+// withoutEndpoints drops the paths whose endpoint is in the given "ip:port"
+// list. It is how a repair's teardown is taken out of the path snapshot the
+// monitor captured before it ran, so the reconcile that follows in the same
+// tick sees the endpoint as missing and connects it again.
+func withoutEndpoints(paths []path, endpoints []string) []path {
+	if len(endpoints) == 0 {
+		return paths
+	}
+	gone := make(map[string]bool, len(endpoints))
+	for _, e := range endpoints {
+		gone[e] = true
+	}
+	kept := make([]path, 0, len(paths))
+	for _, pth := range paths {
+		ip, port := parseEndpoint(pth.Address)
+		if ip != "" && port != "" && gone[net.JoinHostPort(ip, port)] {
+			continue
+		}
+		kept = append(kept, pth)
+	}
+	return kept
 }
