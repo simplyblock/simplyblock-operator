@@ -226,3 +226,36 @@ func TestStageRefusesWhenTheRecordedFilesystemIsNotTheClassOne(t *testing.T) {
 		t.Errorf("staging mounted something anyway: %v", fm.MountPoints)
 	}
 }
+
+// Regression: companion of the NodeStageVolume missing-stash recovery above.
+// A volume whose stash was never written (NodeStageVolume interrupted between
+// FormatAndMount and StashVolumeContext) had no way to unstage: lookupVolumeContext
+// failed every time, and NodeUnstageVolume returned that as a permanent Internal
+// error. That pinned the volume's VolumeAttachment and permanently blocked its pod
+// from ever being rescheduled, since kubelet's retries hit the exact same missing
+// file every time. NodeUnstageVolume must instead proceed without the stash: it has
+// no NQN/model left to disconnect the NVMe-oF connection by, but leaving a
+// potential leak for manual/guardian cleanup is preferable to blocking forever.
+func TestUnstageWithoutStashDoesNotBlockForever(t *testing.T) {
+	ns := &Server{
+		mounter:     mount.NewWith(k8smount.NewFakeMounter(nil), &testingexec.FakeExec{}),
+		volumeLocks: csicommon.NewVolumeLocks(),
+	}
+
+	req := &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: stagingDir(t), // no volume-context.json ever written here
+	}
+
+	resp, err := ns.NodeUnstageVolume(context.Background(), req)
+	if err != nil {
+		t.Fatalf(
+			"NodeUnstageVolume returned an error for a volume with no stash: %v; "+
+				"this permanently blocks the volume from ever being unstaged",
+			err,
+		)
+	}
+	if resp == nil {
+		t.Fatal("NodeUnstageVolume returned a nil response with a nil error")
+	}
+}

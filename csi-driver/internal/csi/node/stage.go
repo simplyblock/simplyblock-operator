@@ -41,18 +41,33 @@ func (ns *Server) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if isStaged {
-		// A staged volume whose backing NVMe-oF device was lost leaves a dead
-		// (EIO) mount that isStaged still reports as staged. Repair it in place
-		// instead of short-circuiting.
-		if !ns.mounter.IsDead(stagingTargetPath) {
+		if _, ctxErr := lookupVolumeContext(stagingParentPath); ctxErr != nil {
+			// Staging was interrupted after FormatAndMount but before StashVolumeContext
+			// (e.g. tune2fs aborting on an unrecognised filesystem feature). The mount is
+			// orphaned even though it can still look perfectly healthy to IsDead (the
+			// backing device may still be connected at this point). Force-unmount and fall
+			// through to a fresh stage below, which rebuilds the VolumeContext from the
+			// request and writes the stash on success.
+			klog.Warningf(
+				"volume %s mount exists at %s but no stash found (%v); unmounting for re-stage",
+				volumeID, stagingTargetPath, ctxErr,
+			)
+			if umountErr := ns.mounter.ForceUnmount(stagingTargetPath); umountErr != nil {
+				klog.Warningf("failed to unmount orphaned staging path %s: %v", stagingTargetPath, umountErr)
+			}
+		} else if !ns.mounter.IsDead(stagingTargetPath) {
+			// A staged volume whose backing NVMe-oF device was lost leaves a dead
+			// (EIO) mount that isStaged still reports as staged. Repair it in place
+			// instead of short-circuiting.
 			klog.Warning("volume already staged")
 			return &csi.NodeStageVolumeResponse{}, nil
+		} else {
+			klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
+			if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
+				return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
+			}
+			return &csi.NodeStageVolumeResponse{}, nil
 		}
-		klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
-		if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
-			return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
-		}
-		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
 	var nvmeInitiator initiator.Initiator
@@ -148,8 +163,24 @@ func (ns *Server) NodeUnstageVolume(
 
 	volumeContext, err := lookupVolumeContext(stagingParentPath)
 	if err != nil {
-		klog.Errorf("failed to lookup volume context, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		// NodeStageVolume was interrupted before it could write this volume's
+		// stash (see the matching recovery in NodeStageVolume, above): the mount
+		// is already removed, but there is no NQN/model left to rebuild an
+		// initiator from, so any NVMe-oF connection this volume made cannot be
+		// identified and torn down here. Blocking the unstage forever over a leak
+		// we cannot safely locate is worse: it pins the VolumeAttachment and
+		// permanently prevents the pod from being rescheduled anywhere. Proceed
+		// and leave the leak, if any, for manual or guardian-driven cleanup.
+		klog.Errorf(
+			"volume %s has no stash at %s (%v); its mount is removed, but any NVMe-oF "+
+				"connection it made cannot be identified and disconnected here; proceeding "+
+				"with unstage anyway rather than blocking the volume forever",
+			volumeID, stagingParentPath, err,
+		)
+		if cleanupErr := cleanUpVolumeContext(stagingParentPath); cleanupErr != nil {
+			klog.Warningf("failed to clean up volume context for %s: %v", volumeID, cleanupErr)
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
 	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
