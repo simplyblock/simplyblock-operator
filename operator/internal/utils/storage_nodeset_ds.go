@@ -17,6 +17,52 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// storageNodeSetSATokenExpirationSeconds is short so a deleted-and-recreated
+// "simplyblock-storage-node-sa" self-heals in minutes: kubelet refreshes a
+// projected token at ~80% of its expiration, and a stale one is rejected with
+// 401 until then. Kubernetes' default ~1h expiration turned that into a
+// long, manual-intervention outage.
+const storageNodeSetSATokenExpirationSeconds int64 = 600
+
+// storageNodeSetSATokenMountPath is where Kubernetes normally auto-mounts a
+// projected SA token. We mount our own short-lived one there instead, so
+// AutomountServiceAccountToken is set to false to avoid a conflicting mount.
+const storageNodeSetSATokenMountPath = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+// buildStorageNodeSetSATokenVolume mirrors the structure of Kubernetes' own
+// auto-injected "kube-api-access-*" projected volume (token + cluster CA +
+// namespace), just with a short, explicit token expiration.
+func buildStorageNodeSetSATokenVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: "kube-api-access-short",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+							Path:              "token",
+							ExpirationSeconds: ptr.To(storageNodeSetSATokenExpirationSeconds),
+						},
+					},
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
+							Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+						},
+					},
+					{
+						DownwardAPI: &corev1.DownwardAPIProjection{
+							Items: []corev1.DownwardAPIVolumeFile{
+								{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 // defaultInitContainerResources are applied when the user has not set
 // InitContainerResources on the StorageNodeSet CR.
 var defaultInitContainerResources = corev1.ResourceRequirements{
@@ -201,6 +247,13 @@ fi`
 				},
 			},
 		},
+		buildStorageNodeSetSATokenVolume(),
+	}
+
+	saTokenMount := corev1.VolumeMount{
+		Name:      "kube-api-access-short",
+		MountPath: storageNodeSetSATokenMountPath,
+		ReadOnly:  true,
 	}
 
 	nodeEnvMount := corev1.VolumeMount{Name: "node-env", MountPath: "/etc/node-env"}
@@ -210,6 +263,7 @@ fi`
 		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 		{Name: "host-mnt", MountPath: "/mnt"},
 		nodeEnvMount,
+		saTokenMount,
 	}
 
 	mainMounts := []corev1.VolumeMount{
@@ -218,6 +272,7 @@ fi`
 		{Name: "host-sys", MountPath: "/sys"},
 		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
 		nodeEnvMount,
+		saTokenMount,
 	}
 
 	readinessProbe := &corev1.Probe{
@@ -290,8 +345,10 @@ fi`
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        true,
-					Tolerations:        sn.Spec.Tolerations,
+					// Avoids conflicting with saTokenMount at the same path.
+					AutomountServiceAccountToken: ptr.To(false),
+					HostNetwork:                  true,
+					Tolerations:                  sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
