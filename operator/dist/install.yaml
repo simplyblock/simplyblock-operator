@@ -4690,7 +4690,6 @@ spec:
       type: integer
     - jsonPath: .status.uuid
       name: UUID
-      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age

@@ -2094,7 +2094,7 @@ type StorageClusterStatus struct {
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="EC",type=string,JSONPath=".status.erasureCodingScheme"
 // +kubebuilder:printcolumn:name="FTT",type=integer,JSONPath=".status.maxFaultTolerance",priority=1
-// +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid",priority=1
+// +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // StorageCluster is one simplyblock backend cluster. It owns the storage nodes
