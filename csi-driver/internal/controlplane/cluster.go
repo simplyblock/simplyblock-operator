@@ -222,18 +222,18 @@ type CreateLVolData struct {
 	//
 	// The numbers and booleans deliberately keep theirs: false and 0 are values
 	// here, not absences, and omitempty cannot tell the two apart.
-	Fabric       string `json:"fabric,omitempty"`
-	Encryption   bool   `json:"encrypt"`
-	MaxRWIOPS    string `json:"max_rw_iops,omitempty"`
-	MaxRWmBytes  string `json:"max_rw_mbytes,omitempty"`
-	MaxRmBytes   string `json:"max_r_mbytes,omitempty"`
-	MaxWmBytes   string `json:"max_w_mbytes,omitempty"`
-	MaxSize      string `json:"max_size,omitempty"`
-	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	HostID       string `json:"host_id,omitempty"`
-	LvolID       string `json:"uid,omitempty"`
-	Namespaced   bool   `json:"namespaced"`
-	PvcName      string `json:"pvc_name,omitempty"`
+	Fabric           string `json:"fabric,omitempty"`
+	Encryption       bool   `json:"encrypt"`
+	MaxRWIOPS        string `json:"max_rw_iops,omitempty"`
+	MaxRWmBytes      string `json:"max_rw_mbytes,omitempty"`
+	MaxRmBytes       string `json:"max_r_mbytes,omitempty"`
+	MaxWmBytes       string `json:"max_w_mbytes,omitempty"`
+	MaxSize          string `json:"max_size,omitempty"`
+	MaxNamespace     int    `json:"max_namespace_per_subsys"`
+	HostID           string `json:"host_id,omitempty"`
+	LvolID           string `json:"uid,omitempty"`
+	Namespaced       bool   `json:"namespaced"`
+	PvcName          string `json:"pvc_name,omitempty"`
 	ConsistencyGroup string `json:"consistency_group,omitempty"`
 }
 
