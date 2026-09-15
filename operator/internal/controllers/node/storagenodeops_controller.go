@@ -531,16 +531,25 @@ func (r *StorageNodeOpsReconciler) observeStep(
 	}
 }
 
-// resultOf is the metric label for a terminal phase, lowercased because a label
-// value is not an API enum.
+// The metric labels a terminal phase is reported under, lowercased because a
+// label value is not an API enum. They are this package's own vocabulary rather
+// than the control plane's, which is why they are not the device status constants
+// beside them that happen to spell one of the words the same way.
+const (
+	resultSucceeded = "succeeded"
+	resultAborted   = "aborted"
+	resultFailed    = "failed"
+)
+
+// resultOf is the metric label for a terminal phase.
 func resultOf(phase simplyblockv1alpha2.StorageNodeOpsPhase) string {
 	switch phase {
 	case simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded:
-		return "succeeded"
+		return resultSucceeded
 	case simplyblockv1alpha2.StorageNodeOpsPhaseAborted:
-		return "aborted"
+		return resultAborted
 	default:
-		return "failed"
+		return resultFailed
 	}
 }
 

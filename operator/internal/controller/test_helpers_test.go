@@ -12,10 +12,6 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// statusSubresource is the name a client passes to a SubResourceUpdate
-// interceptor for a status write, which is how a test makes one fail.
-const statusSubresource = "status"
-
 // newTestScheme builds a scheme carrying both simplyblock API versions, plus
 // whatever else the caller adds.
 //

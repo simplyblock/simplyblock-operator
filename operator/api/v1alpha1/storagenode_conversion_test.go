@@ -30,7 +30,7 @@ func TestStorageNodeReadsItsClusterFromTheControllerOwner(t *testing.T) {
 			Namespace: "simplyblock",
 			OwnerReferences: []metav1.OwnerReference{
 				{Kind: "StorageNodeSet", Name: "rack-a", Controller: ptr.To(false)},
-				{Kind: "StorageCluster", Name: "production", Controller: ptr.To(true)},
+				{Kind: "StorageCluster", Name: testCluster, Controller: ptr.To(true)},
 			},
 		},
 		Spec: StorageNodeSpec{StorageNodeSetRef: "rack-a", WorkerNode: "worker-3"},
@@ -41,9 +41,9 @@ func TestStorageNodeReadsItsClusterFromTheControllerOwner(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if hub.Spec.ClusterRef != "production" {
+	if hub.Spec.ClusterRef != testCluster {
 		t.Errorf("spec.clusterRef = %q, want the controlling StorageCluster %q",
-			hub.Spec.ClusterRef, "production")
+			hub.Spec.ClusterRef, testCluster)
 	}
 	// The set's name survives as a label rather than as a reference, so a node can
 	// still be traced back to the document that produced it.
@@ -125,7 +125,7 @@ func TestStorageNodeFailureDomainLabelSurvivesTheTripDown(t *testing.T) {
 	hub := &v1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
 		Spec: v1alpha2.StorageNodeSpec{
-			ClusterRef: "production",
+			ClusterRef: testCluster,
 			WorkerNode: "worker-3",
 			Config: v1alpha2.StorageNodeConfig{
 				Sizing:        v1alpha2.StorageNodeSizing{VCPUCount: ptr.To(int32(8))},
@@ -228,7 +228,7 @@ func TestStorageNodeSizingSurvivesTheTripDown(t *testing.T) {
 	hub := &v1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
 		Spec: v1alpha2.StorageNodeSpec{
-			ClusterRef: "production",
+			ClusterRef: testCluster,
 			WorkerNode: "worker-3",
 			Config: v1alpha2.StorageNodeConfig{
 				Sizing: v1alpha2.StorageNodeSizing{

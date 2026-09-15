@@ -320,10 +320,7 @@ func (r *StorageDeviceReconciler) upsert(
 		return ctrl.Result{RequeueAfter: deviceRetry}, nil
 	}
 
-	labels, err := r.deviceLabels(ctx, node)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	labels := r.deviceLabels(node)
 
 	spec := simplyblockv1alpha2.StorageDeviceSpec{NodeRef: node.Name, DeviceID: dto.ID}
 	status := simplyblockv1alpha2.StorageDeviceStatus{
@@ -418,8 +415,8 @@ func (r *StorageDeviceReconciler) upsert(
 // absent label is a selector that matches nothing, and a wrong one is a selector
 // that matches the wrong devices.
 func (r *StorageDeviceReconciler) deviceLabels(
-	_ context.Context, node *simplyblockv1alpha2.StorageNode,
-) (map[string]string, error) {
+	node *simplyblockv1alpha2.StorageNode,
+) map[string]string {
 	labels := map[string]string{simplyblockv1alpha2.DeviceLabelNode: node.Name}
 	if worker := node.Labels[simplyblockv1alpha2.DeviceLabelWorker]; worker != "" {
 		labels[simplyblockv1alpha2.DeviceLabelWorker] = worker
@@ -431,7 +428,7 @@ func (r *StorageDeviceReconciler) deviceLabels(
 	if node.Spec.ClusterRef != "" {
 		labels[simplyblockv1alpha2.DeviceLabelCluster] = node.Spec.ClusterRef
 	}
-	return labels, nil
+	return labels
 }
 
 // deviceOwnedLabels are the keys the mirror writes and is therefore responsible
