@@ -83,6 +83,21 @@ Files: `operator/internal/controller/volumegroupsnapshotops_controller_unit_test
 | U-32 | Target exists but is not `ReadyToUse`: the operation holds in `Pending` with a `RestoreBlocked` event, creates no claim, and proceeds once it is ready | Boundary | `TestGroupRestore_WaitsForTargetReady`              |
 | U-33 | Admission: a `volumeGroupSnapshotRef` that resolves is admitted, and one naming no `VolumeGroupSnapshot` in the namespace is rejected at create        | Negative | `TestVolumeGroupSnapshotOpsValidator_RefResolution` |
 
+### Dynamic Membership Watcher (design §4.5, Phase 4)
+
+File: `csi-driver/internal/csi/controller/cg_membership_watcher_test.go`. The backend join guards themselves (placement pin, pool alignment, member cap, and the one-way refusal) are the control plane's to test, per Phase 0: `sbcli` covers them in `tests/integration/test_consistency_group_dynamic_membership.py`.
+
+| #    | Scenario                                                                                                                        | Type     | Test                                                 |
+|------|---------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
+| U-34 | Label added to a bound non-member and the named group exists: the watcher joins the volume and records `ConsistencyGroupJoined` | Positive | `TestLabelAddJoinsTheNamedGroup`                     |
+| U-35 | Label names a group that does not exist: no join, a `ConsistencyGroupPending` event, retried on resync                          | Negative | `TestLabelNamingNoGroupHoldsWithAnEvent`             |
+| U-36 | Label removed from a member of a label-managed group: the watcher detaches and records `ConsistencyGroupDetached`               | Positive | `TestLabelRemovalDetachesFromALabelManagedGroup`     |
+| U-37 | Label absent but the volume belongs to a policy-owned (nameless) group: the watcher never touches it                            | Negative | `TestLabelRemovalNeverDetachesFromAPolicyOwnedGroup` |
+| U-38 | Backend refuses the join (placement, pool, cap, or one-way): a `ConsistencyGroupJoinRefused` Warning, no error, no hot retry    | Negative | `TestRefusedJoinIsAnEventNotAnError`                 |
+| U-39 | The PVC's PV belongs to another CSI driver: no reconcile                                                                        | Negative | `TestForeignDriverVolumesAreIgnored`                 |
+| U-40 | Label and membership agree: no membership calls                                                                                 | Boundary | `TestConvergedMembershipIsANoOp`                     |
+| U-41 | Label names a different group than the volume's membership: a `ConsistencyGroupConflict` Warning, no detach and no join         | Negative | `TestConflictingLabelIsSurfacedNotActedOn`           |
+
 ---
 
 ## 2. Integration Tests
@@ -155,6 +170,16 @@ Against a live simplyblock cluster with real fio workloads. The cross-volume cor
 | E-13 | One applied `VolumeGroupSnapshotOps` restores a generation: every claim binds and the restored set is hash-verified crash-consistent (the one-apply counterpart of E-04) | Positive | —    |
 | E-14 | A restore with `consistencyGroup` set: the clones form a new group pinned on one node (the one-apply counterpart of E-06)                                                | Positive | —    |
 
+### Dynamic Membership (design §4.5, Phase 4)
+
+Covered live by `regression_test/20/test_volume_group_snapshot.sh` test 16 (external to this repository's harness), which drives the label through `kubectl label` and asserts membership through the backend.
+
+| #    | Scenario                                                                                                                                 | Type     | Test |
+|------|------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-15 | A bound, unlabeled volume on the pinned node gains the label: it joins the group and the NEXT generation contains it, prior ones do not  | Positive | —    |
+| E-16 | The label is removed from a member: the next generation excludes it, and its snapshot in the earlier generation stays `ReadyToUse`       | Positive | —    |
+| E-17 | The label is re-added to the detached volume: the join is refused one-way, `ConsistencyGroupJoinRefused` lands on the PVC, and no rejoin | Negative | —    |
+
 ---
 
 ## 4. E2E — Phase 2 gating
@@ -192,16 +217,16 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 ## 6. Axis Coverage
 
-| Axis                       | Values covered                                                                  | IDs                                                     | Not covered                          |
-|----------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
-| Cluster topology           | 1 node, multi-node with a pinned group                                          | E-01, E-02                                              | asymmetric node sizes                |
-| Group size                 | 1 member, 3+ members, the 20-member cap boundary (sbcli unit)                   | E-01, E-04                                              | very large groups (subsystem slots)  |
-| Membership change          | join at create, one-way detach, death with last member                          | E-01, E-03, E-08, E-11                                  | re-establish via a labeled clone     |
-| Selector versus membership | equal, extra handle, missing handle, two groups                                 | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
-| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                               | U-04 … U-10, I-04, I-05                                 | —                                    |
-| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation          | E-09, E-10                                              | listing under very many generations  |
-| Data correctness           | consistent clone, negative control, delete-preserves                            | E-04, E-05, M-01                                        | migration mid-snapshot (M-02 manual) |
-| Restore path               | per-member `dataSource`, one-apply Ops, partial generation, new-group formation | E-04 … E-07, U-25 … U-33, I-09 … I-12, E-13, E-14       | restore into another namespace       |
+| Axis                       | Values covered                                                                         | IDs                                                     | Not covered                          |
+|----------------------------|----------------------------------------------------------------------------------------|---------------------------------------------------------|--------------------------------------|
+| Cluster topology           | 1 node, multi-node with a pinned group                                                 | E-01, E-02                                              | asymmetric node sizes                |
+| Group size                 | 1 member, 3+ members, the 20-member cap boundary (sbcli unit)                          | E-01, E-04                                              | very large groups (subsystem slots)  |
+| Membership change          | join at create, late join and detach by label, one-way refusal, death with last member | E-01, E-03, E-08, E-11, U-34 … U-41, E-15 … E-17        | re-establish via a labeled clone     |
+| Selector versus membership | equal, extra handle, missing handle, two groups                                        | U-04 … U-07, U-12 … U-19, U-21 … U-24, I-03, I-07, I-08 | —                                    |
+| Snapshot lifecycle         | take, get, delete, retry, delete-after-group-gone                                      | U-04 … U-10, I-04, I-05                                 | —                                    |
+| Representation             | per-snapshot group fields, group-scoped listing, incomplete generation                 | E-09, E-10                                              | listing under very many generations  |
+| Data correctness           | consistent clone, negative control, delete-preserves                                   | E-04, E-05, M-01                                        | migration mid-snapshot (M-02 manual) |
+| Restore path               | per-member `dataSource`, one-apply Ops, partial generation, new-group formation        | E-04 … E-07, U-25 … U-33, I-09 … I-12, E-13, E-14       | restore into another namespace       |
 
 ---
 
@@ -209,9 +234,9 @@ The Phase 2 rows (I-01 … I-06, E-04 … E-11 through the `VolumeGroupSnapshot`
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 33        | 31      | U-03, U-08  |
+| Unit        | 41        | 39      | U-03, U-08  |
 | Integration | 12        | 0       | I-01 … I-12 |
-| E2E         | 14        | 0       | E-01 … E-14 |
+| E2E         | 17        | 0       | E-01 … E-17 |
 | Manual      | 2         | 0       | M-01, M-02  |
 
 Every scenario is uncovered because the feature is Draft. The counts are the target, and each `Test` column fills in as the work lands.
@@ -229,6 +254,7 @@ Every scenario is uncovered because the feature is Draft. The counts are the tar
 | —                                    | Restore into another namespace                                                                               | The Ops kind is namespaced and restores into its own namespace, and a cross-namespace restore is not designed  |
 | M-01                                 | Deleting a member preserves its group snapshots                                                              | The one data-loss path (§8.2); needs the standalone delete path and the group-scoped listing to assert against |
 | M-02                                 | A member migrated off the pinned store                                                                       | Needs migration orchestration and the group-snapshot failure path (Open Question 2)                            |
+| E-15 … E-17                          | Dynamic membership live: the label round trip through the CSI watcher and the one-way refusal                | Runs as `regression_test/20` test 16 outside this repository's harness; recorded here until it is adopted      |
 | —                                    | Asymmetric node sizes, very large groups, listing under many generations                                     | Beyond the first coverage pass, recorded so the gap is explicit rather than assumed covered                    |
 
 

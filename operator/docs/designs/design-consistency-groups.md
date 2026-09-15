@@ -2,7 +2,7 @@
 
 **Status:** Implementation  
 **Author:** Israel Geoffrey (geoffrey1330)  
-**Date:** 2026-09-09 (last updated 2026-09-11)  
+**Date:** 2026-09-09 (last updated 2026-09-15)  
 **Test Plan:** [`tests/test-plan-consistency-groups.md`](../tests/test-plan-consistency-groups.md)
 
 ---
@@ -14,8 +14,9 @@
 | **Phase 1** | Implemented | A standalone consistency group in the control plane: membership at provisioning, a group snapshot as one crash-consistent generation, and a listing that shows which snapshots belong to a group | §4, §5, §6, §7, §8 |
 | **Phase 2** | Implemented | The Kubernetes-native surface: a `VolumeGroupSnapshot` snapshots the group through the CSI GroupController service                                                                               | §5.3, §9, §10      |
 | **Phase 3** | Implemented | Single-operation group restore: a `VolumeGroupSnapshotOps` with `action: Restore` restores every member of one generation in one apply                                                           | §7.4, Appendix A   |
+| **Phase 4** | Planned     | Dynamic membership: an existing volume joins its group when its PVC gains the membership label, and detaches when the label is removed                                                           | §4.5, §10          |
 
-Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Phase 3 adds the one-apply restore on top of Phase 2's materialized member snapshots. Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
+Phase 1 stands alone: it decouples the consistency group from the replication policy it is bolted onto today, and it makes a group snapshot and its member snapshots first-class and legible through `sbctl`. Phase 2 puts the Kubernetes `VolumeGroupSnapshot` surface on top of the same backend group. Phase 3 adds the one-apply restore on top of Phase 2's materialized member snapshots. Phase 4 lifts the read-once restriction on the membership label, which the subsystem and pool alignment now enforced by the control plane makes safe (P0-5, §4.5). Replication and backup of a consistency group are out of scope for this design and are noted as future work in §2.
 
 ---
 
@@ -27,8 +28,9 @@ Phase 1 stands alone: it decouples the consistency group from the replication po
 | P0-2 | A standalone consistency-group backend: a group that exists without a replication policy, with create, member-remove, snapshot take, snapshot delete, and a group-aware snapshot listing, all scoped to a cluster | Control plane (`sbcli`) | Phase 1            | Shipped: the standalone group, its REST surface, and the `sbctl cg` commands |
 | P0-3 | Volume-create accepts a `consistency_group` field and, inside one atomic create, ensures the group, joins the volume, and enforces placement                                                                      | Control plane (`sbcli`) | Phase 1 membership | Shipped, on both the create and the clone paths (§7.2)                       |
 | P0-4 | external-snapshotter `VolumeGroupSnapshot` CRDs (`v1beta1`) installed, and the `CSIVolumeGroupSnapshot` feature gate enabled on both the `snapshot-controller` and the `csi-snapshotter` sidecar                  | Ecosystem / Kubernetes  | Phase 2            | Shipped: the chart installs the CRDs and enables the gate                    |
+| P0-5 | Subsystem and pool alignment: a shared NVMe subsystem belongs to exactly one storage pool, enforced at lvol placement and again inside the transactional namespace-slot claim                                     | Control plane (`sbcli`) | Phase 4            | Shipped (verified 2026-09-15)                                                |
 
-P0-1 is the one primitive the whole design rests on, and it is live. P0-2 and P0-3 are the backend work that turns the existing policy-coupled group into a standalone object and lets a volume join a group at creation. Without P0-4 the Phase 2 CSI GroupController has no Kubernetes objects to reconcile, so Phase 1 (the backend group plus `sbctl`) is the whole feature until the gate is turned on.
+P0-1 is the one primitive the whole design rests on, and it is live. P0-2 and P0-3 are the backend work that turns the existing policy-coupled group into a standalone object and lets a volume join a group at creation. Without P0-4 the Phase 2 CSI GroupController has no Kubernetes objects to reconcile, so Phase 1 (the backend group plus `sbctl`) is the whole feature until the gate is turned on. P0-5 is what makes membership changes after provisioning safe (§4.5): with every subsystem owned by exactly one pool, a volume joined late can no longer entangle another pool's volumes in the group's subsystem-scoped operations.
 
 ---
 
@@ -60,13 +62,13 @@ A consistency group is a set of volumes that snapshot as one crash-consistent un
 
 This design makes the consistency group a first-class concept in its own right. A group is named by a **label on its member PVCs**, `storage.simplyblock.io/consistency-group`. The group is born from the first volume that carries the label, its members are pinned to one storage node and logical volume store so the frozen snapshot is possible, and it dies with its last member. A **`VolumeGroupSnapshot`** is the Kubernetes representation of one snapshot of the group, and each snapshot it produces is one **generation** the control plane can list, clone, and reason about by membership.
 
-| Concern          | Mechanism                                                | Decided when                             |
-|------------------|----------------------------------------------------------|------------------------------------------|
-| Group membership | PVC label `storage.simplyblock.io/consistency-group`     | Volume creation, one-way                 |
-| Group placement  | First member's node and logical volume store             | Volume creation, immutable for the group |
-| A group snapshot | `VolumeGroupSnapshot` (Kubernetes) or `sbctl` (headless) | On demand                                |
-| One generation   | `group_seq` on every member snapshot of that snapshot    | At snapshot time                         |
-| A group restore  | `VolumeGroupSnapshotOps` (Kubernetes) or `sbctl` clone   | On demand                                |
+| Concern          | Mechanism                                                | Decided when                                                                                   |
+|------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| Group membership | PVC label `storage.simplyblock.io/consistency-group`     | Volume creation today, and a later label change once Phase 4 lands (§4.5). Epochs stay one-way |
+| Group placement  | First member's node and logical volume store             | Volume creation, immutable for the group                                                       |
+| A group snapshot | `VolumeGroupSnapshot` (Kubernetes) or `sbctl` (headless) | On demand                                                                                      |
+| One generation   | `group_seq` on every member snapshot of that snapshot    | At snapshot time                                                                               |
+| A group restore  | `VolumeGroupSnapshotOps` (Kubernetes) or `sbctl` clone   | On demand                                                                                      |
 
 Replication and backup of a consistency group are deliberately not part of this design (§2). A reader who stops here has the model: a persistent group defined by a label, snapshotted as a `VolumeGroupSnapshot`, with each snapshot a generation the control plane represents by its membership.
 
@@ -97,7 +99,7 @@ But it also carries `policy_id`, and the group is created, snapshotted, and dele
 - Group membership is declared by a PVC label and requires no new simplyblock CRD.
 - A group is born from its first member volume and deleted with its last, with no separate create or delete step for the common Kubernetes path.
 - Members are colocated on one storage node and logical volume store, which the frozen group snapshot requires, and a volume that cannot be colocated fails creation loudly.
-- Membership is one-way: a volume's membership window is fixed at creation and closes permanently on removal, so generation math never reasons about gaps in one volume's history.
+- Membership is one-way: a volume's membership window opens once, at creation or at a later join (§4.5), and closes permanently on removal, so generation math never reasons about gaps in one volume's history.
 - The control plane represents a group snapshot as a listable generation, and every member snapshot names its group and generation, so a snapshot's group membership is answerable without parsing a name (§6).
 - A group snapshot is restorable per member, and the restored set is crash-consistent because the source generation was frozen (§7).
 - A member that leaves the group does not invalidate the generations that already contain it (§8).
@@ -179,7 +181,7 @@ backend, atomically inside volume create:
                            open the member epoch
 ```
 
-**Membership is fixed at creation.** A label added to a PVC after its volume exists does not join the volume to the group, because the join happens only in the create path. This keeps membership decidable from one event rather than from the mutable state of a label over time.
+**Membership is established at creation.** As implemented today, a label added to a PVC after its volume exists does not join the volume to the group, because the join happens only in the create path. Phase 4 lifts this restriction: §4.5 specifies the later join and the label-removal detach, and what made them safe. Until it lands, the create path is the only join.
 
 **A group is capped at 20 members.** The group snapshot freezes I/O across every member for one `bdev_lvol_snapshot_group` call, so an unbounded group would freeze arbitrarily many volumes at once and widen the all-or-nothing rollback surface. The backend caps a group at 20 open-epoch members (`MAX_CONSISTENCY_GROUP_MEMBERS`): a volume-create that would be the 21st member fails loudly, before the volume is created, rather than joining unbounded. A detached member frees its slot, since the cap counts only open epochs. The check runs at join, so it is enforced identically for the label path and the legacy policy path.
 
@@ -196,13 +198,32 @@ Every key this feature reads or writes uses the `storage.simplyblock.io/` prefix
 
 ### 4.3 Membership is one-way
 
-A member's epoch opens at creation and closes permanently when the volume leaves the group. The same volume never rejoins. The backend records membership as `{joined_seq, removed_seq}` per volume, and `included_in_seq(lvol_id, seq)` decides whether a member belongs to a generation: `joined_seq <= seq` and (`removed_seq == 0` or `seq <= removed_seq`). A one-way rule keeps those windows unambiguous, and no member has more than one window to reason about.
+A member's epoch opens at join, at creation today and additionally at a later label add once Phase 4 lands (§4.5), and closes permanently when the volume leaves the group. The same volume never rejoins. The backend records membership as `{joined_seq, removed_seq}` per volume, and `included_in_seq(lvol_id, seq)` decides whether a member belongs to a generation: `joined_seq <= seq` and (`removed_seq == 0` or `seq <= removed_seq`). A one-way rule keeps those windows unambiguous, and no member has more than one window to reason about.
 
 Re-establishing a member is done by creating a new volume that carries the label, for example, a clone of the removed one. It joins as a new member with a fresh epoch under its own logical volume identity, at `last_group_seq + 1`, so earlier generations do not contain it. The generation math never sees a volume leave and return.
 
 ### 4.4 Death with the last member
 
 A group lives exactly as long as its members. Removing the last member deletes the group record. What happens to the group's generations when a member leaves is the subject of §8, and it is the one place where a volume operation can widen into snapshot deletion, so the backend logs and events it.
+
+### 4.5 Membership after provisioning (Phase 4 — Planned)
+
+Phase 4 makes the membership label live for the volume's whole life rather than read once at creation. Adding `storage.simplyblock.io/consistency-group` to an existing PVC joins its volume to the named group, and removing the label detaches the volume in §8.2's sense: the epoch closes and every generation that contains the member stays restorable.
+
+**What made this safe.** The group's subsystem-scoped operations reach every volume that shares a member's NVMe subsystem: a migration moves the whole subsystem (§9.5), and the frozen cut stalls a shared subsystem's I/O path as one unit. While a subsystem could hold volumes of more than one storage pool, only the create path could guarantee that a member's subsystem held nothing those operations must not touch, which is why membership was fixed at creation. The control plane now enforces subsystem and pool alignment as an invariant (P0-5): a shared subsystem belongs to exactly one pool, checked at lvol placement and again inside the transactional namespace-slot claim, so any volume in the group's pool sits in a subsystem wholly owned by that pool. A late join can therefore no longer entangle another pool's volumes in the group's freeze or migration scope, and the join reduces to the epoch bookkeeping the backend already has.
+
+**A late join passes exactly the checks the create path enforces, and it moves nothing.**
+
+- The volume must already be on the group's pinned node and logical volume store (§4.2). A volume placed elsewhere is refused, and a join never migrates a volume to satisfy the pin.
+- The volume must be in the group's storage pool.
+- The group must be below its 20-member cap (§4.1).
+- The volume must have no closed epoch in this group: the one-way rule (§4.3) holds, a removed member is refused, and re-establishment stays the labeled-clone path.
+
+The epoch opens at `last_group_seq + 1`, so generations taken before the join do not contain the volume, the same arithmetic as a labeled clone joining (§4.3).
+
+**The CSI driver relays the label, and the backend decides.** The CSI controller, which already reads the label at provisioning, gains a PVC watcher that reconciles label state to backend membership through the members endpoint (§10): label present and the volume not a member means join, and label absent and the volume a current member means detach. The CSI specification has no verb for a label change, so the watcher is a Kubernetes informer in the driver's controller process, beside the provisioner, not a new CSI RPC. The label remains the only membership source of truth (§3). The watcher never writes the label, and it holds no membership state of its own. A refused join leaves the label in place and surfaces the reason as a Warning event on the PVC, repeated on each reconcile while the mismatch stands, because a label that silently does nothing is indistinguishable from a stalled controller.
+
+**Interplay with the selector checks.** As implemented today, a label added late is permanent drift and §11.6's refusal is the end state. Under Phase 4 the same situation is transient reconciliation lag: the webhook (§9.4) and GroupController (§9.2) checks are unchanged, a snapshot taken inside the lag window is still refused, and it succeeds once the watcher has converged membership to the labels.
 
 ---
 
@@ -398,9 +419,10 @@ The driver and `sbctl` reach the backend over HTTP. Every endpoint is scoped to 
 | `GET`    | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}` | Read one generation's readiness and member snapshot handles.                                                                                                                                                                        |
 | `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/snapshots/{seq}` | Delete one generation and all its member snapshots atomically. Never deletes the group.                                                                                                                                             |
 | `DELETE` | `/api/v2/clusters/{id}/consistency-groups/{gid}/members/{lvid}`  | Detach a member, closing its epoch one-way. Preserves the member's snapshots in prior generations (§8.2).                                                                                                                           |
+| `POST`   | `/api/v2/clusters/{id}/consistency-groups/{gid}/members`         | Phase 4, not yet provided: join an existing volume, body `{lvol_id}`. Validates the pinned placement, the pool, the member cap, and the one-way rule (§4.5). Idempotent: joining a current member returns success.                  |
 | `GET`    | `/api/v2/clusters/{id}/snapshots?consistency_group={gid}`        | The per-snapshot listing (§6.2), extended with `group_id` and `group_seq` on every row and a group filter.                                                                                                                          |
 
-The group-birth path is the volume-create field, not a separate call, so a volume joins its group in the same operation that creates it. Ensure-group idempotency by cluster and name is what lets concurrent first volumes converge (§4.1).
+The group-birth path is the volume-create field, not a separate call, so a volume joins its group in the same operation that creates it. Ensure-group idempotency by cluster and name is what lets concurrent first volumes converge (§4.1). The member-add endpoint is the one Phase 4 addition, and it is this design's external blocker for §4.5: the detach endpoint already exists, so the label watcher's remove path has a surface today while its join path does not.
 
 ---
 
@@ -430,7 +452,11 @@ This is the forbidden path (§8.2), included to show what the design prevents. I
 
 ### 11.6 Selector drift
 
-A user labels a fourth PVC `db-group` after its volume was created. Because membership is fixed at creation (§4.1), the volume is not a group member, but the `VolumeGroupSnapshot` selector now matches four PVCs. The GroupController finds the handle set does not equal the three-member group and refuses with `FAILED_PRECONDITION` (§9.2) rather than snapshotting a four-way set the group does not represent. The fix is to remove the stray label, or to have created the fourth volume with the label so it is a real member.
+A user labels a fourth PVC `db-group` after its volume was created. Because membership is established only at creation today (§4.1), the volume is not a group member, but the `VolumeGroupSnapshot` selector now matches four PVCs. The GroupController finds the handle set does not equal the three-member group and refuses with `FAILED_PRECONDITION` (§9.2) rather than snapshotting a four-way set the group does not represent. The fix is to remove the stray label, or to have created the fourth volume with the label so it is a real member. Under Phase 4 this scenario converges instead of standing: the label watcher joins the fourth volume when it passes the §4.5 checks, and the refusal only covers the reconciliation lag window (§11.9).
+
+### 11.9 A volume joins and leaves after provisioning (Phase 4)
+
+A `db-group` has three members. A fourth volume, created earlier without the label in the same pool and on the pinned node, gains the label. The watcher joins it, the epoch opens at `last_group_seq + 1`, and the next generation contains four members while every earlier generation still lists three. Later the label is removed from one member: the watcher detaches it, the epoch closes, the next generation contains three members, and every generation taken while it was a member stays complete and restorable (§8.2). If the label is then re-added to the detached volume, the join is refused under the one-way rule (§4.3), the Warning event on the PVC names the closed epoch, and re-establishment is a labeled clone. If instead the label is added to a volume on another node, the join is refused naming the pinned placement, and the volume is never moved to satisfy it.
 
 ### 11.7 A member cannot be migrated
 
@@ -456,6 +482,8 @@ One member of `db-group` is offline: its node is down, or its lvol is in an erro
 | A generation is incomplete (a member snapshot is gone)                                                                | Present count below expected count        | The group-scoped listing reports it, and a restore of that generation warns rather than returning a partial set (§8.3).                                                                                                                        |
 | A `VolumeGroupSnapshot` is deleted after its group is gone                                                            | GroupController resolves no group         | Delete returns success. A missing handle is not an error, matching CSI snapshot-delete semantics.                                                                                                                                              |
 | An operator applies a `VolumeMigration` that would move a consistency-group member                                    | Admission webhook, at creation            | Rejected at `kubectl apply` (§9.5): the webhook resolves the PV to a group member and declines, naming the volume and its group. No `VolumeMigration` is created. The backend refusal is the backstop for any path the webhook does not cover. |
+| Phase 4: a label is added to a volume off the pinned store, in another pool, over the cap, or with a closed epoch     | Backend rejects the member add            | The join is refused and the volume is never moved (§4.5). The label stays, and the watcher emits a Warning event on the PVC on each reconcile until the label is removed or the precondition clears.                                           |
+| Phase 4: the backend is unreachable while the watcher reconciles a label change                                       | HTTP error from the members endpoint      | Requeue with backoff. Join and detach are idempotent (§10), so a retry after a partial success converges, and the selector checks refuse any snapshot taken before convergence (§4.5).                                                         |
 
 Every path degrades to a defined state: a failed create leaves a Pending PVC, a refused snapshot leaves no generation, and an incomplete generation is reported rather than silently restored short.
 
@@ -498,6 +526,7 @@ Full scenario matrix, coverage status, and hand-off test concepts: [`tests/test-
 - **Integration:** the CSI GroupController against a mock backend and the snapshot-controller under `envtest`, asserting a `VolumeGroupSnapshot` materializes one `VolumeSnapshot` per member and that a drifted selector is refused.
 - **E2E:** the cross-volume consistency claim, which only a live cluster proves: provision labeled members, run a hashed round-robin writer across them, take generations, restore every member from one generation, and assert the group prefix property and a passing negative control against a mixed-generation restore. This mirrors the existing consistency-group regression script and is where the crash-consistency guarantee is actually verified.
 - **Load / long-running:** group snapshot cadence under sustained write load, asserting the generation counter advances and no member's snapshot diverges by more than one write from the others.
+- **Dynamic membership (Phase 4):** the backend join guards as unit tests (pinned placement, pool, cap, and the one-way refusal), the CSI label watcher's reconcile as an integration test against a mock backend, and the label add and remove round trip live: a labeled existing volume appears in the next generation, a de-labeled member disappears from it, and every earlier generation stays complete.
 
 The risk concentrates in the E2E cross-volume assertion, the placement failure path (a member that cannot colocate must fail creation), and the delete-preserves-snapshots rule (§8.2), which is the one data-loss path. Those must not be cut if the schedule slips. Phase 2 scenarios (`VolumeGroupSnapshot` create, clone, and delete-after-group-gone) become testable only once P0-4 enables the group feature gate.
 
@@ -522,6 +551,7 @@ The backend work (P0-2, P0-3) makes `policy_id` optional on the group record, ad
 | 2   | ~~**Migration of a group member.**~~ **Resolved for now:** consistency-group members are excluded from volume migration, so a group's placement stays fixed (§8.4). Open for later: whether to support migrating a whole group as a unit, moving the shared pin together, rather than refusing migration outright.                                                                                                                                                                  | Backend team                  |
 | 3   | **Deleting a member volume with group snapshots.** §8.2 requires a volume delete to preserve the member's group snapshots. Confirm the backend delete path preserves them rather than cascading, since this is the one data-loss path in the design.                                                                                                                                                                                                                                | Backend team                  |
 | 4   | ~~**Single-operation group restore.**~~ **Resolved:** a dedicated `VolumeGroupSnapshotOps` kind with `action: Restore` (§7.4, Appendix A, Phase 3). It composes the per-member restores of §7.1 into one apply and optionally forms a new group from the clones. The CSI driver and the backend are unchanged.                                                                                                                                                                      | Operator team                 |
+| 5   | **Rejoin under a mutable label.** Phase 4 keeps the one-way rule: a label re-added to a detached volume is refused, and re-establishment is a labeled clone (§4.3, §4.5). The legacy policy attach path instead replaces a closed epoch with a fresh one, which drops the old window from the generation math. Confirm the one-way refusal for the label path, and whether the policy path's replacement behavior should be retired with it.                                        | Backend team                  |
 
 ---
 
