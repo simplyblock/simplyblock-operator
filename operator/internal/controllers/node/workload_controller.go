@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -218,16 +219,29 @@ func (r *StorageNodeWorkloadReconciler) reconcileDaemonSet(
 		return err
 	}
 
-	var existing appsv1.DaemonSet
-	err = r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
-	}
-	if err != nil {
-		return err
-	}
-	desired.ResourceVersion = existing.ResourceVersion
-	return r.Update(ctx, desired)
+	// The read that seeds the update is served from the informer cache, and the
+	// DaemonSet controller rewrites status on every pod transition — so while
+	// pods are rolling, which is exactly when this reconcile runs, the cached
+	// resourceVersion is stale and the update loses. Retrying on a fresh read is
+	// the answer rather than failing the whole workload pass over a conflict that
+	// means no more than that somebody counted a ready pod.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var existing appsv1.DaemonSet
+		err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+		if apierrors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		if err != nil {
+			return err
+		}
+
+		// The desired object is rebuilt from the template on every attempt, so a
+		// retry does not carry the resourceVersion the previous one was refused
+		// for.
+		update := desired.DeepCopy()
+		update.ResourceVersion = existing.ResourceVersion
+		return r.Update(ctx, update)
+	})
 }
 
 // image is the storage-node container image, defaulting to the ControlPlane
