@@ -226,6 +226,27 @@ type ClusterTemplate struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+	// each worker runs, so a group of two workers on a two-socket layout expands
+	// to four nodes.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on: the layout a fleet was built with is not one a later document
+	// can vary, and a reviewer should see it before the cluster exists.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket. See
+	// SocketsToUse, which it multiplies.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`

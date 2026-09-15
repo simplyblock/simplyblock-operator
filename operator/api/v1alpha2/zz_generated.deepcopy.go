@@ -284,6 +284,16 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.SocketsToUse != nil {
+		in, out := &in.SocketsToUse, &out.SocketsToUse
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.NodesPerSocket != nil {
+		in, out := &in.NodesPerSocket, &out.NodesPerSocket
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Stripe != nil {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)
@@ -563,6 +573,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 		for key, val := range *in {
 			(*out)[key] = val
 		}
+	}
+	if in.EnableControlPlaneNodes != nil {
+		in, out := &in.EnableControlPlaneNodes, &out.EnableControlPlaneNodes
+		*out = new(bool)
+		**out = **in
 	}
 	if in.DeviceFilter != nil {
 		in, out := &in.DeviceFilter, &out.DeviceFilter
