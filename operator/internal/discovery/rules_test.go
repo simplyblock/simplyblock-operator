@@ -214,8 +214,8 @@ func TestWorkerHasDevicesExplainsAMachineWhoseDisksAreAlreadyDriven(t *testing.T
 	// full of disks.
 	worker := report("worker-1")
 	worker.NVMeControllers = []nodeprobe.Controller{
-		{Address: "0000:00:02.0", Driver: "uio_pci_generic", TakenByUserspace: true},
-		{Address: "0000:00:03.0", Driver: "uio_pci_generic", TakenByUserspace: true},
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", InUse: true},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", InUse: true},
 	}
 
 	ok, why := (WorkerHasDevices{}).Admit(worker, nil)
@@ -310,5 +310,39 @@ func TestParseSizeRange(t *testing.T) {
 		if _, _, err := ParseSizeRange(bad); err == nil {
 			t.Errorf("parsed %q as a size range", bad)
 		}
+	}
+}
+
+// A controller nothing is using can be reclaimed, and one something is using
+// cannot. The refusal has to say which, because the two ask a reviewer for
+// opposite things: reclaim these disks, or leave that machine alone.
+//
+// The holder need not be simplyblock. vfio-pci is also how a disk is passed
+// through to a guest, so a machine whose controllers are in use may be serving
+// something this product knows nothing about, and a refusal that read as
+// "leftovers, take them" would be an instruction to break it.
+func TestWorkerHasDevicesSeparatesReclaimableFromInUse(t *testing.T) {
+	idle := report("worker-1")
+	idle.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic"},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic"},
+	}
+
+	_, why := (WorkerHasDevices{}).Admit(idle, nil)
+	if !strings.Contains(why, "nothing is using them") {
+		t.Errorf("an idle binding is not reported as reclaimable: %q", why)
+	}
+
+	busy := report("worker-2")
+	busy.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:04.0", Driver: "vfio-pci", InUse: true},
+	}
+
+	_, why = (WorkerHasDevices{}).Admit(busy, nil)
+	if !strings.Contains(why, "in use") {
+		t.Errorf("a held controller is not reported as in use: %q", why)
+	}
+	if strings.Contains(why, "nothing is using them") {
+		t.Errorf("a held controller was offered for reclaiming: %q", why)
 	}
 }

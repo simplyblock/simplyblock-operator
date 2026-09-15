@@ -118,13 +118,29 @@ type Device struct {
 	// this was written against uio0 was the controller in slot 05.0 while uio2
 	// was the one in slot 02.0.
 	UIODevices []string
+
+	// InUse reports whether anything holds one of UIODevices open.
+	//
+	// [Scan] does not set it, because answering needs the process table and a
+	// scan reads sysfs. [CheckHolders] fills it in, and a false on a device
+	// neither of them looked at is the zero value rather than an answer: a
+	// caller that needs to tell the two apart has to know which produced the
+	// device, which is why the check records its failures rather than leaving
+	// this field to carry them.
+	InUse bool
 }
 
 // IsNVMe reports whether the device is an NVMe controller.
 func (d Device) IsNVMe() bool { return strings.HasPrefix(d.Class, classNVMePrefix) }
 
-// BoundToUserspace reports whether a userspace-IO driver owns the device, which
-// on this product's hosts means SPDK has taken it or something left it taken.
+// BoundToUserspace reports whether a userspace-IO driver owns the device.
+//
+// It says which driver is bound and nothing about who is driving it. SPDK binds
+// a controller this way, and so does a hypervisor passing a disk through to a
+// guest, a DPDK application, and any other product that drives hardware from
+// userspace; a binding left behind by something that has since exited looks the
+// same as all of them. [HeldBy] is what separates those cases, and it is a
+// different question with a different source.
 func (d Device) BoundToUserspace() bool {
 	return d.Driver == DriverUIOGeneric || d.Driver == DriverVFIO
 }

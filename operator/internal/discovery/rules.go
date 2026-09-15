@@ -310,14 +310,33 @@ func (WorkerHasDevices) Admit(report nodeprobe.Report, admitted []nodeprobe.Devi
 
 	// A worker whose disks are on a userspace driver has no block devices at
 	// all, so "no device survived the rules" is true and useless: the machine
-	// is full of disks that something else is already driving. Saying which
-	// controllers and which driver is the difference between a reviewer
-	// concluding the machine has no storage and knowing to reclaim it.
-	if taken := report.ControllersTakenByUserspace(); len(taken) > 0 {
+	// is full of disks that something else has. Saying which controllers and
+	// which driver is the difference between a reviewer concluding the machine
+	// has no storage and knowing what is on it.
+	if bound := report.ControllersBoundToUserspace(); len(bound) > 0 {
+		// Whether anything is driving them is the half that decides what to do
+		// next, and the two answers ask for opposite things. Nothing holding
+		// them means the binding is a leftover and the disks can be taken back.
+		// Something holding them means the machine is serving whatever that is,
+		// which need not be this product: a userspace binding is also how a
+		// disk is passed through to a guest.
+		var busy []nodeprobe.Controller
+		for _, controller := range bound {
+			if controller.InUse {
+				busy = append(busy, controller)
+			}
+		}
+		if len(busy) > 0 {
+			return false, fmt.Sprintf(
+				"it presents no usable block device, and %d of its NVMe controllers (%s) are "+
+					"bound to a userspace driver and in use, so something is driving its disks",
+				len(busy), describeControllers(busy))
+		}
 		return false, fmt.Sprintf(
 			"it presents no usable block device, and %d of its NVMe controllers (%s) are "+
-				"held by a userspace driver, so the kernel presents no disk for them",
-			len(taken), describeControllers(taken))
+				"bound to a userspace driver and nothing is using them, so the disks are "+
+				"there to be reclaimed",
+			len(bound), describeControllers(bound))
 	}
 	return false, "no device of it survived the device rules"
 }

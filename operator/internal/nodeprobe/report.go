@@ -28,6 +28,8 @@ import (
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/pci"
 )
 
 // ReportVersion is the schema version of the JSON below.
@@ -36,7 +38,7 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 1
+const ReportVersion = 2
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -259,6 +261,12 @@ type Controller struct {
 	// Driver is what owns it: the kernel's own driver for a controller whose
 	// namespaces it presents, uio_pci_generic or vfio-pci for one a userspace
 	// driver has, and empty for one nothing owns.
+	//
+	// All four states matter and none of them is derivable from the others,
+	// which is why the driver is reported rather than a flag saying whether it
+	// is a userspace one. uio_pci_generic and vfio-pci in particular differ in
+	// what they suggest about who bound it: the second is also how a disk is
+	// passed through to a guest.
 	Driver string `json:"driver,omitempty"`
 
 	// Vendor and Product are the raw PCI identifiers, which is what sysfs has:
@@ -269,17 +277,40 @@ type Controller struct {
 	// NUMANode is the memory node it hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
-	// TakenByUserspace reports whether a userspace-IO driver owns it, which on
-	// this product's hosts means SPDK has it or something left it taken.
-	TakenByUserspace bool `json:"takenByUserspace,omitempty"`
+	// InUse reports whether anything holds the controller open.
+	//
+	// It is the question Driver cannot answer and the one that decides whether
+	// a controller can be reclaimed: a userspace binding nothing is driving is
+	// a leftover, and the same binding with a process behind it is a disk in
+	// service, which may belong to a hypervisor guest or another product rather
+	// than to this one.
+	//
+	// False on a controller the probe could not check is the zero value and not
+	// an answer. A probe that failed to read the process table says so in
+	// Unreadable, so a reader deciding whether to reclaim has to find this
+	// report free of such an entry first.
+	InUse bool `json:"inUse,omitempty"`
 }
 
-// ControllersTakenByUserspace is the controllers no block device corresponds
+// BoundToUserspace reports whether a userspace-IO driver owns the controller.
+//
+// It reads the driver and says nothing about who bound it or whether anything
+// is still driving it. InUse answers the second, and nothing answers the first,
+// because a binding carries no record of what made it.
+func (c Controller) BoundToUserspace() bool {
+	return c.Driver == pci.DriverUIOGeneric || c.Driver == pci.DriverVFIO
+}
+
+// ControllersBoundToUserspace is the controllers no block device corresponds
 // to, which is the answer to why a worker full of disks reported none.
-func (r Report) ControllersTakenByUserspace() []Controller {
+//
+// The classification lives here rather than at every call site because which
+// drivers are userspace drivers is something this product knows and a string
+// comparison spread across consumers would drift.
+func (r Report) ControllersBoundToUserspace() []Controller {
 	var taken []Controller
 	for _, controller := range r.NVMeControllers {
-		if controller.TakenByUserspace {
+		if controller.BoundToUserspace() {
 			taken = append(taken, controller)
 		}
 	}
