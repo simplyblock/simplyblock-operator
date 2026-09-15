@@ -52,6 +52,10 @@ const (
 	// operator writes it and reads it from nowhere: it is an output (§5).
 	readyToDeploy = "storage.simplyblock.io/ready-to-deploy"
 
+	// readyToDeployValue is what the marker carries. An annotation value is a
+	// string, and this is the one a selector matches on.
+	readyToDeployValue = "true"
+
 	// configRetry is how long a held document waits before looking again at
 	// something it cannot hurry: a control plane that is not ready, or a worker
 	// somebody has yet to add.
@@ -270,14 +274,14 @@ func (r *ClusterDeploymentConfigReconciler) holdAsDraft(
 func (r *ClusterDeploymentConfigReconciler) markReadyToDeploy(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) error {
-	if config.Annotations[readyToDeploy] == "true" {
+	if config.Annotations[readyToDeploy] == readyToDeployValue {
 		return nil
 	}
 	patch := client.MergeFrom(config.DeepCopy())
 	if config.Annotations == nil {
 		config.Annotations = map[string]string{}
 	}
-	config.Annotations[readyToDeploy] = "true"
+	config.Annotations[readyToDeploy] = readyToDeployValue
 	return r.Patch(ctx, config, patch)
 }
 
