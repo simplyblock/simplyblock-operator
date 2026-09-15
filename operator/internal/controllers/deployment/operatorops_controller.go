@@ -42,7 +42,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -206,13 +208,32 @@ func (r *OperatorOpsReconciler) inspect(
 		return ctrl.Result{}, err
 	}
 
+	// A worker that looked fine and was not used owes the run a reason. Both
+	// exclusions below are silent otherwise, and a draft missing three machines
+	// somebody expected is a draft they have no way to ask about.
+	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	workers := make([]string, 0, len(nodes.Items))
 	for _, node := range nodes.Items {
-		if !schedulable(node) {
-			continue
-		}
 		if _, already := taken[node.Name]; already {
 			continue
+		}
+		// The role is not derivable from the taints. Kubernetes taints its
+		// control-plane nodes and OpenShift usually does not taint its
+		// infrastructure ones, so an infra node passes every check the run had
+		// before this one and its being the storage tier went unnoticed.
+		role := discoverypkg.RoleOf(node)
+		if !UsableWorker(node, useControlPlane) {
+			r.event(ops, corev1.EventTypeNormal, "WorkerDeclined",
+				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
+			continue
+		}
+		if !role.HoldsStorageNodes() {
+			// The reviewer asked for these and still has to see which machines
+			// they got, because the draft's control-plane node set is otherwise
+			// just another block of hostnames.
+			r.event(ops, corev1.EventTypeWarning, "ControlPlaneNodeIncluded", fmt.Sprintf(
+				"%s is %s and is in the draft because spec.discover.enableControlPlaneNodes is set",
+				node.Name, role.Describe()))
 		}
 		workers = append(workers, node.Name)
 	}
@@ -230,8 +251,9 @@ func (r *OperatorOpsReconciler) inspect(
 
 	if len(workers) == 0 {
 		return r.fail(ctx, ops,
-			"no schedulable worker is free: every node either carries a StorageNode already, "+
-				"is unschedulable, or does not match the run's selector")
+			"no worker is free: every node either carries a StorageNode already, is "+
+				"unschedulable, is reserved for the control plane or for infrastructure, "+
+				"or does not match the run's selector")
 	}
 
 	ops.Status.Workers = workers
@@ -639,6 +661,46 @@ func (r *OperatorOpsReconciler) event(
 // A cordoned node and a node carrying a NoSchedule taint are both excluded: a
 // probe Job is pinned with spec.nodeName and would run on either, and a worker
 // the cluster is not scheduling to is not one to hand to a storage cluster.
+// UsableWorker reports whether a discovery run would inspect this machine.
+//
+// It is exported so that the one thing deciding whether a run is worth raising at
+// all reads the same predicate the run itself applies. A bootstrap that raised a
+// run against a cluster with nothing to inspect would create an object whose only
+// outcome is to fail, and on a namespace delete that object holds a finalizer the
+// operator may no longer be alive to clear.
+func UsableWorker(node corev1.Node, useControlPlane bool) bool {
+	if !schedulable(node) {
+		return false
+	}
+	role := discoverypkg.RoleOf(node)
+	return role.HoldsStorageNodes() || useControlPlane
+}
+
+// declinedBecause says why UsableWorker refused the machine, so the event a
+// reviewer reads names the condition rather than only the outcome.
+func declinedBecause(node corev1.Node, role discoverypkg.NodeRole) string {
+	if !schedulable(node) {
+		return unschedulableReason(node)
+	}
+	return fmt.Sprintf("it is %s; set spec.discover.enableControlPlaneNodes to include it",
+		role.Describe())
+}
+
+// unschedulableReason says which of the two conditions excluded the node, so an
+// administrator reads "it is cordoned" rather than a bare refusal.
+func unschedulableReason(node corev1.Node) string {
+	if node.Spec.Unschedulable {
+		return "it is cordoned"
+	}
+	for _, taint := range node.Spec.Taints {
+		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
+			return fmt.Sprintf("it carries the taint %s=%s:%s",
+				taint.Key, taint.Value, taint.Effect)
+		}
+	}
+	return "it is not schedulable"
+}
+
 func schedulable(node corev1.Node) bool {
 	if node.Spec.Unschedulable {
 		return false

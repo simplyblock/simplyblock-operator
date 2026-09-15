@@ -56,6 +56,18 @@ type KubeNode struct {
 	// that looked fine was not used.
 	Unschedulable bool
 	Taints        []string
+
+	// Role is what the machine is for, read off its node-role labels. It is not
+	// derivable from the taints beside it: Kubernetes taints its control-plane
+	// nodes and OpenShift usually does not taint its infrastructure ones, so a
+	// fleet's infra nodes pass a taint check and would otherwise land in a draft
+	// as storage workers.
+	Role NodeRole
+
+	// Roles is every role the labels name, which is how a combined deployment
+	// marks a machine that is both a control-plane node and a worker. Role is the
+	// most restrictive of them; this is what a draft reports.
+	Roles []NodeRole
 }
 
 // ReservedMemoryBytes is capacity less allocatable: the memory the kubelet
@@ -94,6 +106,8 @@ func KubeNodeOf(node corev1.Node) KubeNode {
 		CapacityCPUMilli:       milliValue(node.Status.Capacity, corev1.ResourceCPU),
 		AllocatableCPUMilli:    milliValue(node.Status.Allocatable, corev1.ResourceCPU),
 		Unschedulable:          node.Spec.Unschedulable,
+		Role:                   RoleOf(node),
+		Roles:                  RolesOf(node),
 	}
 
 	for _, taint := range node.Spec.Taints {

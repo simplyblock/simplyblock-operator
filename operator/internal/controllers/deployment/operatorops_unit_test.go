@@ -315,7 +315,7 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
-	if !strings.Contains(ops.Status.Message, "no schedulable worker") {
+	if !strings.Contains(ops.Status.Message, "no worker is free") {
 		t.Errorf("the message is %q, and it does not say what was wrong", ops.Status.Message)
 	}
 }
