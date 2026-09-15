@@ -182,6 +182,35 @@ func TestLVMVolumeGroupReleaseFallsBackToDeviceMapper(t *testing.T) {
 	}
 }
 
+// The same dead-device force path is what leaves system.devices holding an
+// entry nothing will ever use again, so the force path is also where it is
+// pruned: every device the layer was handed, not only the ones dmsetup found
+// live nodes for.
+func TestLVMVolumeGroupReleaseForgetsDevicesOnTheForcePath(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.err["vgchange"] = errors.New("Volume group vol-... not found")
+
+	if err := l.Release(context.Background(), belowMembers(1)); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if !cmds.ran("lvmdevices") {
+		t.Fatalf("the stale devices-file entry was never pruned:\n%s", cmds.issued())
+	}
+}
+
+// Pruning is hygiene, not a correctness requirement the teardown depends on
+// completing: an unstage must still succeed even when lvmdevices itself
+// fails, or a housekeeping step would block a pod from coming down.
+func TestLVMVolumeGroupReleaseSurvivesForgetDeviceFailure(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.err["vgchange"] = errors.New("Volume group vol-... not found")
+	cmds.err["lvmdevices"] = errors.New("devices file is locked")
+
+	if err := l.Release(context.Background(), belowMembers(1)); err != nil {
+		t.Fatalf("Release must not fail over a devices-file hygiene error: %v", err)
+	}
+}
+
 // Destroy removes the group, and only a deletion path reaches it.
 func TestLVMVolumeGroupDestroyRemovesTheGroup(t *testing.T) {
 	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
