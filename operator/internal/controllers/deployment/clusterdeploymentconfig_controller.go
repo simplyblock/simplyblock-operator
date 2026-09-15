@@ -50,6 +50,10 @@ import (
 const (
 	// readyToDeploy marks an approved document so a selector can find one. The
 	// operator writes it and reads it from nowhere: it is an output (§5).
+	//
+	// It is a label rather than an annotation, and that is the whole point of it.
+	// A label selector cannot see an annotation, so the marker would have been
+	// invisible to the one thing it exists for.
 	readyToDeploy = "storage.simplyblock.io/ready-to-deploy"
 
 	// readyToDeployValue is what the marker carries. An annotation value is a
@@ -142,9 +146,12 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 	}
 
 	if ready, reason := r.controlPlaneReady(ctx); !ready {
+		// Expanding rather than Draft. The document is approved, and Draft is
+		// what the API calls one that is not: reporting it would tell every
+		// status consumer the deployment is still editable and has not started.
 		r.emit(&config, corev1.EventTypeWarning, ControlPlaneNotReady, reason)
 		return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, &config,
-			simplyblockv1alpha2.ClusterDeploymentConfigPhaseDraft, reason)
+			simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding, reason)
 	}
 
 	return r.expand(ctx, &config)
@@ -274,14 +281,14 @@ func (r *ClusterDeploymentConfigReconciler) holdAsDraft(
 func (r *ClusterDeploymentConfigReconciler) markReadyToDeploy(
 	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) error {
-	if config.Annotations[readyToDeploy] == readyToDeployValue {
+	if config.Labels[readyToDeploy] == readyToDeployValue {
 		return nil
 	}
 	patch := client.MergeFrom(config.DeepCopy())
-	if config.Annotations == nil {
-		config.Annotations = map[string]string{}
+	if config.Labels == nil {
+		config.Labels = map[string]string{}
 	}
-	config.Annotations[readyToDeploy] = readyToDeployValue
+	config.Labels[readyToDeploy] = readyToDeployValue
 	return r.Patch(ctx, config, patch)
 }
 

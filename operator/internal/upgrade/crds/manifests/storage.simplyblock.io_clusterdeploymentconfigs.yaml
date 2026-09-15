@@ -117,6 +117,30 @@ spec:
                     description: Name is the StorageCluster's name.
                     maxLength: 253
                     type: string
+                  nodesPerSocket:
+                    description: |-
+                      NodesPerSocket is how many storage nodes run per NUMA socket. See
+                      SocketsToUse, which it multiplies.
+                    format: int32
+                    maximum: 8
+                    minimum: 1
+                    type: integer
+                  socketsToUse:
+                    description: |-
+                      SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+                      means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+                      each worker runs, so a group of two workers on a two-socket layout expands
+                      to four nodes.
+
+                      It is here rather than on a node set because it is immutable on the cluster
+                      it lands on: the layout a fleet was built with is not one a later document
+                      can vary, and a reviewer should see it before the cluster exists.
+                    items:
+                      maxLength: 16
+                      type: string
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-type: set
                   stripe:
                     description: Stripe is the erasure-coding layout.
                     properties:

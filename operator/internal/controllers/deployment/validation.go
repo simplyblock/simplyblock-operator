@@ -79,7 +79,84 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if found := r.missingFailureDomains(ctx, config); found != "" {
 		findings = append(findings, finding{reason: DeviceNotFound, message: found})
 	}
+
+	if found := duplicateWorkers(config); len(found) > 0 {
+		findings = append(findings, finding{
+			reason: WorkerNotFound,
+			message: fmt.Sprintf(
+				"%s %s in more than one group, and a storage node is identified by its "+
+					"worker and slot alone, so only the first group's devices and settings "+
+					"would reach it",
+				strings.Join(found, ", "), plural(len(found), "appears", "appear")),
+		})
+	}
+
+	if found := conflictingInterfaces(config); found != "" {
+		findings = append(findings, finding{reason: WorkerNotFound, message: found})
+	}
 	return findings, nil
+}
+
+// duplicateWorkers names every worker the document lists in more than one group.
+//
+// The schema permits it and the expansion cannot honor it: a StorageNode is
+// identified by its cluster, its worker, and its slot, so the first group to reach
+// a worker creates its nodes and every later group's device list, fault group, and
+// memory setting is discarded by the create that finds one already there. Which
+// group wins is the document's order, which is not a thing anybody chose.
+func duplicateWorkers(config *simplyblockv1alpha2.ClusterDeploymentConfig) []string {
+	seen := map[string]int{}
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			for _, worker := range group.Workers {
+				seen[worker]++
+			}
+		}
+	}
+
+	repeated := map[string]struct{}{}
+	for worker, count := range seen {
+		if count > 1 {
+			repeated[worker] = struct{}{}
+		}
+	}
+	return sortedKeys(repeated)
+}
+
+// conflictingInterfaces reports groups that name different network interfaces.
+//
+// A DaemonSet is one object for every node it schedules and its pod template
+// cannot differ per group, so the interfaces are the cluster's whichever group
+// states them. A document whose groups disagree therefore describes something the
+// expansion cannot build, and taking the first silently would bind every node to
+// one group's network while the document said otherwise.
+func conflictingInterfaces(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	mgmt := map[string]struct{}{}
+	data := map[string]struct{}{}
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.MgmtInterface != "" {
+				mgmt[group.MgmtInterface] = struct{}{}
+			}
+			if len(group.DataInterfaces) > 0 {
+				data[strings.Join(group.DataInterfaces, ",")] = struct{}{}
+			}
+		}
+	}
+
+	if len(mgmt) > 1 {
+		return fmt.Sprintf(
+			"the groups name different management interfaces (%s), and one DaemonSet "+
+				"serves every node of a cluster, so they cannot differ",
+			strings.Join(sortedKeys(mgmt), ", "))
+	}
+	if len(data) > 1 {
+		return fmt.Sprintf(
+			"the groups name different data interfaces (%s), and one DaemonSet serves "+
+				"every node of a cluster, so they cannot differ",
+			strings.Join(sortedKeys(data), "; "))
+	}
+	return ""
 }
 
 // missingWorkers names every worker the document lists that is not a node of this

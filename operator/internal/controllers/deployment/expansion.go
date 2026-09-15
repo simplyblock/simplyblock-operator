@@ -18,6 +18,7 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -138,7 +139,18 @@ func (r *ClusterDeploymentConfigReconciler) createCluster(
 	if err != nil {
 		return false, err
 	}
-	if err := r.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, cluster); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// The read above missed and somebody created the cluster between the
+			// two. That is the ClusterExists case arriving by a different route,
+			// not a success: the document asked to create a cluster and did not,
+			// and nothing here proves the one that is there is the one it
+			// described (§6).
+			return false, refusef(ClusterExists,
+				"spec.cluster.name is %s and a StorageCluster by that name was created "+
+					"while this document was being expanded; set spec.clusterRef to add "+
+					"nodes to it instead", name)
+		}
 		return false, fmt.Errorf("creating StorageCluster %s: %w", name, err)
 	}
 	r.emit(config, corev1.EventTypeNormal, ClusterCreated,
@@ -189,6 +201,14 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) *simplyblockv1alpha2.StorageNodesSpec {
 	workload := &simplyblockv1alpha2.StorageNodesSpec{}
+	if template := config.Spec.Cluster; template != nil {
+		// The socket layout decides how many storage nodes a worker runs, and
+		// CreatingNodes reads it back off the cluster. Leaving it unset here gave
+		// every cluster a document created one node on socket 0, whatever the
+		// document said.
+		workload.SocketsToUse = template.SocketsToUse
+		workload.NodesPerSocket = template.NodesPerSocket
+	}
 
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
@@ -208,6 +228,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 	case simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
 		workload.OpenShiftCluster = ptr.To(true)
 		workload.EnableCpuTopology = ptr.To(true)
+		// Stated rather than left nil. The renderer reads an unset flag as skipping
+		// the kubelet configuration, and the settings this product has shipped
+		// for OpenShift all configure it, so silence here would change what an
+		// OpenShift deployment does.
+		workload.EnableKubeletConfiguration = ptr.To(true)
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
 		// Talos has no writable kubelet configuration and no package manager, so
 		// the node applies neither.
@@ -254,17 +279,24 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 		return false, err
 	}
 
-	created := append([]string(nil), config.Status.NodeRefs...)
+	// The record is rebuilt from the slots the document describes rather than
+	// accumulated across passes. A pass that created a node and then failed to
+	// persist status.nodeRefs would otherwise skip it on the next pass, as one
+	// that already exists, and the finished document would permanently omit a
+	// node it created.
+	var created []string
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
 			for _, worker := range group.Workers {
 				for slot := int32(0); slot < slotsPerWorker(&cluster); slot++ {
-					if _, there := existing[slotKey{worker: worker, slot: slot}]; there {
+					if name, there := existing[slotKey{worker: worker, slot: slot}]; there {
+						created = append(created, name)
 						continue
 					}
 					node := r.buildNode(config, &cluster, set, group, worker, slot)
 					if err := r.Create(ctx, node); err != nil {
 						if apierrors.IsAlreadyExists(err) {
+							created = append(created, node.Name)
 							continue
 						}
 						return false, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
@@ -277,6 +309,7 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 	}
 
 	sort.Strings(created)
+	created = slices.Compact(created)
 	return true, r.recordNodes(ctx, config, created)
 }
 
@@ -290,12 +323,12 @@ type slotKey struct {
 // nodesOfCluster indexes the cluster's existing nodes by the slot each fills.
 func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 	ctx context.Context, namespace, cluster string,
-) (map[slotKey]struct{}, error) {
+) (map[slotKey]string, error) {
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("listing the cluster's nodes: %w", err)
 	}
-	filled := map[slotKey]struct{}{}
+	filled := map[slotKey]string{}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
 		if node.Spec.ClusterRef != cluster {
@@ -305,7 +338,7 @@ func (r *ClusterDeploymentConfigReconciler) nodesOfCluster(
 		if node.Spec.Slot != nil {
 			slot = *node.Spec.Slot
 		}
-		filled[slotKey{worker: node.Spec.WorkerNode, slot: slot}] = struct{}{}
+		filled[slotKey{worker: node.Spec.WorkerNode, slot: slot}] = node.Name
 	}
 	return filled, nil
 }
@@ -370,6 +403,11 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 					VCPUCount:        cluster.Spec.VCPUCount,
 					MinHugePagesSize: cluster.Spec.MinHugePagesSize,
 				},
+				// A node joining a cluster that already exists is an expansion,
+				// which the control plane reads as a request to rebalance onto it
+				// rather than to treat it as part of an initial layout. A growth
+				// document is exactly that case.
+				Expand:           expansionOf(config),
 				DeviceNames:      devicesOf(group),
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
@@ -396,6 +434,21 @@ func decomposeSlot(
 		return workload.SocketsToUse[position], index
 	}
 	return fmt.Sprintf("%d", position), index
+}
+
+// expansionOf reports whether the nodes this document creates are joining a
+// cluster that already exists.
+//
+// The control plane reads the flag as a request to rebalance onto the new node
+// rather than to treat it as part of an initial layout, so a growth document's
+// nodes have to carry it: they are by definition an addition to an active
+// cluster. A document that creates its own cluster is the initial layout, and
+// leaves it unset.
+func expansionOf(config *simplyblockv1alpha2.ClusterDeploymentConfig) *bool {
+	if config.Spec.ClusterRef == "" {
+		return nil
+	}
+	return ptr.To(true)
 }
 
 // devicesOf expands a group's device selection into the one list a node carries.
