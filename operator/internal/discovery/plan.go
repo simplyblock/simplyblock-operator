@@ -87,6 +87,84 @@ func (p Plan) Summary() string {
 		len(p.Workers), devices, p.Class, groups, len(p.NodeSets), len(p.Refusals))
 }
 
+// Explain says why the plan holds nothing, one line per worker.
+//
+// A worker is refused either as a whole — its controllers are on a userspace
+// driver, so the kernel presents no disk — or one device at a time, and the two
+// need different answers. The first is on the worker's own refusal. The second
+// leaves a worker-level reason that is the arithmetic ("no device survived the
+// rules") and puts the reason on the devices, so the device refusals are folded
+// in behind it, deduplicated and counted.
+//
+// Refusals that were pre-filters are left out of both. A machine presents
+// sixteen network block devices and four disks, and a line saying the sixteen
+// were not whole disks is true, longer than the rest of the message, and not
+// the answer to anything.
+func (p Plan) Explain() []string {
+	type perWorker struct {
+		worker  string
+		line    string
+		reasons []string
+		counts  map[string]int
+	}
+
+	order := make([]string, 0, len(p.Refusals))
+	byWorker := map[string]*perWorker{}
+	at := func(worker string) *perWorker {
+		if found, ok := byWorker[worker]; ok {
+			return found
+		}
+		fresh := &perWorker{worker: worker, counts: map[string]int{}}
+		byWorker[worker] = fresh
+		order = append(order, worker)
+		return fresh
+	}
+
+	for _, refusal := range p.Refusals {
+		if refusal.Device == "" {
+			at(refusal.Worker).line = refusal.Reason
+			continue
+		}
+		if refusal.PreFilter {
+			continue
+		}
+		entry := at(refusal.Worker)
+		if _, seen := entry.counts[refusal.Reason]; !seen {
+			entry.reasons = append(entry.reasons, refusal.Reason)
+		}
+		entry.counts[refusal.Reason]++
+	}
+
+	lines := make([]string, 0, len(order))
+	for _, worker := range order {
+		entry := byWorker[worker]
+		if entry.line == "" && len(entry.reasons) == 0 {
+			// Every refusal on it was a pre-filter and the worker itself was
+			// admitted, so there is nothing about it to explain.
+			continue
+		}
+		detail := make([]string, 0, len(entry.reasons))
+		for _, reason := range entry.reasons {
+			if count := entry.counts[reason]; count > 1 {
+				detail = append(detail, fmt.Sprintf("%d devices: %s", count, reason))
+				continue
+			}
+			detail = append(detail, "1 device: "+reason)
+		}
+
+		switch {
+		case len(detail) == 0:
+			lines = append(lines, entry.worker+": "+entry.line)
+		case entry.line == "":
+			lines = append(lines, entry.worker+": "+strings.Join(detail, ", "))
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %s (%s)",
+				entry.worker, entry.line, strings.Join(detail, ", ")))
+		}
+	}
+	return lines
+}
+
 // RefusalLines renders the refusals for a log or an event, one per line.
 func (p Plan) RefusalLines() []string {
 	lines := make([]string, 0, len(p.Refusals))
@@ -235,10 +313,13 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 	var refusals []Refusal
 
 	for _, device := range report.Devices {
-		ok, rule, reason := true, "", ""
+		ok, rule, reason, pre := true, "", "", false
 		for _, r := range rules {
 			if admit, why := r.Admit(report, device); !admit {
 				ok, rule, reason = false, r.Name(), why
+				if marker, says := r.(PreFilter); says {
+					pre = marker.PreFilter()
+				}
 				break
 			}
 		}
@@ -247,7 +328,8 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 			continue
 		}
 		refusals = append(refusals, Refusal{
-			Worker: report.Node, Device: device.Name, Rule: rule, Reason: reason,
+			Worker: report.Node, Device: device.Name,
+			Rule: rule, Reason: reason, PreFilter: pre,
 		})
 	}
 	return admitted, refusals

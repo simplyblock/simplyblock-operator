@@ -39,6 +39,17 @@ type DeviceRule interface {
 	Admit(report nodeprobe.Report, device nodeprobe.Device) (bool, string)
 }
 
+// PreFilter marks a device rule that decides whether a device was ever a
+// candidate. Refusing a loopback device for not being a whole disk is true and
+// says nothing about why a run found no storage; refusing a disk because
+// something else is using it is the answer.
+//
+// It is an optional interface rather than a method on DeviceRule because a rule
+// that does not say is the common case and should not have to.
+type PreFilter interface {
+	PreFilter() bool
+}
+
 // WorkerRule decides whether a worker takes part in the deployment.
 type WorkerRule interface {
 	Name() string
@@ -60,6 +71,12 @@ type Refusal struct {
 	// Rule is the rule that declined it, and Reason is why.
 	Rule   string
 	Reason string
+
+	// PreFilter says the rule answers whether the thing was ever a candidate,
+	// rather than why a candidate was not taken. A machine presents dozens of
+	// loopback and network block devices and one disk somebody cares about, and
+	// a report that treats the two alike buries the second under the first.
+	PreFilter bool
 }
 
 // String renders a refusal for an event or a status message.
@@ -153,6 +170,10 @@ type ClassRule struct {
 
 func (ClassRule) Name() string { return "device class" }
 
+// PreFilter: a device of another class is not one this run was scanning for, so
+// saying so explains nothing about the storage the fleet has.
+func (ClassRule) PreFilter() bool { return true }
+
 func (r ClassRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if r.Class == ClassNVMe && device.Transport != string(blockdev.TransportNVMe) {
 		return false, fmt.Sprintf("this run scans NVMe devices and the device is on %s",
@@ -188,6 +209,10 @@ func addressKind(class DeviceClass) string {
 type WholeDiskRule struct{}
 
 func (WholeDiskRule) Name() string { return "whole disk" }
+
+// PreFilter: a partition or a loopback device was never a disk this run could
+// have taken, so refusing it explains nothing about the fleet's storage.
+func (WholeDiskRule) PreFilter() bool { return true }
 
 func (WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.Kind != string(blockdev.KindDisk) {
