@@ -160,12 +160,23 @@ func (l *LVMVolumeGroup) Ensure(ctx context.Context, below volstack.Artifact) (v
 // longer reach the metadata it wants to update and every retry fails, so the
 // device-mapper nodes are removed directly. That escaping has to double the
 // dashes the way device-mapper does, or it matches nothing.
-func (l *LVMVolumeGroup) Release(ctx context.Context, _ volstack.Artifact) error {
+//
+// The same dead-member condition is what leaves this host's LVM devices file
+// (/etc/lvm/devices/system.devices) holding an entry for a device that will
+// never come back, so the force path is also where that entry is pruned
+// (Manager.ForgetDevice). Pruning is hygiene, not a hold this host gives up:
+// a failure here is logged and never turns an unstage into a failed one.
+func (l *LVMVolumeGroup) Release(ctx context.Context, below volstack.Artifact) error {
 	if err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group()); err == nil {
 		return nil
 	}
 	if err := l.cfg.Manager.RemoveOrphanedDMNodes(ctx, l.group()); err != nil {
 		return fmt.Errorf("lvmVolumeGroup: %w", err)
+	}
+	for _, dev := range below.Devices {
+		if err := l.cfg.Manager.ForgetDevice(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {
+			warnf("lvmVolumeGroup: prune stale devices-file entry for %s: %v", dev.Path, err)
+		}
 	}
 	return nil
 }
