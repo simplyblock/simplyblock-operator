@@ -160,7 +160,25 @@ type ExternalControlPlane struct {
 
 // ControlPlaneSource selects where the control plane comes from. Exactly one
 // member is set, which is what makes the two modes siblings rather than two
-// unrelated top-level fields.
+// unrelated top-level fields, and which member it is cannot change afterward.
+//
+// Both rules are declared here rather than on the field that carries the block,
+// for two separate reasons.
+//
+// The immutability is the interesting one. What is frozen is the choice between
+// the two modes and not the block, because the members have to stay editable:
+// changing spec.source.managed.image is an ordinary edit, and it is what a
+// ControlPlaneOps upgrade performs. Spelling it +k8s:immutable on the field
+// would emit self == oldSelf over the whole struct, which freezes the image with
+// it and makes that operation impossible to complete.
+//
+// The placement is the dull one. controller-gen v0.21.0 emits a single field's
+// marker-derived rules and its injected immutability rule into one list in an
+// order that varies between runs, so a field carrying both produces a CRD that
+// differs from itself and a drift check that fails at random. Two rules of the
+// same kind on a type are emitted in source order.
+// +kubebuilder:validation:XValidation:rule="(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1",message="set exactly one of managed or external"
+// +kubebuilder:validation:XValidation:rule="has(self.managed) == has(oldSelf.managed) && has(self.external) == has(oldSelf.external)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
 	// Managed is a control plane the operator installs.
 	// +optional
@@ -174,13 +192,15 @@ type ControlPlaneSource struct {
 // ControlPlaneSpec is the desired state of the simplyblock control plane for one
 // namespace.
 type ControlPlaneSpec struct {
-	// Source selects where the control plane comes from. Immutable: switching a
-	// live deployment between an installed control plane and an existing one is
-	// not a reconfiguration, because the clusters and their volumes live in the
-	// FoundationDB behind the old one.
-	// +kubebuilder:validation:XValidation:rule="(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1",message="set exactly one of managed or external"
+	// Source selects where the control plane comes from. Switching a live
+	// deployment between an installed control plane and an existing one is not a
+	// reconfiguration, because the clusters and their volumes live in the
+	// FoundationDB behind the old one, so which of the two modes is chosen is
+	// frozen at creation. What is inside the chosen mode stays editable.
+	//
+	// Both rules are declared on ControlPlaneSource rather than here. See the
+	// type for why.
 	// +kubebuilder:validation:Required
-	// +k8s:immutable
 	Source ControlPlaneSource `json:"source"`
 }
 
