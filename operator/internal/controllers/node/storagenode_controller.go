@@ -1161,11 +1161,22 @@ func domainIndex(domain string) *int {
 
 // partitionsPerDevice is how many partitions each device is carved into, which is
 // one when the journal has a device of its own and two when it shares.
+// partitionsPerDevice translates spec.enableJournalDevice into the count the
+// control plane wants: 0 gives a whole device to the journal manager, and 1
+// carves a journal partition out of each storage device. Unset is 1, which is
+// what the retired spec.partitions field defaulted to.
+//
+// The numbers are not arbitrary and are not a preference. The backend compares
+// what a device already carries against 1 + this count and repartitions when
+// they differ, and it cannot repartition a device whose table SPDK's gpt module
+// has claimed — which is every device of a machine that has run this product
+// before. A count one higher than the fleet was built with therefore does not
+// lay the disks out differently; it makes the node impossible to add.
 func partitionsPerDevice(workload *simplyblockv1alpha2.StorageNodesSpec) int {
 	if ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
-		return 1
+		return 0
 	}
-	return 2
+	return 1
 }
 
 func journalPercent(spec *simplyblockv1alpha2.JournalManagerSpec) int {
