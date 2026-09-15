@@ -270,15 +270,24 @@ type ClusterTemplate struct {
 // node set names the same member of its DeviceSelection. The expansion reads the
 // class off them and stamps it onto the cluster it creates, which is why the
 // document carries no field for it.
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
 	// reviewing a wrong document safe.
+	//
+	// It is defaulted and serialized rather than omitted when false, and the
+	// two are the same requirement read twice. A reviewer has to see the gate
+	// they are being asked to open, and the rules above have to find the field
+	// they read: a bool omitted when false is a key the apiserver never stores,
+	// so a rule reading it fails rather than reading false, and the first rule
+	// guarding approval denied every approval there could ever be. The has()
+	// guards are what carry documents written before the default existed.
 	// +optional
-	Approved bool `json:"approved,omitempty"`
+	// +kubebuilder:default=false
+	Approved bool `json:"approved"`
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,

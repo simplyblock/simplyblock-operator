@@ -125,7 +125,7 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 	// script with --max-subsys-count=0 and fails there, which is a long way from
 	// the cause (§5.3).
 	if err := r.Workload.ReconcileConfig(ctx, &cluster); err != nil {
-		return ctrl.Result{RequeueAfter: nodeRetry}, err
+		return ctrl.Result{}, err
 	}
 
 	for _, step := range []struct {
@@ -136,14 +136,63 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		{"the serving certificates", r.reconcileCertificates},
 		{"the headless service", r.reconcileService},
 		{"the endpoint slice", r.reconcileEndpointSlice},
+		{"the worker enrollment", r.enrollWorkers},
 		{"the daemon set", r.reconcileDaemonSet},
 	} {
 		if err := step.run(ctx, &cluster); err != nil {
-			return ctrl.Result{RequeueAfter: nodeRetry},
-				fmt.Errorf("reconcile %s: %w", step.what, err)
+			return ctrl.Result{}, fmt.Errorf("reconcile %s: %w", step.what, err)
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// enrollWorkers puts every worker this cluster has a node on into its storage
+// plane, which is what gives the DaemonSet somewhere to schedule.
+//
+// It runs before the DaemonSet and not after, because the order is the one a
+// reader wants it in: the selector is written, then the thing that selects on it.
+//
+// The retired StorageNodeSet enrolled its own workers, and when provisioning was
+// rebuilt around StorageNode the migration path kept doing it and nothing on the
+// provisioning path did. What that produced was not a failure but a deadlock: a
+// node holds at CheckingHost waiting for the worker's storage-node API, and the
+// process that would answer cannot be scheduled until this label exists. Neither
+// side reports anything wrong, because neither side is.
+//
+// Enrollment is per worker rather than per node. Two nodes on one worker are two
+// slots of one machine, and LabelWorker rewrites that machine's whole slot label
+// set from the nodes that want it, so calling it once per worker is both
+// sufficient and what keeps the set consistent.
+func (r *StorageNodeWorkloadReconciler) enrollWorkers(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) error {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes, client.InNamespace(cluster.Namespace)); err != nil {
+		return fmt.Errorf("list the storage nodes: %w", err)
+	}
+
+	seen := map[string]struct{}{}
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.ClusterRef != cluster.Name || node.Spec.WorkerNode == "" {
+			continue
+		}
+		// A node on its way out is not a reason to keep its worker enrolled, and
+		// releasing it is ReleaseWorker's job on the node's own path.
+		if !node.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if _, already := seen[node.Spec.WorkerNode]; already {
+			continue
+		}
+		seen[node.Spec.WorkerNode] = struct{}{}
+
+		if err := r.Workload.LabelWorker(
+			ctx, cluster.Namespace, cluster.Name, node.Spec.WorkerNode); err != nil {
+			return fmt.Errorf("enroll worker %s: %w", node.Spec.WorkerNode, err)
+		}
+	}
+	return nil
 }
 
 // reconcileDaemonSet applies the pod template every storage node runs under.

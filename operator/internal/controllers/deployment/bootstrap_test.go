@@ -57,13 +57,21 @@ func TestAFreshInstallRaisesOneDiscoveryRun(t *testing.T) {
 	if run.Spec.Action != simplyblockv1alpha2.OperatorOpsActionDiscover {
 		t.Errorf("action = %q, want Discover", run.Spec.Action)
 	}
-	// The run states no filter and no selector: what it produces is a draft of
-	// everything the fleet has, which is what a reviewer narrows.
+	// The run narrows nothing: what it produces is a draft of everything the
+	// fleet has, which is what a reviewer narrows. The partition waiver it does
+	// state is the opposite of a guess at which disks somebody meant — it
+	// admits more rather than less, and what it admits is the ordinary state of
+	// a machine that has held data before.
 	if run.Spec.Discover == nil {
-		t.Error("the run carries no discover block")
-	} else if len(run.Spec.Discover.NodeSelector) != 0 ||
-		run.Spec.Discover.DeviceFilter != nil {
-		t.Errorf("the run guessed at a filter: %+v", run.Spec.Discover)
+		t.Fatal("the run carries no discover block")
+	}
+	if len(run.Spec.Discover.NodeSelector) != 0 {
+		t.Errorf("the run guessed at which machines: %+v", run.Spec.Discover)
+	}
+	if filter := run.Spec.Discover.DeviceFilter; filter != nil {
+		if len(filter.PcieAllowList) != 0 || len(filter.PcieDenyList) != 0 {
+			t.Errorf("the run guessed at which disks: %+v", filter)
+		}
 	}
 }
 
@@ -226,5 +234,34 @@ func TestACordonedFleetRaisesNoRun(t *testing.T) {
 	}
 	if raised(t, d) {
 		t.Error("a run was raised against a fleet with no schedulable machine")
+	}
+}
+
+// The initial run waives a partition table.
+//
+// A disk carrying one is the normal state of a machine that has held data
+// before, and refusing every such disk makes the run that is supposed to show a
+// fleet what it has report that it has nothing. The waiver is narrow on its own
+// terms: it admits a disk whose only refusal is the table, so a boot disk stays
+// out because its partition is mounted and the kernel will not hand it over,
+// which are refusals of their own.
+func TestTheInitialRunWaivesAPartitionTable(t *testing.T) {
+	d := discoveryFor(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var run simplyblockv1alpha2.OperatorOps
+	key := client.ObjectKey{Namespace: theNamespace, Name: InitialDiscoveryName}
+	if err := d.Get(context.Background(), key, &run); err != nil {
+		t.Fatalf("reading the run: %v", err)
+	}
+	filter := run.Spec.Discover.DeviceFilter
+	if filter == nil || filter.EnablePartitionedDevices == nil {
+		t.Fatalf("the initial run states no partition waiver: %+v", run.Spec.Discover)
+	}
+	if !*filter.EnablePartitionedDevices {
+		t.Error("the initial run refuses a disk for carrying a partition table")
 	}
 }

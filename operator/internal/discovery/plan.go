@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/simplyblock/atlas/blockdev"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -87,6 +88,84 @@ func (p Plan) Summary() string {
 		len(p.Workers), devices, p.Class, groups, len(p.NodeSets), len(p.Refusals))
 }
 
+// Explain says why the plan holds nothing, one line per worker.
+//
+// A worker is refused either as a whole — its controllers are on a userspace
+// driver, so the kernel presents no disk — or one device at a time, and the two
+// need different answers. The first is on the worker's own refusal. The second
+// leaves a worker-level reason that is the arithmetic ("no device survived the
+// rules") and puts the reason on the devices, so the device refusals are folded
+// in behind it, deduplicated and counted.
+//
+// Refusals that were pre-filters are left out of both. A machine presents
+// sixteen network block devices and four disks, and a line saying the sixteen
+// were not whole disks is true, longer than the rest of the message, and not
+// the answer to anything.
+func (p Plan) Explain() []string {
+	type perWorker struct {
+		worker  string
+		line    string
+		reasons []string
+		counts  map[string]int
+	}
+
+	order := make([]string, 0, len(p.Refusals))
+	byWorker := map[string]*perWorker{}
+	at := func(worker string) *perWorker {
+		if found, ok := byWorker[worker]; ok {
+			return found
+		}
+		fresh := &perWorker{worker: worker, counts: map[string]int{}}
+		byWorker[worker] = fresh
+		order = append(order, worker)
+		return fresh
+	}
+
+	for _, refusal := range p.Refusals {
+		if refusal.Device == "" {
+			at(refusal.Worker).line = refusal.Reason
+			continue
+		}
+		if refusal.PreFilter {
+			continue
+		}
+		entry := at(refusal.Worker)
+		if _, seen := entry.counts[refusal.Reason]; !seen {
+			entry.reasons = append(entry.reasons, refusal.Reason)
+		}
+		entry.counts[refusal.Reason]++
+	}
+
+	lines := make([]string, 0, len(order))
+	for _, worker := range order {
+		entry := byWorker[worker]
+		if entry.line == "" && len(entry.reasons) == 0 {
+			// Every refusal on it was a pre-filter and the worker itself was
+			// admitted, so there is nothing about it to explain.
+			continue
+		}
+		detail := make([]string, 0, len(entry.reasons))
+		for _, reason := range entry.reasons {
+			if count := entry.counts[reason]; count > 1 {
+				detail = append(detail, fmt.Sprintf("%d devices: %s", count, reason))
+				continue
+			}
+			detail = append(detail, "1 device: "+reason)
+		}
+
+		switch {
+		case len(detail) == 0:
+			lines = append(lines, entry.worker+": "+entry.line)
+		case entry.line == "":
+			lines = append(lines, entry.worker+": "+strings.Join(detail, ", "))
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %s (%s)",
+				entry.worker, entry.line, strings.Join(detail, ", ")))
+		}
+	}
+	return lines
+}
+
 // RefusalLines renders the refusals for a log or an event, one per line.
 func (p Plan) RefusalLines() []string {
 	lines := make([]string, 0, len(p.Refusals))
@@ -94,6 +173,64 @@ func (p Plan) RefusalLines() []string {
 		lines = append(lines, refusal.String())
 	}
 	return lines
+}
+
+// claimableControllers is a device for every NVMe controller the machine owns,
+// nothing is driving, and the kernel presents no disk for.
+//
+// A controller on a userspace driver has no block device, so it cannot reach a
+// draft through the device reading at all: everything known about it is its PCI
+// address. That is not a gap, because a PCI address is precisely how a NodeGroup
+// names an NVMe device — the draft that would be written from a block device and
+// the draft written from the controller name the same string. Leaving them out
+// refused a machine's storage on the grounds that the machine was not currently
+// presenting it, which on a fleet that has run this product before is every
+// machine.
+//
+// Only what nothing is using is offered. A held controller is a disk in service,
+// and whatever is driving it need not be this product: the same binding is how a
+// disk is passed through to a guest.
+//
+// What is lost with the block device is everything the disk would have said
+// about itself — its size, its partition table, whether it looks blank. A
+// controller therefore reaches the draft unsized and uninspected, and approving
+// it is approving a disk nobody read. That is the trade the draft makes visible
+// rather than one it hides: the group it lands in is named for the count and not
+// a capacity, so a reviewer sees which machines are being taken on trust.
+func claimableControllers(report nodeprobe.Report, class DeviceClass) []nodeprobe.Device {
+	if class != ClassNVMe {
+		// The other class names devices by path, and a controller with no block
+		// device has none to name.
+		return nil
+	}
+
+	presented := map[string]struct{}{}
+	for _, device := range report.Devices {
+		if device.PCIAddress != "" {
+			presented[device.PCIAddress] = struct{}{}
+		}
+	}
+
+	var out []nodeprobe.Device
+	for _, controller := range report.NVMeControllers {
+		if !controller.BoundToUserspace() || controller.InUse {
+			continue
+		}
+		if _, already := presented[controller.Address]; already {
+			// The kernel is presenting it after all, so the device reading has
+			// it and naming it twice would propose one disk under two entries.
+			continue
+		}
+		out = append(out, nodeprobe.Device{
+			Name:       controller.Address,
+			PCIAddress: controller.Address,
+			Kind:       string(blockdev.KindDisk),
+			Transport:  string(blockdev.TransportNVMe),
+			NUMANode:   controller.NUMANode,
+			Available:  true,
+		})
+	}
+	return out
 }
 
 // BasicDeviceRules is the default device pipeline for a class and a filter.
@@ -181,6 +318,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
 
 	for _, report := range ordered {
+		report.Devices = append(report.Devices, claimableControllers(report, class)...)
+
 		admitted, refusals := admitDevices(report, deviceRules)
 		plan.Refusals = append(plan.Refusals, refusals...)
 
@@ -235,10 +374,13 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 	var refusals []Refusal
 
 	for _, device := range report.Devices {
-		ok, rule, reason := true, "", ""
+		ok, rule, reason, pre := true, "", "", false
 		for _, r := range rules {
 			if admit, why := r.Admit(report, device); !admit {
 				ok, rule, reason = false, r.Name(), why
+				if marker, says := r.(PreFilter); says {
+					pre = marker.PreFilter()
+				}
 				break
 			}
 		}
@@ -247,7 +389,8 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 			continue
 		}
 		refusals = append(refusals, Refusal{
-			Worker: report.Node, Device: device.Name, Rule: rule, Reason: reason,
+			Worker: report.Node, Device: device.Name,
+			Rule: rule, Reason: reason, PreFilter: pre,
 		})
 	}
 	return admitted, refusals

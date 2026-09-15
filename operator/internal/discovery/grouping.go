@@ -164,8 +164,15 @@ func (c DeviceClass) signature(addresses []string) string {
 // what a reviewer edits and "group-1" invites that where a hash does not. The
 // ordering above is what makes the number stable.
 func groupName(index int, group Group) string {
+	size := humanBytes(groupDeviceBytes(group))
+	if groupDeviceBytes(group) == 0 {
+		// Devices the kernel does not present have no size to read, and naming
+		// the group for "0 B" would state a capacity where there is only an
+		// absence of one.
+		size = "unsized"
+	}
 	return fmt.Sprintf("group-%d-%s-%dx%s", index+1, group.Class,
-		len(group.Addresses), humanBytes(groupDeviceBytes(group)))
+		len(group.Addresses), size)
 }
 
 // groupDeviceBytes is the size of one worker's devices in the group, which is
