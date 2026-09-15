@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/blockdev"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -163,11 +164,22 @@ type runner struct {
 // newRunner builds a reconciler over the objects given.
 func newRunner(t *testing.T, objects ...client.Object) *runner {
 	t.Helper()
+	return newRunnerWithInterceptors(t, interceptor.Funcs{}, objects...)
+}
+
+// newRunnerWithInterceptors is the same runner with the client's answers
+// scripted, which is how a test reaches the failures a real API server produces
+// and a fake one never does.
+func newRunnerWithInterceptors(
+	t *testing.T, funcs interceptor.Funcs, objects ...client.Object,
+) *runner {
+	t.Helper()
 	scheme := opsScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithStatusSubresource(&simplyblockv1alpha2.OperatorOps{}).
+		WithInterceptorFuncs(funcs).
 		Build()
 
 	return &runner{

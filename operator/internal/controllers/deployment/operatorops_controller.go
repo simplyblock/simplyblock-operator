@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -646,12 +647,51 @@ func (r *OperatorOpsReconciler) fail(
 
 // status writes the run's status, stamping the generation it was computed from
 // so that a stale status can be told from a current one.
+// status persists what the step concluded, retrying a write that lost a race.
+//
+// A step does its work and then records it, so a recording that fails leaves the
+// step not having happened as far as the next pass is concerned — and the next
+// pass does the work again. Writing's work is creating a document and telling a
+// reviewer about it. The document survives being created twice, because the
+// create is idempotent by name and says so; the events do not, and a run that
+// wrote one document reported writing it twice and reported finding it already
+// there, which describes to a reviewer a race that nobody had.
+//
+// So the write is a patch against a fresh read rather than an update of the
+// object the reconcile started from, and a conflict is retried here rather than
+// paid for by the step. It is the same shape the deployment config's own status
+// write uses, for the same reason.
 func (r *OperatorOpsReconciler) status(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
 ) error {
 	ops.Status.ObservedGeneration = ops.Generation
-	return r.Status().Update(ctx, ops)
+	desired := *ops.Status.DeepCopy()
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh simplyblockv1alpha2.OperatorOps
+		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), &fresh); err != nil {
+			return err
+		}
+
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(),
+			client.MergeFromWithOptimisticLock{})
+		fresh.Status = desired
+		fresh.Status.ObservedGeneration = fresh.Generation
+		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
+			return err
+		}
+
+		// The caller goes on using its own object, so it has to carry the
+		// version the patch produced or its next write conflicts with itself.
+		ops.Status = fresh.Status
+		ops.ResourceVersion = fresh.ResourceVersion
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("record the run's status: %w", err)
+	}
+	return nil
 }
 
 // event records one, when there is a recorder to record it with.
