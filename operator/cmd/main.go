@@ -779,8 +779,11 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
 
-		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagenode",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenode",
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
 		setupLog.Info("registered storagenode validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-replicationops",
