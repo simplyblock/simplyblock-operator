@@ -27,7 +27,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -417,18 +419,37 @@ func (r *StorageDeviceReconciler) upsert(
 func (r *StorageDeviceReconciler) deviceLabels(
 	node *simplyblockv1alpha2.StorageNode,
 ) map[string]string {
-	labels := map[string]string{simplyblockv1alpha2.DeviceLabelNode: node.Name}
+	labels := map[string]string{
+		simplyblockv1alpha2.DeviceLabelNode: labelValue(node.Name),
+	}
 	if worker := node.Labels[simplyblockv1alpha2.DeviceLabelWorker]; worker != "" {
-		labels[simplyblockv1alpha2.DeviceLabelWorker] = worker
+		labels[simplyblockv1alpha2.DeviceLabelWorker] = labelValue(worker)
 	}
 	// The cluster is on the node itself now. It used to be reached through the
 	// StorageNodeSet the node belonged to, which made a label on a device depend on
 	// a third object being readable; a node names its own cluster, so there is
 	// nothing left to look up (design-storagenode.md §3.1).
 	if node.Spec.ClusterRef != "" {
-		labels[simplyblockv1alpha2.DeviceLabelCluster] = node.Spec.ClusterRef
+		labels[simplyblockv1alpha2.DeviceLabelCluster] = labelValue(node.Spec.ClusterRef)
 	}
 	return labels
+}
+
+// labelValue holds a name to what a label value may be.
+//
+// A StorageNode's name is a cluster name, a worker hostname, and a slot, so it
+// outgrows the 63 bytes a label allows on any fleet whose machines carry fully
+// qualified hostnames. What that costs is not a truncated label but the object:
+// the API server refuses the whole write, so the mirror for every device on that
+// node fails to reconcile and none of them is ever published.
+//
+// The formula leaves a value that already fits exactly as it is, which is what
+// the labels are for — a person selects on them, and a value nobody can type is
+// a selector nobody can write. A value that does not fit is cut and carries a
+// digest, because cutting alone would map every node of a long-named cluster to
+// one label and answer "which devices are in this node" with the cluster's.
+func labelValue(name string) string {
+	return atlaskube.Formula{Kind: atlaskube.LabelValue}.Derive(name).Value
 }
 
 // deviceOwnedLabels are the keys the mirror writes and is therefore responsible
