@@ -107,6 +107,7 @@ type initiatorNVMf struct {
 	hostNQN        string
 	poolID         string
 	clusterID      string // explicit cluster override. Empty means derive it from the NQN
+	targetLvolID   string // non-empty when the backend redirected this volume to a failover clone
 }
 
 type Path struct {
@@ -147,7 +148,8 @@ func New(volumeContext map[string]string) (Initiator, error) {
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
 		srcLvolID := volumeContext["uuid"]
-		deviceLvolID := volumeContext["targetLvolID"]
+		targetLvolID := volumeContext["targetLvolID"]
+		deviceLvolID := targetLvolID
 		if deviceLvolID == "" {
 			deviceLvolID = srcLvolID
 		}
@@ -165,6 +167,7 @@ func New(volumeContext map[string]string) (Initiator, error) {
 			clusterID:      volumeContext["cluster_id"],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
+			targetLvolID:   targetLvolID,
 		}, nil
 
 	default:
@@ -259,7 +262,13 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 		}
 	}
 
-	return matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.deviceLvolID, nvmf.nsId, time.Second)
+	order := lookupModelFirst
+	if nvmf.targetLvolID != "" {
+		order = lookupTargetFirst
+	}
+	return matchNamespaceDeviceWithOrder(
+		ctx, defaultDevDiskByID, nvmf.model, nvmf.deviceLvolID, nvmf.nsId, time.Second, order,
+	)
 }
 
 // registerDevicePresence records a freshly connected device in the shared
@@ -357,6 +366,13 @@ func nsuuidDeviceGlob(byIDDir, id string) string {
 	return filepath.Join(byIDDir, fmt.Sprintf(devByIDNSUUIDPattern, id))
 }
 
+type deviceLookupOrder int
+
+const (
+	lookupModelFirst deviceLookupOrder = iota
+	lookupTargetFirst
+)
+
 // matchNamespaceDevice waits in byIDDir for the block device of namespace nsID
 // to show up. It tries three patterns in order:
 //  1. *<model>*_<nsID>: subsystem model carried by every namespace link.
@@ -369,9 +385,44 @@ func matchNamespaceDevice(
 	nsID int,
 	pollInterval time.Duration,
 ) (string, error) {
+	return matchNamespaceDeviceWithOrder(ctx, byIDDir, model, lvolID, nsID, pollInterval, lookupModelFirst)
+}
+
+func matchNamespaceDeviceWithOrder(
+	ctx context.Context,
+	byIDDir, model, lvolID string,
+	nsID int,
+	pollInterval time.Duration,
+	order deviceLookupOrder,
+) (string, error) {
 	deviceGlob := namespaceDeviceGlob(byIDDir, model, nsID)
 	deviceGlobFallback := namespaceDeviceGlob(byIDDir, lvolID, nsID)
 	deviceGlobNSUUID := nsuuidDeviceGlob(byIDDir, lvolID)
+
+	if order == lookupTargetFirst {
+		devicePath, nsuuidErr := waitForDeviceReady(ctx, deviceGlobNSUUID, deviceReadyAttempts, pollInterval)
+		if nsuuidErr == nil {
+			return devicePath, nil
+		}
+
+		klog.Warningf("Target lvol device symlink not found (%s). Retrying target namespace format: %s",
+			deviceGlobNSUUID, deviceGlobFallback)
+		devicePath, fallbackErr := waitForDeviceReady(ctx, deviceGlobFallback, deviceReadyAttempts, pollInterval)
+		if fallbackErr == nil {
+			return devicePath, nil
+		}
+
+		klog.Warningf("Target lvol device symlink not found (%s). Retrying model format: %s",
+			deviceGlobFallback, deviceGlob)
+		devicePath, modelErr := waitForDeviceReady(ctx, deviceGlob, deviceReadyAttempts, pollInterval)
+		if modelErr == nil {
+			return devicePath, nil
+		}
+
+		return "", fmt.Errorf("device not found in NSUUID (%s), target (%s), or model (%s) formats: %w",
+			deviceGlobNSUUID, deviceGlobFallback, deviceGlob,
+			errors.Join(nsuuidErr, fallbackErr, modelErr))
+	}
 
 	devicePath, primaryErr := waitForDeviceReady(ctx, deviceGlob, deviceReadyAttempts, pollInterval)
 	if primaryErr == nil {
