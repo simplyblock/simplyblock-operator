@@ -10,6 +10,28 @@ labels:
   chartVersion: "{{ .Chart.Version }}"
 {{- end -}}
 
+{{/*
+Whether the chart still renders the control-plane workloads.
+
+Both the chart and the operator can apply the FoundationDB cluster, the object
+store, and the management API, and they must not both own them at once. The
+operator's install is what a deployment gets by default
+(design-controlplane.md §5.1): the control plane's version then becomes a field
+the operator reconciles rather than a value baked into a chart release, and every
+object becomes a child of the ControlPlane rather than of a Helm release.
+
+Setting controlplane.managedByOperator to false hands them back to the chart,
+which is what a deployment does when it needs something the ControlPlane spec
+cannot yet express. TLS is the one such thing today, and
+validate-controlplane.yaml refuses the combination rather than quietly
+installing a control plane without it.
+*/}}
+{{- define "simplyblock.chartInstallsControlPlane" -}}
+{{- if and .Values.operator.enabled (not .Values.controlplane.managedByOperator) -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}

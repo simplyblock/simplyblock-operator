@@ -1,4 +1,5 @@
 {{- if .Values.operator.enabled }}
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -41,6 +42,7 @@ spec:
     - simplyblock-webappapi.{{ .Release.Namespace }}
     - simplyblock-webappapi.{{ .Release.Namespace }}.svc
     - simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local
+{{- end }}
 {{- end }}
 
 ---

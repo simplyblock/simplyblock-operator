@@ -1,5 +1,6 @@
 ---
 {{- if .Values.operator.enabled }}
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -901,6 +902,7 @@ spec:
       targetPort: 9001
 
 ---
+{{- end }}
 {{- if .Values.controlplane.observability.enabled }}
 apiVersion: apps/v1
 kind: Deployment

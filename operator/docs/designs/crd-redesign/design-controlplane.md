@@ -865,7 +865,7 @@ assume and nothing exercises.
 | `spec.image`                                  | `spec.source.managed.image` (§5.1)          | Spec regrouping, and the field stops doubling as the storage-node default (see below)                                                                                                                                            |
 | No way to name an external control plane      | `spec.source.external` (§5.2)               | Additive, and it is the half of `design-crd-model.md` §6 that does not exist today                                                                                                                                               |
 | The endpoint is `SIMPLYBLOCK_WEBAPI_BASE_URL` | `status.endpoint` (§3.3)                    | Behavioral. Every caller of `webapi.NewClient()` moves, which is every controller in the operator                                                                                                                                |
-| The chart installs the control plane          | The operator installs it (§5.1)             | The largest piece of work here, and it cannot be a flag day (§12, Q2)                                                                                                                                                            |
+| The chart installs the control plane          | The operator installs it (§5.1)             | The largest piece of work here. `controlplane.managedByOperator` is the flag, and it defaults to the operator. Adopting a control plane the chart already installed is the open half (§12, Q2)                                   |
 | `status.phase` untyped, two values            | `ControlPlanePhase`, four values (§3.3)     | `Degraded` and `Unavailable` are both new, and together they separate a control plane that is impaired from one that is not answering. `Ready` becomes `Available`, which is the opposite of `Unavailable` where `Ready` was not |
 | No step field                                 | `status.step` (§4.2)                        | Additive. A stalled install currently reports one message and no position                                                                                                                                                        |
 | No `observedGeneration`                       | Present (§3.3)                              | Required by `design-crd-model.md` §7.9                                                                                                                                                                                           |
@@ -898,13 +898,36 @@ from review history. §3.1 is where the answer went: a Kubernetes cluster holds 
 `ControlPlane`, which is the limit the operator's own cluster-scoped objects
 already impose on the operator.
 
-**Q2: How the install moves from the chart to the operator.** §5.1 has the
-operator apply what the chart applies today, and both cannot own the same objects
-at once. The candidates are a chart flag that stops rendering the templates once
-the operator is capable of applying them, an adoption pass where the operator
-takes ownership of objects the chart already created, and leaving the chart in
-place for existing deployments while new ones use the operator. Nothing here
-settles it, and it is the reason §5.1's work is larger than its specification.
+**Q2 is settled for a fresh install and open for an existing one.**
+`controlplane.managedByOperator` is the chart flag, and it defaults to the
+operator: a new deployment gets the control plane §5.1 describes, and the chart
+renders only the `ControlPlane` object beside the FoundationDB CRDs, the
+Prometheus configuration, and the log-collector RBAC. Setting it to false hands
+the templates back, unchanged, which is what a deployment does when it needs
+something the spec cannot yet express.
+
+What is open is the transition for a deployment already running a chart-installed
+control plane. The apply is a server-side apply under a stable field manager, so
+it takes over the objects a Helm release created rather than failing on them, but
+nothing verifies the handover or strips the release's claim afterward, and §5.1's
+ownership spine is only real once it has. That is the shape
+[`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.3 gives the CSI
+driver's adoption, and it is the half of this question still to answer.
+
+**The install covers a base control plane rather than everything the chart
+renders.** What it applies is the FoundationDB half, the object store, and the
+management API with the services beside it, which is what the chart renders with
+observability disabled. Graylog, Grafana, Thanos, the document store behind them,
+and the log collector stay with the chart: none appears in a step of §4.2's
+machine, every one is non-essential in §4.3's table, and they are gated behind one
+chart value this kind has no field for.
+
+**TLS is the one configuration the install cannot express.** The chart serves the
+control plane over TLS behind `tls.enabled`, and `ManagedControlPlane` has no
+field for it, since §5.1 settles which issuer is detected rather than whether a
+deployment wants one. The chart refuses `managedByOperator` together with
+`tls.enabled` rather than installing a control plane in plaintext, and closing
+that gap is a field on this kind.
 
 **Q3: Whether backup belongs to the action or to the spec.**
 `FoundationDBBackup` describes a continuous backup, carrying a `backupState` and a

@@ -2,7 +2,11 @@
 //
 // Two properties move (design-property-renames.md §2.4 and §2.5): the top-level
 // image regroups under spec.source.managed, and the readiness phase Ready becomes
-// Available. Everything else is carried across unchanged.
+// Available. Everything else this version declares is carried across unchanged,
+// and everything the hub adds — the step, the endpoint, the version, the
+// components, the lock, and the observed generation — has no v1alpha1 spelling
+// and is dropped on the way down, which is what a spoke that predates a field
+// does with it.
 //
 // The conversion never fails. A phase value in neither table is passed through as
 // written, because a conversion webhook is the wrong place to reject an object:
@@ -54,18 +58,18 @@ func (src *ControlPlane) ConvertTo(dstRaw conversion.Hub) error {
 
 	dst.ObjectMeta = src.ObjectMeta
 
-	// An unset image leaves spec.source absent rather than allocating an empty
-	// managed block. A conversion that writes an empty parent hands the user a
-	// value they never set, and elsewhere in this migration such a parent is
-	// immutable once written and cannot then be corrected.
-	dst.Spec.Source = nil
-	if src.Spec.Image != "" {
-		dst.Spec.Source = &v1alpha2.ControlPlaneSource{
-			Managed: &v1alpha2.ManagedControlPlane{Image: src.Spec.Image},
-		}
+	// Every v1alpha1 ControlPlane is one the chart installed, so the managed
+	// member is the one it converts into, and it is set even when the image is
+	// empty. The hub requires exactly one member (design-controlplane.md §3.2),
+	// and an object arriving upward with neither is one nothing downstream can
+	// classify: the reconciler would read it as neither managed nor external and
+	// refuse to act on a control plane that is plainly running.
+	dst.Spec.Source = v1alpha2.ControlPlaneSource{
+		Managed: &v1alpha2.ManagedControlPlane{Image: src.Spec.Image},
 	}
 
-	dst.Status.Phase = mapOrPassThrough(controlPlanePhaseToHub, src.Status.Phase)
+	dst.Status.Phase = v1alpha2.ControlPlanePhase(
+		mapOrPassThrough(controlPlanePhaseToHub, src.Status.Phase))
 	dst.Status.Message = src.Status.Message
 	dst.Status.LastChecked = src.Status.LastChecked
 
@@ -78,12 +82,16 @@ func (dst *ControlPlane) ConvertFrom(srcRaw conversion.Hub) error {
 
 	dst.ObjectMeta = src.ObjectMeta
 
+	// An external control plane has no image, which is what this version's only
+	// spec field holds. It converts down to an empty one rather than to an
+	// error: the object still has to be readable at v1alpha1, and what a reader
+	// there loses is a field that never applied to it.
 	dst.Spec.Image = ""
-	if src.Spec.Source != nil && src.Spec.Source.Managed != nil {
-		dst.Spec.Image = src.Spec.Source.Managed.Image
+	if managed := src.Spec.Source.Managed; managed != nil {
+		dst.Spec.Image = managed.Image
 	}
 
-	dst.Status.Phase = mapOrPassThrough(controlPlanePhaseFromHub, src.Status.Phase)
+	dst.Status.Phase = mapOrPassThrough(controlPlanePhaseFromHub, string(src.Status.Phase))
 	dst.Status.Message = src.Status.Message
 	dst.Status.LastChecked = src.Status.LastChecked
 

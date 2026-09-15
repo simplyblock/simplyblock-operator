@@ -74,6 +74,25 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-controlplaneops
+  failurePolicy: Fail
+  name: vcontrolplaneops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - controlplaneops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha1-replicationops
   failurePolicy: Fail
   name: vreplicationops.simplyblock.io
