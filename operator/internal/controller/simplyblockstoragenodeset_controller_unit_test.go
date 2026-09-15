@@ -913,44 +913,80 @@ func TestStorageNodeSetReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	}
 }
 
-func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
+// TestStorageNodeSetReconcileServiceAccountSurvivesSiblingReconcile verifies
+// that the shared "simplyblock-storage-node-sa" ServiceAccount is not tied to
+// a single StorageNodeSet's lifecycle. Two StorageNodeSets in the same
+// namespace (one per storage cluster, a supported topology documented in
+// docs/kubernetes/installation/k8s-storage-plane.md) both reconcile the same
+// ServiceAccount, and reconciling the second must not orphan whatever
+// ownership the first reconcile established. Deleting either StorageNodeSet
+// (e.g., decommissioning one of the two clusters) would otherwise
+// cascade-delete the ServiceAccount out from under the StorageNodeSet left
+// standing.
+func TestStorageNodeSetReconcileServiceAccountSurvivesSiblingReconcile(t *testing.T) {
 	const namespace = "default"
-	const clusterName = "cluster-ownerref-sa"
-	const clusterUUID = "cluster-uuid-ownerref-sa"
 
-	cluster := &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
+	clusterA := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: namespace},
 		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
-		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "cluster-uuid-a"},
 	}
-	sn := &simplyblockv1alpha1.StorageNodeSet{
+	clusterB := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: namespace},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "cluster-uuid-b"},
+	}
+	snA := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "sn-ownerref-sa",
+			Name:       "sn-a",
 			Namespace:  namespace,
+			UID:        "sn-a-uid",
 			Finalizers: []string{utils.FinalizerStorageNodeSet},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName: clusterName,
+			ClusterName: "cluster-a",
+			WorkerNodes: []string{},
+		},
+	}
+	snB := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-b",
+			Namespace:  namespace,
+			UID:        "sn-b-uid",
+			Finalizers: []string{utils.FinalizerStorageNodeSet},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: "cluster-b",
 			WorkerNodes: []string{},
 		},
 	}
 
-	r := newStorageNodeSetStateTestReconciler(t, sn, cluster)
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
-	if err != nil {
-		t.Fatalf("reconcile returned error: %v", err)
+	r := newStorageNodeSetStateTestReconciler(t, snA, snB, clusterA, clusterB)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(snA)}); err != nil {
+		t.Fatalf("reconcile sn-a returned error: %v", err)
 	}
 
 	sa := &corev1.ServiceAccount{}
-	if err := r.Get(context.Background(), client.ObjectKey{
-		Name:      "simplyblock-storage-node-sa",
-		Namespace: namespace,
-	}, sa); err != nil {
-		t.Fatalf("failed to fetch serviceaccount: %v", err)
+	saKey := client.ObjectKey{Name: "simplyblock-storage-node-sa", Namespace: namespace}
+	if err := r.Get(context.Background(), saKey, sa); err != nil {
+		t.Fatalf("failed to fetch serviceaccount after sn-a reconcile: %v", err)
+	}
+	for _, ref := range sa.OwnerReferences {
+		if ref.UID == snA.UID {
+			t.Fatalf("sn-a must not become the ServiceAccount's owner: %#v", sa.OwnerReferences)
+		}
 	}
 
-	if len(sa.OwnerReferences) == 0 {
-		t.Fatalf("expected ServiceAccount to carry ownerReference to storagenodeset CR")
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(snB)}); err != nil {
+		t.Fatalf("reconcile sn-b returned error: %v", err)
+	}
+
+	if err := r.Get(context.Background(), saKey, sa); err != nil {
+		t.Fatalf("failed to fetch serviceaccount after sn-b reconcile: %v", err)
+	}
+	if len(sa.OwnerReferences) != 0 {
+		t.Fatalf("ServiceAccount must carry no StorageNodeSet owner reference (shared across StorageNodeSets), got %#v", sa.OwnerReferences)
 	}
 }
 

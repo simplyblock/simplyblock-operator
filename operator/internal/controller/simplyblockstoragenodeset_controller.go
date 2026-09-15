@@ -1123,14 +1123,18 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 
 // reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
 // required by the storage-node DaemonSet are present and up to date.
+//
+// None of the three carry an owner reference to snCR: all three are shared by
+// every StorageNodeSet in the namespace (e.g., one StorageNodeSet per storage
+// cluster, per docs/kubernetes/installation/k8s-storage-plane.md), so tying
+// one to a single StorageNodeSet's lifecycle would let deleting that
+// StorageNodeSet cascade-delete the resource out from under its siblings:
+// whichever StorageNodeSet last reconciled it "owns" it, so any of them being
+// deleted (e.g., decommissioning one cluster) removes it for all the others.
 func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
 	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
+		sa.OwnerReferences = nil
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
