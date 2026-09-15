@@ -11,6 +11,7 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -21,7 +22,7 @@ import (
 
 func discoveryFor(t *testing.T, objects ...client.Object) *InitialDiscovery {
 	t.Helper()
-	scheme := testsupport.NewScheme(t)
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	return &InitialDiscovery{
 		Client:    fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(),
 		Namespace: theNamespace,
@@ -39,7 +40,7 @@ func raised(t *testing.T, d *InitialDiscovery) bool {
 
 // An install with nothing in it is the one state this exists for.
 func TestAFreshInstallRaisesOneDiscoveryRun(t *testing.T) {
-	d := discoveryFor(t)
+	d := discoveryFor(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
 
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -113,7 +114,7 @@ func TestAPreviousResultDeclinesTheRun(t *testing.T) {
 // The check runs on every operator start, and a restart must not raise a second
 // run against a fleet the first one already reported on.
 func TestARestartRaisesNothingFurther(t *testing.T) {
-	d := discoveryFor(t)
+	d := discoveryFor(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
 
 	for pass := 0; pass < 3; pass++ {
 		if err := d.Start(context.Background()); err != nil {
@@ -164,5 +165,66 @@ func TestAnObjectByThatNameIsNotReplaced(t *testing.T) {
 func TestTheCheckIsLeaderElected(t *testing.T) {
 	if !(&InitialDiscovery{}).NeedLeaderElection() {
 		t.Error("the check runs on every replica, so the reads race")
+	}
+}
+
+// A cluster with nothing a discovery run would inspect is the fourth question,
+// and it is the one with teeth beyond convenience.
+//
+// A run raised against such a cluster fails, and a failed run is still an object
+// carrying a finalizer. Uninstalling the operator deletes its namespace and its
+// Deployment together, so the controller that would release that finalizer can be
+// gone before it sees the delete, and the namespace stays Terminating. An install
+// that raises a run it knows cannot succeed has therefore made its own uninstall
+// conditional on timing.
+//
+// The single-node development cluster is exactly this shape: its one machine is
+// the control-plane node, which nothing places storage on unless somebody asks.
+func TestAClusterWithNothingToInspectRaisesNoRun(t *testing.T) {
+	controlPlane := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name:   "kind-control-plane",
+		Labels: map[string]string{"node-role.kubernetes.io/control-plane": ""},
+	}}
+	d := discoveryFor(t, controlPlane)
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if raised(t, d) {
+		t.Error("a run was raised against a cluster whose only node holds no storage")
+	}
+}
+
+// The same cluster once somebody has asked for its control-plane node is not that
+// case: there is a machine to inspect, so the run is worth raising.
+//
+// The bootstrap does not set the opt-in, so this asserts the reason rather than
+// the outcome: the question the guard asks is whether a machine exists at all,
+// and it must not answer it by reading a flag nobody set.
+func TestAWorkerIsEnoughToRaiseTheRun(t *testing.T) {
+	d := discoveryFor(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !raised(t, d) {
+		t.Error("a cluster with a worker in it raised no run")
+	}
+}
+
+// An unschedulable machine is not one a run would inspect either, so a fleet
+// cordoned for maintenance is the empty case rather than the worker case.
+func TestACordonedFleetRaisesNoRun(t *testing.T) {
+	cordoned := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
+		Spec:       corev1.NodeSpec{Unschedulable: true},
+	}
+	d := discoveryFor(t, cordoned)
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if raised(t, d) {
+		t.Error("a run was raised against a fleet with no schedulable machine")
 	}
 }

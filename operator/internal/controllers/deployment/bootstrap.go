@@ -10,7 +10,8 @@
 // control plane and the draft it writes is inert, but Probing creates one Job per
 // worker, so a run that fired on every restart would put a Job on every node of
 // the fleet every time the operator was upgraded. The guard is therefore that no
-// previous result exists, and it is three questions rather than one:
+// previous result exists and there is something to look at, which is four
+// questions rather than one:
 //
 //   - Has any OperatorOps ever run? A terminal one is a previous result, and so
 //     is a failed one: the administrator has seen the answer and either acted on
@@ -21,12 +22,22 @@
 //     nothing to add that they did not already have.
 //   - Does any StorageCluster exist? A deployed fleet was bootstrapped by
 //     something, and a fresh install is the only state this exists for.
+//   - Is there a machine a run would inspect at all? This one is not about
+//     previous results, and it is the question with a cost behind it rather than
+//     a convenience. A run raised against a cluster with no usable worker fails,
+//     and a failed run is still an object holding a finalizer. Uninstalling the
+//     operator deletes its namespace and its Deployment together, so the
+//     controller that would release that finalizer can be gone before it sees the
+//     delete, and the namespace stays Terminating. An install that raises a run
+//     it already knows cannot succeed has made its own uninstall conditional on
+//     timing, which is the single-node development cluster exactly: its one
+//     machine is the control-plane node.
 //
-// Any one of the three is enough to decline. Together, they mean the run happens
-// on the install that has nothing, and never again.
+// Any one of the four is enough to decline. Together, they mean the run happens
+// on the install that has nothing and has something to look at, and never again.
 //
 // It runs under leader election, so one replica asks. The create is idempotent by
-// name as well, because two replicas answering the same three questions at once
+// name as well, because two replicas answering the same questions at once
 // would both conclude yes.
 
 package deployment
@@ -35,6 +46,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -144,6 +156,28 @@ func (d *InitialDiscovery) declineReason(ctx context.Context) (string, error) {
 	}
 	if len(clusters.Items) > 0 {
 		return fmt.Sprintf("%d storage cluster(s) are already deployed", len(clusters.Items)), nil
+	}
+
+	// The run this would raise states no filter and no selector, so it asks about
+	// every machine, and UsableWorker is the same predicate it would then apply.
+	// Reading it here rather than restating the conditions is what keeps the two
+	// from drifting into a bootstrap that raises runs the run itself declines.
+	var nodes corev1.NodeList
+	if err := d.List(ctx, &nodes); err != nil {
+		return "", fmt.Errorf("listing nodes: %w", err)
+	}
+	usable := 0
+	for _, node := range nodes.Items {
+		// The opt-in is a decision an administrator makes on a run they wrote.
+		// This one writes no spec, so it asks the question the run it would raise
+		// asks: false, and a control-plane node does not count.
+		if UsableWorker(node, false) {
+			usable++
+		}
+	}
+	if usable == 0 {
+		return fmt.Sprintf("none of the %d node(s) hold storage without being asked to",
+			len(nodes.Items)), nil
 	}
 
 	return "", nil
