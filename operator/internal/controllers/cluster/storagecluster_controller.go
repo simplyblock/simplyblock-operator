@@ -754,9 +754,15 @@ func (r *StorageClusterReconciler) readTasks(
 	}
 
 	current := make(map[string]bool, len(reported))
+	// A finished task is kept by id rather than skipped, because it is the only
+	// place the outcome exists. The window publishes what is running, so a task
+	// that has ended is described once, here, and what the control plane said
+	// about it is gone on the next read.
+	finished := make(map[string]subscriptions.TaskDTO, len(reported))
 	running := make([]simplyblockv1alpha2.ClusterTask, 0, len(reported))
 	for _, task := range reported {
 		if task.Finished() {
+			finished[task.ID] = task
 			continue
 		}
 		current[task.ID] = true
@@ -776,16 +782,63 @@ func (r *StorageClusterReconciler) readTasks(
 	}
 
 	// A task that was in the list and is no longer running finished between
-	// two readings. The event is what remains of it.
+	// two readings. The event is what remains of it, so it carries the outcome
+	// rather than only the disappearance: "is no longer running" is as true of a
+	// task that succeeded as of one that exhausted its retries, and a reader
+	// looking for why a deployment stalled needs the difference.
 	for _, previous := range cluster.Status.Tasks {
 		if current[previous.ID] {
 			continue
 		}
-		r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal,
-			TaskCompleted, TaskCompleted,
-			"Task %s (%s) is no longer running", previous.ID, previous.Type)
+		r.emitTaskOutcome(cluster, previous, finished[previous.ID])
 	}
 	return running
+}
+
+// emitTaskOutcome raises the one event a finished task gets.
+//
+// The retry count decides which. A task the control plane never restarted ran
+// once and ended, and a task it restarted was failing each time it did, so one
+// that has left the window having been retried gave up rather than finished.
+// Nothing here infers that from the status, which says done for both.
+//
+// The count and the control plane's own result go into the note whatever the
+// verdict. The result is where the answer actually is — a node_add that gave up
+// came back with "max retry reached (11/11)" — and it was decoded and dropped.
+func (r *StorageClusterReconciler) emitTaskOutcome(
+	cluster *simplyblockv1alpha2.StorageCluster,
+	previous simplyblockv1alpha2.ClusterTask,
+	outcome subscriptions.TaskDTO,
+) {
+	// The task may have scrolled out of the window rather than been read as
+	// finished, in which case the previous snapshot is all there is.
+	retries := previous.Retry
+	if outcome.Retry > retries {
+		retries = outcome.Retry
+	}
+
+	detail := ""
+	if outcome.Result != "" {
+		detail = ": " + outcome.Result
+	}
+
+	if outcome.Canceled {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			TaskCanceled, TaskCanceled,
+			"Task %s (%s) was canceled after %d retries%s",
+			previous.ID, previous.Type, retries, detail)
+		return
+	}
+	if retries > 0 {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			TaskGaveUp, TaskGaveUp,
+			"Task %s (%s) gave up after %d retries%s",
+			previous.ID, previous.Type, retries, detail)
+		return
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal,
+		TaskCompleted, TaskCompleted,
+		"Task %s (%s) finished%s", previous.ID, previous.Type, detail)
 }
 
 // reportedTasks is every task of one cluster, from the stream's cache once it

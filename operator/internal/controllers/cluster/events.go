@@ -37,6 +37,13 @@ const (
 	TaskCompleted = "TaskCompleted"
 	TaskCanceled  = "TaskCanceled"
 
+	// TaskGaveUp is a task that left the window having been restarted, which is
+	// the control plane reporting a failure rather than a finish. Its own status
+	// says done either way, so the retry count is what separates them, and the
+	// schema says as much: it is the one number that separates a task that is
+	// slow from one that is failing.
+	TaskGaveUp = "TaskGaveUp"
+
 	// The operation reasons, raised on the StorageClusterOps rather than the
 	// cluster.
 	//

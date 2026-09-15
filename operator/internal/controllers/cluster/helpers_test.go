@@ -12,6 +12,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -138,12 +139,41 @@ type recorder struct {
 type recordedEvent struct {
 	Type   string
 	Reason string
+
+	// Note is the formatted message. A reason says which event happened and the
+	// note says what it was about, and some of what an event owes a reader is
+	// only in the second.
+	Note string
 }
 
 func (r *recorder) Eventf(
-	_ runtime.Object, _ runtime.Object, eventType, reason, _, _ string, _ ...any,
+	_ runtime.Object, _ runtime.Object, eventType, reason, _, note string, args ...any,
 ) {
-	r.events = append(r.events, recordedEvent{Type: eventType, Reason: reason})
+	r.events = append(r.events, recordedEvent{
+		Type:   eventType,
+		Reason: reason,
+		Note:   fmt.Sprintf(note, args...),
+	})
+}
+
+// noteFor is the message of the first event carrying a reason.
+func (r *recorder) noteFor(reason string) string {
+	for _, e := range r.events {
+		if e.Reason == reason {
+			return e.Note
+		}
+	}
+	return ""
+}
+
+// typeFor is the severity of the first event carrying a reason.
+func (r *recorder) typeFor(reason string) string {
+	for _, e := range r.events {
+		if e.Reason == reason {
+			return e.Type
+		}
+	}
+	return ""
 }
 
 // count returns how many events carried a reason, which is what a test
