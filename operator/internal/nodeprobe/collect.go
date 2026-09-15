@@ -150,12 +150,12 @@ func controllersOf(devices []pci.Device) []Controller {
 	out := make([]Controller, 0, len(devices))
 	for _, device := range devices {
 		out = append(out, Controller{
-			Address:          device.Address,
-			Driver:           device.Driver,
-			Vendor:           device.Vendor,
-			Product:          device.Product,
-			NUMANode:         device.NUMANode,
-			TakenByUserspace: device.BoundToUserspace(),
+			Address:  device.Address,
+			Driver:   device.Driver,
+			Vendor:   device.Vendor,
+			Product:  device.Product,
+			NUMANode: device.NUMANode,
+			InUse:    device.InUse,
 		})
 	}
 	return out
@@ -187,7 +187,7 @@ func sentences(err error) []string {
 func Summary(report Report) string {
 	return fmt.Sprintf(
 		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
-			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
+			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers bound to a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
 		len(report.AvailableDevices()), len(report.Devices),
@@ -195,7 +195,7 @@ func Summary(report Report) string {
 		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,
 		report.HugePageBytes()>>20,
 		len(report.Interfaces),
-		len(report.ControllersTakenByUserspace()),
+		len(report.ControllersBoundToUserspace()),
 		len(report.Unreadable),
 	)
 }

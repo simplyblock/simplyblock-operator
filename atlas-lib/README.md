@@ -680,22 +680,35 @@ one mistake in this whole flow that loses data. The host's table is PID 1's.
 Everything else defaults sensibly; this one does not, and it is a field rather
 than a guess because only the caller knows where it mounted `/proc`.
 
-**A worker's NVMe disks may be invisible to the disk reading entirely.** SPDK
-takes a controller by rebinding it from the kernel's `nvme` driver to
+**A worker's NVMe disks may be invisible to the disk reading entirely.** A
+controller is taken by rebinding it from the kernel's `nvme` driver to
 `uio_pci_generic` or `vfio-pci`, and from that moment the kernel presents no
-block device for it. On the fleet this was developed against, three of four
-workers had four NVMe controllers each on `uio_pci_generic` and not one NVMe
-block device between them — so a `class/block` scan reports "no NVMe disks"
-about a machine with four. `inv.NVMeControllers` is the second half of the
-answer, and `inv.ControllersTakenByUserspace()` is the question worth asking
-whenever a draft came back empty:
+block device for it. SPDK does this, and so does a hypervisor passing a disk
+through to a guest, a DPDK application, and anything else driving hardware from
+userspace. On the fleet this was developed against, three of four workers had
+four NVMe controllers each on `uio_pci_generic` and not one NVMe block device
+between them — so a `class/block` scan reports "no NVMe disks" about a machine
+with four. `inv.NVMeControllers` is the second half of the answer, and
+`inv.ControllersBoundToUserspace()` is the question worth asking whenever a
+draft came back empty.
+
+Which driver is bound comes from sysfs; whether anything is still driving it
+does not, and sysfs exports nothing that changes while a process holds the
+character device — that was measured rather than assumed. `Collect` therefore
+runs `pci.CheckHolders` and reports the answer per controller as `InUse`, and a
+controller it could not check leaves `InUse` false and records why in the error
+it returns. Dropping that error turns unknown into free, which is the one
+mistake here that takes a running guest's disk away:
 
 ```go
 if len(inv.AvailableDevices()) == 0 {
-    if taken := inv.ControllersTakenByUserspace(); len(taken) > 0 {
+    if bound := inv.ControllersBoundToUserspace(); len(bound) > 0 {
         // Not a machine without storage: a machine whose storage something
-        // else is already driving. pci.HeldBy says which process, and
-        // pci.BindTo gives a controller back — refusing while anything holds it.
+        // else has. Which of the two answers applies is per controller —
+        // InUse false is a leftover that pci.BindTo can reclaim, and InUse
+        // true is a disk in service, which may belong to something this
+        // product knows nothing about. pci.HeldBy names the process, and
+        // pci.BindTo refuses while anything holds it either way.
     }
 }
 ```

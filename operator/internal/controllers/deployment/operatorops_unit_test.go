@@ -622,10 +622,9 @@ func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1
 	}
 	for _, address := range addresses {
 		report.NVMeControllers = append(report.NVMeControllers, nodeprobe.Controller{
-			Address:          address,
-			Driver:           "uio_pci_generic",
-			NUMANode:         -1,
-			TakenByUserspace: true,
+			Address:  address,
+			Driver:   "uio_pci_generic",
+			NUMANode: -1,
 		})
 	}
 
