@@ -59,6 +59,7 @@ import (
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -634,10 +635,23 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeOpsReconciler{
+	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
+		API:      nodecontroller.NewControlPlane(),
+		Nodes:    nodeSubscription,
+		Clusters: clusterSubscription,
+		Workload: &nodecontroller.Workload{
+			Client: mgr.GetClient(),
+			// The EndpointSlice a migration blocks on is read straight from the
+			// API server: a stale informer cache can miss a freshly published
+			// endpoint, and a migration would then wait on DNS forever while the
+			// name has in fact resolved for minutes (design-storagenode.md §5.4).
+			Uncached:         mgr.GetAPIReader(),
+			TLSEnabled:       tlsEnabled,
+			TLSMutualEnabled: tlsMutualEnabled,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
