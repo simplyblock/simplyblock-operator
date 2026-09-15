@@ -2,35 +2,6 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 
-{{- if .Values.storagenode.create }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: simplyblock-clusters
-data:
-  clusters.json: |
-    {
-      "clusters": [
-{{- if .Values.storagenode.multiCluster.enable }}
-{{- $clusters := default (list) .Values.storagenode.multiCluster.clusters -}}
-{{- range $i, $c := $clusters }}
-        {{- if $i }},{{ end }}
-        {
-          "cluster_id": {{ required "storagenode.multiCluster.clusters[].cluster_id is required" $c.cluster_id | quote }},
-          "workers": {{ toJson (default (list) $c.workers) }}
-        }
-{{- end }}
-{{- else }}
-        {
-          "cluster_id": {{ .Values.csiConfig.simplybk.uuid | quote }},
-          "workers": []
-        }
-{{- end }}
-      ]
-    }
-{{- end }}
-
 ---
 apiVersion: v1
 kind: ConfigMap

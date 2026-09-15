@@ -36,8 +36,8 @@ install.
 */}}
 {{- define "simplyblock.eventAlertClusters" -}}
 {{- $out := list -}}
-{{- if .Values.storagenode.multiCluster.enable -}}
-{{- range default (list) .Values.storagenode.multiCluster.clusters -}}
+{{- if .Values.multiCluster.enable -}}
+{{- range default (list) .Values.multiCluster.clusters -}}
 {{- if and .cluster_id .secret -}}
 {{- $out = append $out (dict "id" .cluster_id "secret" .secret) -}}
 {{- end -}}
