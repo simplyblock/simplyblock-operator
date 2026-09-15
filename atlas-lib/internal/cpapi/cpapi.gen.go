@@ -18,6 +18,42 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AlertDTOSeverity.
+const (
+	AlertDTOSeverityCritical AlertDTOSeverity = "critical"
+	AlertDTOSeverityWarning  AlertDTOSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOSeverity enum.
+func (e AlertDTOSeverity) Valid() bool {
+	switch e {
+	case AlertDTOSeverityCritical:
+		return true
+	case AlertDTOSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AlertDTOStatus.
+const (
+	AlertDTOStatusFiring   AlertDTOStatus = "firing"
+	AlertDTOStatusResolved AlertDTOStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOStatus enum.
+func (e AlertDTOStatus) Valid() bool {
+	switch e {
+	case AlertDTOStatusFiring:
+		return true
+	case AlertDTOStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
@@ -489,6 +525,42 @@ func (e ClustersCreateApiV2ClustersPostParamsResponseFormat) Valid() bool {
 	}
 }
 
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "critical"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning  ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring   ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "firing"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat.
 const (
 	ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormatEmpty      ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat = "empty"
@@ -635,6 +707,36 @@ func (e ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMig
 		return false
 	}
 }
+
+// AlertDTO One condition that currently needs an operator.
+//
+// Deliberately NOT an EventObj. An event is a journal entry -- it happened,
+// it is kept forever, and nothing ever retracts it. An alert is a claim
+// about the present that goes away by itself when it stops being true, so
+// it carries the object it is about and the time the condition started
+// rather than the time something was logged. “id“ is derived from the
+// kind and the object, so it is stable across polls and a consumer can
+// dedupe on it without keeping state.
+type AlertDTO struct {
+	ClusterId  openapi_types.UUID     `json:"cluster_id"`
+	Details    map[string]interface{} `json:"details"`
+	DeviceId   *openapi_types.UUID    `json:"device_id"`
+	FirstSeen  *string                `json:"first_seen"`
+	Id         string                 `json:"id"`
+	Kind       string                 `json:"kind"`
+	Message    string                 `json:"message"`
+	NodeId     *openapi_types.UUID    `json:"node_id"`
+	ResolvedAt *string                `json:"resolved_at"`
+	Severity   AlertDTOSeverity       `json:"severity"`
+	Since      *string                `json:"since"`
+	Status     AlertDTOStatus         `json:"status"`
+}
+
+// AlertDTOSeverity defines model for AlertDTO.Severity.
+type AlertDTOSeverity string
+
+// AlertDTOStatus defines model for AlertDTO.Status.
+type AlertDTOStatus string
 
 // BackupConfigParams defines model for BackupConfigParams.
 type BackupConfigParams struct {
@@ -1401,6 +1503,27 @@ type ClustersDetailApiV2ClustersClusterIdGetParams struct {
 	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams struct {
+	// Severity Only return alerts of this severity
+	Severity *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+
+	// History Also return alerts that have already resolved
+	History *bool `form:"history,omitempty" json:"history,omitempty"`
+
+	// HistorySeconds Limit the history to alerts resolved within this many seconds. Implies history=true.
+	HistorySeconds *int `form:"history_seconds,omitempty" json:"history_seconds,omitempty"`
+
+	// Status Only return alerts in this state
+	Status *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 	ResponseFormat *ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -2148,6 +2271,28 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/addreplication (the `ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost` operationId).
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
+	//
+	// The conditions in this cluster that currently need an operator.
+	//
+	// This is not the event log. An alert appears only while it is still true
+	// and disappears on its own once it is not: the node comes back ONLINE, the
+	// device comes back, the cluster leaves degraded. Conditions an operator
+	// caused on purpose -- a node they shut down, a device they removed -- are
+	// not alerts and are not listed.
+	//
+	// By default only what is wrong NOW is returned -- every entry has
+	// ``status: firing``. Pass ``history=true`` to also get the ones that have
+	// since resolved, each with its ``resolved_at``, or ``history_seconds=N``
+	// for just the recent past. Either way both transitions are written to the
+	// cluster event log as ALERT_RAISED / ALERT_RESOLVED, so a resolution
+	// reaches an operator whether or not anyone asks for history here.
+	//
+	// Critical sorts before warning, and firing before resolved.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	//
@@ -3182,6 +3327,38 @@ func (c *Client) ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostW
 // Corresponds with POST /api/v2/clusters/{cluster_id}/addreplication (the `ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost` operationId).
 func (c *Client) ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
+//
+// The conditions in this cluster that currently need an operator.
+//
+// This is not the event log. An alert appears only while it is still true
+// and disappears on its own once it is not: the node comes back ONLINE, the
+// device comes back, the cluster leaves degraded. Conditions an operator
+// caused on purpose -- a node they shut down, a device they removed -- are
+// not alerts and are not listed.
+//
+// By default only what is wrong NOW is returned -- every entry has
+// “status: firing“. Pass “history=true“ to also get the ones that have
+// since resolved, each with its “resolved_at“, or “history_seconds=N“
+// for just the recent past. Either way both transitions are written to the
+// cluster event log as ALERT_RAISED / ALERT_RESOLVED, so a resolution
+// reaches an operator whether or not anyone asks for history here.
+//
+// Critical sorts before warning, and firing before resolved.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
+func (c *Client) ClustersAlertsListApiV2ClustersClusterIdAlertsGet(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersAlertsListApiV2ClustersClusterIdAlertsGetRequest(c.Server, clusterId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -5755,6 +5932,103 @@ func NewClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostRequestWit
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersAlertsListApiV2ClustersClusterIdAlertsGetRequest constructs an http.Request for the ClustersAlertsListApiV2ClustersClusterIdAlertsGet method
+func NewClustersAlertsListApiV2ClustersClusterIdAlertsGetRequest(server string, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/alerts/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Severity != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "severity", *params.Severity, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.History != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "history", *params.History, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.HistorySeconds != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "history_seconds", *params.HistorySeconds, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Status != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "status", *params.Status, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -11682,6 +11956,30 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/addreplication (the `ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost` operationId).
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse, error)
 
+	// ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse Clusters:Alerts:List
+	//
+	// The conditions in this cluster that currently need an operator.
+	//
+	// This is not the event log. An alert appears only while it is still true
+	// and disappears on its own once it is not: the node comes back ONLINE, the
+	// device comes back, the cluster leaves degraded. Conditions an operator
+	// caused on purpose -- a node they shut down, a device they removed -- are
+	// not alerts and are not listed.
+	//
+	// By default only what is wrong NOW is returned -- every entry has
+	// ``status: firing``. Pass ``history=true`` to also get the ones that have
+	// since resolved, each with its ``resolved_at``, or ``history_seconds=N``
+	// for just the recent past. Either way both transitions are written to the
+	// cluster event log as ALERT_RAISED / ALERT_RESOLVED, so a resolution
+	// reaches an operator whether or not anyone asks for history here.
+	//
+	// Critical sorts before warning, and firing before resolved.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse, error)
+
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -13051,6 +13349,54 @@ func (r ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse) 
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *[]AlertDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) GetJSON200() *[]AlertDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -17832,6 +18178,36 @@ func (c *ClientWithResponses) ClustersAddreplicationApiV2ClustersClusterIdAddrep
 	return ParseClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse(rsp)
 }
 
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse Clusters:Alerts:List
+//
+// The conditions in this cluster that currently need an operator.
+//
+// This is not the event log. An alert appears only while it is still true
+// and disappears on its own once it is not: the node comes back ONLINE, the
+// device comes back, the cluster leaves degraded. Conditions an operator
+// caused on purpose -- a node they shut down, a device they removed -- are
+// not alerts and are not listed.
+//
+// By default only what is wrong NOW is returned -- every entry has
+// “status: firing“. Pass “history=true“ to also get the ones that have
+// since resolved, each with its “resolved_at“, or “history_seconds=N“
+// for just the recent past. Either way both transitions are written to the
+// cluster event log as ALERT_RAISED / ALERT_RESOLVED, so a resolution
+// reaches an operator whether or not anyone asks for history here.
+//
+// Critical sorts before warning, and firing before resolved.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/alerts/ (the `ClustersAlertsListApiV2ClustersClusterIdAlertsGet` operationId).
+func (c *ClientWithResponses) ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, params *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams, reqEditors ...RequestEditorFn) (*ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse, error) {
+	rsp, err := c.ClustersAlertsListApiV2ClustersClusterIdAlertsGet(ctx, clusterId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse(rsp)
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -19850,6 +20226,39 @@ func ParseClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse
 	switch {
 	case rsp.StatusCode == 202:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse parses an HTTP response from a ClustersAlertsListApiV2ClustersClusterIdAlertsGetWithResponse call
+func ParseClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse(rsp *http.Response) (*ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersAlertsListApiV2ClustersClusterIdAlertsGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []AlertDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError
