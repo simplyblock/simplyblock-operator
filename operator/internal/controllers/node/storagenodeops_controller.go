@@ -272,11 +272,13 @@ func (r *StorageNodeOpsReconciler) advance(
 	// a cluster, and one whose cluster is mid-rebalance or not active will either
 	// be rejected by the control plane or succeed into an inconsistent layout. It
 	// holds rather than fails, and resumes when the cluster does (§7.1).
-	if ready, reason, err := r.clusterReady(ctx, ops); err != nil {
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
-	} else if !ready {
-		r.emit(ctx, ops, corev1.EventTypeWarning, ClusterNotReady, reason)
-		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, reason)
+	if !skipsClusterGate(ops) {
+		if ready, reason, err := r.clusterReady(ctx, ops); err != nil {
+			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
+		} else if !ready {
+			r.emit(ctx, ops, corev1.EventTypeWarning, ClusterNotReady, reason)
+			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, reason)
+		}
 	}
 
 	if machine.TimeoutReached() {
@@ -720,6 +722,23 @@ func (r *StorageNodeOpsReconciler) target(
 // It reports a reason rather than an error, because holding is the response and a
 // reason is what an event carries. A cluster whose reading cannot be taken at all
 // is an error, which the caller retries.
+// skipsClusterGate reports the operations that run whatever the cluster says
+// about itself.
+//
+// Removal is the one. A node is removed from an unready cluster precisely to
+// make the cluster ready, so holding the removal until the cluster is active
+// closes a loop with no way out: the node cannot be removed until the cluster is
+// active, and the cluster cannot become active while the node it is stuck on is
+// still in it. That is not hypothetical — it is what a node whose add never
+// finished does to the cluster it was being added to.
+//
+// Nothing else is exempt. The gate exists to keep an operation that moves data
+// off a cluster that cannot take it, and an exemption wider than the one case
+// that needs it is a gate that stops meaning anything.
+func skipsClusterGate(ops *simplyblockv1alpha2.StorageNodeOps) bool {
+	return ops.Spec.Action == simplyblockv1alpha2.StorageNodeOpsActionRemove
+}
+
 func (r *StorageNodeOpsReconciler) clusterReady(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
 ) (bool, string, error) {
