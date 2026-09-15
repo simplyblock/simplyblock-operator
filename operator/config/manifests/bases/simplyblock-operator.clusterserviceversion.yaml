@@ -178,6 +178,14 @@ spec:
       kind: StorageNodeOps
       name: storagenodeops.storage.simplyblock.io
       version: v1alpha1
+    - description: VolumeGroupSnapshotOps is a one-shot operation on a VolumeGroupSnapshot,
+        analogous to a Kubernetes Job. The Restore action creates one PersistentVolumeClaim
+        per member snapshot of the target's generation and waits for every claim to
+        bind.
+      displayName: Volume Group Snapshot Ops
+      kind: VolumeGroupSnapshotOps
+      name: volumegroupsnapshotops.storage.simplyblock.io
+      version: v1alpha1
     - description: VolumeMigration is the Schema for the volumemigrations API.
       displayName: Volume Migration
       kind: VolumeMigration

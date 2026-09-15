@@ -11,6 +11,7 @@
 package driver
 
 import (
+	"slices"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -149,6 +150,36 @@ func TestNoRuleIsAWildcard(t *testing.T) {
 					t.Errorf("%s grants %v on every resource", component, r.Verbs)
 				}
 			}
+		}
+	}
+}
+
+// The csi-snapshotter sidecar watches VolumeGroupSnapshotContent and drives
+// the GroupController when the CSIVolumeGroupSnapshot gate is on
+// (design-consistency-groups.md §9, P0-4). The chart granted these on the
+// provisioner role before the deployment moved into the operator.
+func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
+	wanted := map[string][]string{
+		"volumegroupsnapshotclasses":         {"get", "list", "watch"},
+		"volumegroupsnapshotcontents":        {"create", "get", "list", "watch", "update", "delete", "patch"},
+		"volumegroupsnapshotcontents/status": {"get", "update", "patch"},
+	}
+	for resource, verbs := range wanted {
+		found := false
+		for _, r := range clusterRoleRules["provisioner"] {
+			if !slices.Contains(r.APIGroups, "groupsnapshot.storage.k8s.io") {
+				continue
+			}
+			if !slices.Contains(r.Resources, resource) {
+				continue
+			}
+			found = true
+			if !slices.Equal(r.Verbs, verbs) {
+				t.Errorf("groupsnapshot rule for %s has verbs %v, want %v", resource, r.Verbs, verbs)
+			}
+		}
+		if !found {
+			t.Errorf("the provisioner role carries no groupsnapshot rule for %s", resource)
 		}
 	}
 }

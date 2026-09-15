@@ -132,3 +132,22 @@ spec:
   # nodeConfigs:
   #   worker-node-1:
   #     failureDomain: 0
+
+---
+# The CSI driver's deployment as a resource (design-simplyblockdriver.md): the
+# operator reconciles it into the node plugin, the controller plugin, their
+# RBAC, and the CSIDriver registration. One per cluster. The name derives every
+# workload name (simplyblock-csi-node, simplyblock-csi-controller), and on a
+# cluster where the chart previously installed the driver, the first reconcile
+# adopts the running deployment instead of recreating it. Every field defaults:
+# an unset image runs the driver build belonging to the reconciling operator.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  # image: docker.io/simplyblock/spdkcsi:latest
+  # imagePullPolicy: Always
+  # controllerReplicas: 1

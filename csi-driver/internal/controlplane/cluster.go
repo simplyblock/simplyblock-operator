@@ -222,18 +222,19 @@ type CreateLVolData struct {
 	//
 	// The numbers and booleans deliberately keep theirs: false and 0 are values
 	// here, not absences, and omitempty cannot tell the two apart.
-	Fabric       string `json:"fabric,omitempty"`
-	Encryption   bool   `json:"encrypt"`
-	MaxRWIOPS    string `json:"max_rw_iops,omitempty"`
-	MaxRWmBytes  string `json:"max_rw_mbytes,omitempty"`
-	MaxRmBytes   string `json:"max_r_mbytes,omitempty"`
-	MaxWmBytes   string `json:"max_w_mbytes,omitempty"`
-	MaxSize      string `json:"max_size,omitempty"`
-	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	HostID       string `json:"host_id,omitempty"`
-	LvolID       string `json:"uid,omitempty"`
-	Namespaced   bool   `json:"namespaced"`
-	PvcName      string `json:"pvc_name,omitempty"`
+	Fabric           string `json:"fabric,omitempty"`
+	Encryption       bool   `json:"encrypt"`
+	MaxRWIOPS        string `json:"max_rw_iops,omitempty"`
+	MaxRWmBytes      string `json:"max_rw_mbytes,omitempty"`
+	MaxRmBytes       string `json:"max_r_mbytes,omitempty"`
+	MaxWmBytes       string `json:"max_w_mbytes,omitempty"`
+	MaxSize          string `json:"max_size,omitempty"`
+	MaxNamespace     int    `json:"max_namespace_per_subsys"`
+	HostID           string `json:"host_id,omitempty"`
+	LvolID           string `json:"uid,omitempty"`
+	Namespaced       bool   `json:"namespaced"`
+	PvcName          string `json:"pvc_name,omitempty"`
+	ConsistencyGroup string `json:"consistency_group,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID
@@ -288,9 +289,9 @@ func (c *ClusterClient) ListSnapshots(ctx context.Context) ([]*SnapshotResp, err
 // CloneSnapshot clones a snapshot to a new volume
 func (c *ClusterClient) CloneSnapshot(
 	ctx context.Context,
-	snapshotID, cloneName, newSize, pvcName string,
+	snapshotID, cloneName, newSize, pvcName, consistencyGroup string,
 ) (string, error) {
-	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName)
+	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName, consistencyGroup)
 	if err != nil {
 		return "", err
 	}
