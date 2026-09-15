@@ -323,9 +323,6 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert namespace ID %s to integer: %w", volumeContext["nsId"], err)
 	}
-	if nsId < 1 {
-		return nil, fmt.Errorf("namespace ID must be greater than zero")
-	}
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
 		srcLvolID := volumeContext["uuid"]
@@ -374,6 +371,9 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 // So a failed device lookup is diagnosed rather than simply returned, and if the
 // fabric could be repaired the attach is tried once more. See nvmerepair.go.
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
+	if nvmf.nsId < 1 {
+		return "", fmt.Errorf("namespace ID must be greater than zero")
+	}
 	devicePath, err := nvmf.connectOnce(ctx)
 	if err != nil && nvmf.repairFabric(ctx) {
 		klog.Infof("Connect: retrying attach of %s after a fabric repair", nvmf.nqn)
