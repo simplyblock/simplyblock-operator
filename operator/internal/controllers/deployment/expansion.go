@@ -113,11 +113,18 @@ func (r *ClusterDeploymentConfigReconciler) createCluster(
 	getErr := r.Get(ctx, key, &existing)
 
 	switch {
+	case getErr == nil && config.Status.ClusterRef == name:
+		// This document created it on an earlier pass and said so. Re-entering a
+		// step is ordinary — a lost status write, a generation bump, a restart
+		// mid-expansion — so a step that refused its own prior success would fail
+		// the deployment on a retry rather than resume it.
+		return true, r.recordCluster(ctx, config, name)
+
 	case getErr == nil && config.Spec.ClusterRef == "":
-		// The document asked to create a cluster and one is already there.
-		// Merging would have the operator decide what a difference means, and the
-		// differences that matter are of the form "this node's device list
-		// changed" (§6).
+		// The document asked to create a cluster and one is already there that it
+		// did not put there. Merging would have the operator decide what a
+		// difference means, and the differences that matter are of the form "this
+		// node's device list changed" (§6).
 		return false, refusef(ClusterExists,
 			"spec.cluster.name is %s and a StorageCluster by that name already exists; "+
 				"set spec.clusterRef to add nodes to it instead", name)
@@ -141,6 +148,12 @@ func (r *ClusterDeploymentConfigReconciler) createCluster(
 	}
 	if err := r.Create(ctx, cluster); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			if config.Status.ClusterRef == name {
+				// The read above was served from a cache that had not caught up
+				// with this document's own earlier create. The same resumption as
+				// at the top of the switch, reached by the other route.
+				return true, r.recordCluster(ctx, config, name)
+			}
 			// The read above missed and somebody created the cluster between the
 			// two. That is the ClusterExists case arriving by a different route,
 			// not a success: the document asked to create a cluster and did not,
