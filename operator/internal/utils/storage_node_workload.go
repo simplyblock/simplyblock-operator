@@ -7,7 +7,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -45,26 +45,29 @@ var defaultContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(
+	sn *simplyblockv1alpha2.StorageCluster,
+	tlsEnabled, tlsMutualEnabled bool,
+	tlsProvider, tlsSecretResourceVersion, image string,
+) *appsv1.DaemonSet {
+	wl := storageNodesOf(sn)
 
 	labels := map[string]string{
 		kube.LabelApp:                kube.AppStorageNode,
-		kube.LabelSimplyblockCluster: sn.Spec.ClusterName,
+		kube.LabelSimplyblockCluster: sn.Name,
 		kube.LabelStorageNodeSet:     sn.Name,
 	}
-
-	image := sn.Spec.ClusterImage
 
 	// Build the fleet-level (non-overridable) args that are always appended.
 	// Per-node args (pci-*, device-*, size-range, lblk/blk-*) and the cluster-scoped
 	// sizing args (max-subsys-count, max-size, vcpu-count) are read at runtime from
 	// the per-node ConfigMap via the init script.
 	fleetArgs := ""
-	if len(sn.Spec.SocketsToUse) > 0 {
-		fleetArgs += " --sockets-to-use=" + JoinList(sn.Spec.SocketsToUse)
+	if len(wl.SocketsToUse) > 0 {
+		fleetArgs += " --sockets-to-use=" + JoinList(wl.SocketsToUse)
 	}
-	if sn.Spec.NodesPerSocket != nil {
-		fleetArgs += " --nodes-per-socket=" + ptr.StringOrDefault(sn.Spec.NodesPerSocket, "")
+	if wl.NodesPerSocket != nil {
+		fleetArgs += " --nodes-per-socket=" + ptr.StringOrDefault(wl.NodesPerSocket, "")
 	}
 
 	// The init container sources the per-node env file (written by node-env-writer)
@@ -98,29 +101,29 @@ else
 fi`
 	nodeEnvWriterCmd := []string{"sh", "-c", nodeEnvWriterScript}
 
-	imagePullPolicy := sn.Spec.ImagePullPolicy
+	imagePullPolicy := wl.ImagePullPolicy
 	if imagePullPolicy == "" {
 		imagePullPolicy = corev1.PullAlways
 	}
 
 	mainEnv := []corev1.EnvVar{
-		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(sn.Spec.UbuntuHost, "false")},
-		{Name: "OPENSHIFT_CLUSTER", Value: ptr.StringOrDefault(sn.Spec.OpenShiftCluster, "false")},
-		{Name: "SKIP_KUBELET_CONFIGURATION", Value: ptr.StringOrDefault(sn.Spec.SkipKubeletConfiguration, "false")},
+		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, "false")},
+		{Name: "OPENSHIFT_CLUSTER", Value: ptr.StringOrDefault(wl.OpenShiftCluster, "false")},
+		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
-		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(sn.Spec.EnableCpuTopology, "false")},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
-	if sn.Spec.MaxParallelNodeAdds != nil {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *sn.Spec.MaxParallelNodeAdds)})
+	if wl.MaxParallelNodeAdds != nil {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.MaxParallelNodeAdds)})
 	}
-	if sn.Spec.OpenShiftMachineConfigPool != "" {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: sn.Spec.OpenShiftMachineConfigPool})
+	if wl.OpenShiftMachineConfigPool != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShiftMachineConfigPool})
 	}
-	if sn.Spec.ReservedSystemCPU != "" {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
+	if wl.ReservedSystemCPU != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})
 	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
@@ -301,7 +304,7 @@ fi`
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
-					Tolerations:        sn.Spec.Tolerations,
+					Tolerations:        wl.Tolerations,
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},
@@ -322,7 +325,7 @@ fi`
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 								}},
 							},
-							Resources: effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
+							Resources: effectiveResources(wl.InitContainerResources, defaultInitContainerResources),
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "per-node-config", MountPath: "/etc/per-node-config", ReadOnly: true},
 								nodeEnvMount,
@@ -337,7 +340,7 @@ fi`
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
 							VolumeMounts:    initMounts,
-							Resources:       effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
+							Resources:       effectiveResources(wl.InitContainerResources, defaultInitContainerResources),
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -356,7 +359,7 @@ fi`
 exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
-							Resources:       effectiveResources(sn.Spec.ContainerResources, defaultContainerResources),
+							Resources:       effectiveResources(wl.ContainerResources, defaultContainerResources),
 							ReadinessProbe:  readinessProbe,
 							Env:             mainEnv,
 							VolumeMounts:    mainMounts,
@@ -478,7 +481,7 @@ func StorageNodeSetAPIAddress(workerNode, namespace string) string {
 	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", NodeHostnameLabel(workerNode), namespace)
 }
 
-func BuildStorageNodeSetService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
+func BuildStorageNodeService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        kube.StorageNodeSetAPIServiceName,
@@ -498,7 +501,7 @@ func BuildStorageNodeSetService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabl
 	}
 }
 
-func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha2.StorageCluster, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
 	protocol := corev1.ProtocolTCP
 	port := int32(5000)
 	portName := "api"
@@ -542,7 +545,7 @@ type SpdkProxyEndpoint struct {
 	RpcPort  int32
 }
 
-func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
+func BuildSpdkProxyService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "simplyblock-spdk-proxy",
@@ -561,7 +564,7 @@ func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bo
 // name truncated at the first dot so FQDN-style node names stay within the
 // 63-char DNS label limit.
 func BuildSpdkProxyEndpointSlice(
-	sn *simplyblockv1alpha1.StorageNodeSet,
+	sn *simplyblockv1alpha2.StorageCluster,
 	rpcPort int32,
 	endpoints []SpdkProxyEndpoint,
 ) (*discoveryv1.EndpointSlice, error) {
@@ -649,4 +652,33 @@ func effectiveResources(user, def corev1.ResourceRequirements) corev1.ResourceRe
 		return user
 	}
 	return def
+}
+
+// storageNodesOf is the cluster's workload block, never nil, so a builder reads
+// defaults from a zero value rather than guarding every field.
+//
+// A cluster that states no block is the ordinary case: every field in it has a
+// default or is legitimately empty, and the DaemonSet a zero block produces is the
+// one a deployment that configured nothing asked for.
+func storageNodesOf(cluster *simplyblockv1alpha2.StorageCluster) *simplyblockv1alpha2.StorageNodesSpec {
+	if cluster.Spec.StorageNodes == nil {
+		return &simplyblockv1alpha2.StorageNodesSpec{}
+	}
+	return cluster.Spec.StorageNodes
+}
+
+// skipKubeletConfiguration renders the environment variable the storage node
+// still reads, from the field that replaced it.
+//
+// It is written out rather than substituted because this is the one rename in the
+// migration that also inverts: the retired skipKubeletConfiguration was off unless
+// set, and enableKubeletConfiguration is off unless asked for, so the two say the
+// opposite thing about the same deployment. A mechanical rename here would have
+// turned kubelet configuration on for every cluster that never mentioned it
+// (design-storagenode.md §15.1).
+func skipKubeletConfiguration(wl *simplyblockv1alpha2.StorageNodesSpec) string {
+	if ptr.BoolFromOrFalse(wl.EnableKubeletConfiguration) {
+		return "false"
+	}
+	return "true"
 }

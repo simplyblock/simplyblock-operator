@@ -78,6 +78,7 @@ func derivations() []upgrade.Derivation {
 func migrationSteps() []upgrade.Step {
 	all := steps.Upgrade()
 	all = append(all, steps.Ownership()...)
+	all = append(all, steps.Sizing()...)
 	return append(all, steps.Migrate()...)
 }
 

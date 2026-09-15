@@ -61,6 +61,7 @@ import (
 	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -354,6 +355,18 @@ func main() {
 	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
 	// and StorageNode objects, and two replicas writing the same object would
 	// fight over it.
+	// The storage-plane side of a node, shared by the three reconcilers that touch
+	// it. The EndpointSlice a migration blocks on is read straight from the API
+	// server: a stale informer cache can miss a freshly published endpoint, and a
+	// migration would then wait on DNS forever while the name has in fact resolved
+	// for minutes (design-storagenode.md §5.4).
+	storageNodeWorkload := &nodecontroller.Workload{
+		Client:           mgr.GetClient(),
+		Uncached:         mgr.GetAPIReader(),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
+	}
+
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
@@ -384,13 +397,13 @@ func main() {
 	// so it comes from Prometheus rather than from the API or the stream. An
 	// endpoint that cannot be reached leaves the capacity absent from the
 	// status and everything else in it correct.
-	var nodeCapacity controller.NodeCapacitySource
+	var nodeCapacity nodecontroller.NodeCapacitySource
 	if provider, err := atlasprom.New(prometheusURL); err != nil {
 		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		nodeCapacity = provider
 	}
-	if err := (&controller.StorageDeviceReconciler{
+	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Devices:  deviceSubscription,
@@ -403,13 +416,13 @@ func main() {
 	// continuously and comes from the same Prometheus the node capacity does. The
 	// collector publishes it as a gauge on a timer and warns about a device over
 	// its cluster's threshold, without writing any of it to an object.
-	var deviceCapacity controller.DeviceCapacitySource
+	var deviceCapacity nodecontroller.DeviceCapacitySource
 	if provider, err := atlasprom.New(prometheusURL); err != nil {
 		setupLog.Error(err, "storage-device capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		deviceCapacity = provider
 	}
-	if err := mgr.Add(&controller.StorageDeviceCollector{
+	if err := mgr.Add(&nodecontroller.StorageDeviceCollector{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorder("storagedevice-collector"),
 		Capacity: deviceCapacity,
@@ -501,16 +514,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeSetReconciler{
+	if err := (&nodecontroller.StorageNodeWorkloadReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagenode-workload-controller"),
 		Namespace:        operatorNamespace,
 		TLSEnabled:       tlsEnabled,
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
-		Recorder:         mgr.GetEventRecorder("storagenodeset-controller"),
+		Workload:         storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)
 	}
 	if err := (&pool.StoragePoolReconciler{
@@ -535,16 +549,6 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Task")
-		os.Exit(1)
-	}
-	if err := (&controller.NodeDrainCoordinatorReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		ManagerNodeName:  os.Getenv("NODE_NAME"),
-		TLSEnabled:       tlsEnabled,
-		TLSMutualEnabled: tlsMutualEnabled,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
 	}
 	// The data-protection band. The mirror is what creates every StorageBackup
@@ -627,26 +631,30 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
-		TLSEnabled:       tlsEnabled,
-		TLSMutualEnabled: tlsMutualEnabled,
-		DeviceScopes:     deviceScopes,
-		NodeRegistries: []controller.NodeObjectRegistry{
+	if err := (&nodecontroller.StorageNodeReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenode-controller"),
+		API:      nodecontroller.NewControlPlane(),
+		Nodes:    nodeSubscription,
+		Registries: []nodecontroller.NodeObjectRegistry{
 			deviceSubscription, nodeSubscription,
 		},
-		Nodes:    nodeSubscription,
-		Capacity: nodeCapacity,
+		DeviceScopes: deviceScopes,
+		Capacity:     nodeCapacity,
+		Workload:     storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeOpsReconciler{
+	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
+		API:      nodecontroller.NewControlPlane(),
+		Nodes:    nodeSubscription,
+		Clusters: clusterSubscription,
+		Workload: storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
@@ -788,8 +796,11 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
 
-		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagenode",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenode",
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
 		setupLog.Info("registered storagenode validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-replicationops",

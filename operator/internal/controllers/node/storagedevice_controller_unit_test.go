@@ -2,7 +2,7 @@
 // device status to a typed phase, and the create, update, and delete paths of
 // the reconciler that publishes it.
 
-package controller
+package node
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
@@ -52,10 +53,10 @@ func (f *fakeDeviceCache) Lookup(key types.NamespacedName) (cpinformer.Scope, su
 	return sdScope(), dto, true
 }
 
-func sdNodeObject() *simplyblockv1alpha1.StorageNode {
-	return &simplyblockv1alpha1.StorageNode{
+func sdNodeObject() *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdNodeCR},
-		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: sdNodeID},
+		Status:     simplyblockv1alpha2.StorageNodeStatus{UUID: sdNodeID},
 	}
 }
 
@@ -64,11 +65,11 @@ func sdNodeObject() *simplyblockv1alpha1.StorageNode {
 // fake client only answers a MatchingFields query for an index it was given.
 func sdReconciler(t *testing.T, cache DeviceCache, objs ...client.Object) *StorageDeviceReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
+	scheme := testsupport.NewScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha2.StorageDevice{}).
-		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
+		WithIndex(&simplyblockv1alpha2.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
 		WithObjects(objs...).
 		Build()
 	return &StorageDeviceReconciler{
@@ -266,9 +267,9 @@ func TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace(t *testing.T) {
 	// all: it learns the node's, which is the whole of the fix.
 	const nodeNamespace = "default"
 
-	node := &simplyblockv1alpha1.StorageNode{
+	node := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Namespace: nodeNamespace, Name: sdNodeCR},
-		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: sdNodeID},
+		Status:     simplyblockv1alpha2.StorageNodeStatus{UUID: sdNodeID},
 	}
 
 	// The real subscription, wired the way cmd/main.go wires it, so the object
@@ -316,11 +317,11 @@ func sdReconcilerWithInterceptor(
 	t *testing.T, cache DeviceCache, funcs interceptor.Funcs, objs ...client.Object,
 ) *StorageDeviceReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
+	scheme := testsupport.NewScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha2.StorageDevice{}).
-		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
+		WithIndex(&simplyblockv1alpha2.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
 		WithObjects(objs...).
 		WithInterceptorFuncs(funcs).
 		Build()
@@ -368,7 +369,7 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 			ctx context.Context, c client.Client, subResourceName string,
 			obj client.Object, opts ...client.SubResourceUpdateOption,
 		) error {
-			if subResourceName == statusSubresource {
+			if subResourceName == testsupport.StatusSubresource {
 				statusUpdates++
 				if statusUpdates == 1 {
 					return sdConflictErr()

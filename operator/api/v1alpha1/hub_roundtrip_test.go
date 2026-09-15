@@ -206,13 +206,15 @@ func TestStorageNodeOpsRoundTripsFromTheHub(t *testing.T) {
 			Remove: &v1alpha2.RemoveSpec{SystemVolumeFilterRegex: &filter},
 		},
 		Status: v1alpha2.StorageNodeOpsStatus{
-			Phase:           v1alpha2.StorageNodeOpsPhaseRunning,
-			SubPhase:        v1alpha2.StorageNodeOpsSubPhaseRestarting,
-			Message:         "waiting for node-1",
-			VolumesMigrated: 7,
-			VolumesPending:  3,
-			Triggered:       true,
-			StartedAt:       &started,
+			Phase: v1alpha2.StorageNodeOpsPhaseRunning,
+			// AwaitingNode is the sharper half of the pair this version spells as
+			// one Restarting, so it is the value that proves the stash carries
+			// what the projection cannot.
+			Step:               statemachine.KubeSnapshot{State: string(v1alpha2.StorageNodeOpsStepAwaitingNode)},
+			Message:            "waiting for node-1",
+			Drain:              &v1alpha2.DrainStatus{VolumesTotal: 10, VolumesMigrated: 7},
+			ObservedGeneration: 3,
+			StartedAt:          &started,
 		},
 	}
 

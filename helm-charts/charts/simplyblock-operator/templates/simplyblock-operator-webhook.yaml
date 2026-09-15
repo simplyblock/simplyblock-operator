@@ -228,15 +228,17 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
-      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+      path: /validate-storage-simplyblock-io-v1alpha2-storagenode
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vstoragenode.simplyblock.io
   rules:
   - apiGroups:
     - storage.simplyblock.io
     apiVersions:
-    - v1alpha1
+    - v1alpha2
     operations:
+    - CREATE
     - UPDATE
     resources:
     - storagenodes

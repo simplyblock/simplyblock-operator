@@ -15,7 +15,7 @@
 // object went away, and a series nobody deletes reports a failed drive as
 // healthy forever.
 
-package controller
+package node
 
 import (
 	"context"

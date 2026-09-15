@@ -11,11 +11,10 @@
 // `enable` fields and one removal, and status gaining a typed phase, a creation
 // step, the control plane's task window, and observedGeneration.
 //
-// One field of Appendix A is deliberately absent. spec.storageNodes is the
-// Kubernetes workload the cluster's nodes run as, and its type belongs to
-// design-storagenode.md Appendix C, which has not been written yet: StorageNode
-// is still v1alpha1 and StorageNodeSet still owns the workload. It lands with
-// that kind's move rather than here, where it could only be an empty block.
+// spec.storageNodes is the Kubernetes workload the cluster's nodes run as. Its
+// type is design-storagenode.md Appendix C and it arrived with that kind's move
+// to v1alpha2, which is what retired StorageNodeSet and left the DaemonSet, the
+// Services, the certificates, and the per-node ConfigMap without an owner.
 
 package v1alpha2
 
@@ -439,6 +438,117 @@ type ClusterTask struct {
 	Retry int32 `json:"retry,omitempty"`
 }
 
+// StorageNodesSpec is the Kubernetes workload every storage node in the cluster
+// runs as: a DaemonSet, a headless Service and its EndpointSlices, a serving
+// certificate, a ServiceAccount, and the ConfigMap the init container reads its
+// per-node configuration out of.
+//
+// Every field here is cluster-uniform by construction, because a DaemonSet is one
+// object for every node it schedules and its pod template cannot differ per node.
+// What can differ is in StorageNode.spec.config: the two images, the SPDK system
+// memory, and the sizing block, which are per node precisely so that an image
+// rollout and a hardware re-size can walk the fleet one machine at a time.
+type StorageNodesSpec struct {
+	// Image is the storage-node container image. Defaults to the ControlPlane
+	// singleton's spec.image when unset, so a deployment states the version once.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImagePullPolicy controls when that image is pulled.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=IfNotPresent
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// MgmtInterface is the management network interface storage nodes bind.
+	// +optional
+	// +k8s:immutable
+	MgmtInterface string `json:"mgmtInterface,omitempty"`
+
+	// DataInterfaces are the data-plane network interfaces.
+	// +optional
+	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
+	// socket 0 alone.
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +optional
+	// +k8s:immutable
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// MaxParallelNodeAdds limits how many workers may be in the node-add process
+	// at once, counted by distinct worker rather than by object so that a
+	// two-socket host consumes one slot. Workers hosting a FoundationDB pod are
+	// always sequential regardless of this value, because a node add reboots the
+	// host and two simultaneous FoundationDB reboots reduce the control plane's
+	// own fault tolerance.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +optional
+	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+
+	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
+	// journal manager, instead of carving a journal partition out of every
+	// device.
+	// +optional
+	// +k8s:immutable
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
+
+	// EnableFormat4K formats NVMe devices to a 4K block size where the device
+	// supports it.
+	// +optional
+	// +k8s:immutable
+	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
+
+	// EnableCpuTopology turns on topology-aware CPU assignment.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
+	// ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
+	// EnableKubeletConfiguration lets the storage node apply the kubelet
+	// configuration changes it needs. Off by default, which is the behavior the
+	// retired skipKubeletConfiguration expressed by being set.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// UbuntuHost states that the worker's host OS is Ubuntu, which changes how
+	// the node configures huge pages and the kernel modules it loads.
+	// +optional
+	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
+
+	// OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+	// +optional
+	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+
+	// OpenShiftMachineConfigPool names the pool generated MachineConfig objects
+	// are labeled into.
+	// +kubebuilder:default=worker
+	// +optional
+	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
+
+	// Tolerations are applied to the storage-node pods.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// ContainerResources sets requests and limits for the storage-node container.
+	// Unset enforces no limits.
+	// +optional
+	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
+
+	// InitContainerResources does the same for the init container.
+	// +optional
+	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+}
+
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomic4kWrites requires enableChecksumValidation to be true"
@@ -585,6 +695,15 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=1
 	// +optional
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
+
+	// StorageNodes is the Kubernetes workload the cluster's storage nodes run
+	// as, and the cluster owns every object in it by controller reference: a
+	// cluster deleted takes its DaemonSet, Services, certificate, and per-node
+	// ConfigMap with it. One workload serves the whole cluster, because growth is
+	// nodes rather than sets and what differs between hardware generations is per
+	// node already.
+	// +optional
+	StorageNodes *StorageNodesSpec `json:"storageNodes,omitempty"`
 
 	// Backup is the S3 location this cluster's backups live in, and it is both
 	// the target copies are written to and the inventory the operator walks to

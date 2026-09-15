@@ -22,6 +22,10 @@ const testSystemVolumeFilter = "^system-.*"
 
 const testImage = "quay.io/simplyblock-io/simplyblock:26.2.2"
 
+// testCluster is the cluster name every conversion fixture names, so the
+// literal appears once rather than in each of them.
+const testCluster = "production"
+
 func TestControlPlaneConvertToRegroupsImage(t *testing.T) {
 	src := &ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
