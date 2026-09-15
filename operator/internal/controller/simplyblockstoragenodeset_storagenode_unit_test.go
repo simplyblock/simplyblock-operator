@@ -243,11 +243,62 @@ func TestBuildPerNodeEnvFile_ContainsAllRequiredKeys(t *testing.T) {
 	env := buildPerNodeEnvFile(cluster, sns, "any-worker")
 	required := []string{"MAX_SUBSYS_COUNT=", "MAX_HUGE_PAGES_SIZE=", "VCPU_COUNT=",
 		"PCI_ALLOWED=", "PCI_BLOCKED=", "NVME_DEVICES=",
-		"DEVICE_MODEL=", "SIZE_RANGE=", "JM_PERCENT=", "HA_JM_COUNT="}
+		"DEVICE_MODEL=", "SIZE_RANGE=", "JM_PERCENT=", "HA_JM_COUNT=",
+		"LBLK=", "BLK_NAMES=", "BLK_NAMES_EXCLUDE=", "BLK_SERIALS=", "LBLK_JM_PERCENT="}
 	for _, key := range required {
 		if !strings.Contains(env, key) {
 			t.Errorf("missing key %q in env:\n%s", key, env)
 		}
+	}
+}
+
+func TestBuildPerNodeEnvFile_LblkFleetDefaults(t *testing.T) {
+	enableLblk := true
+	jmPercent := int32(5)
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName:        snsTestCluster,
+			EnableLblk:         &enableLblk,
+			BlkSerials:         []string{"WD-ABC123", "WD-DEF456"},
+			LblkJournalPercent: &jmPercent,
+		},
+	}
+	cluster := newSizingStorageCluster(nil, nil, "")
+	env := buildPerNodeEnvFile(cluster, sns, "worker-a")
+	if !strings.Contains(env, "LBLK=true") {
+		t.Errorf("expected LBLK=true, got:\n%s", env)
+	}
+	if !strings.Contains(env, "BLK_SERIALS='WD-ABC123,WD-DEF456'") {
+		t.Errorf("expected BLK_SERIALS with both serials, got:\n%s", env)
+	}
+	if !strings.Contains(env, "LBLK_JM_PERCENT=5") {
+		t.Errorf("expected LBLK_JM_PERCENT=5, got:\n%s", env)
+	}
+}
+
+func TestBuildPerNodeEnvFile_LblkOverrideWinsOverFleet(t *testing.T) {
+	fleetEnable := false
+	overrideEnable := true
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: snsTestCluster,
+			EnableLblk:  &fleetEnable,
+			BlkNames:    []string{"sda"},
+			NodeConfigs: map[string]simplyblockv1alpha1.StorageNodeOverrides{
+				"worker-b": {
+					EnableLblk: &overrideEnable,
+					BlkNames:   []string{"sdb", "sdc"},
+				},
+			},
+		},
+	}
+	cluster := newSizingStorageCluster(nil, nil, "")
+	env := buildPerNodeEnvFile(cluster, sns, "worker-b")
+	if !strings.Contains(env, "LBLK=true") {
+		t.Errorf("expected override LBLK=true, got:\n%s", env)
+	}
+	if !strings.Contains(env, "BLK_NAMES='sdb,sdc'") {
+		t.Errorf("expected override BLK_NAMES=sdb,sdc, got:\n%s", env)
 	}
 }
 

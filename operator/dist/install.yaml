@@ -1777,6 +1777,25 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              deviceMode:
+                default: nvme
+                description: |-
+                  DeviceMode selects how storage devices are attached for every node in this
+                  cluster. "nvme" (default) auto-discovers and attaches NVMe PCIe devices via the
+                  SPDK nvme driver. "lblk" wraps arbitrary Linux block devices (e.g. cloud block
+                  volumes, virtio-blk disks, non-NVMe local disks) in SPDK AIO bdevs instead; which
+                  devices are used is then selected per node via StorageNodeSet/StorageNode block-
+                  device fields (blkNames, blkNamesExclude, and blkSerials). Chosen at cluster-create
+                  time on the backend and cannot be switched on a live cluster.
+                  Requires sbcli with lblk device-mode support (simplyblock/sbcli#1224); sending this
+                  against an older backend is rejected at cluster creation.
+                enum:
+                - nvme
+                - lblk
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableFailureDomains:
                 description: |-
                   EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
@@ -2049,6 +2068,8 @@ spec:
               rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field deviceMode is immutable once set
+              rule: '!has(oldSelf.deviceMode) || has(self.deviceMode)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
@@ -2577,6 +2598,47 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
+                  blkForceFormat:
+                    description: |-
+                      BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                      (wipefs) to become eligible whole-disk devices on this node.
+                    type: boolean
+                  blkNames:
+                    description: |-
+                      BlkNames overrides the block-device kernel-name selector for this node.
+                      Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                  blkNamesExclude:
+                    description: |-
+                      BlkNamesExclude overrides the kernel-name exclusion selector for this node.
+                      Immutable once set (see BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                  blkSerials:
+                    description: |-
+                      BlkSerials overrides the block-device serial/WWN selector for this node.
+                      Immutable once set (see BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -2591,6 +2653,11 @@ spec:
                   enableCpuTopology:
                     description: EnableCpuTopology overrides topology-aware CPU handling
                       for this node.
+                    type: boolean
+                  enableLblk:
+                    description: |-
+                      EnableLblk overrides whether this node uses lblk devices instead of NVMe.
+                      Only meaningful when the cluster's spec.deviceMode is "lblk."
                     type: boolean
                   expand:
                     description: |-
@@ -2620,6 +2687,12 @@ spec:
                         format: int32
                         type: integer
                     type: object
+                  lblkJournalPercent:
+                    description: |-
+                      LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+                      this node.
+                    format: int32
+                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.
@@ -2664,6 +2737,16 @@ spec:
                       this node.
                     type: boolean
                 type: object
+                x-kubernetes-validations:
+                - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                    are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+                  rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                    && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
+                    > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) &&
+                    ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) ||
+                    (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel)
+                    && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                    > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
                   (e.g. "0", "1"). Immutable.
@@ -2883,6 +2966,52 @@ spec:
           spec:
             description: spec defines the desired state of StorageNodeSet
             properties:
+              blkForceFormat:
+                description: |-
+                  BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
+                  partitioned lblk devices so they become eligible whole-disk devices. Destructive —
+                  only set this when reusing a disk whose old data is no longer needed.
+                type: boolean
+              blkNames:
+                description: |-
+                  BlkNames selects block devices by kernel name (e.g., sdb, sdc) when EnableLblk is
+                  set. Empty selects every eligible whole disk. At most one of BlkNames,
+                  BlkNamesExclude, BlkSerials may be set. Immutable once set — including unset-to-set,
+                  since the backend (node_configure.py) silently ignores a selector change on an
+                  already-provisioned node.
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              blkNamesExclude:
+                description: |-
+                  BlkNamesExclude excludes block devices by kernel name when EnableLblk is set.
+                  Immutable once set (see BlkNames).
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              blkSerials:
+                description: |-
+                  BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
+                  stable across device-name changes, unlike BlkNames. Immutable once set (see
+                  BlkNames).
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
@@ -2984,6 +3113,15 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              enableLblk:
+                description: |-
+                  EnableLblk selects lblk devices instead of NVMe for this fleet. Only meaningful
+                  when the cluster's spec.deviceMode is "lblk"; mutually exclusive with the NVMe
+                  PCIe selectors below.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               expand:
                 description: |-
                   Expand indicates that storage nodes added from this StorageNodeSet are being
@@ -3080,6 +3218,13 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              lblkJournalPercent:
+                description: |-
+                  LblkJournalPercent is the journal-partition capacity percentage, used when the
+                  smallest selected lblk device is a partition. Ignored for whole disks; backend
+                  defaults to 3.
+                format: int32
+                type: integer
               maxParallelNodeAdds:
                 default: 1
                 description: |-
@@ -3109,6 +3254,47 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
+                    blkForceFormat:
+                      description: |-
+                        BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                        (wipefs) to become eligible whole-disk devices on this node.
+                      type: boolean
+                    blkNames:
+                      description: |-
+                        BlkNames overrides the block-device kernel-name selector for this node.
+                        Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                    blkNamesExclude:
+                      description: |-
+                        BlkNamesExclude overrides the kernel-name exclusion selector for this node.
+                        Immutable once set (see BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                    blkSerials:
+                      description: |-
+                        BlkSerials overrides the block-device serial/WWN selector for this node.
+                        Immutable once set (see BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -3123,6 +3309,11 @@ spec:
                     enableCpuTopology:
                       description: EnableCpuTopology overrides topology-aware CPU
                         handling for this node.
+                      type: boolean
+                    enableLblk:
+                      description: |-
+                        EnableLblk overrides whether this node uses lblk devices instead of NVMe.
+                        Only meaningful when the cluster's spec.deviceMode is "lblk."
                       type: boolean
                     expand:
                       description: |-
@@ -3153,6 +3344,12 @@ spec:
                           format: int32
                           type: integer
                       type: object
+                    lblkJournalPercent:
+                      description: |-
+                        LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+                        this node.
+                      format: int32
+                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.
@@ -3197,6 +3394,17 @@ spec:
                         this node.
                       type: boolean
                   type: object
+                  x-kubernetes-validations:
+                  - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                      are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+                    rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                      && size(self.blkNames) > 0) || (has(self.blkNamesExclude) &&
+                      size(self.blkNamesExclude) > 0) || (has(self.blkSerials) &&
+                      size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) &&
+                      size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) &&
+                      size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel)
+                      > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                      > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
                 description: |-
                   NodeConfigs allows per-worker-node configuration overrides keyed by the
                   Kubernetes worker node name. Entries are propagated to the corresponding
@@ -3342,8 +3550,19 @@ spec:
               rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
             - message: field nodesPerSocket is immutable once set
               rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field enableLblk is immutable once set
+              rule: '!has(oldSelf.enableLblk) || has(self.enableLblk)'
             - message: field forceFormat4K is immutable once set
               rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
+            - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+              rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
+                > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList)
+                && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList)
+                > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange)
+                && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames)
+                > 0)))'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
