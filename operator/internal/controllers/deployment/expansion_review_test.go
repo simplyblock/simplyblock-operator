@@ -294,3 +294,47 @@ func saidSomethingAbout(findings []finding, want string) bool {
 	}
 	return false
 }
+
+// A document that already created its cluster does not refuse it on the next
+// pass.
+//
+// Re-entering a step is ordinary: a lost status write, a generation bump, an
+// operator restart mid-expansion. The step has to be idempotent against its own
+// prior success, and this one was not — it read "a cluster by that name exists"
+// and refused, on a document whose own status said it had put it there.
+//
+// What that cost was the deployment: the config went Failed at AwaitingCluster
+// with ClusterExists, naming the cluster it had created itself, and the nodes it
+// had not created yet were never created.
+func TestADocumentDoesNotRefuseTheClusterItCreated(t *testing.T) {
+	config := aDocument(nil)
+	config.Status.ClusterRef = theCluster
+	objects := append(workers("worker-1", "worker-2"), config, aCluster(nil))
+	r := reconcilerFor(t, objects...)
+
+	done, err := r.createCluster(context.Background(), config)
+	if err != nil {
+		t.Fatalf("the document refused the cluster it created: %v", err)
+	}
+	if !done {
+		t.Error("the step did not advance past a cluster that is already there")
+	}
+}
+
+// A cluster somebody else put there is still refused, which is what the check
+// exists for: the document asked to create one and nothing proves the one that
+// is there is the one it described.
+func TestAClusterThisDocumentDidNotCreateIsStillRefused(t *testing.T) {
+	config := aDocument(nil)
+	objects := append(workers("worker-1", "worker-2"), config, aCluster(nil))
+	r := reconcilerFor(t, objects...)
+
+	_, err := r.createCluster(context.Background(), config)
+	if err == nil {
+		t.Fatal("a cluster this document did not create was adopted silently")
+	}
+	var refusal *refusedError
+	if !errors.As(err, &refusal) || refusal.reason != ClusterExists {
+		t.Errorf("the failure is %v, want a ClusterExists refusal", err)
+	}
+}
