@@ -664,6 +664,15 @@ func main() {
 	// image is read from the environment rather than from the running pod,
 	// because a pod may name its image by a tag the registry has since moved and
 	// what a Job needs is the reference the operator was deployed with.
+	if err := (&deployment.ClusterDeploymentConfigReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
+		Namespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
+		os.Exit(1)
+	}
 	if err := (&deployment.OperatorOpsReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
