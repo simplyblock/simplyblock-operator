@@ -7,7 +7,7 @@
 // because that file is about the mirror's create, update, and delete paths,
 // which are the same three whatever the device turns out to be.
 
-package controller
+package node
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -38,10 +39,10 @@ func sdNodeSet() *simplyblockv1alpha1.StorageNodeSet {
 
 // sdNodeWithStatus is the owning node in a given control-plane state, wired to
 // its set and carrying the worker label the device copies.
-func sdNodeWithStatus(status string) *simplyblockv1alpha1.StorageNode {
+func sdNodeWithStatus(status string) *simplyblockv1alpha2.StorageNode {
 	node := sdNodeObject()
 	node.Labels = map[string]string{simplyblockv1alpha2.DeviceLabelWorker: "worker-3"}
-	node.Spec.StorageNodeSetRef = "production-set"
+	node.Spec.ClusterRef = "production"
 	node.Status.Status = status
 	return node
 }
@@ -444,7 +445,7 @@ func TestTheUnknownTransitionRetriesOnConflict(t *testing.T) {
 				ctx context.Context, c client.Client, subResourceName string,
 				obj client.Object, opts ...client.SubResourceUpdateOption,
 			) error {
-				if subResourceName == statusSubresource {
+				if subResourceName == testsupport.StatusSubresource {
 					statusUpdates++
 					if statusUpdates == 1 {
 						return sdConflictErr()

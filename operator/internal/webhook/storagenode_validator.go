@@ -10,7 +10,7 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-storagenode,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodes,verbs=update,versions=v1alpha1,name=vstoragenode.simplyblock.io,admissionReviewVersions=v1
@@ -34,7 +34,7 @@ import (
 // gates pod creation, which must not block on webhook availability.)
 type StorageNodeValidator struct {
 	// OperatorNamespace is the namespace the operator runs in. Any service
-	// account in this namespace (i.e. the operator itself) is permitted to change
+	// account in this namespace (that is, the operator itself) is permitted to change
 	// spec.workerNode; every other identity is rejected.
 	OperatorNamespace string
 }
@@ -44,7 +44,7 @@ func (v *StorageNodeValidator) Handle(_ context.Context, req admission.Request) 
 		return admission.Allowed("")
 	}
 
-	var oldSN, newSN simplyblockv1alpha1.StorageNode
+	var oldSN, newSN simplyblockv1alpha2.StorageNode
 	if err := json.Unmarshal(req.OldObject.Raw, &oldSN); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}

@@ -19,4 +19,5 @@ storagebackups.storage.simplyblock.io
 storageclusterops.storage.simplyblock.io
 storageclusters.storage.simplyblock.io
 storagenodeops.storage.simplyblock.io
+storagenodes.storage.simplyblock.io
 storagepools.storage.simplyblock.io

@@ -36,7 +36,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -69,8 +68,8 @@ type StorageNodeLatencyReconciler struct {
 	// Set to WebAPIBenchmarkProvisioner for test environments that require explicit provisioning.
 	Provisioner BenchmarkProvisioner
 
-	// APIClient queries the SimplyBlock REST API to resolve a storage node's
-	// data-network IP (the /nics endpoint). Independent of the provisioner.
+	// APIClient queries the simplyblock REST API to resolve a storage node's
+	// data-network IP from its NIC listing. Independent of the provisioner.
 	APIClient *webapi.Client
 }
 
@@ -85,7 +84,7 @@ type StorageNodeLatencyReconciler struct {
 func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	snode := &simplyblockv1alpha1.StorageNodeSet{}
+	snode := &simplyblockv1alpha2.StorageCluster{}
 	if err := r.Get(ctx, req.NamespacedName, snode); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -93,7 +92,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	clusterCR := &simplyblockv1alpha2.StorageCluster{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Namespace: req.Namespace,
-		Name:      snode.Spec.ClusterName,
+		Name:      snode.Name,
 	}, clusterCR); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -132,36 +131,34 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	poolUUID, err := r.Provisioner.EnsurePool(ctx, snode.Namespace, snode.Spec.ClusterName)
+	poolUUID, err := r.Provisioner.EnsurePool(ctx, snode.Namespace, snode.Name)
 	if err != nil {
 		log.Error(err, "Cannot ensure benchmark pool")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// One baseline Job per node UUID. On NUMA hosts multiple backend nodes share the
-	// same k8s hostname but have independent NVMe devices and independent latency
-	// characteristics, so every node UUID is measured separately.
-	nodesByUUID := map[string]simplyblockv1alpha1.NodeStatus{}
-	for _, n := range snode.Status.Nodes {
-		if n.UUID == "" || n.Status != nodeStatusOnline || !n.Health || n.Hostname == "" {
-			continue
-		}
-		if _, seen := nodesByUUID[n.UUID]; !seen {
-			nodesByUUID[n.UUID] = n
-		}
+	// One baseline Job per backend node. On NUMA hosts several of them share a
+	// Kubernetes hostname while having independent NVMe devices and independent
+	// latency characteristics, so each is measured separately — which is what makes
+	// the StorageNode object, rather than the host, the thing a reading belongs to.
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes, client.InNamespace(snode.Namespace)); err != nil {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	latencyMetrics := r.copyLatencyMetrics(snode.Status.LatencyMetrics)
-	// hostConfigs accumulates per-node configs keyed by k8s hostname so the sidecar
-	// (one pod per host) receives a JSON array covering all NUMA nodes on its host.
+	// hostConfigs accumulates per-node configs keyed by Kubernetes hostname so the
+	// sidecar, which is one pod per host, receives a JSON array covering every NUMA
+	// node on its host.
 	hostConfigs := map[string][]autoplacement.NodeConfig{}
-	changed := false
 
-	for _, node := range nodesByUUID {
-		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, rebalancerImage, &latencyMetrics, hostConfigs)
-		if nodeChanged {
-			changed = true
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.ClusterRef != snode.Name || node.Status.UUID == "" ||
+			node.Status.Status != utils.NodeStatusOnline || !node.Status.Health ||
+			node.Status.Hostname == "" {
+			continue
 		}
+		r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, rebalancerImage, hostConfigs)
 	}
 
 	configData := make(map[string]string, len(hostConfigs))
@@ -169,21 +166,8 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		raw, _ := json.Marshal(cfgs)
 		configData[hostname] = string(raw)
 	}
-	if err := r.reconcileConfigMap(ctx, snode.Namespace, snode.Spec.ClusterName, configData); err != nil {
+	if err := r.reconcileConfigMap(ctx, snode.Namespace, snode.Name, configData); err != nil {
 		log.Error(err, "Cannot reconcile simplyblock-rebalancer ConfigMap")
-	}
-
-	if changed {
-		if err := r.patchLatencyStatus(ctx, snode, latencyMetrics); err != nil {
-			if apierrors.IsConflict(err) {
-				// Stale snapshot — the StorageNode status was updated concurrently. The
-				// optimistic lock prevented clobbering existing baselines; requeue to
-				// recompute from fresh state.
-				return ctrl.Result{Requeue: true}, nil
-			}
-			log.Error(err, "Failed to patch StorageNode latency status")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 	}
 
 	return ctrl.Result{RequeueAfter: benchInterval}, nil
@@ -194,59 +178,62 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 // Returns true when latencyMetrics was changed and needs to be patched.
 func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	ctx context.Context,
-	snode *simplyblockv1alpha1.StorageNodeSet,
+	snode *simplyblockv1alpha2.StorageCluster,
 	clusterCR *simplyblockv1alpha2.StorageCluster,
 	poolUUID string,
-	node simplyblockv1alpha1.NodeStatus,
+	node *simplyblockv1alpha2.StorageNode,
 	image string,
-	latencyMetrics *[]simplyblockv1alpha1.NodeLatencyMetrics,
 	hostConfigs map[string][]autoplacement.NodeConfig,
-) bool {
+) {
 	log := logf.FromContext(ctx)
 
-	m := r.findOrCreateEntry(*latencyMetrics, node.UUID)
+	nodeUUID := node.Status.UUID
+	measured := node.Status.LatencyMetrics
 
 	volumeUUID, err := r.Provisioner.EnsureVolume(
-		ctx, snode.Namespace, snode.Spec.ClusterName, poolUUID,
-		"simplyblock-rebalancer-"+node.UUID, node.UUID,
+		ctx, snode.Namespace, snode.Name, poolUUID,
+		"simplyblock-rebalancer-"+nodeUUID, nodeUUID,
 	)
 	if err != nil {
-		log.Error(err, "Cannot ensure benchmark volume", "node", node.UUID)
-		return false
+		log.Error(err, "Cannot ensure benchmark volume", "node", nodeUUID)
+		return
 	}
 
 	conn := benchmarkConnInfo{
 		NQN:  r.Provisioner.BenchmarkNQN(clusterCR.Status.NQN, volumeUUID),
-		Addr: node.MgmtIp,
+		Addr: managementAddress(node),
 		Port: logicalVolumeConnectionPort(node),
 	}
 	// The lvol's NVMe-oF subsystem listens on the node's data NIC, not its management
-	// IP, so targeting node.MgmtIp fails with "connection refused". Resolve the node's
-	// data-network address from the /nics endpoint; fall back to the management address
+	// IP, so targeting the management address fails with a refused connection.
+	// Resolve the node's data-network address from its NIC listing, and fall back to
+	// the management address
 	// only when it cannot be resolved.
-	if dataAddr, err := r.nodeDataAddr(ctx, clusterCR.Status.UUID, node.UUID); err != nil {
+	if dataAddr, err := r.nodeDataAddr(ctx, clusterCR.Status.UUID, nodeUUID); err != nil {
 		log.Info("Could not resolve data-network address; falling back to management IP",
-			"node", node.UUID, "addr", conn.Addr, "error", err.Error())
+			"node", nodeUUID, "addr", conn.Addr, "error", err.Error())
 	} else {
 		conn.Addr = dataAddr
 	}
 
-	changed := false
-	if m.BaselineP99NS == 0 {
-		baseline, jobChanged, err := r.reconcileBaselineJob(ctx, snode, node, conn, image)
+	if measured == nil || measured.BaselineP99NS == 0 {
+		baseline, _, err := r.reconcileBaselineJob(ctx, snode, node, conn, image)
 		if err != nil {
-			log.Error(err, "Baseline job error", "node", node.UUID)
+			log.Error(err, "Baseline job error", "node", nodeUUID)
 		}
 		if baseline != nil {
 			now := metav1.NewTime(time.Now())
-			m.BaselineP50NS = baseline.P50NS
-			m.BaselineP99NS = baseline.P99NS
-			m.BaselineMeasuredAt = &now
-			log.Info("Baseline measured", "node", node.UUID, "p50ns", baseline.P50NS, "p99ns", baseline.P99NS)
-			jobChanged = true
-		}
-		if jobChanged {
-			changed = true
+			measured = &simplyblockv1alpha2.NodeLatencyMetrics{
+				NodeUUID:           nodeUUID,
+				BaselineP50NS:      baseline.P50NS,
+				BaselineP99NS:      baseline.P99NS,
+				BaselineMeasuredAt: &now,
+			}
+			log.Info("Baseline measured", "node", nodeUUID,
+				"p50ns", baseline.P50NS, "p99ns", baseline.P99NS)
+			if err := r.patchLatencyStatus(ctx, node, measured); err != nil {
+				log.Error(err, "Failed to record the node's baseline", "node", nodeUUID)
+			}
 		}
 	}
 
@@ -254,18 +241,16 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	// This prevents the sidecar's continuous fio loop from running concurrently
 	// with the one-shot baseline Job — both would write to the same NVMe device
 	// and corrupt each other's measurements.
-	if m.BaselineP99NS > 0 {
-		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], autoplacement.NodeConfig{
+	if measured != nil && measured.BaselineP99NS > 0 {
+		host := node.Status.Hostname
+		hostConfigs[host] = append(hostConfigs[host], autoplacement.NodeConfig{
 			NQN:         conn.NQN,
 			Addr:        conn.Addr,
 			Port:        conn.Port,
-			NodeUUID:    node.UUID,
+			NodeUUID:    nodeUUID,
 			ClusterUUID: clusterCR.Status.UUID,
 		})
 	}
-
-	*latencyMetrics = r.setEntry(*latencyMetrics, m)
-	return changed
 }
 
 // benchmarkConnInfo holds the NVMe-oF connection parameters for the benchmark volume.
@@ -281,12 +266,12 @@ type benchmarkConnInfo struct {
 // for a single backend node. Returns the parsed result once the Job succeeds.
 func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	ctx context.Context,
-	snode *simplyblockv1alpha1.StorageNodeSet,
-	node simplyblockv1alpha1.NodeStatus,
+	snode *simplyblockv1alpha2.StorageCluster,
+	node *simplyblockv1alpha2.StorageNode,
 	conn benchmarkConnInfo,
 	image string,
 ) (*autoplacement.LatencyResult, bool, error) {
-	jobName := baselineJobNamePrefix + safeNodeID(node.UUID)
+	jobName := baselineJobNamePrefix + safeNodeID(node.Status.UUID)
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: snode.Namespace, Name: jobName}, job)
 
@@ -317,7 +302,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	}
 
 	// No job yet — create one if all connection info is available.
-	if node.Hostname == "" || conn.Addr == "" || conn.NQN == "" {
+	if node.Status.Hostname == "" || conn.Addr == "" || conn.NQN == "" {
 		return nil, false, nil
 	}
 	if createErr := r.createBaselineJob(ctx, snode, node, conn, image); createErr != nil {
@@ -328,8 +313,8 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 
 func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	ctx context.Context,
-	snode *simplyblockv1alpha1.StorageNodeSet,
-	node simplyblockv1alpha1.NodeStatus,
+	snode *simplyblockv1alpha2.StorageCluster,
+	node *simplyblockv1alpha2.StorageNode,
 	conn benchmarkConnInfo,
 	image string,
 ) error {
@@ -340,14 +325,14 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 
 	return r.Create(ctx, &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      baselineJobNamePrefix + safeNodeID(node.UUID),
+			Name:      baselineJobNamePrefix + safeNodeID(node.Status.UUID),
 			Namespace: snode.Namespace,
 			Labels: map[string]string{
 				baselineJobLabelKey:     "true",
-				baselineJobNodeLabelKey: node.UUID,
+				baselineJobNodeLabelKey: node.Status.UUID,
 			},
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(snode, simplyblockv1alpha1.GroupVersion.WithKind("StorageNodeSet")),
+				*metav1.NewControllerRef(snode, simplyblockv1alpha2.GroupVersion.WithKind("StorageCluster")),
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -356,7 +341,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Hostname},
+					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Status.Hostname},
 					HostNetwork:   true,
 					Volumes: []corev1.Volume{
 						{
@@ -397,7 +382,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	})
 }
 
-// nodeDataAddr resolves a storage node's data-network IP via the /nics endpoint,
+// nodeDataAddr resolves a storage node's data-network IP from its NIC listing,
 // returning the first interface that is UP with a non-empty address. The lvol
 // subsystem listens on the data NIC, so the fio baseline must target this address
 // rather than the node's management IP. Returns an error when no API client is
@@ -419,10 +404,9 @@ func (r *StorageNodeLatencyReconciler) nodeDataAddr(ctx context.Context, cluster
 }
 
 // logicalVolumeConnectionPort returns the NVMe/TCP connection port for a node, falling back to 4430 if not reported.
-func logicalVolumeConnectionPort(node simplyblockv1alpha1.NodeStatus) int32 {
-	port := ptr.IntFromOrZero(node.LvolPort)
-	if port > 0 {
-		return int32(port)
+func logicalVolumeConnectionPort(node *simplyblockv1alpha2.StorageNode) int32 {
+	if node.Status.Ports != nil && node.Status.Ports.Lvol != nil && *node.Status.Ports.Lvol > 0 {
+		return *node.Status.Ports.Lvol
 	}
 	return 4430
 }
@@ -453,7 +437,7 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 	return nil, fmt.Errorf("no termination message for job %s", job.Name)
 }
 
-// reconcileConfigMap creates or updates the per-cluster ConfigMap that maps k8s
+// reconcileConfigMap creates or updates the per-cluster ConfigMap that maps Kubernetes
 // node hostname → benchmark volume config JSON consumed by the simplyblock-rebalancer sidecar.
 func (r *StorageNodeLatencyReconciler) reconcileConfigMap(
 	ctx context.Context,
@@ -494,51 +478,30 @@ func (r *StorageNodeLatencyReconciler) jobFailed(job *batchv1.Job) bool {
 	return false
 }
 
+// patchLatencyStatus records one node's baseline on the node itself.
+//
+// The reading moved off the retired fleet object for the reason the reading is one
+// node's: a fleet-wide list made every node's measurement a write to one object
+// shared by all of them, and a stale snapshot of that list silently dropped
+// entries a concurrent reconcile had written. One node, one write, and no list to
+// lose an entry from.
 func (r *StorageNodeLatencyReconciler) patchLatencyStatus(
 	ctx context.Context,
-	snode *simplyblockv1alpha1.StorageNodeSet,
-	latencyMetrics []simplyblockv1alpha1.NodeLatencyMetrics,
+	node *simplyblockv1alpha2.StorageNode,
+	measured *simplyblockv1alpha2.NodeLatencyMetrics,
 ) error {
-	orig := snode.DeepCopy()
-	snode.Status.LatencyMetrics = latencyMetrics
-	// Optimistic lock: the LatencyMetrics array is replaced wholesale by this merge patch,
-	// so a stale snapshot would silently drop entries written by a concurrent reconcile.
-	// Pinning the resourceVersion turns that lost update into a Conflict the caller requeues on.
-	return r.Status().Patch(ctx, snode, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+	patch := client.MergeFrom(node.DeepCopy())
+	node.Status.LatencyMetrics = measured
+	return r.Status().Patch(ctx, node, patch)
 }
 
-func (r *StorageNodeLatencyReconciler) copyLatencyMetrics(
-	src []simplyblockv1alpha1.NodeLatencyMetrics,
-) []simplyblockv1alpha1.NodeLatencyMetrics {
-	out := make([]simplyblockv1alpha1.NodeLatencyMetrics, len(src))
-	copy(out, src)
-	return out
-}
-
-func (r *StorageNodeLatencyReconciler) findOrCreateEntry(
-	metrics []simplyblockv1alpha1.NodeLatencyMetrics,
-	nodeUUID string,
-) *simplyblockv1alpha1.NodeLatencyMetrics {
-	for i := range metrics {
-		if metrics[i].NodeUUID == nodeUUID {
-			cp := metrics[i]
-			return &cp
-		}
+// managementAddress is the node's reported management IP, which is the fallback a
+// benchmark connects on when the data NIC cannot be resolved.
+func managementAddress(node *simplyblockv1alpha2.StorageNode) string {
+	if node.Status.Ports == nil {
+		return ""
 	}
-	return &simplyblockv1alpha1.NodeLatencyMetrics{NodeUUID: nodeUUID}
-}
-
-func (r *StorageNodeLatencyReconciler) setEntry(
-	metrics []simplyblockv1alpha1.NodeLatencyMetrics,
-	m *simplyblockv1alpha1.NodeLatencyMetrics,
-) []simplyblockv1alpha1.NodeLatencyMetrics {
-	for i := range metrics {
-		if metrics[i].NodeUUID == m.NodeUUID {
-			metrics[i] = *m
-			return metrics
-		}
-	}
-	return append(metrics, *m)
+	return node.Status.Ports.Management
 }
 
 func (r *StorageNodeLatencyReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -546,7 +509,7 @@ func (r *StorageNodeLatencyReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		r.Provisioner = &AutomaticBenchmarkProvisioner{}
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageNodeSet{}).
+		For(&simplyblockv1alpha2.StorageCluster{}).
 		Owns(&batchv1.Job{}).
 		Named("storagenodelatency").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).

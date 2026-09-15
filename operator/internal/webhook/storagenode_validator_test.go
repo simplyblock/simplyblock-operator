@@ -11,14 +11,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func snRaw(t *testing.T, worker string) runtime.RawExtension {
 	t.Helper()
-	sn := &simplyblockv1alpha1.StorageNode{
+	sn := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{StorageNodeSetRef: "set", WorkerNode: worker},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: "production", WorkerNode: worker},
 	}
 	b, err := json.Marshal(sn)
 	if err != nil {
