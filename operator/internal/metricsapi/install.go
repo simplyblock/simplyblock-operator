@@ -68,34 +68,36 @@ func Install(
 	// exports.
 	//
 	// An unconfigured or unbuildable endpoint is not fatal, and it costs the
-	// four kinds differently. A volume reading keeps its provisioned size and
+	// five kinds differently. A volume reading keeps its provisioned size and
 	// loses what it occupies, because the first is known without measuring. A
-	// device, a pool, and a cluster reading are measurement throughout, so none
-	// of them is served at all. Serving what can be answered beats serving
-	// nothing over a dependency this API can answer partially without.
+	// device, a node, a pool, and a cluster reading are measurement throughout,
+	// so none of them is served at all. Serving what can be answered beats
+	// serving nothing over a dependency this API can answer partially without.
 	var capacity CapacitySource
 	var deviceCapacity DeviceCapacitySource
 	var poolCapacity PoolCapacitySource
 	var clusterCapacity ClusterCapacitySource
+	var nodeCapacity NodeCapacitySource
 	if prometheusURL == "" {
 		log.Info("no Prometheus endpoint configured; capacity samples will be absent")
 	} else if provider, err := prometheus.New(prometheusURL); err != nil {
 		log.Error(err, "capacity samples will be absent", "prometheusURL", prometheusURL)
 	} else {
-		// One provider satisfies all four: the volume, device, pool, and
+		// One provider satisfies all five: the volume, device, node, pool, and
 		// cluster readings are the same exporter's gauges under different
 		// prefixes.
 		capacity = provider
 		deviceCapacity = provider
 		poolCapacity = provider
 		clusterCapacity = provider
+		nodeCapacity = provider
 	}
 	go func() {
 		<-ready
 		server, err := NewServer(
 			Options{BindPort: port, CertDir: CertDir},
 			volumes, mgr.GetCache(), capacity, deviceCapacity, poolCapacity,
-			clusterCapacity, log,
+			clusterCapacity, nodeCapacity, log,
 		)
 		if err != nil {
 			log.Error(err, "the aggregated metrics API will not be served")

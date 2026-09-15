@@ -275,9 +275,9 @@ func TestDiscoverSkipsWorkersAStorageNodeAlreadyRunsOn(t *testing.T) {
 	// A run reports only what is unclaimed, which is what makes re-running it
 	// useful: a run against a deployed fleet finds the machines nobody has
 	// taken yet.
-	taken := &simplyblockv1alpha1.StorageNode{
+	taken := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1", Namespace: opsNamespace},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: "worker-1"},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{WorkerNode: "worker-1"},
 	}
 	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"), taken)
 

@@ -23,23 +23,12 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 )
 
-// JournalManagerSpec configures the journal managers on a set of nodes.
-//
-// It is declared here rather than borrowed from v1alpha1, as
-// design-clusterdeploymentconfig.md §Appendix A spells it. A v1alpha2 type whose
-// fields are v1alpha1 types cannot be reshaped by the redesign without changing
-// this version's wire format, and it makes the import cycle that the conversion
-// webhook needs impossible: the spoke's ConvertTo and ConvertFrom have to be
-// methods on the v1alpha1 type, so v1alpha1 imports v1alpha2 and v1alpha2 cannot
-// import back.
-type JournalManagerSpec struct {
-	// Count is the number of journal managers to configure.
-	// +optional
-	Count *int32 `json:"count,omitempty"`
-	// PercentPerDevice is the journal manager capacity percentage per device.
-	// +optional
-	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
-}
+// JournalManagerSpec, the journal tuning this document's node-set template
+// states, is StorageNode's own type in storagenode_types.go. It was declared
+// here while that kind was still v1alpha1, for the reason StripeSpec was, and
+// moved to the kind that owns the concept once it arrived: a journal count and a
+// per-device share are one node's on-disk layout, fixed when its devices were
+// partitioned.
 
 // StripeSpec, the erasure-coding layout this document's template states, is
 // StorageCluster's own type in storagecluster_types.go. It was declared here

@@ -42,7 +42,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/inventory"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
@@ -256,7 +255,7 @@ func (r *OperatorOpsReconciler) workersAlreadyTaken(
 	ctx context.Context,
 	namespace string,
 ) (map[string]struct{}, error) {
-	var nodes simplyblockv1alpha1.StorageNodeList
+	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}

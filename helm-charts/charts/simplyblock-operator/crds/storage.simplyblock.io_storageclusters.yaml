@@ -856,6 +856,281 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                storageNodes:
+                  description: |-
+                    StorageNodes is the Kubernetes workload the cluster's storage nodes run
+                    as, and the cluster owns every object in it by controller reference: a
+                    cluster deleted takes its DaemonSet, Services, certificate, and per-node
+                    ConfigMap with it. One workload serves the whole cluster, because growth is
+                    nodes rather than sets and what differs between hardware generations is per
+                    node already.
+                  properties:
+                    containerResources:
+                      description: |-
+                        ContainerResources sets requests and limits for the storage-node container.
+                        Unset enforces no limits.
+                      properties:
+                        claims:
+                          description: |-
+                            Claims lists the names of resources, defined in spec.resourceClaims,
+                            that are used by this container.
+
+                            This field depends on the
+                            DynamicResourceAllocation feature gate.
+
+                            This field is immutable. It can only be set for containers.
+                          items:
+                            description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                            properties:
+                              name:
+                                description: |-
+                                  Name must match the name of one entry in pod.spec.resourceClaims of
+                                  the Pod where this field is used. It makes that resource available
+                                  inside a container.
+                                type: string
+                              request:
+                                description: |-
+                                  Request is the name chosen for a request in the referenced claim.
+                                  If empty, everything from the claim is made available, otherwise
+                                  only the result of this request.
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Limits describes the maximum amount of compute resources allowed.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Requests describes the minimum amount of compute resources required.
+                            If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                            otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                      type: object
+                    dataInterfaces:
+                      description: DataInterfaces are the data-plane network interfaces.
+                      items:
+                        type: string
+                      type: array
+                    enableCpuTopology:
+                      description: EnableCpuTopology turns on topology-aware CPU assignment.
+                      type: boolean
+                    enableFormat4K:
+                      description: |-
+                        EnableFormat4K formats NVMe devices to a 4K block size where the device
+                        supports it.
+                      type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    enableJournalDevice:
+                      description: |-
+                        EnableJournalDevice dedicates the smallest NVMe device on each node to the
+                        journal manager, instead of carving a journal partition out of every
+                        device.
+                      type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    enableKubeletConfiguration:
+                      description: |-
+                        EnableKubeletConfiguration lets the storage node apply the kubelet
+                        configuration changes it needs. Off by default, which is the behavior the
+                        retired skipKubeletConfiguration expressed by being set.
+                      type: boolean
+                    image:
+                      description: |-
+                        Image is the storage-node container image. Defaults to the ControlPlane
+                        singleton's spec.image when unset, so a deployment states the version once.
+                      pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                      type: string
+                    imagePullPolicy:
+                      default: IfNotPresent
+                      description: ImagePullPolicy controls when that image is pulled.
+                      enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                      type: string
+                    initContainerResources:
+                      description: InitContainerResources does the same for the init container.
+                      properties:
+                        claims:
+                          description: |-
+                            Claims lists the names of resources, defined in spec.resourceClaims,
+                            that are used by this container.
+
+                            This field depends on the
+                            DynamicResourceAllocation feature gate.
+
+                            This field is immutable. It can only be set for containers.
+                          items:
+                            description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                            properties:
+                              name:
+                                description: |-
+                                  Name must match the name of one entry in pod.spec.resourceClaims of
+                                  the Pod where this field is used. It makes that resource available
+                                  inside a container.
+                                type: string
+                              request:
+                                description: |-
+                                  Request is the name chosen for a request in the referenced claim.
+                                  If empty, everything from the claim is made available, otherwise
+                                  only the result of this request.
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Limits describes the maximum amount of compute resources allowed.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Requests describes the minimum amount of compute resources required.
+                            If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                            otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                      type: object
+                    maxParallelNodeAdds:
+                      default: 1
+                      description: |-
+                        MaxParallelNodeAdds limits how many workers may be in the node-add process
+                        at once, counted by distinct worker rather than by object so that a
+                        two-socket host consumes one slot. Workers hosting a FoundationDB pod are
+                        always sequential regardless of this value, because a node add reboots the
+                        host and two simultaneous FoundationDB reboots reduce the control plane's
+                        own fault tolerance.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    mgmtInterface:
+                      description: MgmtInterface is the management network interface storage nodes bind.
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    nodesPerSocket:
+                      default: 1
+                      description: NodesPerSocket is how many storage nodes run per NUMA socket.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    openShiftCluster:
+                      description: OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+                      type: boolean
+                    openShiftMachineConfigPool:
+                      default: worker
+                      description: |-
+                        OpenShiftMachineConfigPool names the pool generated MachineConfig objects
+                        are labeled into.
+                      type: string
+                    reservedSystemCPU:
+                      description: ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
+                      type: string
+                    socketsToUse:
+                      description: |-
+                        SocketsToUse restricts deployment to selected NUMA sockets. Empty means
+                        socket 0 alone.
+                      items:
+                        type: string
+                      type: array
+                    tolerations:
+                      description: Tolerations are applied to the storage-node pods.
+                      items:
+                        description: |-
+                          The pod this Toleration is attached to tolerates any taint that matches
+                          the triple <key,value,effect> using the matching operator <operator>.
+                        properties:
+                          effect:
+                            description: |-
+                              Effect indicates the taint effect to match. Empty means match all taint effects.
+                              When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                            type: string
+                          key:
+                            description: |-
+                              Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                              If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                            type: string
+                          operator:
+                            description: |-
+                              Operator represents a key's relationship to the value.
+                              Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                              Exists is equivalent to wildcard for value, so that a pod can
+                              tolerate all taints of a particular category.
+                              Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                            type: string
+                          tolerationSeconds:
+                            description: |-
+                              TolerationSeconds represents the period of time the toleration (which must be
+                              of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                              it is not set, which means tolerate the taint forever (do not evict). Zero and
+                              negative values will be treated as 0 (evict immediately) by the system.
+                            format: int64
+                            type: integer
+                          value:
+                            description: |-
+                              Value is the taint value the toleration matches to.
+                              If the operator is Exists, the value should be empty, otherwise just a regular string.
+                            type: string
+                        type: object
+                      type: array
+                    ubuntuHost:
+                      description: |-
+                        UbuntuHost states that the worker's host OS is Ubuntu, which changes how
+                        the node configures huge pages and the kernel modules it loads.
+                      type: boolean
+                  type: object
+                  x-kubernetes-validations:
+                    - message: field mgmtInterface is immutable once set
+                      rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                    - message: field nodesPerSocket is immutable once set
+                      rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+                    - message: field enableJournalDevice is immutable once set
+                      rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
+                    - message: field enableFormat4K is immutable once set
+                      rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
                 stripe:
                   description: |-
                     Stripe is the erasure-coding layout every volume in the cluster is

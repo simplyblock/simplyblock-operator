@@ -259,11 +259,14 @@ spec:
                                 description: Count is the number of journal managers
                                   to configure.
                                 format: int32
+                                minimum: 1
                                 type: integer
                               percentPerDevice:
-                                description: PercentPerDevice is the journal manager
-                                  capacity percentage per device.
+                                description: PercentPerDevice is the share of each
+                                  device given to the journal.
                                 format: int32
+                                maximum: 100
+                                minimum: 1
                                 type: integer
                             type: object
                           mgmtInterface:

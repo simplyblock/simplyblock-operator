@@ -932,11 +932,14 @@ spec:
                                 description: Count is the number of journal managers
                                   to configure.
                                 format: int32
+                                minimum: 1
                                 type: integer
                               percentPerDevice:
-                                description: PercentPerDevice is the journal manager
-                                  capacity percentage per device.
+                                description: PercentPerDevice is the share of each
+                                  device given to the journal.
                                 format: int32
+                                maximum: 100
+                                minimum: 1
                                 type: integer
                             type: object
                           mgmtInterface:
@@ -4949,6 +4952,286 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              storageNodes:
+                description: |-
+                  StorageNodes is the Kubernetes workload the cluster's storage nodes run
+                  as, and the cluster owns every object in it by controller reference: a
+                  cluster deleted takes its DaemonSet, Services, certificate, and per-node
+                  ConfigMap with it. One workload serves the whole cluster, because growth is
+                  nodes rather than sets and what differs between hardware generations is per
+                  node already.
+                properties:
+                  containerResources:
+                    description: |-
+                      ContainerResources sets requests and limits for the storage-node container.
+                      Unset enforces no limits.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  dataInterfaces:
+                    description: DataInterfaces are the data-plane network interfaces.
+                    items:
+                      type: string
+                    type: array
+                  enableCpuTopology:
+                    description: EnableCpuTopology turns on topology-aware CPU assignment.
+                    type: boolean
+                  enableFormat4K:
+                    description: |-
+                      EnableFormat4K formats NVMe devices to a 4K block size where the device
+                      supports it.
+                    type: boolean
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  enableJournalDevice:
+                    description: |-
+                      EnableJournalDevice dedicates the smallest NVMe device on each node to the
+                      journal manager, instead of carving a journal partition out of every
+                      device.
+                    type: boolean
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  enableKubeletConfiguration:
+                    description: |-
+                      EnableKubeletConfiguration lets the storage node apply the kubelet
+                      configuration changes it needs. Off by default, which is the behavior the
+                      retired skipKubeletConfiguration expressed by being set.
+                    type: boolean
+                  image:
+                    description: |-
+                      Image is the storage-node container image. Defaults to the ControlPlane
+                      singleton's spec.image when unset, so a deployment states the version once.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  imagePullPolicy:
+                    default: IfNotPresent
+                    description: ImagePullPolicy controls when that image is pulled.
+                    enum:
+                    - Always
+                    - Never
+                    - IfNotPresent
+                    type: string
+                  initContainerResources:
+                    description: InitContainerResources does the same for the init
+                      container.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  maxParallelNodeAdds:
+                    default: 1
+                    description: |-
+                      MaxParallelNodeAdds limits how many workers may be in the node-add process
+                      at once, counted by distinct worker rather than by object so that a
+                      two-socket host consumes one slot. Workers hosting a FoundationDB pod are
+                      always sequential regardless of this value, because a node add reboots the
+                      host and two simultaneous FoundationDB reboots reduce the control plane's
+                      own fault tolerance.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  mgmtInterface:
+                    description: MgmtInterface is the management network interface
+                      storage nodes bind.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  nodesPerSocket:
+                    default: 1
+                    description: NodesPerSocket is how many storage nodes run per
+                      NUMA socket.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  openShiftCluster:
+                    description: OpenShiftCluster states that the Kubernetes distribution
+                      is OpenShift.
+                    type: boolean
+                  openShiftMachineConfigPool:
+                    default: worker
+                    description: |-
+                      OpenShiftMachineConfigPool names the pool generated MachineConfig objects
+                      are labeled into.
+                    type: string
+                  reservedSystemCPU:
+                    description: ReservedSystemCPU is the CPU set held back from SPDK
+                      for system workloads.
+                    type: string
+                  socketsToUse:
+                    description: |-
+                      SocketsToUse restricts deployment to selected NUMA sockets. Empty means
+                      socket 0 alone.
+                    items:
+                      type: string
+                    type: array
+                  tolerations:
+                    description: Tolerations are applied to the storage-node pods.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                  ubuntuHost:
+                    description: |-
+                      UbuntuHost states that the worker's host OS is Ubuntu, which changes how
+                      the node configures huge pages and the kernel modules it loads.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: field mgmtInterface is immutable once set
+                  rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                - message: field nodesPerSocket is immutable once set
+                  rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+                - message: field enableJournalDevice is immutable once set
+                  rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
+                - message: field enableFormat4K is immutable once set
+                  rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
               stripe:
                 description: |-
                   Stripe is the erasure-coding layout every volume in the cluster is
@@ -5824,11 +6107,12 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.subPhase
-      name: SubPhase
+    - jsonPath: .status.step.state
+      name: Step
       type: string
     - jsonPath: .status.message
       name: Message
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -5837,10 +6121,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          StorageNodeOps is a one-shot operational CR targeting a single StorageNode.
-          Analogous to a Kubernetes Job — it drives an action (Shutdown, Restart, Suspend,
-          Resume, Remove, Migrate) to completion and records the result. Only one
-          StorageNodeOps can be active per StorageNode at a time.
+          StorageNodeOps is a single operation performed against one StorageNode. It runs
+          to a terminal phase and stays afterward as the audit record of what was done, to
+          which node, with which parameters, and how it ended.
         properties:
           apiVersion:
             description: |-
@@ -5860,10 +6143,19 @@ spec:
           metadata:
             type: object
           spec:
-            description: StorageNodeOpsSpec defines the desired state of a StorageNodeOps.
+            description: StorageNodeOpsSpec is one operation to perform against one
+              StorageNode.
             properties:
+              abort:
+                description: |-
+                  Abort asks a running operation to stop at its next step and unwind. It is
+                  the only mutable field on this spec, because it is the only thing about an
+                  operation that can legitimately be decided after it started. Whether an
+                  abort is expressible from the current step is declared by that action's
+                  graph rather than checked here.
+                type: boolean
               action:
-                description: Action is the operation to perform. Immutable.
+                description: Action is the operation to perform.
                 enum:
                 - Shutdown
                 - Restart
@@ -5871,13 +6163,16 @@ spec:
                 - Resume
                 - Remove
                 - Migrate
+                - HostMaintenance
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
               force:
-                description: Force enables forced execution where the backend supports
-                  it.
+                description: |-
+                  Force passes the control plane's force flag where the action supports it.
+                  Migrate defaults it to true, because the control plane rejects a non-forced
+                  restart of a node that is not already offline.
                 type: boolean
               migrate:
                 description: Migrate parameterizes action Migrate and is ignored by
@@ -5885,16 +6180,15 @@ spec:
                 properties:
                   newSsdPcie:
                     description: |-
-                      NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-                      during a migration. Passed through to the control-plane restart as
-                      new_ssd_pcie.
+                      NewSsdPcie lists additional NVMe PCI addresses to bind on the target host,
+                      passed through to the control-plane restart as new_ssd_pcie and merged into
+                      the node's effective allow list so they survive a later rebuild.
                     items:
                       type: string
                     type: array
                   targetWorkerNode:
-                    description: |-
-                      TargetWorkerNode is the Kubernetes worker hostname the storage node is
-                      relocated onto.
+                    description: TargetWorkerNode is the Kubernetes worker the node
+                      is relocated onto.
                     type: string
                     x-kubernetes-validations:
                     - message: field is immutable
@@ -5903,26 +6197,29 @@ spec:
                 - targetWorkerNode
                 type: object
               nodeRef:
-                description: NodeRef is the name of the target StorageNode. Immutable.
+                description: |-
+                  NodeRef names the StorageNode this operation acts on. The operation never
+                  owns its target, because deleting the record of an operation must not delete
+                  the node it operated on.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
               reattachVolume:
                 description: |-
-                  ReattachVolume reattaches volumes during the node restart.
-                  Applicable when action=Restart or action=Migrate.
+                  ReattachVolume asks the control plane to reattach this node's volumes as
+                  part of a restart. Applies to Restart, Migrate, and HostMaintenance.
                 type: boolean
               remove:
                 description: Remove parameterizes action Remove and is ignored by
                   the others.
                 properties:
                   systemVolumeFilterRegex:
+                    default: ^sb-fio-baseline-.*
                     description: |-
-                      SystemVolumeFilterRegex is a Go regular expression matched against backend
-                      volume names. Matching volumes are treated as system volumes: excluded from
-                      drain migration and deleted inline during the Verifying phase.
-                      Defaults to `^sb-fio-baseline-.*`.
+                      SystemVolumeFilterRegex matches backend volume names that are system
+                      volumes: excluded from the drain's migration and deleted during
+                      verification rather than blocking it.
                     type: string
                 type: object
             required:
@@ -5930,55 +6227,80 @@ spec:
             - nodeRef
             type: object
           status:
-            description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
+            description: StorageNodeOpsStatus is the observed state of one node operation.
             properties:
               completedAt:
-                description: CompletedAt is when the operation finished (successfully
-                  or not).
+                description: CompletedAt is when it reached a terminal phase.
                 format: date-time
                 type: string
+              drain:
+                description: |-
+                  Drain is the drain's progress over the node's volumes, set only for action
+                  Remove.
+                properties:
+                  volumesMigrated:
+                    description: VolumesMigrated is how many of them have completed.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  volumesTotal:
+                    description: |-
+                      VolumesTotal is the number of PV-managed volumes the drain has to move,
+                      written once at the end of Validating and not modified afterward.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - volumesMigrated
+                - volumesTotal
+                type: object
               message:
-                description: Message is a human-readable description of the current
-                  state or failure reason.
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as the
+                  operation moves, and never a log.
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
               phase:
-                description: Phase is the high-level lifecycle phase.
+                description: Phase is the operation's own progress.
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Aborted
                 type: string
               startedAt:
-                description: StartedAt is when the operation began.
+                description: StartedAt is when the operation acquired its target's
+                  lock.
                 format: date-time
                 type: string
-              subPhase:
-                description: SubPhase tracks the active drain step when action=Remove
-                  and phase=Running.
-                enum:
-                - Validating
-                - Suspending
-                - Migrating
-                - Verifying
-                - Removing
-                - Preparing
-                - Restarting
-                - Promoting
-                type: string
-              triggered:
+              step:
                 description: |-
-                  Triggered indicates the backend action POST has been sent (used during
-                  Suspending to avoid duplicate POSTs across reconcile iterations).
-                type: boolean
-              volumesMigrated:
-                description: VolumesMigrated is the count of volumes successfully
-                  migrated (drain only).
-                type: integer
-              volumesPending:
-                description: VolumesPending is the count of volumes awaiting migration
-                  (drain only).
-                type: integer
+                  Step is the position of the running action's state machine, as the shared
+                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                  marker could reach a field of a shared type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Validating'',''Suspending'',''MigratingVolumes'',''Verifying'',''Removing'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
             type: object
         type: object
     served: true
@@ -5993,6 +6315,16 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodes.storage.simplyblock.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: simplyblock-operator-conversion-webhook-service
+          namespace: simplyblock-operator-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: storage.simplyblock.io
   names:
     kind: StorageNode
@@ -6328,6 +6660,515 @@ spec:
               uuid:
                 description: UUID is the backend storage node UUID. Set once after
                   node-add completes.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .spec.workerNode
+      name: Worker
+      type: string
+    - jsonPath: .spec.socketId
+      name: Socket
+      type: string
+    - jsonPath: .spec.slot
+      name: Slot
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.health
+      name: Health
+      type: boolean
+    - jsonPath: .status.uuid
+      name: UUID
+      priority: 1
+      type: string
+    - jsonPath: .status.failureDomain
+      name: FD
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageNode is one backend storage node: one SPDK process bound to one NUMA
+          socket of one Kubernetes worker. One object exists per (workerNode, slot) pair,
+          owned by the StorageCluster it belongs to.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              StorageNodeSpec is the desired state of one backend storage node, meaning one
+              SPDK process bound to one NUMA socket of one Kubernetes worker.
+            properties:
+              clusterRef:
+                description: |-
+                  ClusterRef names the StorageCluster this node belongs to. The cluster also
+                  owns this object by controller reference, so deleting the cluster deletes
+                  its nodes.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              config:
+                description: |-
+                  Config is this node's complete configuration, copied from the
+                  ClusterDeploymentConfig entry that produced it. It is a copy rather than a
+                  projection, because that document is ephemeral: nothing reads it once the
+                  node exists, deleting it changes nothing, and editing it reaches only nodes
+                  created afterward.
+                properties:
+                  deviceNames:
+                    description: |-
+                      DeviceNames names the devices to use. An entry is a PCI address
+                      ("0000:5e:00.0") or a device path ("/dev/sdb,") which are the two classes
+                      simplyblock accepts as backend storage, and a bare name ("nvme0n1") is read
+                      as a path under /dev. One list carries both spellings, and every entry is of
+                      the class its cluster declares in StorageCluster.spec.deviceClass: a list
+                      mixing the two, or naming the class the cluster is not, is rejected by the
+                      StorageNode validating webhook. Set explicitly, it overrides every filter
+                      below. Immutable: it selects which physical devices the node owns.
+                    items:
+                      pattern: ^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]|/dev/[a-zA-Z0-9._/-]+|[a-zA-Z0-9._-]+)$
+                      type: string
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  driveSizeRange:
+                    description: DriveSizeRange filters devices by size.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  expand:
+                    description: |-
+                      Expand marks this node as an addition to an already-active cluster, which
+                      the control plane reads as a request to rebalance onto it rather than to
+                      treat it as part of an initial layout. Immutable once set: it describes how
+                      the node joined rather than what it is.
+                    type: boolean
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  failureDomain:
+                    description: |-
+                      FailureDomain is the label of the fault group this node belongs to
+                      such as rack-b, naming the physical grouping it shares with its peers rather
+                      than indexing it. Required when the cluster has enableFailureDomains set,
+                      and provisioning is held with a FailureDomainMissing event until it is
+                      present. Immutable once set, which is what makes it fillable later and then
+                      frozen: chunk placement was computed from it.
+
+                      The value takes the shape of a Kubernetes label value, because that is what
+                      it is seeded from where a cluster carries topology labels at all.
+                    maxLength: 63
+                    pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  journalManager:
+                    description: |-
+                      JournalManager tunes the journal manager count and per-device capacity
+                      share for this node. Immutable: both are on-disk layout, fixed when the
+                      devices were partitioned.
+                    properties:
+                      count:
+                        description: Count is the number of journal managers to configure.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      percentPerDevice:
+                        description: PercentPerDevice is the share of each device
+                          given to the journal.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                    type: object
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  pcieAllowList:
+                    description: |-
+                      PcieAllowList selects devices by PCI address. It is the one device field a
+                      migration writes, merging spec.migrate.newSsdPcie into it so devices added
+                      on the target host survive a later rebuild, so it is guarded by the
+                      StorageNode validating webhook rather than by a marker. This and the two
+                      PCI filters below belong to an NVMe cluster: the webhook rejects them on a
+                      cluster whose deviceClass is LogicalBlock, because a logical block device
+                      has no PCI address to match.
+                    items:
+                      type: string
+                    type: array
+                  pcieDenyList:
+                    description: PcieDenyList excludes devices by PCI address.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  pcieModel:
+                    description: PcieModel filters devices by PCI model string.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  sizing:
+                    description: |-
+                      Sizing is what this node's huge pages and core layout were sized from.
+                      Writable by the operator alone.
+                    properties:
+                      minHugePagesSize:
+                        description: |-
+                          MinHugePagesSize is the smallest huge-page allocation this node makes, as a
+                          size string such as 100G or 1T, where a bare number is gigabytes. It is a
+                          floor rather than a limit: the effective allocation is the larger of this
+                          value and the minimum the node's device and subsystem count requires.
+                        type: string
+                      vcpuCount:
+                        description: |-
+                          VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
+                          explicit core count rather than a percentage.
+                        format: int32
+                        minimum: 4
+                        type: integer
+                    required:
+                    - vcpuCount
+                    type: object
+                  spdkImage:
+                    description: |-
+                      SpdkImage overrides the SPDK image the control plane starts for this node,
+                      which is what makes a phased image rollout expressible per node.
+                    type: string
+                  spdkProxyImage:
+                    description: SpdkProxyImage overrides the SPDK proxy image for
+                      this node.
+                    type: string
+                  spdkSystemMemory:
+                    description: |-
+                      SpdkSystemMemory is the memory the control plane starts this node's SPDK
+                      with, as a size string such as 4G or 512M. Mutable: a node whose device
+                      count grew legitimately needs to raise it.
+                    pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                    type: string
+                required:
+                - sizing
+                type: object
+                x-kubernetes-validations:
+                - message: field journalManager is immutable once set
+                  rule: '!has(oldSelf.journalManager) || has(self.journalManager)'
+                - message: field deviceNames is immutable once set
+                  rule: '!has(oldSelf.deviceNames) || has(self.deviceNames)'
+                - message: field pcieDenyList is immutable once set
+                  rule: '!has(oldSelf.pcieDenyList) || has(self.pcieDenyList)'
+                - message: field pcieModel is immutable once set
+                  rule: '!has(oldSelf.pcieModel) || has(self.pcieModel)'
+                - message: field driveSizeRange is immutable once set
+                  rule: '!has(oldSelf.driveSizeRange) || has(self.driveSizeRange)'
+                - message: field failureDomain is immutable once set
+                  rule: '!has(oldSelf.failureDomain) || has(self.failureDomain)'
+                - message: field expand is immutable once set
+                  rule: '!has(oldSelf.expand) || has(self.expand)'
+              nodeIndex:
+                description: |-
+                  NodeIndex is the position among the nodes sharing this socket, in
+                  0..nodesPerSocket-1. See SocketID.
+                format: int32
+                minimum: 0
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              nodeSet:
+                description: |-
+                  NodeSet is the name of the group in ClusterDeploymentConfig.nodeSets[] this
+                  node was declared under. It is a label rather than a reference: nothing is
+                  fetched by it, and it exists so that a node can be traced back to the
+                  document that produced it.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              slot:
+                description: |-
+                  Slot is which storage-node slot on this worker the object occupies, counted
+                  from zero. A worker runs one node per socket per nodesPerSocket, and the
+                  slot is the position among them. It is the identity the operator keys on:
+                  the topology label the CSI driver reads is
+                  storage.simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>, and the slot
+                  outlives the node filling it, because only the UUID behind it changes when a
+                  node is replaced or relocated.
+                format: int32
+                minimum: 0
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              socketId:
+                description: |-
+                  SocketID is the NUMA socket this node is bound to, as declared in the node
+                  set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
+                  pair a person reads; nothing but a print column consumes either.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              workerNode:
+                description: |-
+                  WorkerNode is the Kubernetes worker hostname this node runs on. It is not
+                  marked immutable, because a migration re-points it, but the StorageNode
+                  validating webhook rejects any change made by an identity outside the
+                  operator's namespace.
+                type: string
+            required:
+            - clusterRef
+            - config
+            - workerNode
+            type: object
+            x-kubernetes-validations:
+            - message: field nodeSet is immutable once set
+              rule: '!has(oldSelf.nodeSet) || has(self.nodeSet)'
+            - message: field socketId is immutable once set
+              rule: '!has(oldSelf.socketId) || has(self.socketId)'
+            - message: field nodeIndex is immutable once set
+              rule: '!has(oldSelf.nodeIndex) || has(self.nodeIndex)'
+            - message: field slot is immutable once set
+              rule: '!has(oldSelf.slot) || has(self.slot)'
+          status:
+            description: StorageNodeStatus is the observed state of one storage node.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the StorageNodeOps currently allowed to touch this node.
+                  Empty when none is running.
+                type: string
+              failureDomain:
+                description: |-
+                  FailureDomain is the failure-domain label the control plane actually
+                  assigned, which is not necessarily the one spec.config.failureDomain
+                  requested.
+                type: string
+              health:
+                description: Health is the health flag the control plane reports.
+                type: boolean
+              hostname:
+                description: Hostname is the node hostname as the control plane reports
+                  it.
+                type: string
+              latencyMetrics:
+                description: |-
+                  LatencyMetrics holds the fio-measured NVMe-oF baseline the volume
+                  rebalancer reads.
+                properties:
+                  baselineMeasuredAt:
+                    description: BaselineMeasuredAt is when the baseline was established.
+                    format: date-time
+                    type: string
+                  baselineP50NS:
+                    description: |-
+                      BaselineP50NS is the p50 write latency, in nanoseconds, of the initial
+                      empty-cluster benchmark.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  baselineP99NS:
+                    description: |-
+                      BaselineP99NS is the p99 write latency, in nanoseconds, of the same
+                      benchmark.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  nodeUUID:
+                    description: |-
+                      NodeUUID is the backend storage node the reading was taken against. It is
+                      carried beside the reading rather than inferred from status.uuid, because a
+                      baseline measured against one backend node stops describing the slot once a
+                      replacement fills it.
+                    type: string
+                required:
+                - nodeUUID
+                type: object
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as the
+                  node moves, and never a log.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase is the operator's own view of this node, and the field its
+                  provisioning branches on.
+                enum:
+                - Pending
+                - Provisioning
+                - Online
+                - Removing
+                - Offline
+                - Degraded
+                - Failed
+                type: string
+              ports:
+                description: Ports groups the reported addresses and ports.
+                properties:
+                  lvol:
+                    description: Lvol is the logical-volume subsystem port.
+                    format: int32
+                    type: integer
+                  management:
+                    description: Management is the management IP address of the node.
+                    type: string
+                  nvmeof:
+                    description: The NVMe-oF fabric port.
+                    format: int32
+                    type: integer
+                  rpc:
+                    description: Rpc is the RPC and management API port.
+                    format: int32
+                    type: integer
+                type: object
+              resources:
+                description: Resources groups the reported compute and storage figures.
+                properties:
+                  capacity:
+                    description: |-
+                      Capacity is how much of the node's storage is in use, summed over its
+                      devices. It is a measurement rather than a declaration, so it is absent
+                      until something has measured it, and it lags reality by the interval at
+                      which the control plane's metrics are scraped.
+                    properties:
+                      sampledAt:
+                        description: |-
+                          SampledAt is when the control plane took the reading. It is not when the
+                          object was written, and it may be considerably older if metrics collection
+                          has stopped.
+                        format: date-time
+                        type: string
+                      totalBytes:
+                        description: TotalBytes is the storage the node's devices
+                          provide.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      usedBytes:
+                        description: UsedBytes is what they currently hold.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                    type: object
+                  cpu:
+                    description: CPU is the number of SPDK cores allocated to this
+                      node.
+                    format: int32
+                    type: integer
+                  devices:
+                    description: |-
+                      Devices summarizes the node's NVMe devices. Absent until the control plane
+                      has reported, which is what tells a node that has not reported from one that
+                      genuinely has no devices.
+                    properties:
+                      online:
+                        description: |-
+                          Online is how many of the node's devices the control plane reports as
+                          usable.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      total:
+                        description: Total is how many devices the node has.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    required:
+                    - online
+                    - total
+                    type: object
+                  memory:
+                    description: Memory is the SPDK memory allocation the control
+                      plane reports.
+                    type: string
+                  volumes:
+                    description: Volumes is the current number of logical volumes
+                      on this node.
+                    format: int32
+                    type: integer
+                type: object
+              status:
+                description: |-
+                  Status is the lifecycle the control plane reports: online, suspended,
+                  offline, in_creation, in_restart, in_shutdown, unreachable, or timeout. The
+                  values are the control plane's, which is why they are neither PascalCase nor
+                  constrained by an Enum here.
+                type: string
+              step:
+                description: |-
+                  Step is the position of the provisioning machine, as the shared
+                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                  marker could reach a field of a shared type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'']'
+              uptime:
+                description: Uptime is the node uptime as the control plane reports
+                  it.
+                type: string
+              uuid:
+                description: |-
+                  UUID is the backend node UUID. Empty means the node has neither been
+                  provisioned nor adopted, and non-empty means steady state.
                 type: string
             type: object
         type: object
@@ -8235,16 +9076,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - namespaces
   - pods/log
   verbs:
@@ -8287,9 +9118,15 @@ rules:
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - admissionregistration.k8s.io
   resources:
@@ -8316,6 +9153,7 @@ rules:
   - storageclusterops.storage.simplyblock.io
   - storageclusters.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
+  - storagenodes.storage.simplyblock.io
   - storagepools.storage.simplyblock.io
   resources:
   - customresourcedefinitions
@@ -8386,13 +9224,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
 - apiGroups:
   - policy
   resources:
@@ -8475,7 +9306,6 @@ rules:
   - storagedevices
   - storagenodeops
   - storagenodes
-  - storagenodesets
   - storagepoolops
   - storagepools
   - tasks
@@ -8506,7 +9336,6 @@ rules:
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
-  - storagenodesets/finalizers
   - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
@@ -8554,6 +9383,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodesets
+  verbs:
+  - get
+  - list
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -8652,6 +9489,7 @@ rules:
   - storagedevicemetrics
   - storagepoolmetrics
   - storageclustermetrics
+  - storagenodemetrics
   verbs:
   - get
   - list
@@ -9279,15 +10117,17 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
-      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+      path: /validate-storage-simplyblock-io-v1alpha2-storagenode
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vstoragenode.simplyblock.io
   rules:
   - apiGroups:
     - storage.simplyblock.io
     apiVersions:
-    - v1alpha1
+    - v1alpha2
     operations:
+    - CREATE
     - UPDATE
     resources:
     - storagenodes

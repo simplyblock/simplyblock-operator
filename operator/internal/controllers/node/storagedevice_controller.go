@@ -4,7 +4,7 @@
 // update and delete ones, which is what makes it different from the reconcilers
 // that converge a user's spec.
 
-package controller
+package node
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -46,7 +45,7 @@ const StorageNodeUUIDIndex = "status.uuid"
 // does. A node with no id yet is not indexed: it has nothing a device could
 // match against.
 func IndexStorageNodeUUID(o client.Object) []string {
-	node, ok := o.(*simplyblockv1alpha1.StorageNode)
+	node, ok := o.(*simplyblockv1alpha2.StorageNode)
 	if !ok || node.Status.UUID == "" {
 		return nil
 	}
@@ -107,7 +106,7 @@ type StorageDeviceReconciler struct {
 // control-plane changes). Both enqueue a StorageDevice to reconcile.
 func (r *StorageDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID,
+		context.Background(), &simplyblockv1alpha2.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID,
 	); err != nil {
 		return err
 	}
@@ -187,7 +186,7 @@ func (r *StorageDeviceReconciler) unreported(
 // and Removed records a departure that has already happened. Unknown replaces
 // Online and Degraded, which are observations of a device that was serving.
 func (r *StorageDeviceReconciler) markUnobservable(
-	ctx context.Context, sd *simplyblockv1alpha2.StorageDevice, node *simplyblockv1alpha1.StorageNode,
+	ctx context.Context, sd *simplyblockv1alpha2.StorageDevice, node *simplyblockv1alpha2.StorageNode,
 ) error {
 	previous := sd.Status.Phase
 	message := fmt.Sprintf(
@@ -236,7 +235,7 @@ func (r *StorageDeviceReconciler) markUnobservable(
 // removed it, so the two events distinguish an orderly departure from an abrupt
 // one and no more than that.
 func (r *StorageDeviceReconciler) announceDeparture(
-	sd *simplyblockv1alpha2.StorageDevice, node *simplyblockv1alpha1.StorageNode,
+	sd *simplyblockv1alpha2.StorageDevice, node *simplyblockv1alpha2.StorageNode,
 ) {
 	if node == nil {
 		return // the node is gone too, and garbage collection is the whole story
@@ -285,7 +284,7 @@ func (r *StorageDeviceReconciler) announcePhase(
 // node qualify, and an unrecognized state does not: a status the operator does
 // not know is an absence of information, the same way an unrecognized device
 // status is (see [devicePhase]).
-func nodeSeesItsDevices(node *simplyblockv1alpha1.StorageNode) bool {
+func nodeSeesItsDevices(node *simplyblockv1alpha2.StorageNode) bool {
 	switch nodeState(node) {
 	case utils.NodeStatusOnline, utils.NodeStatusSuspended, utils.NodeStatusRemoved:
 		return true
@@ -296,7 +295,7 @@ func nodeSeesItsDevices(node *simplyblockv1alpha1.StorageNode) bool {
 
 // nodeState is the node's control-plane status folded to lower case, or
 // "unknown" when it has none yet.
-func nodeState(node *simplyblockv1alpha1.StorageNode) string {
+func nodeState(node *simplyblockv1alpha2.StorageNode) string {
 	if node.Status.Status == "" {
 		return "unknown"
 	}
@@ -321,10 +320,7 @@ func (r *StorageDeviceReconciler) upsert(
 		return ctrl.Result{RequeueAfter: deviceRetry}, nil
 	}
 
-	labels, err := r.deviceLabels(ctx, node)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	labels := r.deviceLabels(node)
 
 	spec := simplyblockv1alpha2.StorageDeviceSpec{NodeRef: node.Name, DeviceID: dto.ID}
 	status := simplyblockv1alpha2.StorageDeviceStatus{
@@ -419,28 +415,20 @@ func (r *StorageDeviceReconciler) upsert(
 // absent label is a selector that matches nothing, and a wrong one is a selector
 // that matches the wrong devices.
 func (r *StorageDeviceReconciler) deviceLabels(
-	ctx context.Context, node *simplyblockv1alpha1.StorageNode,
-) (map[string]string, error) {
+	node *simplyblockv1alpha2.StorageNode,
+) map[string]string {
 	labels := map[string]string{simplyblockv1alpha2.DeviceLabelNode: node.Name}
 	if worker := node.Labels[simplyblockv1alpha2.DeviceLabelWorker]; worker != "" {
 		labels[simplyblockv1alpha2.DeviceLabelWorker] = worker
 	}
-	if node.Spec.StorageNodeSetRef == "" {
-		return labels, nil
+	// The cluster is on the node itself now. It used to be reached through the
+	// StorageNodeSet the node belonged to, which made a label on a device depend on
+	// a third object being readable; a node names its own cluster, so there is
+	// nothing left to look up (design-storagenode.md §3.1).
+	if node.Spec.ClusterRef != "" {
+		labels[simplyblockv1alpha2.DeviceLabelCluster] = node.Spec.ClusterRef
 	}
-
-	var set simplyblockv1alpha1.StorageNodeSet
-	key := client.ObjectKey{Namespace: node.Namespace, Name: node.Spec.StorageNodeSetRef}
-	switch err := r.Get(ctx, key, &set); {
-	case apierrors.IsNotFound(err):
-		return labels, nil
-	case err != nil:
-		return nil, err
-	}
-	if set.Spec.ClusterName != "" {
-		labels[simplyblockv1alpha2.DeviceLabelCluster] = set.Spec.ClusterName
-	}
-	return labels, nil
+	return labels
 }
 
 // deviceOwnedLabels are the keys the mirror writes and is therefore responsible
@@ -566,8 +554,8 @@ func deviceTrouble(dto subscriptions.DeviceDTO) string {
 // resolve a backend id from.
 func (r *StorageDeviceReconciler) nodeNamed(
 	ctx context.Context, namespace, name string,
-) (*simplyblockv1alpha1.StorageNode, error) {
-	var node simplyblockv1alpha1.StorageNode
+) (*simplyblockv1alpha2.StorageNode, error) {
+	var node simplyblockv1alpha2.StorageNode
 	switch err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &node); {
 	case apierrors.IsNotFound(err):
 		return nil, nil
@@ -580,8 +568,8 @@ func (r *StorageDeviceReconciler) nodeNamed(
 // nodeFor returns the StorageNode carrying the given backend node id, or nil
 // when none does. A nil node is not an error: the node's own object may not have
 // been created yet, or may already be on its way out.
-func (r *StorageDeviceReconciler) nodeFor(ctx context.Context, namespace, nodeID string) (*simplyblockv1alpha1.StorageNode, error) {
-	var nodes simplyblockv1alpha1.StorageNodeList
+func (r *StorageDeviceReconciler) nodeFor(ctx context.Context, namespace, nodeID string) (*simplyblockv1alpha2.StorageNode, error) {
+	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := r.List(ctx, &nodes,
 		client.InNamespace(namespace),
 		client.MatchingFields{StorageNodeUUIDIndex: nodeID},

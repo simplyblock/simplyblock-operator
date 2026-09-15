@@ -12,7 +12,7 @@
 // than joined from the control plane's own exporter, so nothing needs the
 // backend id to line the two up.
 
-package controller
+package node
 
 import (
 	"github.com/prometheus/client_golang/prometheus"

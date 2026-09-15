@@ -6,7 +6,7 @@
 // scraping, because what matters is the value under a label set and not the
 // exposition format.
 
-package controller
+package node
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 )
 
 // fakeCapacitySource is a static device-capacity provider, or a broken one when
@@ -86,7 +87,7 @@ func newCollector(
 ) *StorageDeviceCollector {
 	t.Helper()
 	resetDeviceMetrics()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
+	scheme := testsupport.NewScheme(t, simplyblockv1alpha1.AddToScheme, simplyblockv1alpha2.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return &StorageDeviceCollector{
 		Client:   c,
