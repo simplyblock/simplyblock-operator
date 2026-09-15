@@ -5,9 +5,10 @@
 // Two things distinguish it from the registered kind it replaces. spec.source
 // says which control plane the object means, so reusing an external one is a
 // field rather than the SIMPLYBLOCK_WEBAPI_BASE_URL environment variable
-// (§5.2). And status.endpoint publishes the resolved base URL, so one object
-// answers where the control plane is and every controller reads it from there
-// (§3.3).
+// (§5.2). And status.endpoint publishes the resolved base URL, which the
+// operator's control-plane clients resolve per call, so one object answers where
+// the control plane is and a change to it reaches every caller without a
+// Deployment rollout (§3.3).
 //
 // design-controlplane.md Appendix A is the specification for this file.
 
@@ -149,8 +150,14 @@ type ExternalControlPlane struct {
 	// CredentialsSecretRef names a Secret in this namespace holding the bearer
 	// token the operator authenticates with. It is a reference rather than a
 	// field because a token in a spec is a token in every `kubectl get -o yaml`.
-	// +kubebuilder:validation:Required
-	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
+	//
+	// Absent means the endpoint is reached without one, which is the in-cluster
+	// case: a control plane the Helm chart installed answers on a ClusterIP
+	// Service in this namespace and does not require a token for the readiness
+	// read. Naming a Secret that does not exist stays an error, because naming
+	// one is a statement that the control plane needs it.
+	// +optional
+	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
 
 	// CABundleSecretRef names a Secret holding the CA certificate the endpoint
 	// is verified against. Absent means the system trust store.

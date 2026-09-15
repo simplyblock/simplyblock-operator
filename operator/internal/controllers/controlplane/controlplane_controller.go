@@ -100,6 +100,35 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if !cp.DeletionTimestamp.IsZero() {
 		return r.finalize(ctx, &cp)
 	}
+
+	// The limit is one per Kubernetes cluster and not one per namespace (§3.1),
+	// and the name check above cannot see that: it admits a "simplyblock" object
+	// in every namespace. Each of those would apply the same fixed-name
+	// cluster-scoped roles and bindings under the same managed-by label, so they
+	// would overwrite each other's and either one's finalizer would delete what
+	// the other needs.
+	//
+	// The check runs before the finalizer is taken, for the reason
+	// SimplyblockDriver gives for the same ordering: a finalizer on the duplicate
+	// would delete the holder's cluster-scoped objects when somebody removed the
+	// duplicate, which is the opposite of what removing a duplicate should do.
+	holder, err := r.deploymentHolder(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// An empty holder means the list came back without the object this reconcile
+	// just read, which is a stale cache rather than a second control plane.
+	// Refusing on it would stall an install behind a message naming nobody, so
+	// the object in hand is taken as the holder and the next pass corrects it.
+	if holder.Name != "" && holder != client.ObjectKeyFromObject(&cp) {
+		message := fmt.Sprintf(
+			"a Kubernetes cluster holds one ControlPlane, and %s/%s holds it",
+			holder.Namespace, holder.Name)
+		r.emit(&cp, corev1.EventTypeWarning, DuplicateControlPlane, message)
+		return ctrl.Result{RequeueAfter: steadyStateInterval}, r.report(ctx, &cp,
+			simplyblockv1alpha2.ControlPlanePhaseInstalling, message)
+	}
+
 	if err := r.ensureFinalizer(ctx, &cp); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -127,7 +156,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *ControlPlaneReconciler) reconcileExternal(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
-	endpoint, token, err := resolveExternal(ctx, r.Client, cp)
+	access, err := resolveExternal(ctx, r.Client, cp)
 	if err != nil {
 		var credentials *credentialsError
 		reason := EndpointUnreachable
@@ -139,7 +168,7 @@ func (r *ControlPlaneReconciler) reconcileExternal(
 			simplyblockv1alpha2.ControlPlanePhaseUnavailable, err.Error())
 	}
 
-	ok, message := r.probe(ctx, cp.Namespace, endpoint, token)
+	ok, message := r.probe(ctx, cp.Namespace, access)
 	phase := simplyblockv1alpha2.ControlPlanePhaseAvailable
 	if !ok {
 		phase = simplyblockv1alpha2.ControlPlanePhaseUnavailable
@@ -149,8 +178,8 @@ func (r *ControlPlaneReconciler) reconcileExternal(
 	return ctrl.Result{RequeueAfter: steadyStateInterval}, r.publish(ctx, cp, statusUpdate{
 		phase:    phase,
 		message:  message,
-		endpoint: endpoint,
-		version:  r.version(ctx, endpoint, token),
+		endpoint: access.endpoint,
+		version:  r.version(ctx, access),
 		probed:   true,
 	})
 }
@@ -270,7 +299,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
 
 	case stepAwaitingAPI:
-		ok, message := r.probe(ctx, cp.Namespace, managedEndpoint(cp.Namespace), "")
+		ok, message := r.probe(ctx, cp.Namespace, externalAccess{endpoint: managedEndpoint(cp.Namespace)})
 		if !ok {
 			return false, fmt.Sprintf("the management API is not answering yet: %s", message), nil
 		}
@@ -293,8 +322,10 @@ func (r *ControlPlaneReconciler) steadyState(
 		return ctrl.Result{}, err
 	}
 
-	endpoint := managedEndpoint(cp.Namespace)
-	ok, message := r.probe(ctx, cp.Namespace, endpoint, "")
+	// A managed control plane is reached on the Service this install created, so
+	// there is no token to present and no CA beyond the cluster's own.
+	access := externalAccess{endpoint: managedEndpoint(cp.Namespace)}
+	ok, message := r.probe(ctx, cp.Namespace, access)
 
 	components, err := observe(ctx, r.Client, cp.Namespace)
 	if err != nil {
@@ -308,8 +339,8 @@ func (r *ControlPlaneReconciler) steadyState(
 	return ctrl.Result{RequeueAfter: steadyStateInterval}, r.publish(ctx, cp, statusUpdate{
 		phase:      phase,
 		message:    reason,
-		endpoint:   endpoint,
-		version:    r.version(ctx, endpoint, ""),
+		endpoint:   access.endpoint,
+		version:    r.version(ctx, access),
 		components: components,
 		probed:     true,
 	})
@@ -335,15 +366,15 @@ func (r *ControlPlaneReconciler) applyEverything(
 
 // probe performs the readiness read and records what it cost.
 func (r *ControlPlaneReconciler) probe(
-	ctx context.Context, namespace, endpoint, token string,
+	ctx context.Context, namespace string, access externalAccess,
 ) (bool, string) {
 	prober := r.Prober
 	if prober == nil {
-		prober = &HTTPProber{Token: token}
+		prober = &HTTPProber{Token: access.token, Client: access.client}
 	}
 
 	started := time.Now()
-	ok, message := prober.Ready(ctx, endpoint)
+	ok, message := prober.Ready(ctx, access.endpoint)
 	controlPlaneProbeDuration.WithLabelValues(namespace).Observe(time.Since(started).Seconds())
 
 	if ok {
@@ -358,12 +389,12 @@ func (r *ControlPlaneReconciler) probe(
 // version reads what the management API reports. A read that fails publishes
 // nothing rather than clearing what was published, because a version the
 // operator could not confirm this pass is not a version that changed.
-func (r *ControlPlaneReconciler) version(ctx context.Context, endpoint, token string) string {
+func (r *ControlPlaneReconciler) version(ctx context.Context, access externalAccess) string {
 	prober := r.Prober
 	if prober == nil {
-		prober = &HTTPProber{Token: token}
+		prober = &HTTPProber{Token: access.token, Client: access.client}
 	}
-	version, err := prober.Version(ctx, endpoint)
+	version, err := prober.Version(ctx, access.endpoint)
 	if err != nil {
 		return ""
 	}
@@ -547,10 +578,21 @@ func (r *ControlPlaneReconciler) finalize(
 		return ctrl.Result{RequeueAfter: steadyStateInterval}, r.report(ctx, cp, cp.Status.Phase, message)
 	}
 
+	// Deleting a control plane that never held the install must take nothing with
+	// it. The check is repeated here rather than trusted from the reconcile that
+	// added the finalizer, because an object may carry one from before this
+	// ordering existed, and the cost of being wrong is the running deployment's
+	// RBAC.
+	holder, err := r.deploymentHolder(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	heldTheInstall := holder.Name == "" || holder == client.ObjectKeyFromObject(cp)
+
 	// An external control plane had nothing installed, so there is nothing
 	// cluster-scoped to remove: deletion takes the object and touches neither
 	// the endpoint nor its data.
-	if isManaged(cp) {
+	if isManaged(cp) && heldTheInstall {
 		for _, obj := range append(foundationDBClusterScoped(), managementAPIClusterScoped()...) {
 			if err := deleteIfMarked(ctx, r.Client, obj); err != nil {
 				return ctrl.Result{}, err
@@ -572,6 +614,45 @@ func (r *ControlPlaneReconciler) ensureFinalizer(
 	base := cp.DeepCopy()
 	controllerutil.AddFinalizer(cp, FinalizerControlPlane)
 	return r.Patch(ctx, cp, client.MergeFrom(base))
+}
+
+// deploymentHolder is the ControlPlane that owns the install: the oldest in the
+// Kubernetes cluster, with namespace and name breaking a tie. Every reconciler
+// picks the same one from the same list, so two of them never disagree about
+// which object is the second.
+func (r *ControlPlaneReconciler) deploymentHolder(ctx context.Context) (client.ObjectKey, error) {
+	var list simplyblockv1alpha2.ControlPlaneList
+	if err := r.List(ctx, &list); err != nil {
+		return client.ObjectKey{}, err
+	}
+
+	var oldest *simplyblockv1alpha2.ControlPlane
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.Name != SingletonName {
+			continue
+		}
+		if oldest == nil || olderThan(item, oldest) {
+			oldest = item
+		}
+	}
+	if oldest == nil {
+		return client.ObjectKey{}, nil
+	}
+	return client.ObjectKey{Namespace: oldest.Namespace, Name: oldest.Name}, nil
+}
+
+// olderThan orders two control planes by creation time, then by namespace and
+// name. The tie-break matters because a creation timestamp has one-second
+// resolution, so two objects applied together compare equal on it.
+func olderThan(a, b *simplyblockv1alpha2.ControlPlane) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	if a.Namespace != b.Namespace {
+		return a.Namespace < b.Namespace
+	}
+	return a.Name < b.Name
 }
 
 // foundationDBServed reports whether the API server knows the FoundationDB

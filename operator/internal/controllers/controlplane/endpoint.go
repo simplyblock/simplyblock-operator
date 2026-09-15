@@ -3,10 +3,10 @@
 //
 // This is the field that makes the object useful to anything but a human
 // (design-controlplane.md §3.3). Every controller in the operator reaches the
-// control plane, and today every one of them resolves the endpoint from an
-// environment variable. In the target they read the endpoint this object
-// publishes, so that one object answers where the control plane is and a change
-// to it reaches every reader without a Deployment rollout.
+// control plane, and each resolves this endpoint per call through
+// [NewEndpointResolver], falling back to the environment only where the object
+// has published nothing. One object answers where the control plane is, and a
+// change to it reaches every reader without a Deployment rollout.
 //
 // Resolution is deliberately dumb for the managed case: the Service this install
 // creates, in the namespace the ControlPlane is in, on the port it publishes.
@@ -17,7 +17,10 @@ package controlplane
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -33,6 +36,11 @@ import (
 // be a rename disguised as a validation.
 var credentialKeys = []string{"token", "secret"}
 
+// The keys a CA bundle Secret may carry. ca.crt is what cert-manager writes and
+// what a kubernetes.io/tls Secret carries; tls.crt covers a bundle somebody
+// assembled by hand.
+var caBundleKeys = []string{"ca.crt", "tls.crt"}
+
 // managedEndpoint is where the management API this install created answers.
 func managedEndpoint(namespace string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ComponentWebAPI, namespace, webAPIPort)
@@ -46,8 +54,23 @@ type credentialsError struct{ message string }
 
 func (e *credentialsError) Error() string { return e.message }
 
-// resolveExternal reads the endpoint and the bearer token of an external control
-// plane.
+// externalAccess is everything needed to reach an external control plane: where
+// it is, what to authenticate with, and what to verify its certificate against.
+//
+// The three travel together because all three come from the same spec block and
+// all three are needed by the same call. Returning the transport rather than the
+// CA bytes keeps the trust decision in one place instead of at each probe.
+type externalAccess struct {
+	endpoint string
+	token    string
+
+	// client is nil when the system trust store is what verifies the endpoint,
+	// which is what an absent caBundleSecretRef means.
+	client *http.Client
+}
+
+// resolveExternal reads where an external control plane is, what to
+// authenticate with, and what to verify it against.
 //
 // The endpoint is validated here as well as by the spec's pattern, because the
 // pattern admits a loopback address and this does not. An operator pointed at
@@ -55,35 +78,103 @@ func (e *credentialsError) Error() string { return e.message }
 // external endpoint in this group is guarded against.
 func resolveExternal(
 	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
-) (endpoint, token string, err error) {
+) (externalAccess, error) {
 	external := cp.Spec.Source.External
 	if external == nil {
-		return "", "", fmt.Errorf("spec.source.external is not set")
+		return externalAccess{}, fmt.Errorf("spec.source.external is not set")
 	}
 
 	if err := validateEndpoint(external.Endpoint); err != nil {
-		return "", "", err
+		return externalAccess{}, err
+	}
+	access := externalAccess{endpoint: external.Endpoint}
+
+	transport, err := caBundleTransport(ctx, c, cp)
+	if err != nil {
+		return externalAccess{}, err
+	}
+	access.client = transport
+
+	// No reference means no token, which is the in-cluster case the chart writes
+	// when it installs the control plane itself.
+	if external.CredentialsSecretRef == nil || external.CredentialsSecretRef.Name == "" {
+		return access, nil
 	}
 
 	var secret corev1.Secret
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: external.CredentialsSecretRef.Name}
 	if err := c.Get(ctx, key, &secret); err != nil {
 		if errors.IsNotFound(err) {
-			return "", "", &credentialsError{message: fmt.Sprintf(
+			return externalAccess{}, &credentialsError{message: fmt.Sprintf(
 				"Secret %s/%s does not exist, and it is what holds the bearer token this "+
 					"control plane is reached with", cp.Namespace, external.CredentialsSecretRef.Name)}
 		}
-		return "", "", err
+		return externalAccess{}, err
 	}
 
 	for _, k := range credentialKeys {
 		if value := strings.TrimSpace(string(secret.Data[k])); value != "" {
-			return external.Endpoint, value, nil
+			access.token = value
+			return access, nil
 		}
 	}
-	return "", "", &credentialsError{message: fmt.Sprintf(
+	return externalAccess{}, &credentialsError{message: fmt.Sprintf(
 		"Secret %s/%s carries no %s key, so there is no token to authenticate with",
 		cp.Namespace, external.CredentialsSecretRef.Name, strings.Join(credentialKeys, " or "))}
+}
+
+// caBundleTransport builds the HTTP client that verifies the endpoint against
+// the CA the spec names, or nil where it names none.
+//
+// A Secret that is named and unusable is an error rather than a fall back to the
+// system trust store. Naming a CA is a statement that the endpoint is signed by
+// it, so quietly verifying against something else would turn a misconfiguration
+// into a connection to a control plane nobody vouched for.
+func caBundleTransport(
+	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
+) (*http.Client, error) {
+	ref := cp.Spec.Source.External.CABundleSecretRef
+	if ref == nil || ref.Name == "" {
+		return nil, nil
+	}
+
+	var secret corev1.Secret
+	key := client.ObjectKey{Namespace: cp.Namespace, Name: ref.Name}
+	if err := c.Get(ctx, key, &secret); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, &credentialsError{message: fmt.Sprintf(
+				"Secret %s/%s does not exist, and it is what the endpoint's certificate is "+
+					"verified against", cp.Namespace, ref.Name)}
+		}
+		return nil, err
+	}
+
+	var bundle []byte
+	for _, k := range caBundleKeys {
+		if value := secret.Data[k]; len(value) > 0 {
+			bundle = value
+			break
+		}
+	}
+	if len(bundle) == 0 {
+		return nil, &credentialsError{message: fmt.Sprintf(
+			"Secret %s/%s carries no %s key, so there is no CA to verify the endpoint against",
+			cp.Namespace, ref.Name, strings.Join(caBundleKeys, " or "))}
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle) {
+		return nil, &credentialsError{message: fmt.Sprintf(
+			"Secret %s/%s holds no PEM certificate this operator could parse",
+			cp.Namespace, ref.Name)}
+	}
+
+	return &http.Client{
+		Timeout: probeTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		},
+	}, nil
 }
 
 // validateEndpoint refuses the addresses an external control plane must not be

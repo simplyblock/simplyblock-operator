@@ -541,23 +541,38 @@ func TestADigestPinnedImageIsNotComparedAgainstAVersion(t *testing.T) {
 	}
 }
 
-// A Restart naming a workload this control plane does not have is refused rather
+// A Restart naming something this control plane cannot roll is refused rather
 // than skipped. An operation that reported success while recycling nothing is
 // worse than one that says the name was wrong.
-func TestARestartNamingAnUnknownComponentFails(t *testing.T) {
-	cp := managedControlPlane()
-	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
-	ops.Spec.Restart = &simplyblockv1alpha2.RestartSpec{Components: []string{"simplyblock-graylog"}}
+//
+// The FoundationDB cluster is the case worth stating: it is a component of the
+// control plane, so a check against the component table admits it, and it is not
+// rolled by a pod-template annotation, so the recycle would do nothing and the
+// wait that follows would pass against a healthy database.
+func TestARestartNamingSomethingItCannotRollFails(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope string
+	}{
+		{"a workload of another deployment", "simplyblock-graylog"},
+		{"the database, which no annotation rolls", ComponentFDBCluster},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := managedControlPlane()
+			ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
+			ops.Spec.Restart = &simplyblockv1alpha2.RestartSpec{Components: []string{tc.scope}}
 
-	r := &ControlPlaneOpsReconciler{Client: newClient(t, cp, ops), Scheme: testScheme(t)}
+			r := &ControlPlaneOpsReconciler{Client: newClient(t, cp, ops), Scheme: testScheme(t)}
 
-	_, _, err := r.restart(context.Background(), ops, cp)
-	var fatal *terminalStepError
-	if !errors.As(err, &fatal) {
-		t.Fatalf("restart returned %v, want a terminal failure", err)
-	}
-	if !strings.Contains(fatal.Error(), "simplyblock-graylog") {
-		t.Errorf("the refusal is %q, want it to name the component", fatal.Error())
+			_, _, err := r.restart(context.Background(), ops, cp)
+			var fatal *terminalStepError
+			if !errors.As(err, &fatal) {
+				t.Fatalf("restart returned %v, want a terminal failure", err)
+			}
+			if !strings.Contains(fatal.Error(), tc.scope) {
+				t.Errorf("the refusal is %q, want it to name the component", fatal.Error())
+			}
+		})
 	}
 }
 

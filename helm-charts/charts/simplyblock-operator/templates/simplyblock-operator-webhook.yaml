@@ -103,6 +103,7 @@ webhooks:
     - v1alpha2
     operations:
     - CREATE
+    - DELETE
     resources:
     - controlplaneops
   sideEffects: None

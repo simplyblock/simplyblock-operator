@@ -177,9 +177,27 @@ func TestTheDatabaseIsNotRestartable(t *testing.T) {
 				"FoundationDBCluster does nothing", ComponentFDBCluster)
 		}
 	}
-	if !knownComponent(ComponentFDBCluster) {
-		t.Errorf("%s is not a known component, so a Restart naming it would be refused for "+
-			"the wrong reason", ComponentFDBCluster)
+	if restartable(ComponentFDBCluster) {
+		t.Errorf("%s is accepted as a restart scope, so an operation naming it would recycle "+
+			"nothing and report success", ComponentFDBCluster)
+	}
+	if !restartable(ComponentTasks) {
+		t.Errorf("%s is refused as a restart scope, and it is a workload a restart rolls",
+			ComponentTasks)
+	}
+}
+
+// Every component the table lists is either restartable or excluded for a stated
+// reason. A component that is neither is one a Restart refuses without anything
+// saying why.
+func TestEveryComponentIsRestartableOrExcludedForAReason(t *testing.T) {
+	for _, comp := range componentTable {
+		if comp.kind == kindFoundationDB {
+			continue
+		}
+		if !restartable(comp.name) {
+			t.Errorf("%s is neither a FoundationDB resource nor restartable", comp.name)
+		}
 	}
 }
 

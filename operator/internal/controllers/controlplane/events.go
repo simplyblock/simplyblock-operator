@@ -54,6 +54,11 @@ const (
 	// PrerequisiteMissing is an install held on something the cluster has to
 	// provide and does not, such as the FoundationDB CRDs.
 	PrerequisiteMissing = "PrerequisiteMissing"
+
+	// DuplicateControlPlane is a second ControlPlane in a Kubernetes cluster that
+	// already has one. It installs nothing, because the objects it would apply
+	// are the same fixed-name cluster-scoped objects the first one owns.
+	DuplicateControlPlane = "DuplicateControlPlane"
 )
 
 // Reasons emitted on a ControlPlaneOps.
