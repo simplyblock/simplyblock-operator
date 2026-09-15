@@ -350,13 +350,15 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 			}
 		}
 
+		kube := p.KubeNodes[report.Node]
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
 			Devices:         chosen,
 			Class:           class,
 			PlacementReason: why,
-			Kube:            p.KubeNodes[report.Node],
+			Kube:            kube,
+			MgmtInterface:   ManagementInterface(report, kube.InternalIP),
 		})
 	}
 

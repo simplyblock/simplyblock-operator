@@ -62,6 +62,12 @@ type KubeNode struct {
 	// nodes and OpenShift usually does not taint its infrastructure ones, so a
 	// fleet's infra nodes pass a taint check and would otherwise land in a draft
 	// as storage workers.
+	// InternalIP is the address the cluster reaches the machine on, which is
+	// what decides which of its interfaces a draft names for management: the
+	// operator addresses a worker by this everywhere else, so naming the
+	// interface that holds it keeps both halves on one network.
+	InternalIP string
+
 	Role NodeRole
 
 	// Roles is every role the labels name, which is how a combined deployment
@@ -108,6 +114,13 @@ func KubeNodeOf(node corev1.Node) KubeNode {
 		Unschedulable:          node.Spec.Unschedulable,
 		Role:                   RoleOf(node),
 		Roles:                  RolesOf(node),
+	}
+
+	for _, address := range node.Status.Addresses {
+		if address.Type == corev1.NodeInternalIP {
+			out.InternalIP = address.Address
+			break
+		}
 	}
 
 	for _, taint := range node.Spec.Taints {

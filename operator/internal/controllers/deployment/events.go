@@ -17,9 +17,13 @@ const (
 	// What a draft's validation found. These are the whole value of the review
 	// gate: a document that names a worker which does not exist should say so
 	// while it is still a draft, rather than after somebody approved it.
-	WorkerNotFound      = "WorkerNotFound"
-	DeviceNotFound      = "DeviceNotFound"
-	DeviceClassMismatch = "DeviceClassMismatch"
+	WorkerNotFound = "WorkerNotFound"
+
+	// NoManagementInterface is a group that names no interface for the storage
+	// nodes to bind their management address to.
+	NoManagementInterface = "NoManagementInterface"
+	DeviceNotFound        = "DeviceNotFound"
+	DeviceClassMismatch   = "DeviceClassMismatch"
 
 	// AwaitingApproval is the one that changes how the kind is used. A valid draft
 	// nobody has approved looks identical to a controller that has not noticed it,

@@ -105,6 +105,8 @@ func interfacesOf(ifaces []inventory.Interface) []Interface {
 			NUMANode:   iface.NUMANode,
 			Virtual:    iface.Virtual,
 			Loopback:   iface.Loopback,
+			Bridge:     iface.Bridge,
+			Addresses:  iface.Addresses,
 		})
 	}
 	return out

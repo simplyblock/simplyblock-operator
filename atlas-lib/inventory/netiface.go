@@ -17,6 +17,7 @@ package inventory
 import (
 	"cmp"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -90,6 +91,61 @@ type Interface struct {
 	// NUMANodeUnknown. It is what decides whether a storage node pinned to one
 	// socket reaches its NIC across the interconnect.
 	NUMANode int
+
+	// Bridge reports whether the interface is a software bridge.
+	//
+	// It is separate from Virtual, which a bridge also is, because the two
+	// answer different questions. Virtual says the interface is backed by no
+	// hardware; Bridge says it is carrying somebody else's traffic, which is
+	// what makes a cluster's own bridge a poor choice for a management address
+	// even where it holds one.
+	Bridge bool
+
+	// Addresses are the IP addresses assigned to the interface, as plain
+	// addresses without a prefix length, in the order the host reports them.
+	//
+	// They do not come from sysfs, which does not carry them. They are read
+	// through Config.InterfaceAddresses, and a caller that supplies none gets
+	// none rather than an error: an interface reported without its addresses is
+	// still worth reporting.
+	Addresses []string
+}
+
+// AddressReader answers which IP addresses each interface holds, by interface
+// name.
+//
+// It is a seam because sysfs does not carry addresses and the kernel's own
+// answer is namespace-scoped: a process reading it reports the addresses of the
+// network namespace it is in, so a pod without the host's network would report
+// its own. The default reads this process's namespace, which is the host's when
+// the caller runs with host networking, and a caller that cannot guarantee that
+// supplies its own reader rather than being handed a confident wrong answer.
+type AddressReader func() (map[string][]string, error)
+
+// LocalAddresses reads the addresses of this process's network namespace.
+func LocalAddresses() (map[string][]string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("list the network interfaces: %w", err)
+	}
+
+	out := make(map[string][]string, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			// One interface refusing its addresses is not a reason to lose the
+			// rest, and an interface with none reported is reported with none.
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil {
+				continue
+			}
+			out[iface.Name] = append(out[iface.Name], ip.String())
+		}
+	}
+	return out, nil
 }
 
 // ReadInterfaces reads every network interface the host presents, ordered by
@@ -108,9 +164,21 @@ func ReadInterfaces(cfg Config) ([]Interface, error) {
 		return nil, fmt.Errorf("list %s: %w", base, err)
 	}
 
+	// The addresses are read once for the whole host rather than per interface,
+	// because the source answers for all of them at once. A reader that fails
+	// costs the addresses and nothing else.
+	addresses := map[string][]string{}
+	if reader := cfg.addresses(); reader != nil {
+		if read, err := reader(); err == nil {
+			addresses = read
+		}
+	}
+
 	ifaces := make([]Interface, 0, len(entries))
 	for _, entry := range entries {
-		ifaces = append(ifaces, readInterface(filepath.Join(base, entry.Name()), entry.Name()))
+		iface := readInterface(filepath.Join(base, entry.Name()), entry.Name())
+		iface.Addresses = addresses[entry.Name()]
+		ifaces = append(ifaces, iface)
 	}
 
 	slices.SortFunc(ifaces, func(a, b Interface) int { return cmp.Compare(a.Name, b.Name) })
@@ -147,6 +215,11 @@ func readInterface(dir, name string) Interface {
 		return iface
 	}
 	iface.Virtual = sysfs.IsVirtual(resolved)
+	// A bridge exports a bridge/ directory whatever it is named, which is what
+	// makes this a reading rather than a guess at br0 and cni0 and docker0.
+	if entries, err := os.Stat(filepath.Join(dir, "bridge")); err == nil && entries.IsDir() {
+		iface.Bridge = true
+	}
 	if iface.Virtual {
 		return iface
 	}

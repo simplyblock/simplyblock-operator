@@ -29,6 +29,10 @@ const (
 	HostUnreachable      = "HostUnreachable"
 	AwaitingSlot         = "AwaitingSlot"
 
+	// NodeAddGaveUp is the add this node was waiting on leaving the control
+	// plane's task window without having produced a node.
+	NodeAddGaveUp = "NodeAddGaveUp"
+
 	// NodeAdopted says an existing backend node was taken over rather than
 	// added, which is the difference between a migration and a mistake.
 	NodeAdopted = "NodeAdopted"

@@ -94,7 +94,38 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 	if found := conflictingInterfaces(config); found != "" {
 		findings = append(findings, finding{reason: WorkerNotFound, message: found})
 	}
+	if groups := groupsWithoutManagementInterface(config); len(groups) > 0 {
+		findings = append(findings, finding{
+			reason: NoManagementInterface,
+			message: fmt.Sprintf(
+				"group(s) %s name no management interface, and the control plane refuses a "+
+					"node it cannot find a management address on",
+				strings.Join(groups, ", ")),
+		})
+	}
 	return findings, nil
+}
+
+// groupsWithoutManagementInterface names the groups that would be expanded into
+// nodes the control plane refuses.
+//
+// It is worth a finding of its own because of where the refusal otherwise lands.
+// The control plane does not reject the request; it accepts it, starts a node_add
+// task, and fails inside it. What an administrator sees is a task that gave up on
+// a document that looked complete, several steps and one approval away from the
+// field that was empty.
+func groupsWithoutManagementInterface(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) []string {
+	var missing []string
+	for _, set := range config.Spec.NodeSets {
+		for _, group := range set.Groups {
+			if group.MgmtInterface == "" {
+				missing = append(missing, group.Name)
+			}
+		}
+	}
+	return missing
 }
 
 // duplicateWorkers names every worker the document lists in more than one group.
