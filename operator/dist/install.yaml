@@ -751,15 +751,41 @@ spec:
               document carries no field for it.
             properties:
               approved:
+                default: false
                 description: |-
                   Approved is the review gate. A document is expanded only once it is set,
                   and is validated but otherwise inert before that, which is what makes
                   reviewing a wrong document safe.
+
+                  It is defaulted and serialized rather than omitted when false, and the
+                  two are the same requirement read twice. A reviewer has to see the gate
+                  they are being asked to open, and the rules above have to find the field
+                  they read: a bool omitted when false is a key the apiserver never stores,
+                  so a rule reading it fails rather than reading false, and the first rule
+                  guarding approval denied every approval there could ever be. The has()
+                  guards are what carry documents written before the default existed.
                 type: boolean
               cluster:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  enableDriveFormat:
+                    description: |-
+                      EnableDriveFormat formats every device the document names before a storage
+                      node takes it, which is how a drive carrying anything already is made
+                      usable.
+
+                      It says what is wanted rather than how, because the how differs by device
+                      class: an NVMe device is formatted to a 4K block size, and a logical block
+                      device has its signatures wiped. One field covers both, so a document does
+                      not have to know which class the expansion will resolve it to.
+
+                      It is on the document rather than defaulted further down because it is
+                      destructive and the document is what somebody approves. A reviewer reading
+                      a draft has to see that the drives it lists will be formatted, and be able
+                      to strike it before approving; the cluster's own field is immutable once
+                      the cluster exists, so a default nobody saw could not be undone either.
+                    type: boolean
                   enableFailureDomains:
                     description: |-
                       EnableFailureDomains opts the cluster into failure-domain mode, in which
@@ -1020,9 +1046,9 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: an approved deployment config is immutable
-              rule: '!oldSelf.approved || self == oldSelf'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
-              rule: '!oldSelf.approved || self.approved'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
             - message: 'every group must name the same device class: all nvme or all
                 block'
               rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
@@ -1084,7 +1110,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'',''Activating'']'
             type: object
         type: object
     served: true
@@ -5946,6 +5972,8 @@ spec:
                 enum:
                 - Pending
                 - Creating
+                - Provisioning
+                - Activating
                 - Online
                 - Degraded
                 - Unavailable
