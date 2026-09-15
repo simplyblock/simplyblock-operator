@@ -28,6 +28,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -419,8 +420,23 @@ func (r *OperatorOpsReconciler) write(
 	plan := planner.Plan(collected, filter)
 
 	if len(plan.NodeSets) == 0 {
+		// The rules worked out why every machine was dropped, and a run that
+		// reported only how many were dropped would throw that away: a reviewer
+		// reading "78 refusal(s)" cannot tell a fleet with no disks from a fleet
+		// whose disks are held by a driver they could reclaim. The refusals go
+		// out as events, and the worker-level ones go into the message as well,
+		// because the message is what `kubectl get operatorops` shows.
+		for _, refusal := range plan.RefusalLines() {
+			r.event(ops, corev1.EventTypeNormal, "DeviceDeclined", refusal)
+		}
+		why := plan.Explain()
+		if len(why) == 0 {
+			// No machine was refused by name, so the run had no worker to refuse.
+			return r.fail(ctx, ops, fmt.Sprintf(
+				"no worker has a device this run would use: %s", plan.Summary()))
+		}
 		return r.fail(ctx, ops, fmt.Sprintf(
-			"no worker has a device this run would use: %s", plan.Summary()))
+			"no worker has a device this run would use: %s", strings.Join(why, "; ")))
 	}
 
 	config, notes := r.draftFor(ops, spec, plan)
