@@ -38,7 +38,7 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 2
+const ReportVersion = 3
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -209,6 +209,20 @@ type Interface struct {
 
 	Virtual  bool `json:"virtual,omitempty"`
 	Loopback bool `json:"loopback,omitempty"`
+
+	// Bridge reports whether the interface is a software bridge, which a
+	// cluster's own CNI leaves on every worker. It is separate from Virtual
+	// because the two answer different questions: Virtual says the interface is
+	// backed by no hardware, and Bridge says it is carrying somebody else's
+	// traffic, which is what disqualifies it from being a management address
+	// even where it holds one.
+	Bridge bool `json:"bridge,omitempty"`
+
+	// Addresses are the IP addresses the interface holds, without a prefix
+	// length. They are what makes a management interface identifiable: the one
+	// a draft names is the one carrying the address the cluster already reaches
+	// the machine on.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // Device is one block device and whether it may be handed to a storage cluster.

@@ -54,6 +54,13 @@ type Worker struct {
 	// with 256 GiB may schedule against 250. Its zero value means the planner
 	// was given no node objects.
 	Kube KubeNode
+
+	// MgmtInterface is the interface the draft names for management, or empty
+	// when the machine presents none that would serve. It is part of what makes
+	// two workers groupable: a NodeGroup names one interface for every worker in
+	// it, so machines that call theirs different things describe different
+	// groups however identical their disks are.
+	MgmtInterface string
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -91,6 +98,11 @@ type Group struct {
 	// Class and Addresses are the device selection they share.
 	Class     DeviceClass
 	Addresses []string
+
+	// MgmtInterface is the interface every worker in the group binds its
+	// management address to, which is why it is on the group rather than on the
+	// workers: a NodeGroup names one.
+	MgmtInterface string
 }
 
 // Grouper puts workers into groups.
@@ -120,11 +132,15 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses)
+		signature := worker.Class.signature(addresses, worker.MgmtInterface)
 
 		group, seen := bySignature[signature]
 		if !seen {
-			group = &Group{Class: worker.Class, Addresses: addresses}
+			group = &Group{
+				Class:         worker.Class,
+				Addresses:     addresses,
+				MgmtInterface: worker.MgmtInterface,
+			}
 			bySignature[signature] = group
 			order = append(order, signature)
 		}
@@ -150,11 +166,17 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 	return groups
 }
 
-// signature is the key two workers must agree on to share a group: the class
-// and the addresses, hashed so that a hundred addresses do not become a
-// hundred-element map key.
-func (c DeviceClass) signature(addresses []string) string {
-	digest := sha256.Sum256([]byte(string(c) + "\x00" + strings.Join(addresses, "\x00")))
+// signature is the key two workers must agree on to share a group: the class,
+// the addresses, and the management interface, hashed so that a hundred
+// addresses do not become a hundred-element map key.
+//
+// The interface is in the key because a NodeGroup names one for every worker it
+// lists. Two machines with identical disks that call their NICs different things
+// cannot be described by one group, and grouping them anyway would write a
+// document that is wrong for whichever of them lost.
+func (c DeviceClass) signature(addresses []string, mgmtInterface string) string {
+	digest := sha256.Sum256([]byte(
+		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
 }
 
@@ -239,7 +261,11 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		workers = append(workers, worker.Name)
 	}
 
-	out := simplyblockv1alpha2.NodeGroup{Name: group.Name, Workers: workers}
+	out := simplyblockv1alpha2.NodeGroup{
+		Name:          group.Name,
+		Workers:       workers,
+		MgmtInterface: group.MgmtInterface,
+	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}
 		if group.Class == ClassBlock {

@@ -370,8 +370,7 @@ func (r *StorageNodeReconciler) performNodeStep(
 	case stepPosting:
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
-		done, err := r.resolveUUID(ctx, node, cluster)
-		return stepResolving, done, err
+		return r.resolve(ctx, node, cluster)
 	case stepAdopting:
 		done, err := r.resolveUUID(ctx, node, cluster)
 		return stepAdopting, done, err
@@ -543,6 +542,68 @@ func (r *StorageNodeReconciler) postNode(
 // one worker are sorted by RPC port ascending, and position in that list is the
 // socket ordinal, because the ports are assigned in socket order at node-add time
 // (§4.3).
+// nodeAddTask is the control plane's own name for the job Posting starts.
+const nodeAddTask = "node_add"
+
+// resolve waits for the backend node the add was asked to produce, and asks
+// again when nothing is still working on producing one.
+//
+// The add can fail after it has started — a management interface the control
+// plane cannot find an address on is the case this was written for — and what it
+// leaves behind is a task that finished and no node. Nothing about that is
+// visible from the node list, which is empty either way, so a step that only
+// matched the list waited out its deadline against an add that had already given
+// up. It held the cluster's one node-add slot while it waited, so every other
+// node of the cluster waited behind a node that was never coming.
+//
+// The task window is the evidence. A node_add still in it is an add worth
+// waiting for; no node_add in it at all means the add this step is waiting on is
+// over, and an add that is over without a node is one to ask for again. The
+// window is capped, so a task that has scrolled out of it has finished too.
+//
+// Asking again is unbounded here and bounded by the step's own deadline, which
+// is what makes a permanently failing add fail the node rather than spin on it
+// forever.
+func (r *StorageNodeReconciler) resolve(
+	ctx context.Context,
+	node *simplyblockv1alpha2.StorageNode,
+	cluster *simplyblockv1alpha2.StorageCluster,
+) (nodeStep, bool, error) {
+	done, err := r.resolveUUID(ctx, node, cluster)
+	if err != nil || done {
+		return stepResolving, done, err
+	}
+
+	if addInFlight(cluster) {
+		return stepResolving, false, nil
+	}
+
+	r.emit(node, corev1.EventTypeWarning, NodeAddGaveUp, fmt.Sprintf(
+		"the node_add for worker %s finished without producing a node, so it is being asked for again",
+		node.Spec.WorkerNode))
+	return stepPosting, true, nil
+}
+
+// addInFlight reports whether the control plane is still working on a node_add
+// for this cluster.
+//
+// It does not ask which node the task is for, because the window does not say
+// and because the cap is one add at a time: a node_add in flight is this node's
+// add or the add of the node holding the slot ahead of it, and waiting is right
+// either way.
+func addInFlight(cluster *simplyblockv1alpha2.StorageCluster) bool {
+	for _, task := range cluster.Status.Tasks {
+		if task.Type == nodeAddTask && task.Status != taskDone {
+			return true
+		}
+	}
+	return false
+}
+
+// taskDone is the control plane's terminal task status. Everything else it
+// publishes — new, running, suspended — is a task still being worked through.
+const taskDone = "done"
+
 func (r *StorageNodeReconciler) resolveUUID(
 	ctx context.Context,
 	node *simplyblockv1alpha2.StorageNode,

@@ -90,10 +90,23 @@ type Config struct {
 	// kernel.
 	Exclusive blockdev.ExclusiveOpener
 
+	// InterfaceAddresses answers which IP addresses each interface holds. A nil
+	// reader is LocalAddresses, this process's own network namespace, which is
+	// the host's for a caller running with host networking.
+	InterfaceAddresses AddressReader
+
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
 	// outside a cluster has.
 	Kubernetes KubernetesSources
+}
+
+// addresses is the reader to use, defaulted.
+func (c Config) addresses() AddressReader {
+	if c.InterfaceAddresses != nil {
+		return c.InterfaceAddresses
+	}
+	return LocalAddresses
 }
 
 // KubernetesSources is what the environment is concluded from.
