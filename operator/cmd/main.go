@@ -57,6 +57,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
+	controlplanecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
@@ -473,12 +474,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.ControlPlaneReconciler{
+	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
+		os.Exit(1)
+	}
+	if err := (&controlplanecontroller.ControlPlaneOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
 		os.Exit(1)
 	}
 	if err := (&clustercontroller.StorageClusterReconciler{
@@ -841,6 +850,10 @@ func main() {
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
 			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagebackupops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-controlplaneops",
+			&webhook.Admission{Handler: &internalwebhook.ControlPlaneOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered controlplaneops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{

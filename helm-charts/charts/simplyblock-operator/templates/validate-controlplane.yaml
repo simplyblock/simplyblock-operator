@@ -1,0 +1,19 @@
+{{/*
+Refuses the one combination that would install a control plane missing something
+the deployment asked for.
+
+The operator's install (design-controlplane.md §5.1) applies the FoundationDB
+cluster, the object store, and the management API from fields on the ControlPlane
+spec. That spec has no TLS field: §5.1 settles only that the certificate issuer
+is detected rather than declared, and whether the control plane serves TLS at all
+is still the chart's tls.enabled. An operator-managed install of a TLS-enabled
+deployment would therefore come up in plaintext, which is a downgrade nobody
+asked for and one nothing on the objects would announce.
+
+So it fails here instead, and names the value that resolves it. Handing the
+install back to the chart keeps a TLS deployment working exactly as it does
+today.
+*/}}
+{{- if and .Values.operator.enabled .Values.controlplane.managedByOperator .Values.tls.enabled -}}
+{{- fail (printf "controlplane.managedByOperator and tls.enabled cannot both be set: the ControlPlane spec has no field for TLS, so the operator's install would bring the control plane up in plaintext. Set controlplane.managedByOperator=false to keep the chart installing the control plane, which is what a TLS deployment needs until the spec can express it.") -}}
+{{- end -}}

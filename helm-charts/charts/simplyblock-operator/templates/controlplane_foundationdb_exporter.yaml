@@ -1,4 +1,4 @@
-{{- if and .Values.operator.enabled .Values.controlplane.foundationdb.enabled .Values.controlplane.foundationdb.exporter.enabled }}
+{{- if and (include "simplyblock.chartInstallsControlPlane" . ) .Values.controlplane.foundationdb.enabled .Values.controlplane.foundationdb.exporter.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
