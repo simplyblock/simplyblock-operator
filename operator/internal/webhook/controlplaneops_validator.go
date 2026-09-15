@@ -33,7 +33,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-controlplaneops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=controlplaneops,verbs=create,versions=v1alpha2,name=vcontrolplaneops.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-controlplaneops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=controlplaneops,verbs=create;delete,versions=v1alpha2,name=vcontrolplaneops.simplyblock.io,admissionReviewVersions=v1
 
 // ControlPlaneOpsValidator refuses an operation whose target cannot be operated
 // on, and one whose action is missing the block that parameterizes it.
@@ -45,11 +45,80 @@ type ControlPlaneOpsValidator struct {
 	Client client.Client
 }
 
+// undeletableControlPlaneSteps are the steps from which a running operation's record may not
+// be withdrawn, and what it is in the middle of.
+//
+// Each has already changed something that nothing else would finish. Restarting
+// and Applying have rolled a Deployment or written a new image onto the entity,
+// and Awaiting and Verifying are watching that rollout back. Deleting the record
+// there releases the control plane's lock while the rollout is still moving, so
+// the next operation starts against a half-applied one.
+//
+// It is the same guard StorageBackupOps carries, and the stronger of the two the
+// operation has: the finalizer alone does not catch a --force --grace-period=0.
+var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]string{
+	simplyblockv1alpha2.ControlPlaneOpsStepRestarting: "the workloads are being recycled",
+	simplyblockv1alpha2.ControlPlaneOpsStepApplying:   "the new image is being written onto the control plane",
+	simplyblockv1alpha2.ControlPlaneOpsStepAwaiting:   "the recycled workloads are still coming back",
+	simplyblockv1alpha2.ControlPlaneOpsStepVerifying:  "the rollout is being checked against the version it asked for",
+}
+
 func (v *ControlPlaneOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
-	if req.Operation != admissionv1.Create {
+	switch req.Operation {
+	case admissionv1.Create:
+		return v.admitCreate(ctx, req)
+	case admissionv1.Delete:
+		return v.admitDelete(req)
+	default:
+		return admission.Allowed("")
+	}
+}
+
+// admitDelete refuses to withdraw the record of an operation that is part-way
+// through a rollout.
+//
+// The object is read from req.OldObject, which is what the API server sends on a
+// DELETE: there is no new object, and the step the operation is on is in the
+// status of the one being removed.
+func (v *ControlPlaneOpsValidator) admitDelete(req admission.Request) admission.Response {
+	if len(req.OldObject.Raw) == 0 {
+		// Nothing to read means nothing to refuse on. Admitting is the only
+		// answer that does not block a delete on the basis of no information.
 		return admission.Allowed("")
 	}
 
+	var ops simplyblockv1alpha2.ControlPlaneOps
+	if err := json.Unmarshal(req.OldObject.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// A terminal operation is a record of work that has finished, and
+	// withdrawing it stops nothing.
+	switch ops.Status.Phase {
+	case simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded,
+		simplyblockv1alpha2.ControlPlaneOpsPhaseFailed,
+		simplyblockv1alpha2.ControlPlaneOpsPhaseAborted:
+		return admission.Allowed("the operation is terminal")
+	}
+
+	step := simplyblockv1alpha2.ControlPlaneOpsStep(ops.Status.Step.State)
+	doing, undeletable := undeletableControlPlaneSteps[step]
+	if !undeletable {
+		return admission.Allowed("")
+	}
+
+	return admission.Denied(fmt.Sprintf(
+		"ControlPlaneOps %s/%s is at step %s, where %s. Deleting the record would not stop that "+
+			"work, it would release the control plane's lock while it is still moving and let the "+
+			"next operation start against a half-applied one. Wait for it to finish, then delete "+
+			"the record.",
+		ops.Namespace, ops.Name, step, doing))
+}
+
+// admitCreate resolves the target and checks the action's parameters.
+func (v *ControlPlaneOpsValidator) admitCreate(
+	ctx context.Context, req admission.Request,
+) admission.Response {
 	var ops simplyblockv1alpha2.ControlPlaneOps
 	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)

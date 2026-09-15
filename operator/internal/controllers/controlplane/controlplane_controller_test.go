@@ -13,7 +13,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -51,6 +53,83 @@ func TestAControlPlaneThatIsNotTheSingletonIsIgnored(t *testing.T) {
 	}
 	if len(after.Finalizers) != 0 {
 		t.Errorf("finalizers = %v, want none on an object the controller ignores", after.Finalizers)
+	}
+}
+
+// A ControlPlane is one per Kubernetes cluster, not one per namespace. Two of
+// them reconciling at once apply the same fixed-name cluster-scoped RBAC under
+// the same managed-by label, so each overwrites the other's and either one's
+// deletion takes away what the other needs.
+//
+// The older object holds the deployment, and the younger reports that it does
+// not. That is the rule SimplyblockDriver uses for the same reason, and the two
+// have to agree about which object is the second.
+func TestASecondControlPlaneInAnotherNamespaceDoesNotInstall(t *testing.T) {
+	ctx := context.Background()
+
+	holder := managedControlPlane()
+	holder.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+
+	second := managedControlPlane()
+	second.Namespace = "simplyblock-second"
+	second.CreationTimestamp = metav1.NewTime(time.Now())
+
+	c := newClient(t, holder, second)
+	recorder := &recordingRecorder{}
+	r := &ControlPlaneReconciler{
+		Client: c, Scheme: testScheme(t), Recorder: recorder,
+		Prober: &stubProber{ready: true},
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(second),
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var deployments appsv1.DeploymentList
+	if err := c.List(ctx, &deployments, client.InNamespace(second.Namespace)); err != nil {
+		t.Fatalf("list the second namespace: %v", err)
+	}
+	if len(deployments.Items) != 0 {
+		t.Errorf("the second control plane installed %d workloads, and the first holds the "+
+			"cluster-scoped objects they would overwrite", len(deployments.Items))
+	}
+
+	var after simplyblockv1alpha2.ControlPlane
+	if err := c.Get(ctx, client.ObjectKeyFromObject(second), &after); err != nil {
+		t.Fatalf("read the second control plane back: %v", err)
+	}
+	if !strings.Contains(after.Status.Message, holder.Namespace) {
+		t.Errorf("status.message = %q, want it to name the namespace that holds the "+
+			"deployment", after.Status.Message)
+	}
+	if recorder.count(DuplicateControlPlane) == 0 {
+		t.Error("no DuplicateControlPlane event: nothing says why this object does nothing")
+	}
+}
+
+// The holder itself still installs. A rule that refused both would take a
+// working deployment down on the first reconcile after somebody added a second
+// object by mistake.
+func TestTheOlderControlPlaneStillHoldsTheDeployment(t *testing.T) {
+	holder := managedControlPlane()
+	holder.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+
+	second := managedControlPlane()
+	second.Namespace = "simplyblock-second"
+	second.CreationTimestamp = metav1.NewTime(time.Now())
+
+	c := newClient(t, holder, second)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	key, err := r.deploymentHolder(context.Background())
+	if err != nil {
+		t.Fatalf("deploymentHolder: %v", err)
+	}
+	if key.Namespace != holder.Namespace {
+		t.Errorf("the holder is %s/%s, want the older object in %s",
+			key.Namespace, key.Name, holder.Namespace)
 	}
 }
 
@@ -97,6 +176,65 @@ func TestAnExternalControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
 	if after.Status.LastChecked == nil {
 		t.Error("status.lastChecked is unset after a probe ran")
 	}
+}
+
+// An external control plane may name no credentials Secret, and that is the
+// shape the chart writes when it installs the control plane itself: the endpoint
+// is a ClusterIP Service in the same namespace, the readiness probe there is
+// unauthenticated, and there is no static token to point at.
+//
+// It is the field that lets the chart hand the install back. Without it the CR
+// would have to claim a managed source whichever side installed, and the
+// operator would apply the workloads the chart had just rendered.
+func TestAnExternalControlPlaneMayNameNoCredentials(t *testing.T) {
+	ctx := context.Background()
+	const endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
+
+	cp := externalControlPlane(endpoint)
+	cp.Spec.Source.External.CredentialsSecretRef = nil
+
+	c := newClient(t, cp)
+	prober := &stubProber{ready: true}
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Prober: prober}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(cp),
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var after simplyblockv1alpha2.ControlPlane
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cp), &after); err != nil {
+		t.Fatalf("read the object back: %v", err)
+	}
+	if after.Status.Phase != simplyblockv1alpha2.ControlPlanePhaseAvailable {
+		t.Errorf("status.phase = %s (%q), want Available", after.Status.Phase, after.Status.Message)
+	}
+	if after.Status.Endpoint != endpoint {
+		t.Errorf("status.endpoint = %q, want %q", after.Status.Endpoint, endpoint)
+	}
+	if prober.readyCalls == 0 {
+		t.Error("the endpoint was never probed")
+	}
+}
+
+// A credentials Secret that is named and absent is still an error. Naming one is
+// a statement that the control plane needs it, so falling back to an
+// unauthenticated probe would turn a misconfiguration into a silent downgrade.
+func TestANamedButMissingCredentialsSecretIsStillAnError(t *testing.T) {
+	cp := externalControlPlane("https://sb-control.example.com:5000")
+	c := newClient(t, cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	_, err := resolveExternal(context.Background(), c, cp)
+	if err == nil {
+		t.Fatal("a named Secret that does not exist was accepted")
+	}
+	var credentials *credentialsError
+	if !errorsAs(err, &credentials) {
+		t.Errorf("err = %v, want a credentials error so the event names the right cause", err)
+	}
+	_ = r
 }
 
 // A credentials Secret that does not exist is a different problem from an

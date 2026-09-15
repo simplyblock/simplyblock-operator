@@ -12,6 +12,8 @@
 // written, because a conversion webhook is the wrong place to reject an object:
 // each version's Enum marker already refuses what that version does not accept,
 // and a conversion that errors makes the object unreadable rather than invalid.
+// Every value either Enum declares is in a table, so the pass-through covers only
+// a hand-edited object or one written by a version that has not shipped.
 
 package v1alpha1
 
@@ -21,19 +23,39 @@ import (
 	"github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// controlPlanePhaseToHub maps this version's readiness phases onto the hub's.
-// Only the renamed value appears; anything absent is passed through.
+// controlPlanePhaseToHub maps this version's two readiness phases onto the hub's.
+// Both are mapped: neither v1alpha1 spelling is a value v1alpha2's Enum admits,
+// so passing one through unchanged produces an object the API server rejects on
+// write and the new controller cannot interpret.
 var controlPlanePhaseToHub = map[string]string{
-	"Ready": "Available",
+	"Initializing": "Installing",
+	"Ready":        "Available",
 }
 
-// controlPlanePhaseFromHub is the inverse of controlPlanePhaseToHub, built from
-// it so the two cannot drift into disagreeing about a value.
-var controlPlanePhaseFromHub = invertStringMap(controlPlanePhaseToHub)
+// controlPlanePhaseFromHub maps the hub's four phases onto this version's two.
+//
+// It is written out rather than derived by inverting the table above, because
+// the hub says more than this version can hold and the mapping is therefore not
+// one to one. Degraded and Unavailable have no v1alpha1 spelling, and each lands
+// on the value that tells a v1alpha1 reader the same thing: a Degraded control
+// plane answers requests, so it reads as Ready, and an Unavailable one does not,
+// so it reads as Initializing.
+//
+// That makes hub to spoke to hub lossy for those two, which is the direction
+// this version cannot help. Spoke to hub to spoke is lossless, and that is the
+// trip the API server performs on every read of a stored v1alpha1 object.
+var controlPlanePhaseFromHub = map[string]string{
+	"Installing":  "Initializing",
+	"Available":   "Ready",
+	"Degraded":    "Ready",
+	"Unavailable": "Initializing",
+}
 
-// invertStringMap returns m with its keys and values exchanged. It is used to
-// derive a conversion's downward value table from its upward one, so that adding
-// a renamed value means editing one map rather than remembering to edit two.
+// invertStringMap returns m with its keys and values exchanged. It derives a
+// conversion's downward value table from its upward one, so that a renamed value
+// means editing one map rather than remembering to edit two. It suits a rename
+// and not this file's phases, where the hub holds more values than the spoke and
+// the two directions are therefore written out separately.
 func invertStringMap(m map[string]string) map[string]string {
 	inverted := make(map[string]string, len(m))
 	for from, to := range m {

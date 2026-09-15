@@ -39,7 +39,7 @@ func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 	managed := &simplyblockv1alpha2.ManagedControlPlane{Image: testImage}
 	external := &simplyblockv1alpha2.ExternalControlPlane{
 		Endpoint:             "https://sb-control.example.com:5000",
-		CredentialsSecretRef: corev1.LocalObjectReference{Name: "cp-token"},
+		CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 	}
 
 	for _, tc := range []struct {
@@ -113,7 +113,7 @@ func TestControlPlaneCELRefusesToChangeTheSource(t *testing.T) {
 	cp.Spec.Source = simplyblockv1alpha2.ControlPlaneSource{
 		External: &simplyblockv1alpha2.ExternalControlPlane{
 			Endpoint:             "https://sb-control.example.com:5000",
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: "cp-token"},
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 		},
 	}
 	err := apiClient.Update(ctx, cp)
@@ -163,4 +163,84 @@ func freshNamespace(t *testing.T, apiClient client.Client) string {
 		t.Fatalf("create a namespace: %v", err)
 	}
 	return ns.Name
+}
+
+// The operation's parameters are frozen once it is admitted, so the status stays
+// an audit of the request that ran. They are consumed several steps apart:
+// Preflight reads the image and Applying writes it, so an edit in between
+// produces an operation that checked one thing and did another.
+func TestControlPlaneOpsCELFreezesTheParametersAfterAdmission(t *testing.T) {
+	ctx := context.Background()
+	apiClient := apiServer(t)
+	namespace := freshNamespace(t, apiClient)
+
+	ops := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "an-upgrade", Namespace: namespace},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: SingletonName,
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionUpgrade,
+			Upgrade: &simplyblockv1alpha2.UpgradeSpec{
+				Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
+			},
+		},
+	}
+	if err := apiClient.Create(ctx, ops); err != nil {
+		t.Fatalf("create the operation: %v", err)
+	}
+
+	t.Run("the image cannot be swapped", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.Upgrade.Image = "quay.io/simplyblock-io/simplyblock:26.9.9"
+		if err := apiClient.Update(ctx, edited); err == nil {
+			t.Error("the image was changed after admission, so Preflight checked one " +
+				"version and Applying would write another")
+		}
+	})
+
+	t.Run("the block cannot be cleared", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.Upgrade = nil
+		if err := apiClient.Update(ctx, edited); err == nil {
+			t.Error("spec.upgrade was cleared after admission, which is what Applying " +
+				"would then dereference")
+		}
+	})
+
+	t.Run("abort stays settable", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.Abort = true
+		if err := apiClient.Update(ctx, edited); err != nil {
+			t.Errorf("spec.abort could not be set, and it is the one field meant to be "+
+				"changed after the operation started: %v", err)
+		}
+	})
+}
+
+// A restart's scope is frozen for the same reason: the drain is decided from the
+// component list, so widening it after Draining skips a drain the wider list
+// would have required.
+func TestControlPlaneOpsCELFreezesTheRestartScope(t *testing.T) {
+	ctx := context.Background()
+	apiClient := apiServer(t)
+	namespace := freshNamespace(t, apiClient)
+
+	ops := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "a-restart", Namespace: namespace},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: SingletonName,
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionRestart,
+			Restart: &simplyblockv1alpha2.RestartSpec{
+				Components: []string{ComponentTasks},
+			},
+		},
+	}
+	if err := apiClient.Create(ctx, ops); err != nil {
+		t.Fatalf("create the operation: %v", err)
+	}
+
+	ops.Spec.Restart.Components = []string{ComponentTasks, ComponentWebAPI}
+	if err := apiClient.Update(ctx, ops); err == nil {
+		t.Error("an essential component was added to the scope after admission, which " +
+			"would recycle the management API without the drain that scope requires")
+	}
 }

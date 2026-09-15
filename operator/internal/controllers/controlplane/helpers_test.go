@@ -76,7 +76,7 @@ func externalControlPlane(endpoint string) *simplyblockv1alpha2.ControlPlane {
 			Source: simplyblockv1alpha2.ControlPlaneSource{
 				External: &simplyblockv1alpha2.ExternalControlPlane{
 					Endpoint:             endpoint,
-					CredentialsSecretRef: corev1.LocalObjectReference{Name: "cp-token"},
+					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 				},
 			},
 		},

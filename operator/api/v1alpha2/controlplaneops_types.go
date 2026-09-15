@@ -136,6 +136,23 @@ type BackupSpec struct {
 }
 
 // ControlPlaneOpsSpec is one operation to perform against the control plane.
+//
+// Everything except spec.abort is frozen once the object is admitted, which is
+// what makes the status an audit of the request that ran rather than of whatever
+// the object says now. The parameters are consumed several steps apart —
+// Preflight reads spec.upgrade.image and Applying writes it, Draining reads
+// spec.restart.components and Restarting recycles them — so an edit in between
+// produces an operation that checked one thing and did another.
+//
+// The rules are declared here rather than as +k8s:immutable on each field for
+// two reasons. That marker emits a second, parent-level rule for an optional
+// field, so three of them would put four rules on this type in an order
+// controller-gen does not fix. And it freezes a block whole, where what has to
+// be frozen is the block's presence and its contents together, which is what
+// these say.
+// +kubebuilder:validation:XValidation:rule="has(self.upgrade) == has(oldSelf.upgrade) && (!has(self.upgrade) || self.upgrade == oldSelf.upgrade)",message="spec.upgrade is immutable: Preflight checked the image the operation was admitted with, and Applying writes it several steps later"
+// +kubebuilder:validation:XValidation:rule="has(self.restart) == has(oldSelf.restart) && (!has(self.restart) || self.restart == oldSelf.restart)",message="spec.restart is immutable: the drain is decided from the component list, so widening it afterward skips a drain the wider list would have required"
+// +kubebuilder:validation:XValidation:rule="has(self.backup) == has(oldSelf.backup) && (!has(self.backup) || self.backup == oldSelf.backup)",message="spec.backup is immutable: the destination is what Requesting created the FoundationDBBackup against"
 type ControlPlaneOpsSpec struct {
 	// ControlPlaneRef names the ControlPlane this operation acts on, in this
 	// object's own namespace. The operation never owns its target, because
@@ -151,9 +168,11 @@ type ControlPlaneOpsSpec struct {
 	// +k8s:immutable
 	Action ControlPlaneOpsAction `json:"action"`
 
-	// Abort asks a running operation to stop at its next step and unwind.
-	// Whether an abort is expressible from the current step is declared by that
-	// action's graph rather than checked here.
+	// Abort asks a running operation to stop at its next step and unwind. It is
+	// the one field of this spec an update may change, because it is the one that
+	// is meant to be set after the operation started. Whether an abort is
+	// expressible from the current step is declared by that action's graph rather
+	// than checked here.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 

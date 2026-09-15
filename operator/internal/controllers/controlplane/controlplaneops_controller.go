@@ -409,9 +409,9 @@ func (r *ControlPlaneOpsReconciler) restart(
 ) (bool, string, error) {
 	scope := restartScope(ops)
 	for _, name := range scope {
-		if !knownComponent(name) {
+		if !restartable(name) {
 			return false, "", &terminalStepError{message: fmt.Sprintf(
-				"%q is not a component of this control plane", name)}
+				"%q is not a workload this control plane can recycle", name)}
 		}
 	}
 
@@ -480,6 +480,15 @@ func (r *ControlPlaneOpsReconciler) applyUpgrade(
 	ops *simplyblockv1alpha2.ControlPlaneOps,
 	target *simplyblockv1alpha2.ControlPlane,
 ) (bool, string, error) {
+	// Preflight read this block, and the CEL rule on the spec freezes it after
+	// admission, so reaching here without one means an object written before that
+	// rule shipped. It is a terminal failure rather than a panic.
+	if ops.Spec.Upgrade == nil || ops.Spec.Upgrade.Image == "" {
+		return false, "", &terminalStepError{
+			message: "spec.upgrade.image is gone, so there is no version to move to",
+		}
+	}
+
 	base := target.DeepCopy()
 	target.Spec.Source.Managed.Image = ops.Spec.Upgrade.Image
 	if err := r.Patch(ctx, target, client.MergeFrom(base)); err != nil {
@@ -552,6 +561,11 @@ func (r *ControlPlaneOpsReconciler) verify(
 		return true, "", r.note(ctx, ops,
 			"the rollout finished; the version was not verified because the control plane "+
 				"does not serve a version endpoint")
+	}
+	if ops.Spec.Upgrade == nil {
+		return false, "", &terminalStepError{
+			message: "spec.upgrade.image is gone, so there is nothing to verify the rollout against",
+		}
 	}
 	if !imageStates(ops.Spec.Upgrade.Image, reported) {
 		r.emit(ops, corev1.EventTypeWarning, VersionMismatch, fmt.Sprintf(

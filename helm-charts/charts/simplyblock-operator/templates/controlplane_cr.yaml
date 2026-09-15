@@ -26,6 +26,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   source:
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
+    # The chart rendered the workloads, so from the operator's side this is a
+    # control plane that already exists: it resolves the endpoint, probes it, and
+    # reports, and it applies nothing.
+    #
+    # Naming a managed source here instead would make the operator install the
+    # same objects the templates beside this one just rendered, so both would own
+    # them — which is the outcome controlplane.managedByOperator exists to avoid.
+    external:
+      endpoint: "http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000"
+{{- else }}
     managed:
       image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
       imagePullPolicy: "{{ .Values.image.simplyblock.pullPolicy }}"
@@ -56,4 +67,5 @@ spec:
         {{- end }}
       {{- end }}
       {{- end }}
+{{- end }}
 {{- end }}

@@ -272,10 +272,15 @@ func essentialComponents() map[string]bool {
 	return out
 }
 
-// knownComponent reports whether a name is one this table has, which is what a
-// Restart naming a workload that does not exist is refused on.
-func knownComponent(name string) bool {
-	for _, comp := range componentTable {
+// restartable reports whether a Restart may name this component.
+//
+// It is deliberately narrower than membership of the table. The FoundationDB
+// cluster is a component of the control plane and is not rolled by writing an
+// annotation into a pod template, so an operation scoped to it would recycle
+// nothing, find a healthy database on the wait that follows, and report success
+// having done nothing. Refusing the name is the only answer that does not lie.
+func restartable(name string) bool {
+	for _, comp := range restartableComponents() {
 		if comp.name == name {
 			return true
 		}

@@ -474,6 +474,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Where the control plane is, read from the ControlPlane object rather than
+	// from the environment (design-controlplane.md §3.3). Every control-plane
+	// client below shares it, so an external control plane is reachable and a
+	// change to its endpoint reaches every caller without a rollout.
+	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
+		mgr.GetClient(), operatorNamespace)
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -494,7 +501,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -635,7 +642,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenode-controller"),
-		API:      nodecontroller.NewControlPlane(),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
 		Nodes:    nodeSubscription,
 		Registries: []nodecontroller.NodeObjectRegistry{
 			deviceSubscription, nodeSubscription,
@@ -651,7 +658,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
-		API:      nodecontroller.NewControlPlane(),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
 		Nodes:    nodeSubscription,
 		Clusters: clusterSubscription,
 		Workload: storageNodeWorkload,
@@ -714,7 +721,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,

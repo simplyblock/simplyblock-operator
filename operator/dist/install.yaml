@@ -1289,6 +1289,12 @@ spec:
                           CredentialsSecretRef names a Secret in this namespace holding the bearer
                           token the operator authenticates with. It is a reference rather than a
                           field because a token in a spec is a token in every `kubectl get -o yaml`.
+
+                          Absent means the endpoint is reached without one, which is the in-cluster
+                          case: a control plane the Helm chart installed answers on a ClusterIP
+                          Service in this namespace and does not require a token for the readiness
+                          read. Naming a Secret that does not exist stays an error, because naming
+                          one is a statement that the control plane needs it.
                         properties:
                           name:
                             default: ""
@@ -1309,7 +1315,6 @@ spec:
                         pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                         type: string
                     required:
-                    - credentialsSecretRef
                     - endpoint
                     type: object
                   managed:
@@ -10445,6 +10450,7 @@ webhooks:
     - v1alpha2
     operations:
     - CREATE
+    - DELETE
     resources:
     - controlplaneops
   sideEffects: None

@@ -99,7 +99,7 @@ func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
 			Source: v1alpha2.ControlPlaneSource{
 				External: &v1alpha2.ExternalControlPlane{
 					Endpoint:             "https://sb-control.example.com:5000",
-					CredentialsSecretRef: corev1.LocalObjectReference{Name: "cp-token"},
+					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 				},
 			},
 		},
