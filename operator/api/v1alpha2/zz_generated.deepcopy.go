@@ -564,6 +564,11 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.EnableControlPlaneNodes != nil {
+		in, out := &in.EnableControlPlaneNodes, &out.EnableControlPlaneNodes
+		*out = new(bool)
+		**out = **in
+	}
 	if in.DeviceFilter != nil {
 		in, out := &in.DeviceFilter, &out.DeviceFilter
 		*out = new(DeviceFilter)

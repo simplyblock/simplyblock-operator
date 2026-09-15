@@ -1450,6 +1450,24 @@ spec:
                         devices and require enableLogicalBlockDevices
                       rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
                         || !(has(self.blockAllowList) || has(self.blockDenyList))
+                  enableControlPlaneNodes:
+                    description: |-
+                      EnableControlPlaneNodes lets the run consider machines that run the API
+                      server and etcd.
+
+                      It is off by default because a storage node is a data path, and putting one
+                      on an etcd host is a placement almost nobody intends. The approval gate is a
+                      poor place to catch it: a fifty-worker draft is not a document anybody reads
+                      closely enough to spot three control-plane nodes in it. A combined three-node
+                      or single-node deployment is the case that wants it, and those are set up
+                      deliberately.
+
+                      There is no field beside it for infrastructure nodes, because those are used
+                      without asking: an OpenShift infra node is the tier a cluster's own
+                      infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+                      with disks in its infra nodes meant those disks to be the storage, so a draft
+                      proposes them ahead of the workers rather than leaving them out.
+                    type: boolean
                   nodeSelector:
                     additionalProperties:
                       type: string

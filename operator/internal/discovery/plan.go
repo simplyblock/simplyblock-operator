@@ -44,7 +44,8 @@ type Planner struct {
 	// Grouper puts the workers into groups. Nil is GroupByHardware.
 	Grouper Grouper
 
-	// NodeSetBuilder organizes the groups. Nil is SingleNodeSet.
+	// NodeSetBuilder organizes the groups. Nil is SplitByRole, which puts the
+	// infrastructure tier in a node set of its own and ahead of the workers.
 	NodeSetBuilder NodeSetBuilder
 
 	// KubeNodes is what Kubernetes says about each worker, keyed by name, from
@@ -171,7 +172,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 	}
 	builder := p.NodeSetBuilder
 	if builder == nil {
-		builder = SingleNodeSet{}
+		builder = SplitByRole{}
 	}
 
 	plan := Plan{Class: class}
