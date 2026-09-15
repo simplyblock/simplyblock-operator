@@ -1,4 +1,5 @@
 {{- if .Values.operator.enabled }}
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -21,6 +22,7 @@ subjects:
     name: default
     namespace: {{ .Release.Namespace }}
 
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

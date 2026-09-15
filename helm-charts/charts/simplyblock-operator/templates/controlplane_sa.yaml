@@ -1,4 +1,4 @@
-{{- if .Values.operator.enabled }}
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

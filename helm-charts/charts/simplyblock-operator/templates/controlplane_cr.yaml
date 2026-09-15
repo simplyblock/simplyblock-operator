@@ -12,6 +12,13 @@
 # (design-controlplane.md §5.1). A v1alpha1 spec.image here would be pruned
 # rather than converted, because the apiVersion above declares which schema the
 # body is read against.
+#
+# The sizing and scheduling below are carried across from the values the chart's
+# own templates read, so that a deployment switching to the operator's install
+# gets the control plane it already configured rather than the defaults. The
+# object is written whichever side installs: with controlplane.managedByOperator
+# false the operator reads its phase and probes its endpoint and applies nothing,
+# which is what it did before the install moved.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
@@ -19,6 +26,46 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   source:
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
+    # The chart rendered the workloads, so from the operator's side this is a
+    # control plane that already exists: it resolves the endpoint, probes it, and
+    # reports, and it applies nothing.
+    #
+    # Naming a managed source here instead would make the operator install the
+    # same objects the templates beside this one just rendered, so both would own
+    # them — which is the outcome controlplane.managedByOperator exists to avoid.
+    external:
+      endpoint: "http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000"
+{{- else }}
     managed:
       image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
+      imagePullPolicy: "{{ .Values.image.simplyblock.pullPolicy }}"
+      foundationDB:
+        # The chart states the redundancy mode and the operator states the
+        # coordinator count, and the two have to agree: triple redundancy needs
+        # five coordinators and double needs three.
+        replicas: {{ if eq (.Values.controlplane.foundationdb.redundancyMode | default "double") "triple" }}5{{ else }}3{{ end }}
+        {{- if .Values.controlplane.storageclass.name }}
+        storageClassName: {{ .Values.controlplane.storageclass.name }}
+        {{- end }}
+      {{- if .Values.controlplane.nodeSelector.create }}
+      nodeSelector:
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
+      {{- end }}
+      {{- if .Values.controlplane.tolerations.create }}
+      tolerations:
+      {{- range .Values.controlplane.tolerations.list }}
+      - operator: {{ .operator | quote }}
+        {{- if .effect }}
+        effect: {{ .effect | quote }}
+        {{- end }}
+        {{- if .key }}
+        key: {{ .key | quote }}
+        {{- end }}
+        {{- if .value }}
+        value: {{ .value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+{{- end }}
 {{- end }}

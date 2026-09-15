@@ -1,4 +1,5 @@
 {{- if .Values.operator.enabled }}
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -10,6 +11,7 @@ data:
   LOG_LEVEL: {{ .Values.controlplane.observability.level }}
   LOG_DELETION_INTERVAL: {{ .Values.controlplane.observability.deletionInterval }}
 
+{{- end }}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1
@@ -166,6 +168,7 @@ data:
       {{- end }}
   {{- end }}
   
+{{- if include "simplyblock.chartInstallsControlPlane" . }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -183,6 +186,7 @@ data:
       access_key: {{ .Values.controlplane.observability.minio.accessKey }}
       secret_key: {{ .Values.controlplane.observability.minio.secretKey }}
       insecure: true
+{{- end }}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1

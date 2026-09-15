@@ -37,7 +37,7 @@ func TestControlPlaneConvertToRegroupsImage(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if dst.Spec.Source == nil || dst.Spec.Source.Managed == nil {
+	if dst.Spec.Source.Managed == nil {
 		t.Fatalf("spec.source.managed is absent, want the image regrouped under it")
 	}
 	if got := dst.Spec.Source.Managed.Image; got != testImage {
@@ -48,11 +48,12 @@ func TestControlPlaneConvertToRegroupsImage(t *testing.T) {
 	}
 }
 
-// An absent image must leave spec.source absent rather than allocating an empty
-// struct. A conversion that writes an empty parent hands the user a value they
-// did not set, which for the immutable groups elsewhere in this migration cannot
-// then be corrected.
-func TestControlPlaneConvertToLeavesSourceAbsentWhenImageEmpty(t *testing.T) {
+// Every v1alpha1 ControlPlane is one the chart installed, so an absent image
+// still converts into a managed source. The hub requires exactly one member of
+// spec.source, and an object arriving with neither is one the reconciler reads
+// as neither managed nor external and therefore refuses to act on — which for a
+// control plane that is plainly running is the wrong answer.
+func TestControlPlaneConvertToStillNamesManagedWhenImageEmpty(t *testing.T) {
 	src := &ControlPlane{Spec: ControlPlaneSpec{Image: ""}}
 
 	var dst v1alpha2.ControlPlane
@@ -60,8 +61,14 @@ func TestControlPlaneConvertToLeavesSourceAbsentWhenImageEmpty(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if dst.Spec.Source != nil {
-		t.Errorf("spec.source = %+v, want nil for an unset image", dst.Spec.Source)
+	if dst.Spec.Source.Managed == nil {
+		t.Fatalf("spec.source.managed is absent, want a managed source with an empty image")
+	}
+	if got := dst.Spec.Source.Managed.Image; got != "" {
+		t.Errorf("spec.source.managed.image = %q, want empty", got)
+	}
+	if dst.Spec.Source.External != nil {
+		t.Errorf("spec.source.external = %+v, want nil", dst.Spec.Source.External)
 	}
 }
 
@@ -72,7 +79,7 @@ func TestControlPlaneConvertToRenamesReadyPhase(t *testing.T) {
 		want string
 	}{
 		{"ready becomes available", "Ready", "Available"},
-		{"initializing is unchanged", "Initializing", "Initializing"},
+		{"initializing becomes installing", "Initializing", "Installing"},
 		{"empty is unchanged", "", ""},
 		{"an unrecognized value passes through", "Wedged", "Wedged"},
 	} {
@@ -83,7 +90,7 @@ func TestControlPlaneConvertToRenamesReadyPhase(t *testing.T) {
 			if err := src.ConvertTo(&dst); err != nil {
 				t.Fatalf("ConvertTo: %v", err)
 			}
-			if got := dst.Status.Phase; got != tc.want {
+			if got := string(dst.Status.Phase); got != tc.want {
 				t.Errorf("status.phase = %q, want %q", got, tc.want)
 			}
 		})
@@ -94,7 +101,7 @@ func TestControlPlaneConvertFromUngroupsImage(t *testing.T) {
 	src := &v1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
 		Spec: v1alpha2.ControlPlaneSpec{
-			Source: &v1alpha2.ControlPlaneSource{
+			Source: v1alpha2.ControlPlaneSource{
 				Managed: &v1alpha2.ManagedControlPlane{Image: testImage},
 			},
 		},
@@ -113,17 +120,71 @@ func TestControlPlaneConvertFromUngroupsImage(t *testing.T) {
 	}
 }
 
-func TestControlPlaneConvertFromRenamesAvailablePhase(t *testing.T) {
-	src := &v1alpha2.ControlPlane{
-		Status: v1alpha2.ControlPlaneStatus{Phase: "Available"},
+// Every hub phase has to land on a value this version's Enum admits, which is
+// Initializing or Ready. Degraded and Unavailable have no v1alpha1 spelling, so
+// they map onto the one that describes the same thing to a v1alpha1 reader:
+// Degraded answers requests, and Unavailable does not.
+func TestControlPlaneConvertFromMapsEveryHubPhase(t *testing.T) {
+	for _, tc := range []struct {
+		from v1alpha2.ControlPlanePhase
+		want string
+	}{
+		{"Available", "Ready"},
+		{"Degraded", "Ready"},
+		{"Installing", "Initializing"},
+		{"Unavailable", "Initializing"},
+		{"", ""},
+	} {
+		t.Run(string(tc.from), func(t *testing.T) {
+			src := &v1alpha2.ControlPlane{
+				Status: v1alpha2.ControlPlaneStatus{Phase: tc.from},
+			}
+
+			var dst ControlPlane
+			if err := dst.ConvertFrom(src); err != nil {
+				t.Fatalf("ConvertFrom: %v", err)
+			}
+			if got := dst.Status.Phase; got != tc.want {
+				t.Errorf("status.phase = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Both directions have to produce a value the target version's Enum admits. A
+// phase outside it is an object the API server rejects on write and the new
+// controller cannot interpret, which is how a migration stops on a control
+// plane that was merely starting up.
+func TestControlPlanePhasesStayInsideBothEnums(t *testing.T) {
+	hubPhases := map[string]bool{
+		"Installing": true, "Available": true, "Degraded": true, "Unavailable": true,
+	}
+	spokePhases := map[string]bool{"Initializing": true, "Ready": true}
+
+	for phase := range spokePhases {
+		var hub v1alpha2.ControlPlane
+		src := &ControlPlane{Status: ControlPlaneStatus{Phase: phase}}
+		if err := src.ConvertTo(&hub); err != nil {
+			t.Fatalf("ConvertTo: %v", err)
+		}
+		if !hubPhases[string(hub.Status.Phase)] {
+			t.Errorf("%q converts up to %q, which v1alpha2's Enum does not admit",
+				phase, hub.Status.Phase)
+		}
 	}
 
-	var dst ControlPlane
-	if err := dst.ConvertFrom(src); err != nil {
-		t.Fatalf("ConvertFrom: %v", err)
-	}
-	if got := dst.Status.Phase; got != "Ready" {
-		t.Errorf("status.phase = %q, want %q", got, "Ready")
+	for phase := range hubPhases {
+		var spoke ControlPlane
+		src := &v1alpha2.ControlPlane{
+			Status: v1alpha2.ControlPlaneStatus{Phase: v1alpha2.ControlPlanePhase(phase)},
+		}
+		if err := spoke.ConvertFrom(src); err != nil {
+			t.Fatalf("ConvertFrom: %v", err)
+		}
+		if !spokePhases[spoke.Status.Phase] {
+			t.Errorf("%q converts down to %q, which v1alpha1's Enum does not admit",
+				phase, spoke.Status.Phase)
+		}
 	}
 }
 
