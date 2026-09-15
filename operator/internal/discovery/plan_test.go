@@ -324,3 +324,75 @@ func TestPlanHonorsTheSeamsItWasGiven(t *testing.T) {
 			group.Devices.NVMe)
 	}
 }
+
+// A controller bound to a userspace driver with nothing using it is a disk this
+// fleet owns and nothing is driving, so the draft proposes it.
+//
+// The kernel presents no block device for it, which is why it cannot come
+// through the device reading: the whole of what is known about it is its PCI
+// address, and a PCI address is exactly what a NodeGroup names an NVMe device
+// by. Refusing it would be refusing the storage the machine has on the grounds
+// that the machine is not currently presenting it.
+func TestAnIdleUserspaceControllerIsPlannedOn(t *testing.T) {
+	worker := report("worker-1")
+	worker.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", NUMANode: 0},
+	}
+
+	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+
+	if len(plan.Workers) != 1 {
+		t.Fatalf("planned %d workers, want the one: %s", len(plan.Workers), plan.Summary())
+	}
+	named := map[string]bool{}
+	for _, set := range plan.NodeSets {
+		for _, group := range set.Groups {
+			for _, address := range group.Devices.NVMe {
+				named[address] = true
+			}
+		}
+	}
+	for _, want := range []string{"0000:00:02.0", "0000:00:03.0"} {
+		if !named[want] {
+			t.Errorf("the draft does not name %s: %+v", want, plan.NodeSets)
+		}
+	}
+}
+
+// A controller something is driving is not free, whoever is driving it, so it
+// stays out of the draft.
+func TestAHeldUserspaceControllerIsNotPlannedOn(t *testing.T) {
+	worker := report("worker-1")
+	worker.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0, InUse: true},
+	}
+
+	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+
+	if len(plan.Workers) != 0 {
+		t.Errorf("a worker whose only controller is in use was planned on: %s", plan.Summary())
+	}
+}
+
+// A kernel-bound controller already reaches the draft as a block device, and
+// counting it twice would propose the same disk under two names.
+func TestAKernelBoundControllerIsNotCountedTwice(t *testing.T) {
+	disk := disk("nvme0n1", "0000:00:02.0", 0, 3<<40)
+	worker := report("worker-1", disk)
+	worker.NVMeControllers = []nodeprobe.Controller{
+		{Address: "0000:00:02.0", Driver: "nvme", NUMANode: 0},
+	}
+
+	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+
+	var addresses []string
+	for _, set := range plan.NodeSets {
+		for _, group := range set.Groups {
+			addresses = append(addresses, group.Devices.NVMe...)
+		}
+	}
+	if len(addresses) != 1 {
+		t.Errorf("the draft names %v, want the one disk once", addresses)
+	}
+}

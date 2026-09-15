@@ -602,9 +602,9 @@ func TestDiscoverAddsItsFinalizerBeforeDoingAnything(t *testing.T) {
 // driver. The kernel presents no disk for such a controller, so the report
 // carries no device at all and the controllers say where the disks went.
 //
-// It is the state a machine is left in by a simplyblock deployment that has
-// since been removed, which makes it the state a second discovery run on a lab
-// finds rather than an exotic one.
+// Something is driving them, which is what puts the machine out of reach: a
+// binding nothing is using is a disk the draft claims, and only a held one is a
+// disk in service. Whatever holds it need not be this product.
 func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1.ConfigMap {
 	t.Helper()
 
@@ -625,6 +625,9 @@ func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1
 			Address:  address,
 			Driver:   "uio_pci_generic",
 			NUMANode: -1,
+			// Held rather than idle, which is what makes the machine unusable:
+			// an idle binding is a disk the draft now claims.
+			InUse: true,
 		})
 	}
 

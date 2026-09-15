@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -108,11 +109,24 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 		},
 		Spec: simplyblockv1alpha2.OperatorOpsSpec{
 			Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
-			// The run states no filter and no selector. What it produces is a
-			// draft of everything the fleet has, which is what a reviewer
-			// narrows: a guess at which disks somebody meant would be a guess
-			// they then have to find and undo (§8.1).
-			Discover: &simplyblockv1alpha2.DiscoverSpec{},
+			// The run states no selector. What it produces is a draft of
+			// everything the fleet has, which is what a reviewer narrows: a
+			// guess at which disks somebody meant would be a guess they then
+			// have to find and undo (§8.1).
+			//
+			// The one thing it does state is that a partition table is not by
+			// itself a reason to leave a disk out. A machine that has held data
+			// before carries one on every disk, so refusing them makes the run
+			// meant to show a fleet what it has report that it has nothing. The
+			// waiver stays narrow on its own terms: it admits a disk whose only
+			// refusal is the table, and a disk that is also mounted, held by
+			// the kernel, or carrying swap is refused for those instead — which
+			// is what keeps a boot disk out of a draft nobody reads closely.
+			Discover: &simplyblockv1alpha2.DiscoverSpec{
+				DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
+					EnablePartitionedDevices: ptr.To(true),
+				},
+			},
 		},
 	}
 	if err := d.Create(ctx, run); err != nil {

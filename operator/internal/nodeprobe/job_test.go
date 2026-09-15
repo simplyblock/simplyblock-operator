@@ -359,3 +359,52 @@ func TestJobNameFitsWhereKubernetesPutsIt(t *testing.T) {
 		}
 	}
 }
+
+// The probe is pulled on every run unless a caller says otherwise.
+//
+// The probe and the operator ship in one image, and an operator deployed from a
+// moving tag is replaced by a pull while its probes are not: a node holding the
+// previous layer keeps running the previous probe. The report carries a version
+// for exactly this skew, so the operator then refuses those reports and the run
+// waits on machines that will never answer — an upgrade that silently produces
+// a stalled discovery rather than a wrong one.
+//
+// The cost is a registry round-trip per worker per run, against a Job that runs
+// once per discovery and lives for seconds.
+func TestTheProbeIsPulledForEveryRun(t *testing.T) {
+	job, err := Job(JobOptions{
+		Namespace:          "simplyblock",
+		Run:                "run-1",
+		Node:               "worker-1",
+		Image:              "example.test/simplyblock-operator:develop",
+		ServiceAccountName: "sb-nodeprobe",
+	})
+	if err != nil {
+		t.Fatalf("build the Job: %v", err)
+	}
+
+	container := job.Spec.Template.Spec.Containers[0]
+	if container.ImagePullPolicy != corev1.PullAlways {
+		t.Errorf("the probe pull policy is %q, want Always", container.ImagePullPolicy)
+	}
+}
+
+// A caller that states one keeps it, which is what an air-gapped fleet or a
+// pinned digest needs.
+func TestAStatedPullPolicyIsKept(t *testing.T) {
+	job, err := Job(JobOptions{
+		Namespace:          "simplyblock",
+		Run:                "run-1",
+		Node:               "worker-1",
+		Image:              "example.test/simplyblock-operator:develop",
+		ServiceAccountName: "sb-nodeprobe",
+		ImagePullPolicy:    corev1.PullIfNotPresent,
+	})
+	if err != nil {
+		t.Fatalf("build the Job: %v", err)
+	}
+
+	if got := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
+		t.Errorf("the stated pull policy became %q", got)
+	}
+}
