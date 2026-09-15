@@ -282,9 +282,22 @@ func fieldRefEnv(name, path string) corev1.EnvVar {
 	}
 }
 
+// pullPolicyOr defaults the probe to being pulled on every run.
+//
+// The probe and the operator ship in one image, so an operator deployed from a
+// moving tag is replaced by a pull while its probes are not: a node still
+// holding the previous layer keeps running the previous probe. The report
+// carries a version for exactly that skew, so the operator refuses those reports
+// and the run waits on machines that will never answer — an upgrade that
+// produces a stalled discovery rather than a wrong one, which is harder to read
+// than either.
+//
+// The cost is a registry round-trip per worker per run, against a Job that runs
+// once per discovery and lives for seconds. A fleet that cannot pay it, because
+// it is air-gapped or already pins a digest, states its own policy.
 func pullPolicyOr(policy corev1.PullPolicy) corev1.PullPolicy {
 	if policy == "" {
-		return corev1.PullIfNotPresent
+		return corev1.PullAlways
 	}
 	return policy
 }

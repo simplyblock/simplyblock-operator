@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/simplyblock/atlas/blockdev"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -174,6 +175,64 @@ func (p Plan) RefusalLines() []string {
 	return lines
 }
 
+// claimableControllers is a device for every NVMe controller the machine owns,
+// nothing is driving, and the kernel presents no disk for.
+//
+// A controller on a userspace driver has no block device, so it cannot reach a
+// draft through the device reading at all: everything known about it is its PCI
+// address. That is not a gap, because a PCI address is precisely how a NodeGroup
+// names an NVMe device — the draft that would be written from a block device and
+// the draft written from the controller name the same string. Leaving them out
+// refused a machine's storage on the grounds that the machine was not currently
+// presenting it, which on a fleet that has run this product before is every
+// machine.
+//
+// Only what nothing is using is offered. A held controller is a disk in service,
+// and whatever is driving it need not be this product: the same binding is how a
+// disk is passed through to a guest.
+//
+// What is lost with the block device is everything the disk would have said
+// about itself — its size, its partition table, whether it looks blank. A
+// controller therefore reaches the draft unsized and uninspected, and approving
+// it is approving a disk nobody read. That is the trade the draft makes visible
+// rather than one it hides: the group it lands in is named for the count and not
+// a capacity, so a reviewer sees which machines are being taken on trust.
+func claimableControllers(report nodeprobe.Report, class DeviceClass) []nodeprobe.Device {
+	if class != ClassNVMe {
+		// The other class names devices by path, and a controller with no block
+		// device has none to name.
+		return nil
+	}
+
+	presented := map[string]struct{}{}
+	for _, device := range report.Devices {
+		if device.PCIAddress != "" {
+			presented[device.PCIAddress] = struct{}{}
+		}
+	}
+
+	var out []nodeprobe.Device
+	for _, controller := range report.NVMeControllers {
+		if !controller.BoundToUserspace() || controller.InUse {
+			continue
+		}
+		if _, already := presented[controller.Address]; already {
+			// The kernel is presenting it after all, so the device reading has
+			// it and naming it twice would propose one disk under two entries.
+			continue
+		}
+		out = append(out, nodeprobe.Device{
+			Name:       controller.Address,
+			PCIAddress: controller.Address,
+			Kind:       string(blockdev.KindDisk),
+			Transport:  string(blockdev.TransportNVMe),
+			NUMANode:   controller.NUMANode,
+			Available:  true,
+		})
+	}
+	return out
+}
+
 // BasicDeviceRules is the default device pipeline for a class and a filter.
 //
 // The order is deliberate and is the order a reader wants the refusal in: what
@@ -259,6 +318,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
 
 	for _, report := range ordered {
+		report.Devices = append(report.Devices, claimableControllers(report, class)...)
+
 		admitted, refusals := admitDevices(report, deviceRules)
 		plan.Refusals = append(plan.Refusals, refusals...)
 
