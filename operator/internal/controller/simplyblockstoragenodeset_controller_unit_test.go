@@ -724,10 +724,10 @@ func TestStorageNodeSetReconcileWithClusterUUIDProceeds(t *testing.T) {
 	// With SA-token auth, the cluster secret is no longer required.
 	// Reconcile should proceed (not requeue waiting for a secret) when
 	// the cluster UUID is available.
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-no-secret"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "cluster-uuid-no-secret"},
 	}
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -766,10 +766,10 @@ func TestStorageNodeSetReconcileDeletionFlow(t *testing.T) {
 	const clusterUUID = "cluster-uuid-del"
 	now := metav1.NewTime(time.Now())
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -807,10 +807,10 @@ func TestStorageNodeSetReconcileAddsFinalizer(t *testing.T) {
 	const clusterName = "cluster-finalizer"
 	const clusterUUID = "cluster-uuid-finalizer"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -843,10 +843,10 @@ func TestStorageNodeSetReconcileLabelWorkerNodesFailure(t *testing.T) {
 	const clusterName = "cluster-label-fail"
 	const clusterUUID = "cluster-uuid-label-fail"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -873,10 +873,10 @@ func TestStorageNodeSetReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	const clusterUUID = "cluster-uuid-known-worker"
 	const workerName = "node-known"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerName},
@@ -918,10 +918,10 @@ func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
 	const clusterName = "cluster-ownerref-sa"
 	const clusterUUID = "cluster-uuid-ownerref-sa"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -958,15 +958,15 @@ func TestStorageNodeSetReconcileCreatesNamespaceSpecificClusterRoleBindings(t *t
 	const clusterUUID1 = "cluster-uuid-one"
 	const clusterUUID2 = "cluster-uuid-two"
 
-	cluster1 := &simplyblockv1alpha1.StorageCluster{
+	cluster1 := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "cluster1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID1},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID1},
 	}
-	cluster2 := &simplyblockv1alpha1.StorageCluster{
+	cluster2 := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster2", Namespace: "cluster2"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID2},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID2},
 	}
 	sn1 := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1010,10 +1010,10 @@ func TestStorageNodeSetReconcileMissingInternalIPRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-missing-ip"
 	const workerName = "node-no-ip"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerName},
@@ -1046,10 +1046,10 @@ func TestStorageNodeSetReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-unreachable-info"
 	const workerName = "node-bad-ip"
 
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: clusterUUID},
 	}
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerName},
@@ -1228,10 +1228,10 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		)
 		apiClient := webapi.NewClient(mock.URL())
 
-		cluster := &simplyblockv1alpha1.StorageCluster{
+		cluster := &simplyblockv1alpha2.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-			Status: simplyblockv1alpha1.StorageClusterStatus{
+			Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+			Status: simplyblockv1alpha2.StorageClusterStatus{
 				Status:              "active",
 				ErasureCodingScheme: "1x0",
 			},
@@ -1298,10 +1298,10 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		)
 		apiClient := webapi.NewClient(mock.URL())
 
-		cluster := &simplyblockv1alpha1.StorageCluster{
+		cluster := &simplyblockv1alpha2.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-			Status: simplyblockv1alpha1.StorageClusterStatus{
+			Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+			Status: simplyblockv1alpha2.StorageClusterStatus{
 				Status:              "active",
 				ErasureCodingScheme: "1x0",
 			},
@@ -1568,7 +1568,7 @@ func newStorageNodeSetStateTestReconciler(
 		WithScheme(scheme).
 		WithStatusSubresource(
 			&simplyblockv1alpha1.StorageNodeSet{},
-			&simplyblockv1alpha1.StorageCluster{},
+			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha2.ControlPlane{},
 			&appsv1.DaemonSet{},
 		).
@@ -2735,23 +2735,23 @@ func TestParallelNodeAddContinuesPastPendingWorker(t *testing.T) {
 }
 
 // maybeActivateCluster is the OTHER path that can fire an activate call
-// (alongside reconcileActivate, gated in simplyblockstoragecluster_controller.go).
+// (alongside the Activate action, gated in controllers/cluster/actions.go).
 // ShouldActivateCluster only counts online-healthy nodes against the erasure
 // coding scheme -- it has no notion of failure domains, so this reconciler
 // needs the same npcs+2 readiness gate or it POSTs /activate every time it
 // runs whenever enough nodes are online but the FDs aren't ready yet (the
 // 2026-08-06 repeated unready->in_activation->unready incident).
 func newActivationTestClusterAndNodeSet(clusterName string, nodeFDs []int32) (
-	*simplyblockv1alpha1.StorageCluster, *simplyblockv1alpha1.StorageNodeSet,
+	*simplyblockv1alpha2.StorageCluster, *simplyblockv1alpha1.StorageNodeSet,
 ) {
 	parity := int32(2)
-	cluster := &simplyblockv1alpha1.StorageCluster{
+	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			EnableFailureDomains: &[]bool{true}[0],
-			StripeSpec:           &simplyblockv1alpha1.StripeSpec{ParityChunks: &parity},
+			Stripe:               &simplyblockv1alpha2.StripeSpec{ParityChunks: &parity},
 		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{
+		Status: simplyblockv1alpha2.StorageClusterStatus{
 			ErasureCodingScheme: "1x1", // requiredEc=2, required=3 in ShouldActivateCluster
 		},
 	}

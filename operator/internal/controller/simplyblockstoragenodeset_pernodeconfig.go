@@ -57,6 +57,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // PerNodeConfigMapName returns the name of the per-node ConfigMap for a StorageNodeSet.
@@ -76,7 +77,7 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 
 	// MAX_SUBSYS_COUNT, MAX_HUGE_PAGES_SIZE and VCPU_COUNT come from the StorageCluster,
 	// so every entry this ConfigMap holds shares them.
-	var cluster simplyblockv1alpha1.StorageCluster
+	var cluster simplyblockv1alpha2.StorageCluster
 	if err := r.Get(ctx, client.ObjectKey{
 		Name:      sns.Spec.ClusterName,
 		Namespace: sns.Namespace,
@@ -190,7 +191,7 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 // core-sizing values (MAX_SUBSYS_COUNT, MAX_HUGE_PAGES_SIZE, VCPU_COUNT) come from the
 // StorageCluster and are therefore identical in every entry.
 func buildPerNodeEnvFile(
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	worker string,
 ) string {
@@ -205,6 +206,12 @@ func buildPerNodeEnvFile(
 		DeviceNames:        sns.Spec.DeviceNames,
 		EnableCpuTopology:  sns.Spec.EnableCpuTopology,
 		ReservedSystemCPU:  sns.Spec.ReservedSystemCPU,
+		EnableLblk:         sns.Spec.EnableLblk,
+		BlkNames:           sns.Spec.BlkNames,
+		BlkNamesExclude:    sns.Spec.BlkNamesExclude,
+		BlkSerials:         sns.Spec.BlkSerials,
+		LblkJournalPercent: sns.Spec.LblkJournalPercent,
+		BlkForceFormat:     sns.Spec.BlkForceFormat,
 	}
 
 	// Apply per-node overrides if present.
@@ -236,12 +243,30 @@ func buildPerNodeEnvFile(
 		if o.ReservedSystemCPU != "" {
 			eff.ReservedSystemCPU = o.ReservedSystemCPU
 		}
+		if o.EnableLblk != nil {
+			eff.EnableLblk = o.EnableLblk
+		}
+		if len(o.BlkNames) > 0 {
+			eff.BlkNames = o.BlkNames
+		}
+		if len(o.BlkNamesExclude) > 0 {
+			eff.BlkNamesExclude = o.BlkNamesExclude
+		}
+		if len(o.BlkSerials) > 0 {
+			eff.BlkSerials = o.BlkSerials
+		}
+		if o.LblkJournalPercent != nil {
+			eff.LblkJournalPercent = o.LblkJournalPercent
+		}
+		if o.BlkForceFormat != nil {
+			eff.BlkForceFormat = o.BlkForceFormat
+		}
 	}
 
 	var b strings.Builder
 	// Cluster-scoped: identical for every worker in every set of this cluster.
 	fmt.Fprintf(&b, "MAX_SUBSYS_COUNT=%s\n", ptr.StringOrDefault(cluster.Spec.MaxSubsystemCount, ""))
-	fmt.Fprintf(&b, "MAX_HUGE_PAGES_SIZE=%s\n", utils.ShellQuote(cluster.Spec.MaxHugePagesSize))
+	fmt.Fprintf(&b, "MAX_HUGE_PAGES_SIZE=%s\n", utils.ShellQuote(cluster.Spec.MinHugePagesSize))
 	fmt.Fprintf(&b, "VCPU_COUNT=%s\n", ptr.StringOrDefault(cluster.Spec.VCPUCount, ""))
 	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))
 	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(eff.PcieDenyList, ",")))
@@ -255,5 +280,11 @@ func buildPerNodeEnvFile(
 		b.WriteString("JM_PERCENT=\n")
 		b.WriteString("HA_JM_COUNT=\n")
 	}
+	fmt.Fprintf(&b, "LBLK=%t\n", ptr.BoolFromOrFalse(eff.EnableLblk))
+	fmt.Fprintf(&b, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(eff.BlkNames, ",")))
+	fmt.Fprintf(&b, "BLK_NAMES_EXCLUDE=%s\n", utils.ShellQuote(strings.Join(eff.BlkNamesExclude, ",")))
+	fmt.Fprintf(&b, "BLK_SERIALS=%s\n", utils.ShellQuote(strings.Join(eff.BlkSerials, ",")))
+	fmt.Fprintf(&b, "LBLK_JM_PERCENT=%s\n", ptr.StringOrDefault(eff.LblkJournalPercent, ""))
+	fmt.Fprintf(&b, "LBLK_FORCE_FORMAT=%t\n", ptr.BoolFromOrFalse(eff.BlkForceFormat))
 	return b.String()
 }

@@ -6,6 +6,7 @@ import (
 
 	atlasprom "github.com/simplyblock/atlas/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -22,7 +23,7 @@ type BaselineProvider interface {
 // rollingWindow (the default, and the fallback for any unrecognised value) derives a robust
 // estimate from a rolling window of the probe latency series in Prometheus.
 func newBaselineProvider(k8sClient client.Client, cfg RebalancingConfig) (BaselineProvider, error) {
-	if cfg.BaselineStrategy == string(simplyblockv1alpha1.BaselineStrategyBenchmark) {
+	if cfg.BaselineStrategy == string(simplyblockv1alpha2.BaselineStrategyBenchmark) {
 		return &benchmarkBaselineProvider{client: k8sClient, percentile: cfg.LatencyPercentile}, nil
 	}
 	provider, err := atlasprom.New(cfg.PrometheusURL)
@@ -113,7 +114,7 @@ func reduceWindowedBaselines(
 	windowed map[string]map[string][]float64,
 	cfg RebalancingConfig,
 ) []nodeBaseline {
-	deferUnderSampled := cfg.BaselineColdStart == string(simplyblockv1alpha1.BaselineColdStartDefer)
+	deferUnderSampled := cfg.BaselineColdStart == string(simplyblockv1alpha2.BaselineColdStartDefer)
 
 	var out []nodeBaseline
 	for clusterUUID, byNode := range windowed {

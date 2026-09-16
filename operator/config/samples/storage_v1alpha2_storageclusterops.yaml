@@ -1,0 +1,21 @@
+# One operation performed against one StorageCluster. It runs to a terminal
+# phase and stays afterward as the record of what was done, to which cluster,
+# with which parameters, and how it ended.
+#
+# A rolling restart is the longest of the seven actions: it walks every storage
+# node in the cluster in turn, holding before each one until every peer is back
+# online, and it holds the cluster's lock for the whole walk.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageClusterOps
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: storageclusterops-sample
+spec:
+  clusterRef: sample-cluster
+  action: RollingRestart
+  rollingRestart:
+    # Replace each node's storage-node pod between its shutdown and its
+    # restart, so the latest image is running when the node returns.
+    refreshSNodeAPI: true

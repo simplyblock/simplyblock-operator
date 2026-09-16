@@ -51,6 +51,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -1667,7 +1668,7 @@ func maybeActivateCluster(
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
 		// Failure-domain readiness gate: mirrors the one in
 		// StorageClusterOpsReconciler.reconcileActivate
-		// (storageclusterops_controller.go). ShouldActivateCluster only
+		// (controllers/cluster/actions.go). ShouldActivateCluster only
 		// counts online-healthy nodes against the erasure-coding scheme -- it
 		// has no notion of failure domains, so without this check a cluster
 		// with enough nodes but too few/unbalanced FDs gets POSTed to
@@ -1676,14 +1677,14 @@ func maybeActivateCluster(
 		// unready), producing a permanent activation-retry loop instead of
 		// quietly waiting. No-op for FD-disabled clusters.
 		if ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains) {
-			hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+			hostDomains, err := clustercontroller.FailureDomainHosts(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 			if err != nil {
 				log.Error(err, "Failed to list StorageNodeSets for failure-domain readiness check",
 					"cluster", clusterCR.Name)
 				return err
 			}
-			npcs := stripeParityChunks(clusterCR.Spec.StripeSpec)
-			if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
+			npcs := clustercontroller.StripeParityChunks(clusterCR.Spec.Stripe)
+			if reason := clustercontroller.ActivationDomainCountViolation(npcs, hostDomains); reason != "" {
 				log.Info("Not activating yet, waiting on failure-domain readiness",
 					"cluster", clusterCR.Name, "reason", reason)
 				r.Recorder.Eventf(snCR, nil, corev1.EventTypeWarning, "FailureDomainNotReady", "FailureDomainNotReady",

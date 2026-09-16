@@ -3,7 +3,7 @@
 // Neither carries the control plane's address or credentials, and that is not an
 // omission. The driver reads those from simplyblock-csi-secret-v2, which the
 // StorageCluster reconciler upserts with one entry per cluster it creates or
-// adopts (internal/controller/simplyblockstoragecluster_controller.go,
+// adopts (internal/controllers/cluster/storagecluster_controller.go,
 // upsertCSICredentialsSecret). That Secret is therefore not in this
 // deployment's object set: two controllers writing one object alternate its
 // contents, which is the failure design §3.4 keeps a cluster to one driver to

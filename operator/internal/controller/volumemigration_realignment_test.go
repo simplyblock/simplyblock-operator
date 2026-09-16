@@ -11,6 +11,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // newVMReconcilerForRealign builds a VolumeMigrationReconciler whose fake client has
@@ -19,13 +20,13 @@ import (
 func newVMReconcilerForRealign(t *testing.T, objs ...client.Object) (*VolumeMigrationReconciler, client.Client) {
 	t.Helper()
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha1.StorageCluster{}}, objs...)
+	cl := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha2.StorageCluster{}}, objs...)
 	return &VolumeMigrationReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16)}, cl
 }
 
-func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha1.StorageCluster {
+func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha2.StorageCluster {
 	t.Helper()
-	cr := &simplyblockv1alpha1.StorageCluster{}
+	cr := &simplyblockv1alpha2.StorageCluster{}
 	key := types.NamespacedName{Namespace: realignNamespace, Name: realignClusterName}
 	if err := cl.Get(context.Background(), key, cr); err != nil {
 		t.Fatalf("get cluster %q: %v", realignClusterName, err)

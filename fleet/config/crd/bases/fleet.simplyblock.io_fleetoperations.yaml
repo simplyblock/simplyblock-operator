@@ -1,0 +1,687 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: fleetoperations.fleet.simplyblock.io
+spec:
+  group: fleet.simplyblock.io
+  names:
+    kind: FleetOperation
+    listKind: FleetOperationList
+    plural: fleetoperations
+    shortNames:
+    - fop
+    singular: fleetoperation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.memberRef
+      name: Member
+      type: string
+    - jsonPath: .status.target.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.remote.phase
+      name: Remote
+      type: string
+    - jsonPath: .status.remote.step
+      name: Step
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          FleetOperation ships one storage-group Ops object into one member and reports
+          what it does there. One kind rather than one per managed Ops kind, because the
+          hub's question is which member and which operation, and the parameters belong
+          to the kind whose spec it carries.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: FleetOperationSpec is a request, and every field but Abort
+              is immutable.
+            properties:
+              abort:
+                description: |-
+                  Abort asks the member's own object to stop, by setting spec.abort on it
+                  through the payload. It is the one mutable field on this spec, and the
+                  member's graph decides whether the step it is on accepts it.
+                type: boolean
+              memberRef:
+                description: MemberRef names the FleetMember the operation runs in.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              operation:
+                description: Operation is what to run there. Exactly one member is
+                  set.
+                properties:
+                  operatorOps:
+                    description: OperatorOps runs an operator-level operation, today
+                      a discovery run.
+                    properties:
+                      abort:
+                        description: |-
+                          Abort asks a running operation to stop at its next step and unwind.
+                          Whether an abort is expressible from the current step is declared by that
+                          action's graph rather than checked here. Discovery changes nothing, so an
+                          aborted run leaves behind at most the config it had already written.
+                        type: boolean
+                      action:
+                        description: Action is the operation to perform.
+                        enum:
+                        - Discover
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      discover:
+                        description: Discover parameterizes action Discover.
+                        properties:
+                          clusterRef:
+                            description: |-
+                              ClusterRef names an existing StorageCluster the draft grows rather than
+                              creates. It is copied to the draft's own clusterRef, so that re-running
+                              discovery after an expansion produces a growth document naming the same
+                              cluster.
+                            type: string
+                          configName:
+                            description: |-
+                              ConfigName is the ClusterDeploymentConfig to write. Absent generates one
+                              from the run's timestamp, so that a second discovery never overwrites the
+                              first, which may have been reviewed and corrected.
+                            type: string
+                          deviceFilter:
+                            description: |-
+                              DeviceFilter narrows which of an inspected worker's devices reach the
+                              draft. Empty reports every device the worker advertises, including the one
+                              it boots from, which is what the approval gate then has to catch.
+                            properties:
+                              blockAllowList:
+                                description: |-
+                                  BlockAllowList restricts candidates to these device paths ("/dev/sdb").
+                                  This and BlockDenyList are the block class's half of the filter, and they
+                                  require EnableLogicalBlockDevices for the same reason the PCI filters
+                                  forbid it.
+                                items:
+                                  pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: set
+                              blockDenyList:
+                                description: |-
+                                  BlockDenyList excludes these device paths. On a fleet that boots from
+                                  /dev/sda, this is the one entry that keeps the root disk out of every group
+                                  of every draft.
+                                items:
+                                  pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: set
+                              driveSizeRange:
+                                description: |-
+                                  DriveSizeRange restricts candidates by size ("100G-2T"). Unlike the
+                                  per-class filters, it applies to whichever class the run is scanning.
+                                type: string
+                              enableLogicalBlockDevices:
+                                description: |-
+                                  EnableLogicalBlockDevices scans a worker's available logical block devices
+                                  instead of its available NVMe devices. It selects the class rather than
+                                  adding one, because the draft a run writes describes one cluster and a
+                                  cluster is built out of one class. Unset scans NVMe, so that upgrading to
+                                  26.4 does not change what a discovery run reports.
+                                type: boolean
+                              enablePartitionedDevices:
+                                description: |-
+                                  EnablePartitionedDevices reports devices carrying a partition table
+                                  alongside the available ones, for the administrator who knows the table is
+                                  stale and intends to hand the device over anyway. It is the only one of the
+                                  three availability conditions that can be waived: a mounted or otherwise
+                                  busy device is never reported, because simplyblock taking it would corrupt
+                                  whatever is using it.
+                                type: boolean
+                              pcieAllowList:
+                                description: |-
+                                  PcieAllowList restricts candidates to these PCI addresses. This and the two
+                                  PCI filters below narrow the NVMe class alone, because a logical block
+                                  device has no PCI address to match, so setting any of them on a run that
+                                  scans the block class is rejected by the rule on this type.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: set
+                              pcieDenyList:
+                                description: |-
+                                  PcieDenyList excludes these PCI addresses. On a fleet that is uniform
+                                  about which slot holds the boot device, this is what keeps that device out
+                                  of every group of every draft.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: set
+                              pcieModel:
+                                description: PcieModel restricts candidates to devices
+                                  whose PCI model string matches.
+                                type: string
+                            type: object
+                            x-kubernetes-validations:
+                            - message: the PCI filters select NVMe devices and cannot
+                                be combined with enableLogicalBlockDevices; use blockAllowList
+                                and blockDenyList
+                              rule: '!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                                || !(has(self.pcieAllowList) || has(self.pcieDenyList)
+                                || has(self.pcieModel))'
+                            - message: blockAllowList and blockDenyList select logical
+                                block devices and require enableLogicalBlockDevices
+                              rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
+                                || !(has(self.blockAllowList) || has(self.blockDenyList))
+                          nodeSelector:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              NodeSelector restricts which workers are inspected. Empty inspects every
+                              schedulable worker.
+                            type: object
+                        type: object
+                    required:
+                    - action
+                    type: object
+                  storageBackupOps:
+                    description: StorageBackupOps runs a backup or a restore.
+                    properties:
+                      abort:
+                        description: |-
+                          Abort asks a running operation to stop at its next step and unwind. It is
+                          the one field of this spec that may be edited after the object is created,
+                          because it is the one thing about an operation that can legitimately be
+                          decided after it started.
+
+                          A restore cannot be aborted once it has created a logical volume, and the
+                          action's graph declares that rather than this field: an abort arriving
+                          later is reported as an illegal transition while the operation runs on,
+                          rather than leaving the work half undone.
+                        type: boolean
+                      action:
+                        description: Action is the operation to perform.
+                        enum:
+                        - Restore
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      backupRef:
+                        description: |-
+                          BackupRef names the StorageBackup this operation acts on, in this
+                          namespace. Required, since Restore is the only action and every backup in
+                          the store has an object.
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      clusterRef:
+                        description: ClusterRef names the StorageCluster the operation
+                          runs against.
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      restore:
+                        description: Restore parameterizes action Restore.
+                        properties:
+                          claimAnnotations:
+                            additionalProperties:
+                              type: string
+                            type: object
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                          claimLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              ClaimLabels and ClaimAnnotations are applied to the created claim, so that
+                              a restored volume can be selected by a policy or an application the same
+                              way its original was.
+
+                              Immutable with the rest of the block. The claim is written at the last
+                              step, so a value edited while the operation waited for its volume would
+                              produce a claim built from inputs the admitted and audited operation never
+                              carried, which is the audit record disagreeing with what happened.
+                            type: object
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                          claimName:
+                            description: |-
+                              ClaimName is the PersistentVolumeClaim to create. It must not already
+                              exist: a restore that adopted an existing claim would replace a running
+                              workload's data with the backup's.
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                          targetPool:
+                            description: |-
+                              TargetPool is the StoragePool to restore into. It is required rather than
+                              defaulted: a backup found in the store may have been written by another
+                              cluster, so status.source.poolName names a pool this cluster need not
+                              have, and which pool a volume lands in is a tenancy and QoS decision
+                              nobody should make by omission.
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                        required:
+                        - claimName
+                        - targetPool
+                        type: object
+                        x-kubernetes-validations:
+                        - message: field claimLabels is immutable once set
+                          rule: '!has(oldSelf.claimLabels) || has(self.claimLabels)'
+                        - message: field claimAnnotations is immutable once set
+                          rule: '!has(oldSelf.claimAnnotations) || has(self.claimAnnotations)'
+                    required:
+                    - action
+                    - backupRef
+                    - clusterRef
+                    type: object
+                  storageClusterOps:
+                    description: StorageClusterOps runs a cluster-level operation.
+                    properties:
+                      action:
+                        description: Action is the operation to perform. Immutable.
+                        enum:
+                        - Activate
+                        - Expand
+                        - Shutdown
+                        - Start
+                        - Restart
+                        - RollingRestart
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      clusterRef:
+                        description: ClusterRef is the name of the target StorageCluster.
+                          Immutable.
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      rollingRestart:
+                        description: |-
+                          RollingRestart configures behavior specific to the RollingRestart action.
+                          Ignored for all other actions.
+                        properties:
+                          refreshSNodeAPI:
+                            description: |-
+                              RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+                              after the backend node is shut down and before it is restarted, ensuring
+                              the latest image is running before the node comes back online.
+                            type: boolean
+                        type: object
+                    required:
+                    - action
+                    - clusterRef
+                    type: object
+                  storageNodeOps:
+                    description: StorageNodeOps runs a node-level operation.
+                    properties:
+                      action:
+                        description: Action is the operation to perform. Immutable.
+                        enum:
+                        - Shutdown
+                        - Restart
+                        - Suspend
+                        - Resume
+                        - Remove
+                        - Migrate
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      force:
+                        description: Force enables forced execution where the backend
+                          supports it.
+                        type: boolean
+                      migrate:
+                        description: Migrate parameterizes action Migrate and is ignored
+                          by the others.
+                        properties:
+                          newSsdPcie:
+                            description: |-
+                              NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                              during a migration. Passed through to the control-plane restart as
+                              new_ssd_pcie.
+                            items:
+                              type: string
+                            type: array
+                          targetWorkerNode:
+                            description: |-
+                              TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                              relocated onto.
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                        required:
+                        - targetWorkerNode
+                        type: object
+                      nodeRef:
+                        description: NodeRef is the name of the target StorageNode.
+                          Immutable.
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      reattachVolume:
+                        description: |-
+                          ReattachVolume reattaches volumes during the node restart.
+                          Applicable when action=Restart or action=Migrate.
+                        type: boolean
+                      remove:
+                        description: Remove parameterizes action Remove and is ignored
+                          by the others.
+                        properties:
+                          systemVolumeFilterRegex:
+                            description: |-
+                              SystemVolumeFilterRegex is a Go regular expression matched against backend
+                              volume names. Matching volumes are treated as system volumes: excluded from
+                              drain migration and deleted inline during the Verifying phase.
+                              Defaults to `^sb-fio-baseline-.*`.
+                            type: string
+                        type: object
+                    required:
+                    - action
+                    - nodeRef
+                    type: object
+                  storagePoolOps:
+                    description: StoragePoolOps runs a pool-level operation.
+                    properties:
+                      abort:
+                        description: Abort asks a running operation to stop at its
+                          next step and unwind.
+                        type: boolean
+                      action:
+                        description: |-
+                          Action is the operation to perform. Immutable: an operation that changed
+                          what it was doing halfway through would have a status describing neither.
+                        enum:
+                        - Rebalance
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                      poolRef:
+                        description: |-
+                          PoolRef names the StoragePool this operation acts on, in this object's own
+                          namespace. The operation never owns its target, because deleting the
+                          record of an operation must not delete the pool it operated on.
+                        type: string
+                        x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    required:
+                    - action
+                    - poolRef
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+                - message: set exactly one operation
+                  rule: '[has(self.operatorOps),has(self.storageClusterOps),has(self.storageNodeOps),has(self.storagePoolOps),has(self.storageBackupOps)].filter(x,
+                    x).size() == 1'
+            required:
+            - memberRef
+            - operation
+            type: object
+          status:
+            description: FleetOperationStatus is the hub's view of an operation running
+              in a member.
+            properties:
+              completedAt:
+                description: |-
+                  CompletedAt is when the operation reached a terminal remote phase, and is
+                  what retention measures against.
+                format: date-time
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              delivery:
+                description: Delivery is what the ManifestWork carrying the payload
+                  reports.
+                properties:
+                  appliedFingerprint:
+                    description: AppliedFingerprint is the fingerprint of what actually
+                      reached the member.
+                    type: string
+                  conditions:
+                    description: |-
+                      Conditions mirror the ManifestWork's Applied, Available, and Degraded,
+                      each written against this object's own generation, which the hub issued
+                      and can therefore compare.
+                    items:
+                      description: Condition contains details for one aspect of the
+                        current state of this API Resource.
+                      properties:
+                        lastTransitionTime:
+                          description: |-
+                            lastTransitionTime is the last time the condition transitioned from one status to another.
+                            This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            message is a human readable message indicating details about the transition.
+                            This may be an empty string.
+                          maxLength: 32768
+                          type: string
+                        observedGeneration:
+                          description: |-
+                            observedGeneration represents the .metadata.generation that the condition was set based upon.
+                            For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                            with respect to the current state of the instance.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        reason:
+                          description: |-
+                            reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                            Producers of specific condition types may define expected values and meanings for this field,
+                            and whether the values are considered a guaranteed API.
+                            The value should be a CamelCase string.
+                            This field may not be empty.
+                          maxLength: 1024
+                          minLength: 1
+                          pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                          type: string
+                        status:
+                          description: status of the condition, one of True, False,
+                            Unknown.
+                          enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                          type: string
+                        type:
+                          description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                          maxLength: 316
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                          type: string
+                      required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - type
+                    x-kubernetes-list-type: map
+                  manifestWorkName:
+                    description: ManifestWorkName is the object in the member's namespace
+                      on the hub.
+                    type: string
+                type: object
+              message:
+                description: Message is why the phase is what it is.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation this status was computed from. It
+                  advances at most twice, and the second advance is the signal that Abort
+                  was observed.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase is the hub's own progress, which is about delivery rather than about
+                  the operation. What the operation is doing is in Remote.
+                enum:
+                - Pending
+                - Delivering
+                - Running
+                - Succeeded
+                - Failed
+                - Aborted
+                type: string
+              remote:
+                description: |-
+                  Remote is what the member's own object reports, filled from the status
+                  feedback rules on the ManifestWork. Scalars only, which is what a feedback
+                  rule carries and what a list view needs. Anything beyond it is a
+                  ManagedClusterView against Target.
+                properties:
+                  message:
+                    description: Message is the member object's status message.
+                    type: string
+                  observedAt:
+                    description: ObservedAt is when the feedback last arrived.
+                    format: date-time
+                    type: string
+                  observedGeneration:
+                    description: |-
+                      ObservedGeneration is the member object's, and is comparable only against
+                      generations in the member.
+                    format: int64
+                    type: integer
+                  phase:
+                    description: Phase is the member object's own phase, in its own
+                      spelling.
+                    type: string
+                  step:
+                    description: |-
+                      Step is the state name of the member object's step machine. The deadline
+                      beside it in the member is an absolute instant and is deliberately not
+                      carried, because it is meaningless against the hub's clock.
+                    type: string
+                type: object
+              startedAt:
+                description: StartedAt is when the payload was delivered.
+                format: date-time
+                type: string
+              target:
+                description: |-
+                  Target names the object the payload created in the member, so that a
+                  ManagedClusterView for the whole object needs no re-derivation.
+                properties:
+                  kind:
+                    description: Kind is the storage-group kind that was created.
+                    type: string
+                  name:
+                    description: Name is the object's name in the member.
+                    type: string
+                  namespace:
+                    description: Namespace is where it was created in the member.
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

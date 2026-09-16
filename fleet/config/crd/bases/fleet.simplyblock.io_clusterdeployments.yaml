@@ -1,0 +1,572 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: clusterdeployments.fleet.simplyblock.io
+spec:
+  group: fleet.simplyblock.io
+  names:
+    kind: ClusterDeployment
+    listKind: ClusterDeploymentList
+    plural: clusterdeployments
+    shortNames:
+    - cd
+    singular: clusterdeployment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.memberRef
+      name: Member
+      type: string
+    - jsonPath: .spec.approved
+      name: Approved
+      type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.result.storageClusterName
+      name: Cluster
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterDeployment is the intent to build one storage cluster in one member,
+          the document that will be applied there, and the record of it landing.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ClusterDeploymentSpec is the document and the approval.
+            properties:
+              approved:
+                description: |-
+                  Approved is the instruction to build, and setting it is the deployment
+                  rather than a review stage in front of one.
+                type: boolean
+              approvedBy:
+                description: |-
+                  ApprovedBy records the identity that approved, which the service account
+                  replaying the edit into the member would otherwise erase. A webhook sets
+                  it from the request's user info.
+                type: string
+              config:
+                description: |-
+                  Config is the document that will be applied in the member, composed from
+                  that member's inventory. It is a typed storage-group spec rather than an
+                  opaque blob because it is the thing a reviewer reads.
+                properties:
+                  approved:
+                    description: |-
+                      Approved is the review gate. A document is expanded only once it is set,
+                      and is validated but otherwise inert before that, which is what makes
+                      reviewing a wrong document safe.
+                    type: boolean
+                  cluster:
+                    description: Cluster is the StorageCluster to create. Ignored
+                      when ClusterRef is set.
+                    properties:
+                      enableFailureDomains:
+                        description: |-
+                          EnableFailureDomains opts the cluster into failure-domain mode, in which
+                          every group must label the fault group its workers belong to.
+                        type: boolean
+                      fabricType:
+                        description: FabricType is the storage fabric.
+                        maxLength: 32
+                        type: string
+                      maxSubsystemCount:
+                        description: |-
+                          MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+                          node of this cluster serves. Required, because the StorageCluster's own
+                          field is, and no StorageNode carries a copy of it.
+                        format: int32
+                        maximum: 75
+                        minimum: 10
+                        type: integer
+                      minHugePagesSize:
+                        description: |-
+                          MinHugePagesSize is the smallest huge-page allocation each storage node of
+                          this cluster makes: 100G or 1T, where a bare number is gigabytes. Like
+                          VCPUCount it is the cluster's and is copied onto every node the expansion
+                          writes. Omitted, each node uses the computed minimum.
+                        maxLength: 32
+                        type: string
+                      name:
+                        description: Name is the StorageCluster's name.
+                        maxLength: 253
+                        type: string
+                      stripe:
+                        description: Stripe is the erasure-coding layout.
+                        properties:
+                          dataChunks:
+                            description: DataChunks defines the number of data chunks
+                              in the erasure-coding layout.
+                            format: int32
+                            type: integer
+                          parityChunks:
+                            description: ParityChunks defines the number of parity
+                              chunks in the erasure-coding layout.
+                            format: int32
+                            type: integer
+                        type: object
+                      vcpuCount:
+                        description: |-
+                          VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+                          this cluster. It is stated here and nowhere below, because the control
+                          plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
+                          into every StorageNode.spec.config.sizing it writes. Required, because the
+                          StorageCluster's own field is.
+                          The floor is 4 rather than a hardware limit: a node must carry one core
+                          beyond this budget for the system, and the control plane's core layout
+                          assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+                        format: int32
+                        minimum: 4
+                        type: integer
+                    required:
+                    - maxSubsystemCount
+                    - name
+                    - vcpuCount
+                    type: object
+                  clusterRef:
+                    description: |-
+                      ClusterRef names an existing StorageCluster this document adds nodes to.
+                      Absent means the document creates the cluster in Cluster. Setting it to a
+                      cluster that does not exist, or leaving it absent when one already does,
+                      is refused rather than reconciled.
+                    maxLength: 253
+                    type: string
+                  edgeCluster:
+                    description: |-
+                      EdgeCluster states that this is an edge deployment. An edge deployment
+                      differs from a datacenter one in topology and scale rather than in kind,
+                      so it is the same StorageCluster with fewer, smaller nodes.
+                    type: boolean
+                  environment:
+                    description: |-
+                      Environment is the Kubernetes distribution this deployment targets. It is a
+                      shorthand the expansion spends: it sets enableKubeletConfiguration,
+                      enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
+                      the document produces, after which nothing reads it again.
+                    enum:
+                    - Vanilla
+                    - OpenShift
+                    - Rancher
+                    - K3s
+                    - Talos
+                    type: string
+                  nodeSets:
+                    description: |-
+                      NodeSets are the nodes the deployment is made of.
+
+                      The upper bound is what makes the device-class rule above estimable: the
+                      API server costs a CEL rule against the largest value the schema permits,
+                      and a list with no bound is costed as unbounded, which the rule's nested
+                      all() then multiplies past the budget.
+                    items:
+                      description: |-
+                        NodeSet is the organizational grouping of a deployment, usually a rack: the
+                        workers a document adds or grows together. It carries no sizing, because sizing
+                        is uniform across a cluster and is stated once in ClusterTemplate.
+                      properties:
+                        groups:
+                          description: Groups are the sets of workers sharing one
+                            configuration.
+                          items:
+                            description: |-
+                              NodeGroup is a set of workers that share one configuration, which is what
+                              makes ten identical machines one entry rather than ten.
+                            properties:
+                              dataInterfaces:
+                                description: DataInterfaces are the data-plane network
+                                  interfaces.
+                                items:
+                                  maxLength: 63
+                                  type: string
+                                maxItems: 32
+                                type: array
+                              devices:
+                                description: Devices selects the storage devices every
+                                  worker in the group uses.
+                                properties:
+                                  block:
+                                    description: |-
+                                      Block names logical block devices by path ("/dev/sdb"). It expands into the
+                                      same config.deviceNames as NVMe, which takes a PCI address and a device
+                                      path in one list. It is the alternative to NVMe rather than a companion of
+                                      it: the two classes are not mixed within a cluster.
+                                    items:
+                                      maxLength: 255
+                                      pattern: ^/dev/[a-zA-Z0-9._/-]+$
+                                      type: string
+                                    maxItems: 128
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                  nvme:
+                                    description: NVMe names NVMe devices by PCI address
+                                      ("0000:5e:00.0").
+                                    items:
+                                      maxLength: 32
+                                      pattern: ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$
+                                      type: string
+                                    maxItems: 128
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                type: object
+                                x-kubernetes-validations:
+                                - message: a device selection names NVMe addresses
+                                    or block devices, not both
+                                  rule: has(self.nvme) != has(self.block)
+                              failureDomain:
+                                description: |-
+                                  FailureDomain is the label of the fault group every worker in this group
+                                  belongs to ("rack-b"), which is usually the name of the rack, zone, or
+                                  power feed they share. Discovery seeds it from topology.kubernetes.io/zone
+                                  and leaves it unset where the Kubernetes API carries no topology, which
+                                  holds provisioning with a clear reason rather than guessing. It expands
+                                  into StorageNode.spec.config.failureDomain, whose shape it shares.
+                                maxLength: 63
+                                pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
+                                type: string
+                              journalManager:
+                                description: JournalManager tunes the journal managers
+                                  on these nodes.
+                                properties:
+                                  count:
+                                    description: Count is the number of journal managers
+                                      to configure.
+                                    format: int32
+                                    type: integer
+                                  percentPerDevice:
+                                    description: PercentPerDevice is the journal manager
+                                      capacity percentage per device.
+                                    format: int32
+                                    type: integer
+                                type: object
+                              mgmtInterface:
+                                description: MgmtInterface is the management network
+                                  interface the storage nodes bind.
+                                maxLength: 63
+                                type: string
+                              name:
+                                description: |-
+                                  Name identifies the group within its node set, for a reader and for the
+                                  events a validation failure emits.
+                                maxLength: 253
+                                type: string
+                              spdkSystemMemory:
+                                description: |-
+                                  SpdkSystemMemory is the memory the control plane starts SPDK with on these
+                                  nodes.
+                                maxLength: 32
+                                pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                                type: string
+                              workers:
+                                description: Workers are the Kubernetes worker hostnames
+                                  in this group.
+                                items:
+                                  maxLength: 253
+                                  type: string
+                                maxItems: 200
+                                minItems: 1
+                                type: array
+                                x-kubernetes-list-type: set
+                            required:
+                            - name
+                            - workers
+                            type: object
+                          maxItems: 64
+                          minItems: 1
+                          type: array
+                        name:
+                          description: |-
+                            Name is the node set's name. It is copied to StorageNode.spec.nodeSet, so
+                            that a node can be traced back to the part of the document that produced
+                            it.
+                          maxLength: 253
+                          type: string
+                      required:
+                      - groups
+                      - name
+                      type: object
+                    maxItems: 64
+                    minItems: 1
+                    type: array
+                required:
+                - nodeSets
+                type: object
+                x-kubernetes-validations:
+                - message: an approved deployment config is immutable
+                  rule: '!oldSelf.approved || self == oldSelf'
+                - message: approval cannot be withdrawn
+                  rule: '!oldSelf.approved || self.approved'
+                - message: 'every group must name the same device class: all nvme
+                    or all block'
+                  rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
+                    || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+              memberRef:
+                description: MemberRef names the FleetMember this cluster is built
+                  in.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - config
+            - memberRef
+            type: object
+            x-kubernetes-validations:
+            - message: config is immutable once approved
+              rule: '!oldSelf.approved || self.config == oldSelf.config'
+            - message: approval cannot be withdrawn
+              rule: '!oldSelf.approved || self.approved'
+          status:
+            description: ClusterDeploymentStatus is how far the build-out got, and
+              what it produced.
+            properties:
+              completedAt:
+                description: CompletedAt is when the build-out reached a terminal
+                  phase.
+                format: date-time
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              configFingerprint:
+                description: |-
+                  ConfigFingerprint is a hash of spec.config, and the delivery block's
+                  AppliedFingerprint is the one that reached the member. The pair is what
+                  makes an edit's arrival answerable without a generation the hub did not
+                  issue.
+                type: string
+              delivery:
+                description: Delivery is what the ManifestWork carrying this document
+                  reports.
+                properties:
+                  appliedFingerprint:
+                    description: AppliedFingerprint is the fingerprint of what actually
+                      reached the member.
+                    type: string
+                  conditions:
+                    description: |-
+                      Conditions mirror the ManifestWork's Applied, Available, and Degraded,
+                      each written against this object's own generation, which the hub issued
+                      and can therefore compare.
+                    items:
+                      description: Condition contains details for one aspect of the
+                        current state of this API Resource.
+                      properties:
+                        lastTransitionTime:
+                          description: |-
+                            lastTransitionTime is the last time the condition transitioned from one status to another.
+                            This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            message is a human readable message indicating details about the transition.
+                            This may be an empty string.
+                          maxLength: 32768
+                          type: string
+                        observedGeneration:
+                          description: |-
+                            observedGeneration represents the .metadata.generation that the condition was set based upon.
+                            For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                            with respect to the current state of the instance.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        reason:
+                          description: |-
+                            reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                            Producers of specific condition types may define expected values and meanings for this field,
+                            and whether the values are considered a guaranteed API.
+                            The value should be a CamelCase string.
+                            This field may not be empty.
+                          maxLength: 1024
+                          minLength: 1
+                          pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                          type: string
+                        status:
+                          description: status of the condition, one of True, False,
+                            Unknown.
+                          enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                          type: string
+                        type:
+                          description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                          maxLength: 316
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                          type: string
+                      required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - type
+                    x-kubernetes-list-type: map
+                  manifestWorkName:
+                    description: ManifestWorkName is the object in the member's namespace
+                      on the hub.
+                    type: string
+                type: object
+              message:
+                description: Message is why the phase is what it is.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation this status was
+                  computed from.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is where the build-out is.
+                enum:
+                - Draft
+                - Delivering
+                - Deploying
+                - Ready
+                - Degraded
+                - Failed
+                type: string
+              result:
+                description: Result names what the member built.
+                properties:
+                  namespace:
+                    description: |-
+                      Namespace is where the objects were created in the member. A payload
+                      states its namespace rather than inheriting one, and this records what was
+                      used. It bears no relation to the hub-side namespace the intent was
+                      written in.
+                    type: string
+                  nodesExpected:
+                    description: NodesExpected is how many storage nodes the document
+                      asked for.
+                    format: int32
+                    type: integer
+                  nodesReady:
+                    description: NodesReady is how many of them answered.
+                    format: int32
+                    type: integer
+                  storageClusterName:
+                    description: StorageClusterName is the object's name in the member.
+                    type: string
+                  storageClusterUUID:
+                    description: |-
+                      StorageClusterUUID is the control plane's identifier, which is what the
+                      roll-up and the projection address the same object by.
+                    type: string
+                type: object
+              startedAt:
+                description: StartedAt is when delivery began.
+                format: date-time
+                type: string
+              step:
+                description: Step is the delivery machine's position.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''Composing'',''Delivering'',''Applying'',''Expanding'',''Verifying'']'
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

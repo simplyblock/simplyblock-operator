@@ -1,11 +1,12 @@
 # Root Makefile orchestrating build & test across the monorepo components:
-#   atlas-lib (shared library), csi-driver, operator
+#   atlas-lib (shared library), csi-driver, operator, fleet-manager
 #
 # Each target delegates to the relevant component's own Makefile.
 
 ATLAS_DIR       := atlas-lib
 CSI_DIR         := csi-driver
 OPERATOR_DIR    := operator
+FLEET_DIR       := fleet
 HELM_DIR        := helm-charts
 INTEGRATION_DIR := test/integration
 
@@ -50,21 +51,22 @@ SBCLI_REQUIREMENTS := $(wildcard $(SBCLI_DIR)/requirements.txt)
         atlas atlas-build atlas-test atlas-lint atlas-fmt atlas-vet \
         csi csi-build csi-test csi-lint csi-fmt csi-vet \
         operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet \
+        fleet fleet-manifests fleet-build fleet-test fleet-lint fleet-fmt fleet-vet \
         helm-sync \
         configure openapi-sync openapi-diff openapi-ref openapi-checkout
 
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build-installer operator-build helm-sync ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build fleet-build helm-sync ## Build every component.
 
-test: atlas-test csi-test operator-test ## Test every component.
+test: atlas-test csi-test operator-test fleet-test ## Test every component.
 
-lint: atlas-lint csi-lint operator-lint ## Lint every component.
+lint: atlas-lint csi-lint operator-lint fleet-lint ## Lint every component.
 
-fmt: atlas-fmt csi-fmt operator-fmt ## Format every component.
+fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt ## Format every component.
 
-vet: atlas-vet csi-vet operator-vet ## Vet every component.
+vet: atlas-vet csi-vet operator-vet fleet-vet ## Vet every component.
 
 # ─── atlas ────────────────────────────────────────────────────────────────
 atlas: atlas-build atlas-test ## Build and test atlas.
@@ -129,6 +131,30 @@ operator-fmt: ## Format operator.
 
 operator-vet: ## Vet operator.
 	$(MAKE) -C $(OPERATOR_DIR) vet
+
+# ─── fleet-manager ──────────────────────────────────────────────────────────
+# The hub half of a multi-cluster installation. It is built and tested with the
+# rest, and it reaches no install path of its own: nothing a standalone
+# deployment installs comes from here.
+fleet: fleet-manifests fleet-build fleet-test ## Manifests, build and test the fleet manager.
+
+fleet-manifests: ## Generate the fleet CRDs.
+	$(MAKE) -C $(FLEET_DIR) manifests
+
+fleet-build: ## Build the fleet manager binary.
+	$(MAKE) -C $(FLEET_DIR) build
+
+fleet-test: ## Test the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) test
+
+fleet-lint: ## Lint the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) lint
+
+fleet-fmt: ## Format the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) fmt
+
+fleet-vet: ## Vet the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) vet
 
 # ─── helm ─────────────────────────────────────────────────────────────────
 # Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends

@@ -99,7 +99,7 @@ func ResolveClusterUUID(
 	clusterName string,
 ) (string, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
@@ -123,7 +123,7 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 		// with that UUID actually exists in the requested namespace. Without
 		// this check a caller in namespace A could supply the UUID of a cluster
 		// in namespace B and bypass namespace isolation entirely.
-		var list simplyblockv1alpha1.StorageClusterList
+		var list simplyblockv1alpha2.StorageClusterList
 		if err := k8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 			return "", fmt.Errorf("failed to validate cluster UUID %q in namespace %q: %w", cluster, namespace, err)
 		}
@@ -146,9 +146,9 @@ func ResolveClusterCRByUUID(
 	c client.Client,
 	namespace string,
 	uuid string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
+) (*simplyblockv1alpha2.StorageCluster, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -177,9 +177,9 @@ func ResolveClusterCR(
 	c client.Client,
 	namespace string,
 	clusterName string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
+) (*simplyblockv1alpha2.StorageCluster, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -235,11 +235,11 @@ func ShouldActivateCluster(
 		onlineHealthy >= required
 }
 
-func ClusterAlreadyActive(cluster *simplyblockv1alpha1.StorageCluster) bool {
+func ClusterAlreadyActive(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	return cluster.Status.Status == "active"
 }
 
-func ClusterInExpansion(cluster *simplyblockv1alpha1.StorageCluster) bool {
+func ClusterInExpansion(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	return cluster.Status.Status == "in_expansion"
 }
 
@@ -290,7 +290,7 @@ type ClusterListEntry struct {
 func GetClusterID(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
 	if clusterCR.Status.UUID != "" {
 		return clusterCR.Status.UUID, nil

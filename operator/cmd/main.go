@@ -36,6 +36,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -59,6 +60,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
+	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
@@ -85,6 +87,11 @@ type serverGroupsGetter interface {
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// The cert-manager webhook provisioner injects its CA bundle into the
+	// converting kinds' CRDs (internal/webhook/conversion_trust.go), so this
+	// process has to know that kind too — the same registration
+	// cmd/conversion-webhook/main.go already carries for the same reason.
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
 	// v1alpha2 is the shape every controller reads for the kinds that have one.
 	// v1alpha1 stays registered because it is still the storage version and still
@@ -351,6 +358,17 @@ func main() {
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
+	// The cluster stream is the one subscription with no scope: the control
+	// plane serves every cluster from one route, so a single stream covers
+	// every StorageCluster in every namespace and no reconciler opens or
+	// closes it. Its scope is added here, once, because there is no object
+	// whose arrival would.
+	clusterSubscription := subscriptions.NewClusterSubscription()
+	cpSubscriptions.AddSubscription(clusterSubscription).Add(subscriptions.RootScope)
+	// The task stream is scoped per cluster and carries what that cluster is
+	// currently busy with, which its status publishes as a capped window.
+	taskSubscription := subscriptions.NewTaskSubscription()
+	taskScopes := cpSubscriptions.AddSubscription(taskSubscription)
 	// One stream per cluster carries every node of it, so the cluster's own
 	// controller opens the scope while the node's controller supplies the
 	// backend-id-to-object mapping the events are named by.
@@ -460,14 +478,23 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageClusterReconciler{
+	if err := (&clustercontroller.StorageClusterReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
+		API:          clustercontroller.NewControlPlane(),
 		Namespace:    operatorNamespace,
+		Clusters:     clusterSubscription,
+		Tasks:        taskSubscription,
 		NodeScopes:   nodeScopes,
+		TaskScopes:   taskScopes,
 		BackupScopes: []*cpinformer.ScopeSet{backupScopes, backupPolicyScopes},
-		BackupRegistrars: []controller.ClusterRegistrar{
+		// Every subscription that names a StorageCluster needs the same
+		// mapping, and this reconciler is the only party that knows both the
+		// backend id and the object it was adopted as.
+		BackupRegistrars: []clustercontroller.ClusterRegistrar{
+			&clusterSubscription.ClusterRegistry,
+			&taskSubscription.ClusterRegistry,
 			&backupSubscription.ClusterRegistry,
 			&backupPolicySubscription.ClusterRegistry,
 		},
@@ -657,10 +684,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageClusterOpsReconciler{
+	if err := (&clustercontroller.StorageClusterOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
+		API:      clustercontroller.NewControlPlane(),
+		Clusters: clusterSubscription,
+		Nodes:    nodeSubscription,
+		Tasks:    taskSubscription,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)

@@ -37,6 +37,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -89,7 +90,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	clusterCR := &simplyblockv1alpha1.StorageCluster{}
+	clusterCR := &simplyblockv1alpha2.StorageCluster{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Namespace: req.Namespace,
 		Name:      snode.Spec.ClusterName,
@@ -101,7 +102,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
-	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
+	if !ptr.BoolFromOrFalse(spec.EnableLatencyBenchmark) {
 		return ctrl.Result{}, nil
 	}
 	// The latency/baseline Jobs reuse the existing top-level rebalancer image
@@ -194,7 +195,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	ctx context.Context,
 	snode *simplyblockv1alpha1.StorageNodeSet,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 	poolUUID string,
 	node simplyblockv1alpha1.NodeStatus,
 	image string,

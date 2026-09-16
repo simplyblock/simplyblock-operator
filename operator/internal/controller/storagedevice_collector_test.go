@@ -70,11 +70,11 @@ func collectorDevice(
 
 // collectorCluster is the StorageCluster whose warning threshold decides when a
 // device is nearly full.
-func collectorCluster(warnPercent int32) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func collectorCluster(warnPercent int64) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: "production"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			WarningThresholdSpec: &simplyblockv1alpha1.CapacityThresholdSpec{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			WarningThreshold: &simplyblockv1alpha2.CapacityThresholdSpec{
 				Capacity: ptr.To(warnPercent),
 			},
 		},
@@ -296,7 +296,7 @@ func TestAClusterWithNoThresholdFallsBackToTheDefault(t *testing.T) {
 		sdCluster: {sdDevice: {Total: 1000, Used: 990, SampledAt: time.Unix(1, 0)}},
 	}}
 	c := newCollector(t, capacity,
-		&simplyblockv1alpha1.StorageCluster{
+		&simplyblockv1alpha2.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: "production"},
 		},
 		collectorDevice("production-7f3a9c-5e0000a1", simplyblockv1alpha2.StorageDevicePhaseOnline, sdDevice, 1000))

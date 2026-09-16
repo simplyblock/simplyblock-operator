@@ -78,10 +78,10 @@ func storagePool(namespace, name, poolID string) *simplyblockv1alpha2.StoragePoo
 // namespace varies between tests: every pool's clusterRef names the same cluster
 // and the samples are keyed by the same UUID, so what a case changes is where the
 // cluster is rather than what it is.
-func storageCluster(namespace string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func storageCluster(namespace string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: testPoolClusterCR},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testPoolCluster},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: testPoolCluster},
 	}
 }
 

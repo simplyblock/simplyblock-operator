@@ -17,5 +17,6 @@
 controlplanes.storage.simplyblock.io
 storagebackups.storage.simplyblock.io
 storageclusterops.storage.simplyblock.io
+storageclusters.storage.simplyblock.io
 storagenodeops.storage.simplyblock.io
 storagepools.storage.simplyblock.io

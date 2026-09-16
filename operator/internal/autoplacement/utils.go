@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -31,9 +31,9 @@ const (
 	// Rolling-window baseline defaults. The rollingWindow strategy derives each node's
 	// baseline from a robust (outlier-rejecting) estimate over BaselineWindow of the probe
 	// latency series in Prometheus, rather than the frozen one-shot fio benchmark.
-	defaultBaselineStrategy   = string(simplyblockv1alpha1.BaselineStrategyRollingWindow)
+	defaultBaselineStrategy   = string(simplyblockv1alpha2.BaselineStrategyRollingWindow)
 	defaultBaselineWindow     = 6 * time.Hour
-	defaultBaselineColdStart  = string(simplyblockv1alpha1.BaselineColdStartPartialWindow)
+	defaultBaselineColdStart  = string(simplyblockv1alpha2.BaselineColdStartPartialWindow)
 	defaultBaselineMinSamples = 6
 	// defaultBaselineOutlierK is the Hampel-identifier threshold (samples beyond
 	// k·1.4826·MAD from the median are rejected). 3.0 is the conventional value.
@@ -90,24 +90,27 @@ type RebalancingConfig struct {
 // ResolveAutoPlacementConfig applies defaults and validates the spec. It returns an error
 // when prometheusURL is missing, which is the only hard requirement.
 func ResolveAutoPlacementConfig(
-	spec simplyblockv1alpha1.VolumeAutoPlacementSettings,
+	spec simplyblockv1alpha2.VolumeAutoPlacementSettings,
 ) (RebalancingConfig, error) {
 	cfg := RebalancingConfig{
 		EvalInterval:            DefaultEvaluationInterval,
 		ImbalanceThreshold:      float64(ptr.From(spec.ImbalanceThreshold, defaultImbalanceThresholdPct)),
 		MinHotColdDifferencePct: float64(ptr.From(spec.MinHotColdDifferencePct, defaultMinHotColdDifferencePct)),
 		LatencyPercentile:       defaultLatencyPercentile,
-		MigrationEnabled:        ptr.From(spec.MigrationEnabled, true),
-		IopsWeight:              defaultIOPSWeight,
-		ThroughputWeight:        defaultThroughputMBWeight,
-		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,
-		CoolDownSecs:            int64(ptr.From(spec.DefaultCoolDownSeconds, defaultCoolDownSeconds)),
-		BaselineStrategy:        string(ptr.From(spec.BaselineStrategy, simplyblockv1alpha1.BaselineStrategy(defaultBaselineStrategy))),
-		BaselineWindow:          defaultBaselineWindow,
-		BaselineStep:            defaultBaselineStep,
-		BaselineColdStart:       string(ptr.From(spec.BaselineColdStart, simplyblockv1alpha1.BaselineColdStartPolicy(defaultBaselineColdStart))),
-		BaselineMinSamples:      int(ptr.From(spec.BaselineMinSamples, int32(defaultBaselineMinSamples))),
-		BaselineOutlierK:        ptr.From(spec.BaselineOutlierK, defaultBaselineOutlierK),
+		// disableMigration is the inverting rename of
+		// design-property-renames.md §2.3: migration is on unless somebody
+		// turns it off, so an unstated field means enabled.
+		MigrationEnabled:   !ptr.From(spec.DisableMigration, false),
+		IopsWeight:         defaultIOPSWeight,
+		ThroughputWeight:   defaultThroughputMBWeight,
+		MaxMigrations:      defaultMaxVolumeMigrationsPerCycle,
+		CoolDownSecs:       int64(ptr.From(spec.DefaultCoolDownSeconds, defaultCoolDownSeconds)),
+		BaselineStrategy:   string(ptr.From(spec.BaselineStrategy, simplyblockv1alpha2.BaselineStrategy(defaultBaselineStrategy))),
+		BaselineWindow:     defaultBaselineWindow,
+		BaselineStep:       defaultBaselineStep,
+		BaselineColdStart:  string(ptr.From(spec.BaselineColdStart, simplyblockv1alpha2.BaselineColdStartPolicy(defaultBaselineColdStart))),
+		BaselineMinSamples: int(ptr.From(spec.BaselineMinSamples, int32(defaultBaselineMinSamples))),
+		BaselineOutlierK:   ptr.From(spec.BaselineOutlierK, defaultBaselineOutlierK),
 	}
 
 	if spec.EvaluationInterval != nil && spec.EvaluationInterval.Duration > 0 {

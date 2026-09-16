@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
@@ -136,15 +137,14 @@ func TestResolveConsumerNodeName_PVMissing(t *testing.T) {
 	}
 }
 
-// ---- rebalancer image resolution and migration-enabled guard ----
+// ---- rebalancer image resolution and the known-cluster guard ----
 
 func TestResolveRebalancerImage(t *testing.T) {
-	enabled := true
 	image := "pinned:v1"
 
 	t.Run("explicit image is used", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
-			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled, RebalancerImage: &image}))
+			&simplyblockv1alpha2.VolumeMigrationSettings{RebalancerImage: &image}))
 		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
 		if err != nil {
 			t.Fatalf("resolveRebalancerImage: %v", err)
@@ -154,9 +154,9 @@ func TestResolveRebalancerImage(t *testing.T) {
 		}
 	})
 
-	t.Run("enabled without a pinned image falls back to the default", func(t *testing.T) {
+	t.Run("no pinned image falls back to the default", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
-			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled}))
+			&simplyblockv1alpha2.VolumeMigrationSettings{}))
 		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
 		if err != nil {
 			t.Fatalf("resolveRebalancerImage: %v", err)
@@ -167,18 +167,13 @@ func TestResolveRebalancerImage(t *testing.T) {
 	})
 }
 
-func TestCheckVolumeMigrationEnabled(t *testing.T) {
-	disabled := false
-
-	t.Run("disabled is an error", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
-			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled}))
-		err := checkVolumeMigrationEnabled(context.Background(), r.Client, testVMNamespace, testClusterUUID)
-		if err == nil {
-			t.Fatalf("expected an error when migration is disabled")
-		}
-		if !strings.Contains(err.Error(), "disabled") {
-			t.Errorf("error = %q, want it to say migration is disabled", err)
+func TestRequireStorageCluster(t *testing.T) {
+	t.Run("a known cluster passes", func(t *testing.T) {
+		r, _ := newVMReconciler(t, unreachableAPI,
+			clusterWithSettings(&simplyblockv1alpha2.VolumeMigrationSettings{}))
+		if err := requireStorageCluster(
+			context.Background(), r.Client, testVMNamespace, testClusterUUID); err != nil {
+			t.Fatalf("requireStorageCluster: %v", err)
 		}
 	})
 
@@ -186,7 +181,7 @@ func TestCheckVolumeMigrationEnabled(t *testing.T) {
 	// would then migrate against a cluster the operator does not manage.
 	t.Run("no StorageCluster for the UUID is an error", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI)
-		err := checkVolumeMigrationEnabled(context.Background(), r.Client, testVMNamespace, "unknown-cluster")
+		err := requireStorageCluster(context.Background(), r.Client, testVMNamespace, "unknown-cluster")
 		if err == nil {
 			t.Fatalf("expected an error for an unknown cluster UUID")
 		}

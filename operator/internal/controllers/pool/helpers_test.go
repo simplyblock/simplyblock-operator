@@ -74,10 +74,10 @@ func newClient(t *testing.T, objects ...client.Object) client.Client {
 // newCluster is the StorageCluster a pool names. Only the UUID varies between
 // tests: an empty one is a cluster that is not finished, which is what a pool
 // applied alongside its cluster waits on.
-func newCluster(uuid string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func newCluster(uuid string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: objectMeta(testCluster, testNamespace),
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: uuid},
 	}
 }
 

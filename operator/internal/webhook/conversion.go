@@ -35,6 +35,7 @@ type convertedKind struct {
 var convertedKinds = []convertedKind{
 	{hub: &v1alpha2.ControlPlane{}, crdName: "controlplanes.storage.simplyblock.io"},
 	{hub: &v1alpha2.StorageBackup{}, crdName: "storagebackups.storage.simplyblock.io"},
+	{hub: &v1alpha2.StorageCluster{}, crdName: "storageclusters.storage.simplyblock.io"},
 	{hub: &v1alpha2.StorageClusterOps{}, crdName: "storageclusterops.storage.simplyblock.io"},
 	{hub: &v1alpha2.StorageNodeOps{}, crdName: "storagenodeops.storage.simplyblock.io"},
 	{hub: &v1alpha2.StoragePool{}, crdName: "storagepools.storage.simplyblock.io"},

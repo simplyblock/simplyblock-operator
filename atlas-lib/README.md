@@ -135,7 +135,7 @@ atlas/
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
-│   ├── capacity.go         Capacity + VolumeCapacity / DeviceCapacity (size + sample date)
+│   ├── capacity.go         Capacity + Cluster/Volume/Device/Node/PoolCapacity (size + sample date)
 │   ├── volumeio.go         VolumeIO: per-volume IOPS + throughput
 │   └── latency.go          ClusterLatencies / ClusterLatencySamples (p50/p99), ErrLatencyDataNotReady
 ├── statemachine/           Deterministic state machine declared as data
@@ -333,12 +333,17 @@ for _, handle := range handles {
 Every value is a scrape, so it is at most one scrape interval old, and
 Prometheus offers no push or watch for samples, so a caller reads at the moment
 it needs a number. A cache adds staleness on top of the scrape interval and has
-no event to invalidate it. `DeviceCapacity` is the same call keyed by device UUID.
+no event to invalidate it. `DeviceCapacity`, `NodeCapacity`, and `PoolCapacity`
+are the same call keyed by device, node, and pool UUID. `ClusterCapacity` is the
+odd one out and hands back a single sample rather than a map: the cluster is the
+scope every one of these queries is already narrowed to, so grouping by it
+yields the one entry the caller asked for.
 
 _Today:_ `operator/internal/metricsapi/storage.go` reads `VolumeCapacity` once
 per cluster per request to serve the measured half of a `LogicalVolumeMetrics`
 reading, and takes the provisioned size from the volume itself.
-`DeviceCapacity` has no caller:
+`operator/internal/metricsapi/poolstorage.go` and `clusterstorage.go` do the
+same with `PoolCapacity` and `ClusterCapacity`. `DeviceCapacity` has no caller:
 `operator/internal/controller/storagedevice_controller.go` still publishes the
 device capacity its subscription cached, which the device stream never updates.
 
@@ -1391,7 +1396,7 @@ if err := net.ValidateExternalURL(spec.PrometheusURL); err != nil {
 }
 ```
 
-_Today:_ `operator/internal/controller/simplyblockstoragecluster_controller.go`.
+_Today:_ `operator/internal/controllers/cluster/storagecluster_controller.go`.
 
 ### Testing against the seams
 

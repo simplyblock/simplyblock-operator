@@ -14,7 +14,7 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -170,12 +170,12 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	clusterUUID string,
 	log logr.Logger,
 ) (nodeUUID string, ok bool) {
-	var list simplyblockv1alpha1.StorageClusterList
+	var list simplyblockv1alpha2.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
 		log.Error(err, "Failed to list StorageClusters")
 		return "", false
 	}
-	var cr *simplyblockv1alpha1.StorageCluster
+	var cr *simplyblockv1alpha2.StorageCluster
 	for i := range list.Items {
 		if list.Items[i].Status.UUID == clusterUUID {
 			cr = &list.Items[i]
@@ -193,7 +193,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	// the same latency-deviation signal — so it is gated on LatencyBenchmarkEnabled
 	// (opt-in, default false), not on the rebalancing Enabled flag.
 	spec := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
-	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
+	if !ptr.BoolFromOrFalse(spec.EnableLatencyBenchmark) {
 		log.V(1).Info("Skipping: latency benchmarking not enabled (auto-placement requires it)", "cluster", cr.Name)
 		return "", false
 	}

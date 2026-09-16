@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -104,7 +105,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	clusterCR := &simplyblockv1alpha1.StorageCluster{}
+	clusterCR := &simplyblockv1alpha2.StorageCluster{}
 	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -122,12 +123,14 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	// delay until the next realignment check (0 when realignment is disabled).
 	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, realignClusterUUID)
 
-	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
-	// An unset flag means off, so realignment still gets its requeue.
-	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
-	if !ptr.BoolFromOrFalse(spec.Enabled) {
+	// Auto-rebalancing is opt-in, and the switch is a field of the spec rather
+	// than of the block it governs: spec.volumeAutoPlacement.enabled said the
+	// same word twice (design-storagecluster.md §3.1). Unset means off, so
+	// realignment still gets its requeue.
+	if !ptr.BoolFromOrFalse(clusterCR.Spec.EnableVolumeAutoPlacement) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}
+	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
 
 	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
 	if err != nil {
@@ -243,7 +246,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 // ContinueMigration → poll); this function only creates the CR and tracks it.
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 	toMigrate []autoplacement.MigrationCandidate,
 	coolDownSecs int64,
 	cycleDeadline time.Time,
@@ -301,7 +304,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 // reaps the finished CR.
 func (r *VolumeRebalancerReconciler) processPendingMigrations(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 	clusterUUID string,
 ) {
 	log := logf.FromContext(ctx)
@@ -366,7 +369,7 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 // setRebalancing patches status.rebalancing on the StorageCluster CR.
 func (r *VolumeRebalancerReconciler) setRebalancing(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 	value bool,
 ) error {
 	orig := clusterCR.DeepCopy()
@@ -431,7 +434,7 @@ func nextRequeue(
 // to align.
 func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 	clusterUUID string,
 ) time.Duration {
 	log := logf.FromContext(ctx)
@@ -531,7 +534,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 // migration the control plane has taken on counts.
 func (r *VolumeRebalancerReconciler) movingVolumes(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 ) ([]string, error) {
 	var migrations simplyblockv1alpha1.VolumeMigrationList
 	if err := r.List(ctx, &migrations, client.InNamespace(clusterCR.Namespace)); err != nil {
@@ -561,7 +564,7 @@ func (r *VolumeRebalancerReconciler) movingVolumes(
 // so a one-shot force is consumed exactly once.
 func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 ) error {
 	if _, ok := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation]; !ok {
 		return nil
@@ -571,26 +574,30 @@ func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
 	return r.Patch(ctx, clusterCR, patch)
 }
 
-// resolveDataRealignmentConfig reports whether post-migration data realignment is
-// enabled for the cluster and the interval between realignments. Realignment is on by
-// default and is only meaningful while volume migration itself is enabled.
+// resolveDataRealignmentConfig reports whether post-migration data realignment
+// is enabled for the cluster, and how the requests are spaced.
+//
+// The switch is spec.enableDataRealignment rather than a field of the block it
+// governs, and it is off unless a spec asks for it: every enable-formed field
+// in this group is (design-storagecluster.md §3.1). A cluster that had
+// realignment on under the registered default keeps it, because the conversion
+// writes the field rather than leaving the operator to guess.
+//
+// There is no volume-migration switch above it any more. Migration cannot be
+// turned off, so "nothing ever moves" is not a state a cluster can be in.
 func resolveDataRealignmentConfig(
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 ) (enabled bool, interval time.Duration, minMoves int64) {
 	interval = defaultDataRealignmentInterval
 	minMoves = defaultDataRealignmentMinMoves
-	vms := clusterCR.Spec.VolumeMigrationSettings
-	if vms != nil && !ptr.BoolFromOrTrue(vms.Enabled) {
-		// Volume migration disabled — nothing ever moves, so nothing to realign.
+	if !ptr.BoolFromOrFalse(clusterCR.Spec.EnableDataRealignment) {
 		return false, interval, minMoves
 	}
+	vms := clusterCR.Spec.VolumeMigrationSettings
 	if vms == nil || vms.DataRealignment == nil {
 		return true, interval, minMoves
 	}
 	dr := vms.DataRealignment
-	if !ptr.BoolFromOrTrue(dr.Enabled) {
-		return false, interval, minMoves
-	}
 	if dr.Interval != nil && dr.Interval.Duration > 0 {
 		interval = dr.Interval.Duration
 	}
@@ -633,7 +640,7 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageCluster{},
+		For(&simplyblockv1alpha2.StorageCluster{},
 			// React to spec changes (generation) and to annotation changes so an
 			// explicit realignment trigger (TriggerRealignmentAnnotation) reconciles
 			// the cluster immediately rather than waiting for the next interval tick.

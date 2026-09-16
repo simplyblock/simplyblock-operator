@@ -1,9 +1,23 @@
 package utils
 
+// BackupConfig is where a cluster's backups live and how to reach them. It is
+// a location and nothing else: how a copy is taken is the control plane's, and
+// the four fields that described that are gone from the CRD
+// (design-storagecluster.md §12), so the operator stops sending them and the
+// backend's defaults apply. They stay declared here because the endpoint still
+// accepts them and a future caller may have reason to.
 type BackupConfig struct {
 	AccessKeyID     string `json:"access_key_id,omitempty"`
 	SecretAccessKey string `json:"secret_access_key,omitempty"`
 	LocalEndpoint   string `json:"local_endpoint,omitempty"`
+	// Bucket, Prefix, and Region locate the store within the endpoint. The
+	// registered CRD had no bucket at all, so nothing in the store could be
+	// located; these arrive with spec.backup's rework.
+	// Wire keys must match the /api/v2/clusters/ endpoint — verify against
+	// sbcli before release.
+	Bucket          string `json:"bucket,omitempty"`
+	Prefix          string `json:"prefix,omitempty"`
+	Region          string `json:"region,omitempty"`
 	SnapshotBackups *bool  `json:"snapshot_backups,omitempty"`
 	WithCompression *bool  `json:"with_compression,omitempty"`
 	SecondaryTarget *int32 `json:"secondary_target,omitempty"`
@@ -47,6 +61,10 @@ type ClusterAddParams struct {
 	// Atomic4k declares 4K write atomicity on devices with a <4K logical block size.
 	// Only meaningful when InlineChecksum is true.
 	Atomic4k bool `json:"atomic_4k,omitempty"`
+	// DeviceMode selects "nvme" (default) or "lblk" device attachment for the whole
+	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
+	// "lblk" against an unpatched backend is rejected.
+	DeviceMode string `json:"device_mode,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -127,4 +145,7 @@ type StorageNodeSetAddParams struct {
 	FailureDomain *int `json:"failure_domain,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
+	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py
+	// --force-format only marks them selectable, this flag does the actual wipe.
+	ForceFormat bool `json:"force_format,omitempty"`
 }
