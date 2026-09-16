@@ -134,9 +134,9 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	switch {
-	case isExternal(&cp):
-		return r.reconcileExternal(ctx, &cp)
 	case isManaged(&cp):
+		return r.reconcileExternal(ctx, &cp)
+	case isLocal(&cp):
 		return r.reconcileManaged(ctx, &cp)
 	default:
 		// The API's CEL rule refuses this at admission, so reaching it means an
@@ -144,7 +144,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// It holds and says so rather than picking a mode on the user's behalf.
 		return ctrl.Result{RequeueAfter: steadyStateInterval}, r.report(ctx, &cp,
 			simplyblockv1alpha2.ControlPlanePhaseInstalling,
-			"spec.source names neither a managed nor an external control plane, so there is "+
+			"spec.source names neither a managed nor a remote control plane, so there is "+
 				"nothing to install and nowhere to probe")
 	}
 }
@@ -156,7 +156,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *ControlPlaneReconciler) reconcileExternal(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
-	access, err := resolveExternal(ctx, r.Client, cp)
+	access, err := resolveManaged(ctx, r.Client, cp)
 	if err != nil {
 		var credentials *credentialsError
 		reason := EndpointUnreachable
@@ -299,7 +299,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
 
 	case stepAwaitingAPI:
-		ok, message := r.probe(ctx, cp.Namespace, externalAccess{endpoint: managedEndpoint(cp.Namespace)})
+		ok, message := r.probe(ctx, cp.Namespace, managedAccess{endpoint: localEndpoint(cp.Namespace)})
 		if !ok {
 			return false, fmt.Sprintf("the management API is not answering yet: %s", message), nil
 		}
@@ -324,7 +324,7 @@ func (r *ControlPlaneReconciler) steadyState(
 
 	// A managed control plane is reached on the Service this install created, so
 	// there is no token to present and no CA beyond the cluster's own.
-	access := externalAccess{endpoint: managedEndpoint(cp.Namespace)}
+	access := managedAccess{endpoint: localEndpoint(cp.Namespace)}
 	ok, message := r.probe(ctx, cp.Namespace, access)
 
 	components, err := observe(ctx, r.Client, cp.Namespace)
@@ -366,7 +366,7 @@ func (r *ControlPlaneReconciler) applyEverything(
 
 // probe performs the readiness read and records what it cost.
 func (r *ControlPlaneReconciler) probe(
-	ctx context.Context, namespace string, access externalAccess,
+	ctx context.Context, namespace string, access managedAccess,
 ) (bool, string) {
 	prober := r.Prober
 	if prober == nil {
@@ -389,7 +389,7 @@ func (r *ControlPlaneReconciler) probe(
 // version reads what the management API reports. A read that fails publishes
 // nothing rather than clearing what was published, because a version the
 // operator could not confirm this pass is not a version that changed.
-func (r *ControlPlaneReconciler) version(ctx context.Context, access externalAccess) string {
+func (r *ControlPlaneReconciler) version(ctx context.Context, access managedAccess) string {
 	prober := r.Prober
 	if prober == nil {
 		prober = &HTTPProber{Token: access.token, Client: access.client}
@@ -555,7 +555,7 @@ func (r *ControlPlaneReconciler) announce(
 // it. It is a hold rather than a failure — removing the clusters resolves it,
 // and nothing else can.
 //
-// The same hold applies to an external control plane, because a namespace whose
+// The same hold applies to a remote control plane, because a namespace whose
 // clusters have no control plane to reach is a namespace of objects nothing can
 // reconcile.
 func (r *ControlPlaneReconciler) finalize(
@@ -589,10 +589,10 @@ func (r *ControlPlaneReconciler) finalize(
 	}
 	heldTheInstall := holder.Name == "" || holder == client.ObjectKeyFromObject(cp)
 
-	// An external control plane had nothing installed, so there is nothing
+	// A remote control plane had nothing installed, so there is nothing
 	// cluster-scoped to remove: deletion takes the object and touches neither
 	// the endpoint nor its data.
-	if isManaged(cp) && heldTheInstall {
+	if isLocal(cp) && heldTheInstall {
 		for _, obj := range append(foundationDBClusterScoped(), managementAPIClusterScoped()...) {
 			if err := deleteIfMarked(ctx, r.Client, obj); err != nil {
 				return ctrl.Result{}, err

@@ -57,24 +57,24 @@ func testScheme(t *testing.T) *runtime.Scheme {
 
 // managedControlPlane is the fixture every managed test starts from: the
 // singleton, in the namespace, naming an image.
-func managedControlPlane() *simplyblockv1alpha2.ControlPlane {
+func localControlPlane() *simplyblockv1alpha2.ControlPlane {
 	return &simplyblockv1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.ControlPlaneSpec{
 			Source: simplyblockv1alpha2.ControlPlaneSource{
-				Managed: &simplyblockv1alpha2.ManagedControlPlane{Image: testImage},
+				Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 	}
 }
 
 // externalControlPlane names a control plane that already exists.
-func externalControlPlane(endpoint string) *simplyblockv1alpha2.ControlPlane {
+func managedControlPlane(endpoint string) *simplyblockv1alpha2.ControlPlane {
 	return &simplyblockv1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: testNamespace},
 		Spec: simplyblockv1alpha2.ControlPlaneSpec{
 			Source: simplyblockv1alpha2.ControlPlaneSource{
-				External: &simplyblockv1alpha2.ExternalControlPlane{
+				Managed: &simplyblockv1alpha2.ManagedControlPlane{
 					Endpoint:             endpoint,
 					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 				},

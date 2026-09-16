@@ -304,7 +304,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}},
 		TerminationGracePeriodSeconds: ptr.To(int64(10)),
 	}
-	scheduling(cp.Spec.Source.Managed, &spec)
+	scheduling(cp.Spec.Source.Local, &spec)
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -361,7 +361,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				},
 			},
 		}
-		if managed := cp.Spec.Source.Managed; managed != nil && len(managed.NodeSelector) > 0 {
+		if managed := cp.Spec.Source.Local; managed != nil && len(managed.NodeSelector) > 0 {
 			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(managed.NodeSelector)
 		}
 		return map[string]any{"podTemplate": template}
@@ -387,7 +387,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"spec": volumeClaimSpec(fdb),
 		},
 	}
-	if managed := cp.Spec.Source.Managed; managed != nil && len(managed.NodeSelector) > 0 {
+	if managed := cp.Spec.Source.Local; managed != nil && len(managed.NodeSelector) > 0 {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] =
 			toAnyMap(managed.NodeSelector)
 	}
@@ -480,7 +480,7 @@ func volumeClaimSpec(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
 	return spec
 }
 
-// coordinatorCount is spec.source.managed.foundationDB.replicas, or the API's
+// coordinatorCount is spec.source.local.foundationDB.replicas, or the API's
 // default. Three is the smallest count that survives one loss.
 func coordinatorCount(fdb *simplyblockv1alpha2.FoundationDBSpec) int64 {
 	if fdb == nil || fdb.Replicas == nil {

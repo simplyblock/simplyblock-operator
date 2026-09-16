@@ -26,7 +26,7 @@ import (
 // The environment the control plane reads that has no field on the ControlPlane
 // spec.
 //
-// design-controlplane.md's ManagedControlPlane carries the image, the sizing,
+// design-controlplane.md's LocalControlPlane carries the image, the sizing,
 // and the scheduling, and nothing else: the rest of what the chart took as
 // values is either about the observability half this install does not apply or
 // is a constant the control plane and the operator have to agree on. These are
@@ -175,7 +175,7 @@ func containers(services []service, image string, pullPolicy corev1.PullPolicy) 
 // scheduling is what every pod the install creates carries from the spec: where
 // it may run and what it tolerates. It is one function so that a pod added later
 // cannot silently miss the fields an operator set.
-func scheduling(managed *simplyblockv1alpha2.ManagedControlPlane, spec *corev1.PodSpec) {
+func scheduling(managed *simplyblockv1alpha2.LocalControlPlane, spec *corev1.PodSpec) {
 	if managed == nil {
 		return
 	}
@@ -205,7 +205,7 @@ func spreadAcrossHosts(app string) *corev1.Affinity {
 // pullPolicyOf is the spec's pull policy, or the default the API declares. A
 // zero value reaches this only from an object written before the default landed
 // or built in a test, and IfNotPresent is what the marker says.
-func pullPolicyOf(managed *simplyblockv1alpha2.ManagedControlPlane) corev1.PullPolicy {
+func pullPolicyOf(managed *simplyblockv1alpha2.LocalControlPlane) corev1.PullPolicy {
 	if managed == nil || managed.ImagePullPolicy == "" {
 		return corev1.PullIfNotPresent
 	}

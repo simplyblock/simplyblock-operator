@@ -1,6 +1,11 @@
 // Package controlplane reconciles the ControlPlane singleton and the operations
 // performed against it.
 //
+// The kind says one of two things. spec.source.local is a control plane this
+// cluster hosts, which the operator installs and owns. spec.source.managed is a
+// control plane elsewhere that this cluster's storage is managed by, which the
+// operator only resolves and probes.
+//
 // The kind is the root of the ownership spine: a StorageCluster cannot be
 // created, a StorageNode cannot be added, and a volume cannot be provisioned
 // until it reports Available. That makes two things this package does more

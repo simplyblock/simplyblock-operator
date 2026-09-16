@@ -1,7 +1,7 @@
 // Tests for the ControlPlane conversion between v1alpha1 and the v1alpha2 hub.
 //
 // Two properties are converted (design-property-renames.md §2.4 and §2.5): the
-// top-level image regroups under spec.source.managed, and the readiness phase
+// top-level image regroups under spec.source.local, and the readiness phase
 // Ready becomes Available. Both directions are tested, because a conversion that
 // renames going up and copies going down corrupts on the first
 // `kubectl get -o yaml | kubectl apply -f -` and a one-way test cannot see it.
@@ -37,11 +37,11 @@ func TestControlPlaneConvertToRegroupsImage(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if dst.Spec.Source.Managed == nil {
-		t.Fatalf("spec.source.managed is absent, want the image regrouped under it")
+	if dst.Spec.Source.Local == nil {
+		t.Fatalf("spec.source.local is absent, want the image regrouped under it")
 	}
-	if got := dst.Spec.Source.Managed.Image; got != testImage {
-		t.Errorf("spec.source.managed.image = %q, want %q", got, testImage)
+	if got := dst.Spec.Source.Local.Image; got != testImage {
+		t.Errorf("spec.source.local.image = %q, want %q", got, testImage)
 	}
 	if dst.Name != "simplyblock" || dst.Namespace != "sb" {
 		t.Errorf("object meta not carried: %q/%q", dst.Namespace, dst.Name)
@@ -61,14 +61,14 @@ func TestControlPlaneConvertToStillNamesManagedWhenImageEmpty(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if dst.Spec.Source.Managed == nil {
-		t.Fatalf("spec.source.managed is absent, want a managed source with an empty image")
+	if dst.Spec.Source.Local == nil {
+		t.Fatalf("spec.source.local is absent, want a managed source with an empty image")
 	}
-	if got := dst.Spec.Source.Managed.Image; got != "" {
-		t.Errorf("spec.source.managed.image = %q, want empty", got)
+	if got := dst.Spec.Source.Local.Image; got != "" {
+		t.Errorf("spec.source.local.image = %q, want empty", got)
 	}
-	if dst.Spec.Source.External != nil {
-		t.Errorf("spec.source.external = %+v, want nil", dst.Spec.Source.External)
+	if dst.Spec.Source.Managed != nil {
+		t.Errorf("spec.source.managed = %+v, want nil", dst.Spec.Source.Managed)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestControlPlaneConvertFromUngroupsImage(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
 		Spec: v1alpha2.ControlPlaneSpec{
 			Source: v1alpha2.ControlPlaneSource{
-				Managed: &v1alpha2.ManagedControlPlane{Image: testImage},
+				Local: &v1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 	}

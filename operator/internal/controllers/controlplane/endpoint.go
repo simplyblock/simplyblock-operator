@@ -1,5 +1,5 @@
-// Where the control plane is: derived for a managed one, echoed and validated
-// for an external one.
+// Where the control plane is: derived for one this cluster hosts, echoed and
+// validated for one it is managed by.
 //
 // This is the field that makes the object useful to anything but a human
 // (design-controlplane.md §3.3). Every controller in the operator reaches the
@@ -41,8 +41,8 @@ var credentialKeys = []string{"token", "secret"}
 // assembled by hand.
 var caBundleKeys = []string{"ca.crt", "tls.crt"}
 
-// managedEndpoint is where the management API this install created answers.
-func managedEndpoint(namespace string) string {
+// localEndpoint is where the management API this install created answers.
+func localEndpoint(namespace string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ComponentWebAPI, namespace, webAPIPort)
 }
 
@@ -54,13 +54,13 @@ type credentialsError struct{ message string }
 
 func (e *credentialsError) Error() string { return e.message }
 
-// externalAccess is everything needed to reach an external control plane: where
+// managedAccess is everything needed to reach a remote control plane: where
 // it is, what to authenticate with, and what to verify its certificate against.
 //
 // The three travel together because all three come from the same spec block and
 // all three are needed by the same call. Returning the transport rather than the
 // CA bytes keeps the trust decision in one place instead of at each probe.
-type externalAccess struct {
+type managedAccess struct {
 	endpoint string
 	token    string
 
@@ -69,29 +69,29 @@ type externalAccess struct {
 	client *http.Client
 }
 
-// resolveExternal reads where an external control plane is, what to
+// resolveManaged reads where a remote control plane is, what to
 // authenticate with, and what to verify it against.
 //
 // The endpoint is validated here as well as by the spec's pattern, because the
 // pattern admits a loopback address and this does not. An operator pointed at
 // 127.0.0.1 would probe itself, which is the request-forgery shape every
 // external endpoint in this group is guarded against.
-func resolveExternal(
+func resolveManaged(
 	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
-) (externalAccess, error) {
-	external := cp.Spec.Source.External
+) (managedAccess, error) {
+	external := cp.Spec.Source.Managed
 	if external == nil {
-		return externalAccess{}, fmt.Errorf("spec.source.external is not set")
+		return managedAccess{}, fmt.Errorf("spec.source.managed is not set")
 	}
 
 	if err := validateEndpoint(external.Endpoint); err != nil {
-		return externalAccess{}, err
+		return managedAccess{}, err
 	}
-	access := externalAccess{endpoint: external.Endpoint}
+	access := managedAccess{endpoint: external.Endpoint}
 
 	transport, err := caBundleTransport(ctx, c, cp)
 	if err != nil {
-		return externalAccess{}, err
+		return managedAccess{}, err
 	}
 	access.client = transport
 
@@ -105,11 +105,11 @@ func resolveExternal(
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: external.CredentialsSecretRef.Name}
 	if err := c.Get(ctx, key, &secret); err != nil {
 		if errors.IsNotFound(err) {
-			return externalAccess{}, &credentialsError{message: fmt.Sprintf(
+			return managedAccess{}, &credentialsError{message: fmt.Sprintf(
 				"Secret %s/%s does not exist, and it is what holds the bearer token this "+
 					"control plane is reached with", cp.Namespace, external.CredentialsSecretRef.Name)}
 		}
-		return externalAccess{}, err
+		return managedAccess{}, err
 	}
 
 	for _, k := range credentialKeys {
@@ -118,7 +118,7 @@ func resolveExternal(
 			return access, nil
 		}
 	}
-	return externalAccess{}, &credentialsError{message: fmt.Sprintf(
+	return managedAccess{}, &credentialsError{message: fmt.Sprintf(
 		"Secret %s/%s carries no %s key, so there is no token to authenticate with",
 		cp.Namespace, external.CredentialsSecretRef.Name, strings.Join(credentialKeys, " or "))}
 }
@@ -133,7 +133,7 @@ func resolveExternal(
 func caBundleTransport(
 	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
 ) (*http.Client, error) {
-	ref := cp.Spec.Source.External.CABundleSecretRef
+	ref := cp.Spec.Source.Managed.CABundleSecretRef
 	if ref == nil || ref.Name == "" {
 		return nil, nil
 	}
@@ -177,24 +177,24 @@ func caBundleTransport(
 	}, nil
 }
 
-// validateEndpoint refuses the addresses an external control plane must not be
-// at. It is the outbound-URL guard every other external endpoint in this group
+// validateEndpoint refuses the addresses a remote control plane must not be
+// at. It is the outbound-URL guard every other outbound endpoint in this group
 // carries, applied at the one place the endpoint is read.
 func validateEndpoint(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("spec.source.external.endpoint is not a URL: %w", err)
+		return fmt.Errorf("spec.source.managed.endpoint is not a URL: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("spec.source.external.endpoint has scheme %q, want http or https", parsed.Scheme)
+		return fmt.Errorf("spec.source.managed.endpoint has scheme %q, want http or https", parsed.Scheme)
 	}
 	host := parsed.Hostname()
 	if host == "" {
-		return fmt.Errorf("spec.source.external.endpoint names no host")
+		return fmt.Errorf("spec.source.managed.endpoint names no host")
 	}
 	if isLoopbackOrLinkLocal(host) {
 		return fmt.Errorf(
-			"spec.source.external.endpoint names %q, which resolves inside the operator's own "+
+			"spec.source.managed.endpoint names %q, which resolves inside the operator's own "+
 				"pod rather than to a control plane", host)
 	}
 	return nil

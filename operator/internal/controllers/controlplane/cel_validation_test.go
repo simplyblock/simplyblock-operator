@@ -5,7 +5,7 @@
 //
 // The rule that one member and only one is set is worth an apiserver test rather
 // than a unit test, for two reasons. It is the whole of what makes the two modes
-// siblings rather than a convention, so a reconciler asking `isManaged` has to be
+// siblings rather than a convention, so a reconciler asking `isLocal` has to be
 // able to assume it. And it is declared on ControlPlaneSource rather than on the
 // field that carries it, a placement chosen to work around a generator flake: a
 // rule that silently stopped reaching the schema would look exactly like a rule
@@ -36,8 +36,8 @@ import (
 func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 	apiClient := apiServer(t)
 
-	managed := &simplyblockv1alpha2.ManagedControlPlane{Image: testImage}
-	external := &simplyblockv1alpha2.ExternalControlPlane{
+	managed := &simplyblockv1alpha2.LocalControlPlane{Image: testImage}
+	external := &simplyblockv1alpha2.ManagedControlPlane{
 		Endpoint:             "https://sb-control.example.com:5000",
 		CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 	}
@@ -49,15 +49,15 @@ func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 	}{
 		{
 			name:   "managed alone is what a fresh deployment writes",
-			source: simplyblockv1alpha2.ControlPlaneSource{Managed: managed},
+			source: simplyblockv1alpha2.ControlPlaneSource{Local: managed},
 		},
 		{
 			name:   "external alone is a control plane that already exists",
-			source: simplyblockv1alpha2.ControlPlaneSource{External: external},
+			source: simplyblockv1alpha2.ControlPlaneSource{Managed: external},
 		},
 		{
 			name:       "both would install one control plane and probe another",
-			source:     simplyblockv1alpha2.ControlPlaneSource{Managed: managed, External: external},
+			source:     simplyblockv1alpha2.ControlPlaneSource{Local: managed, Managed: external},
 			wantDenied: true,
 		},
 		{
@@ -77,10 +77,10 @@ func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 			err := apiClient.Create(context.Background(), cp)
 			switch {
 			case tc.wantDenied && err == nil:
-				t.Fatal("the object was admitted, and exactly one of managed or external " +
+				t.Fatal("the object was admitted, and exactly one of local or managed " +
 					"has to be set")
 			case tc.wantDenied:
-				if !strings.Contains(err.Error(), "set exactly one of managed or external") {
+				if !strings.Contains(err.Error(), "set exactly one of local or managed") {
 					t.Errorf("denied with %q, want the rule's own message", err)
 				}
 			case err != nil:
@@ -102,7 +102,7 @@ func TestControlPlaneCELRefusesToChangeTheSource(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: namespace},
 		Spec: simplyblockv1alpha2.ControlPlaneSpec{
 			Source: simplyblockv1alpha2.ControlPlaneSource{
-				Managed: &simplyblockv1alpha2.ManagedControlPlane{Image: testImage},
+				Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 	}
@@ -111,7 +111,7 @@ func TestControlPlaneCELRefusesToChangeTheSource(t *testing.T) {
 	}
 
 	cp.Spec.Source = simplyblockv1alpha2.ControlPlaneSource{
-		External: &simplyblockv1alpha2.ExternalControlPlane{
+		Managed: &simplyblockv1alpha2.ManagedControlPlane{
 			Endpoint:             "https://sb-control.example.com:5000",
 			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 		},
@@ -138,7 +138,7 @@ func TestControlPlaneCELAdmitsAnImageChangeWithinTheSameSource(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: namespace},
 		Spec: simplyblockv1alpha2.ControlPlaneSpec{
 			Source: simplyblockv1alpha2.ControlPlaneSource{
-				Managed: &simplyblockv1alpha2.ManagedControlPlane{Image: testImage},
+				Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 	}
@@ -146,7 +146,7 @@ func TestControlPlaneCELAdmitsAnImageChangeWithinTheSameSource(t *testing.T) {
 		t.Fatalf("create the control plane: %v", err)
 	}
 
-	cp.Spec.Source.Managed.Image = "quay.io/simplyblock-io/simplyblock:26.3.0"
+	cp.Spec.Source.Local.Image = "quay.io/simplyblock-io/simplyblock:26.3.0"
 	if err := apiClient.Update(ctx, cp); err != nil {
 		t.Fatalf("an image change was denied, and it is what an Upgrade performs: %v", err)
 	}

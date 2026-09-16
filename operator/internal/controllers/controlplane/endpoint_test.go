@@ -1,4 +1,4 @@
-// What an external control plane is reached with: the endpoint, the token, and
+// What a remote control plane is reached with: the endpoint, the token, and
 // the CA its certificate is verified against.
 //
 // The CA is the one of the three that was declared in the API and wired to
@@ -35,13 +35,13 @@ Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
 -----END CERTIFICATE-----
 `
 
-func externalWithCABundle(t *testing.T, secretName string, data map[string][]byte) (
+func managedWithCABundle(t *testing.T, secretName string, data map[string][]byte) (
 	*simplyblockv1alpha2.ControlPlane, []client.Object,
 ) {
 	t.Helper()
-	cp := externalControlPlane("https://sb-control.example.com:5000")
-	cp.Spec.Source.External.CredentialsSecretRef = nil
-	cp.Spec.Source.External.CABundleSecretRef = &corev1.LocalObjectReference{Name: secretName}
+	cp := managedControlPlane("https://sb-control.example.com:5000")
+	cp.Spec.Source.Managed.CredentialsSecretRef = nil
+	cp.Spec.Source.Managed.CABundleSecretRef = &corev1.LocalObjectReference{Name: secretName}
 
 	var extra []client.Object
 	if data != nil {
@@ -56,12 +56,12 @@ func externalWithCABundle(t *testing.T, secretName string, data map[string][]byt
 // A named CA bundle produces a client that verifies against it, rather than the
 // nil client that means the system trust store.
 func TestACABundleReachesTheTransport(t *testing.T) {
-	cp, extra := externalWithCABundle(t, "cp-ca", map[string][]byte{"ca.crt": []byte(testCAPEM)})
+	cp, extra := managedWithCABundle(t, "cp-ca", map[string][]byte{"ca.crt": []byte(testCAPEM)})
 	objects := append([]client.Object{cp}, extra...)
 
-	access, err := resolveExternal(context.Background(), newClient(t, objects...), cp)
+	access, err := resolveManaged(context.Background(), newClient(t, objects...), cp)
 	if err != nil {
-		t.Fatalf("resolveExternal: %v", err)
+		t.Fatalf("resolveManaged: %v", err)
 	}
 	if access.client == nil {
 		t.Fatal("no HTTP client was built, so the probe would use the system trust store " +
@@ -75,12 +75,12 @@ func TestACABundleReachesTheTransport(t *testing.T) {
 // No reference means the system trust store, which is a nil client rather than
 // an empty pool: an empty pool verifies nothing at all.
 func TestNoCABundleLeavesTheSystemTrustStore(t *testing.T) {
-	cp := externalControlPlane("https://sb-control.example.com:5000")
-	cp.Spec.Source.External.CredentialsSecretRef = nil
+	cp := managedControlPlane("https://sb-control.example.com:5000")
+	cp.Spec.Source.Managed.CredentialsSecretRef = nil
 
-	access, err := resolveExternal(context.Background(), newClient(t, cp), cp)
+	access, err := resolveManaged(context.Background(), newClient(t, cp), cp)
 	if err != nil {
-		t.Fatalf("resolveExternal: %v", err)
+		t.Fatalf("resolveManaged: %v", err)
 	}
 	if access.client != nil {
 		t.Error("a client was built although no CA bundle was named")
@@ -101,10 +101,10 @@ func TestAnUnusableCABundleIsRefused(t *testing.T) {
 		{"it carries no PEM", map[string][]byte{"ca.crt": []byte("not a certificate")}, "no PEM certificate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cp, extra := externalWithCABundle(t, "cp-ca", tc.data)
+			cp, extra := managedWithCABundle(t, "cp-ca", tc.data)
 			objects := append([]client.Object{cp}, extra...)
 
-			_, err := resolveExternal(context.Background(), newClient(t, objects...), cp)
+			_, err := resolveManaged(context.Background(), newClient(t, objects...), cp)
 			if err == nil {
 				t.Fatal("an unusable CA bundle was accepted")
 			}

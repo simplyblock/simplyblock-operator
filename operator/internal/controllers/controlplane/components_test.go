@@ -116,7 +116,7 @@ func TestZeroDesiredIsNotAnOutage(t *testing.T) {
 	}
 }
 
-// An external control plane has no components the operator owns, so the probe is
+// A remote control plane has no components the operator owns, so the probe is
 // the only signal and Degraded is unreachable.
 func TestWithNoComponentsThePhaseFollowsTheProbeAlone(t *testing.T) {
 	for _, tc := range []struct {

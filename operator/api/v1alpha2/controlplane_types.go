@@ -1,6 +1,6 @@
 // ControlPlane in the shape design-controlplane.md settles: FoundationDB
-// together with the management API, either installed by the operator or already
-// existing somewhere else, expressed as one object.
+// together with the management API, either installed here by the operator or
+// owned by a remote control plane, expressed as one object.
 //
 // Two things distinguish it from the registered kind it replaces. spec.source
 // says which control plane the object means, so reusing an external one is a
@@ -90,10 +90,10 @@ type FoundationDBSpec struct {
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
-// ManagedControlPlane is a control plane the operator installs and owns. Its
-// objects carry a controller reference to the ControlPlane, so the ownership
-// spine starts at a real edge rather than at a Helm release.
-type ManagedControlPlane struct {
+// LocalControlPlane is a control plane this cluster hosts, installed and owned
+// by the operator. Its objects carry a controller reference to the ControlPlane,
+// so the ownership spine starts at a real edge rather than at a Helm release.
+type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// Must reference one of the trusted registries (`quay.io/simplyblock-io`,
 	// `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
@@ -137,11 +137,16 @@ type ManagedControlPlane struct {
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
-// ExternalControlPlane is a control plane that already exists. The operator
-// installs nothing and owns nothing: it resolves, probes, and reports.
-type ExternalControlPlane struct {
+// ManagedControlPlane is a control plane somewhere else, which this cluster's
+// storage is managed by rather than hosting. The operator installs nothing and
+// owns nothing here: it resolves the endpoint, probes it, and reports.
+//
+// The word is about what manages the storage clusters rather than about who
+// runs the operator. A deployment in this mode registers its clusters with a
+// control plane it does not host, so the fleet is administered from there.
+type ManagedControlPlane struct {
 	// Endpoint is the management API's base URL. It is validated against the
-	// same outbound-URL guard every other external endpoint in this group uses,
+	// same outbound-URL guard every other outbound endpoint in this group uses,
 	// so a loopback or link-local address is rejected.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
@@ -165,16 +170,17 @@ type ExternalControlPlane struct {
 	CABundleSecretRef *corev1.LocalObjectReference `json:"caBundleSecretRef,omitempty"`
 }
 
-// ControlPlaneSource selects where the control plane comes from. Exactly one
-// member is set, which is what makes the two modes siblings rather than two
-// unrelated top-level fields, and which member it is cannot change afterward.
+// ControlPlaneSource selects whether this cluster hosts its control plane or is
+// managed by one elsewhere. Exactly one member is set, which is what makes the
+// two modes siblings rather than two unrelated top-level fields, and which
+// member it is cannot change afterward.
 //
 // Both rules are declared here rather than on the field that carries the block,
 // for two separate reasons.
 //
 // The immutability is the interesting one. What is frozen is the choice between
 // the two modes and not the block, because the members have to stay editable:
-// changing spec.source.managed.image is an ordinary edit, and it is what a
+// changing spec.source.local.image is an ordinary edit, and it is what a
 // ControlPlaneOps upgrade performs. Spelling it +k8s:immutable on the field
 // would emit self == oldSelf over the whole struct, which freezes the image with
 // it and makes that operation impossible to complete.
@@ -184,26 +190,26 @@ type ExternalControlPlane struct {
 // order that varies between runs, so a field carrying both produces a CRD that
 // differs from itself and a drift check that fails at random. Two rules of the
 // same kind on a type are emitted in source order.
-// +kubebuilder:validation:XValidation:rule="(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1",message="set exactly one of managed or external"
-// +kubebuilder:validation:XValidation:rule="has(self.managed) == has(oldSelf.managed) && has(self.external) == has(oldSelf.external)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
+// +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
+// +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
 	// Managed is a control plane the operator installs.
 	// +optional
-	Managed *ManagedControlPlane `json:"managed,omitempty"`
+	Local *LocalControlPlane `json:"local,omitempty"`
 
 	// External is a control plane that already exists.
 	// +optional
-	External *ExternalControlPlane `json:"external,omitempty"`
+	Managed *ManagedControlPlane `json:"managed,omitempty"`
 }
 
 // ControlPlaneSpec is the desired state of the simplyblock control plane for one
 // namespace.
 type ControlPlaneSpec struct {
-	// Source selects where the control plane comes from. Switching a live
-	// deployment between an installed control plane and an existing one is not a
+	// Source selects whether this cluster hosts its control plane or is managed
+	// by one elsewhere. Switching a live deployment between the two is not a
 	// reconfiguration, because the clusters and their volumes live in the
-	// FoundationDB behind the old one, so which of the two modes is chosen is
-	// frozen at creation. What is inside the chosen mode stays editable.
+	// FoundationDB behind the old one, so which mode is chosen is frozen at
+	// creation. What is inside the chosen mode stays editable.
 	//
 	// Both rules are declared on ControlPlaneSource rather than here. See the
 	// type for why.
@@ -270,7 +276,7 @@ type ControlPlaneStatus struct {
 
 	// Components is the per-component readiness the phase is derived from
 	// (§4.3), one entry per workload the managed install applies. It is empty
-	// for an external control plane, which has no components the operator owns.
+	// for a remote control plane, which has no components the operator owns.
 	// Without it a Degraded phase says that something is wrong and not what.
 	// +optional
 	// +listType=map

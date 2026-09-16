@@ -265,7 +265,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 			"spec.storageNodes.image is unset and ControlPlane %s cannot be read: %w",
 			SingletonControlPlaneName, err)
 	}
-	if managed := controlPlane.Spec.Source.Managed; managed != nil && managed.Image != "" {
+	if managed := controlPlane.Spec.Source.Local; managed != nil && managed.Image != "" {
 		return managed.Image, nil
 	}
 	return "", fmt.Errorf(

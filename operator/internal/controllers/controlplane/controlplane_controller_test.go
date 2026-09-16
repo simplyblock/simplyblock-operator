@@ -28,7 +28,7 @@ import (
 // singleton enforced by convention. Reconciling one would install a second
 // control plane beside the first.
 func TestAControlPlaneThatIsNotTheSingletonIsIgnored(t *testing.T) {
-	other := managedControlPlane()
+	other := localControlPlane()
 	other.Name = "a-second-one"
 	c := newClient(t, other)
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
@@ -67,10 +67,10 @@ func TestAControlPlaneThatIsNotTheSingletonIsIgnored(t *testing.T) {
 func TestASecondControlPlaneInAnotherNamespaceDoesNotInstall(t *testing.T) {
 	ctx := context.Background()
 
-	holder := managedControlPlane()
+	holder := localControlPlane()
 	holder.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 
-	second := managedControlPlane()
+	second := localControlPlane()
 	second.Namespace = "simplyblock-second"
 	second.CreationTimestamp = metav1.NewTime(time.Now())
 
@@ -113,10 +113,10 @@ func TestASecondControlPlaneInAnotherNamespaceDoesNotInstall(t *testing.T) {
 // working deployment down on the first reconcile after somebody added a second
 // object by mistake.
 func TestTheOlderControlPlaneStillHoldsTheDeployment(t *testing.T) {
-	holder := managedControlPlane()
+	holder := localControlPlane()
 	holder.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 
-	second := managedControlPlane()
+	second := localControlPlane()
 	second.Namespace = "simplyblock-second"
 	second.CreationTimestamp = metav1.NewTime(time.Now())
 
@@ -133,13 +133,13 @@ func TestTheOlderControlPlaneStillHoldsTheDeployment(t *testing.T) {
 	}
 }
 
-// An external control plane is resolved, probed, and reported, and the operator
+// A remote control plane is resolved, probed, and reported, and the operator
 // applies nothing. status.endpoint echoes what the spec said, which is the point
 // of the field: a reader asks status.endpoint either way and does not have to
 // know which mode the deployment is in.
-func TestAnExternalControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
+func TestARemoteControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
 	const endpoint = "https://sb-control.example.com:5000"
-	cp := externalControlPlane(endpoint)
+	cp := managedControlPlane(endpoint)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "cp-token", Namespace: testNamespace},
 		Data:       map[string][]byte{"token": []byte("a-bearer-token")},
@@ -178,7 +178,7 @@ func TestAnExternalControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
 	}
 }
 
-// An external control plane may name no credentials Secret, and that is the
+// A remote control plane may name no credentials Secret, and that is the
 // shape the chart writes when it installs the control plane itself: the endpoint
 // is a ClusterIP Service in the same namespace, the readiness probe there is
 // unauthenticated, and there is no static token to point at.
@@ -186,12 +186,12 @@ func TestAnExternalControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
 // It is the field that lets the chart hand the install back. Without it the CR
 // would have to claim a managed source whichever side installed, and the
 // operator would apply the workloads the chart had just rendered.
-func TestAnExternalControlPlaneMayNameNoCredentials(t *testing.T) {
+func TestARemoteControlPlaneMayNameNoCredentials(t *testing.T) {
 	ctx := context.Background()
 	const endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
 
-	cp := externalControlPlane(endpoint)
-	cp.Spec.Source.External.CredentialsSecretRef = nil
+	cp := managedControlPlane(endpoint)
+	cp.Spec.Source.Managed.CredentialsSecretRef = nil
 
 	c := newClient(t, cp)
 	prober := &stubProber{ready: true}
@@ -222,11 +222,11 @@ func TestAnExternalControlPlaneMayNameNoCredentials(t *testing.T) {
 // a statement that the control plane needs it, so falling back to an
 // unauthenticated probe would turn a misconfiguration into a silent downgrade.
 func TestANamedButMissingCredentialsSecretIsStillAnError(t *testing.T) {
-	cp := externalControlPlane("https://sb-control.example.com:5000")
+	cp := managedControlPlane("https://sb-control.example.com:5000")
 	c := newClient(t, cp)
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 
-	_, err := resolveExternal(context.Background(), c, cp)
+	_, err := resolveManaged(context.Background(), c, cp)
 	if err == nil {
 		t.Fatal("a named Secret that does not exist was accepted")
 	}
@@ -241,7 +241,7 @@ func TestANamedButMissingCredentialsSecretIsStillAnError(t *testing.T) {
 // endpoint that does not answer, and it is reported as one: the phase is
 // Unavailable either way, and the message names the Secret.
 func TestAMissingCredentialsSecretIsReportedAsSuch(t *testing.T) {
-	cp := externalControlPlane("https://sb-control.example.com:5000")
+	cp := managedControlPlane("https://sb-control.example.com:5000")
 	c := newClient(t, cp)
 	prober := &stubProber{ready: true}
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Prober: prober}
@@ -295,7 +295,7 @@ func TestALoopbackEndpointIsRefused(t *testing.T) {
 // CRDs are the chart's to apply, and creating a FoundationDBCluster against a
 // group the API server does not know is an error that reconciling does not fix.
 func TestAMissingFoundationDBGroupHoldsTheInstallWithAReason(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	c := newClient(t, cp)
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 
@@ -326,7 +326,7 @@ func TestAMissingFoundationDBGroupHoldsTheInstallWithAReason(t *testing.T) {
 // mid-install still goes through the hold rather than being collected while its
 // database is coming up.
 func TestTheFinalizerIsTakenBeforeAnythingIsInstalled(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	c := newClient(t, cp)
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 
@@ -350,7 +350,7 @@ func TestTheFinalizerIsTakenBeforeAnythingIsInstalled(t *testing.T) {
 // clusters describe lives in the FoundationDB this object's deletion would take
 // with it.
 func TestDeletionIsHeldWhileClustersStillExist(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Finalizers = []string{FinalizerControlPlane}
 	now := metav1.Now()
 	cp.DeletionTimestamp = &now
@@ -388,7 +388,7 @@ func TestDeletionIsHeldWhileClustersStillExist(t *testing.T) {
 // controller marked go with it.
 func TestDeletionReleasesOnceTheClustersAreGone(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Finalizers = []string{FinalizerControlPlane}
 	now := metav1.Now()
 	cp.DeletionTimestamp = &now
@@ -420,7 +420,7 @@ func TestDeletionReleasesOnceTheClustersAreGone(t *testing.T) {
 // events a day from one outage.
 func TestTheEventMarksTheTransitionRatherThanTheState(t *testing.T) {
 	recorder := &recordingRecorder{}
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseUnavailable
 	r := &ControlPlaneReconciler{Recorder: recorder}
 

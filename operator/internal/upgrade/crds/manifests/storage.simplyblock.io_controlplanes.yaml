@@ -151,68 +151,16 @@ spec:
               properties:
                 source:
                   description: |-
-                    Source selects where the control plane comes from. Switching a live
-                    deployment between an installed control plane and an existing one is not a
+                    Source selects whether this cluster hosts its control plane or is managed
+                    by one elsewhere. Switching a live deployment between the two is not a
                     reconfiguration, because the clusters and their volumes live in the
-                    FoundationDB behind the old one, so which of the two modes is chosen is
-                    frozen at creation. What is inside the chosen mode stays editable.
+                    FoundationDB behind the old one, so which mode is chosen is frozen at
+                    creation. What is inside the chosen mode stays editable.
 
                     Both rules are declared on ControlPlaneSource rather than here. See the
                     type for why.
                   properties:
-                    external:
-                      description: External is a control plane that already exists.
-                      properties:
-                        caBundleSecretRef:
-                          description: |-
-                            CABundleSecretRef names a Secret holding the CA certificate the endpoint
-                            is verified against. Absent means the system trust store.
-                          properties:
-                            name:
-                              default: ""
-                              description: |-
-                                Name of the referent.
-                                This field is effectively required, but due to backwards compatibility is
-                                allowed to be empty. Instances of this type with an empty value here are
-                                almost certainly wrong.
-                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                              type: string
-                          type: object
-                          x-kubernetes-map-type: atomic
-                        credentialsSecretRef:
-                          description: |-
-                            CredentialsSecretRef names a Secret in this namespace holding the bearer
-                            token the operator authenticates with. It is a reference rather than a
-                            field because a token in a spec is a token in every `kubectl get -o yaml`.
-
-                            Absent means the endpoint is reached without one, which is the in-cluster
-                            case: a control plane the Helm chart installed answers on a ClusterIP
-                            Service in this namespace and does not require a token for the readiness
-                            read. Naming a Secret that does not exist stays an error, because naming
-                            one is a statement that the control plane needs it.
-                          properties:
-                            name:
-                              default: ""
-                              description: |-
-                                Name of the referent.
-                                This field is effectively required, but due to backwards compatibility is
-                                allowed to be empty. Instances of this type with an empty value here are
-                                almost certainly wrong.
-                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                              type: string
-                          type: object
-                          x-kubernetes-map-type: atomic
-                        endpoint:
-                          description: |-
-                            Endpoint is the management API's base URL. It is validated against the
-                            same outbound-URL guard every other external endpoint in this group uses,
-                            so a loopback or link-local address is rejected.
-                          pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
-                          type: string
-                      required:
-                        - endpoint
-                      type: object
-                    managed:
+                    local:
                       description: Managed is a control plane the operator installs.
                       properties:
                         foundationDB:
@@ -430,12 +378,64 @@ spec:
                       required:
                         - image
                       type: object
+                    managed:
+                      description: External is a control plane that already exists.
+                      properties:
+                        caBundleSecretRef:
+                          description: |-
+                            CABundleSecretRef names a Secret holding the CA certificate the endpoint
+                            is verified against. Absent means the system trust store.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        credentialsSecretRef:
+                          description: |-
+                            CredentialsSecretRef names a Secret in this namespace holding the bearer
+                            token the operator authenticates with. It is a reference rather than a
+                            field because a token in a spec is a token in every `kubectl get -o yaml`.
+
+                            Absent means the endpoint is reached without one, which is the in-cluster
+                            case: a control plane the Helm chart installed answers on a ClusterIP
+                            Service in this namespace and does not require a token for the readiness
+                            read. Naming a Secret that does not exist stays an error, because naming
+                            one is a statement that the control plane needs it.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        endpoint:
+                          description: |-
+                            Endpoint is the management API's base URL. It is validated against the
+                            same outbound-URL guard every other outbound endpoint in this group uses,
+                            so a loopback or link-local address is rejected.
+                          pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                          type: string
+                      required:
+                        - endpoint
+                      type: object
                   type: object
                   x-kubernetes-validations:
-                    - message: set exactly one of managed or external
-                      rule: '(has(self.managed) ? 1 : 0) + (has(self.external) ? 1 : 0) == 1'
+                    - message: set exactly one of local or managed
+                      rule: '(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1'
                     - message: 'spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one'
-                      rule: has(self.managed) == has(oldSelf.managed) && has(self.external) == has(oldSelf.external)
+                      rule: has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)
               required:
                 - source
               type: object
@@ -451,7 +451,7 @@ spec:
                   description: |-
                     Components is the per-component readiness the phase is derived from
                     (§4.3), one entry per workload the managed install applies. It is empty
-                    for an external control plane, which has no components the operator owns.
+                    for a remote control plane, which has no components the operator owns.
                     Without it a Degraded phase says that something is wrong and not what.
                   items:
                     description: |-

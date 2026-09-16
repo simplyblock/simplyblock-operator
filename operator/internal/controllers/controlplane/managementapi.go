@@ -211,7 +211,7 @@ func serviceReaderClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBindin
 // recycles the workload after draining rather than instead of serving, and an
 // Upgrade rolls this Deployment.
 func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
-	managed := cp.Spec.Source.Managed
+	managed := cp.Spec.Source.Local
 	labels := map[string]string{appLabel: ComponentWebAPI}
 
 	//nolint:prealloc // the literal is the declaration; the append below is the shared set
@@ -237,7 +237,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		Affinity:           spreadAcrossHosts(ComponentWebAPI),
 		Containers: []corev1.Container{{
 			Name:            "webappapi",
-			Image:           managedImage(cp),
+			Image:           localImage(cp),
 			ImagePullPolicy: pullPolicyOf(managed),
 			Command:         []string{"python3", "simplyblock_web/app.py"},
 			Ports:           []corev1.ContainerPort{{ContainerPort: webAPIPort}},
@@ -280,7 +280,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 // The default is the chart's: enough headroom for the request volume a fleet
 // produces, and a limit that contains a leak rather than one anybody has
 // measured against.
-func webAPIResources(managed *simplyblockv1alpha2.ManagedControlPlane) corev1.ResourceRequirements {
+func webAPIResources(managed *simplyblockv1alpha2.LocalControlPlane) corev1.ResourceRequirements {
 	if managed != nil && (len(managed.Resources.Requests) > 0 || len(managed.Resources.Limits) > 0) {
 		return managed.Resources
 	}
@@ -379,7 +379,7 @@ func tasksDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 func servicePoolDeployment(
 	cp *simplyblockv1alpha2.ControlPlane, name string, services []service,
 ) *appsv1.Deployment {
-	managed := cp.Spec.Source.Managed
+	managed := cp.Spec.Source.Local
 	labels := map[string]string{appLabel: name}
 
 	spec := corev1.PodSpec{
@@ -388,7 +388,7 @@ func servicePoolDeployment(
 		// directly, which are host addresses rather than Service names.
 		HostNetwork: true,
 		DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
-		Containers:  containers(services, managedImage(cp), pullPolicyOf(managed)),
+		Containers:  containers(services, localImage(cp), pullPolicyOf(managed)),
 		Volumes:     []corev1.Volume{clusterFileVolumeSource()},
 	}
 	scheduling(managed, &spec)
@@ -418,7 +418,7 @@ func servicePoolDeployment(
 // administrator can exec into it — which is how the command-line surface is
 // reached on a deployment that has no shell access to the control plane's hosts.
 func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
-	managed := cp.Spec.Source.Managed
+	managed := cp.Spec.Source.Local
 	labels := map[string]string{appLabel: ComponentAdminControl}
 
 	//nolint:prealloc // the literal is the declaration; the append below is the shared set
@@ -436,7 +436,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 		Affinity:           spreadAcrossHosts(ComponentAdminControl),
 		Containers: []corev1.Container{{
 			Name:            "simplyblock-control",
-			Image:           managedImage(cp),
+			Image:           localImage(cp),
 			ImagePullPolicy: pullPolicyOf(managed),
 			// Trapping the two signals is what makes the pod terminate promptly
 			// on a delete instead of waiting out its grace period: bash does not
@@ -552,7 +552,7 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		}},
 		TerminationGracePeriodSeconds: ptr.To(int64(10)),
 	}
-	scheduling(cp.Spec.Source.Managed, &spec)
+	scheduling(cp.Spec.Source.Local, &spec)
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

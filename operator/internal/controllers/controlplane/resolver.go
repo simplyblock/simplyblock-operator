@@ -1,14 +1,14 @@
 // Where the rest of the operator reads the control plane's address from.
 //
 // design-controlplane.md §3.3 makes status.endpoint the one answer to where the
-// control plane is, so that reusing an external one is a field rather than the
+// control plane is, so that naming a remote one is a field rather than the
 // SIMPLYBLOCK_WEBAPI_BASE_URL environment variable, and so that a change to it
 // reaches every reader without a Deployment rollout. This is what the readers
 // call.
 //
 // It resolves rather than injects, because the endpoint is not known when the
 // manager builds its controllers: the ControlPlane has not been reconciled then,
-// and an external one may not have been created at all. Every caller therefore
+// and a remote one may not have been created at all. Every caller therefore
 // asks per request and gets the current answer.
 //
 // An empty string means the object says nothing yet, and the caller keeps

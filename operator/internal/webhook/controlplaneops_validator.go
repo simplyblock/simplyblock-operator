@@ -4,7 +4,7 @@
 //
 // Every action acts on what the operator installed — Restart recycles a
 // workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster
-// the operator applied — so an operation naming an external control plane is one
+// the operator applied — so an operation naming a remote control plane is one
 // that can only fail. Admission is where the check belongs, because an operation
 // that can only fail belongs in an error message on the terminal that wrote it
 // rather than in a Failed object somebody has to go and read.
@@ -140,13 +140,13 @@ func (v *ControlPlaneOpsValidator) admitCreate(
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
-	if target.Spec.Source.Managed == nil {
+	if target.Spec.Source.Local == nil {
 		return admission.Denied(fmt.Sprintf(
-			"ControlPlane %q is external, and every action of this kind acts on something the "+
-				"operator installed: Restart recycles a workload, Upgrade replaces its image, and "+
-				"Backup asks the FoundationDBCluster the operator applied. An external control "+
-				"plane is an endpoint and a credential, so there is nothing here for any of them "+
-				"to act on.",
+			"ControlPlane %q names a control plane this cluster does not host, and every "+
+				"action of this kind acts on something the operator installed: Restart recycles a "+
+				"workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster the "+
+				"operator applied. A control plane elsewhere is an endpoint and a credential, so "+
+				"there is nothing here for any of them to act on.",
 			ops.Spec.ControlPlaneRef))
 	}
 

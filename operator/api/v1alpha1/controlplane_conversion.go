@@ -1,7 +1,7 @@
 // Conversion of ControlPlane between this version and the v1alpha2 hub.
 //
 // Two properties move (design-property-renames.md §2.4 and §2.5): the top-level
-// image regroups under spec.source.managed, and the readiness phase Ready becomes
+// image regroups under spec.source.local, and the readiness phase Ready becomes
 // Available. Everything else this version declares is carried across unchanged,
 // and everything the hub adds — the step, the endpoint, the version, the
 // components, the lock, and the observed generation — has no v1alpha1 spelling
@@ -87,7 +87,7 @@ func (src *ControlPlane) ConvertTo(dstRaw conversion.Hub) error {
 	// classify: the reconciler would read it as neither managed nor external and
 	// refuse to act on a control plane that is plainly running.
 	dst.Spec.Source = v1alpha2.ControlPlaneSource{
-		Managed: &v1alpha2.ManagedControlPlane{Image: src.Spec.Image},
+		Local: &v1alpha2.LocalControlPlane{Image: src.Spec.Image},
 	}
 
 	dst.Status.Phase = v1alpha2.ControlPlanePhase(
@@ -104,12 +104,12 @@ func (dst *ControlPlane) ConvertFrom(srcRaw conversion.Hub) error {
 
 	dst.ObjectMeta = src.ObjectMeta
 
-	// An external control plane has no image, which is what this version's only
+	// A remote control plane has no image, which is what this version's only
 	// spec field holds. It converts down to an empty one rather than to an
 	// error: the object still has to be readable at v1alpha1, and what a reader
 	// there loses is a field that never applied to it.
 	dst.Spec.Image = ""
-	if managed := src.Spec.Source.Managed; managed != nil {
+	if managed := src.Spec.Source.Local; managed != nil {
 		dst.Spec.Image = managed.Image
 	}
 

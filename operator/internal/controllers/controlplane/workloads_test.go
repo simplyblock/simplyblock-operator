@@ -26,7 +26,7 @@ import (
 // zero, which for an essential one would hold every controller in the operator
 // on a workload nobody asked for.
 func TestEveryWatchedComponentIsOneTheInstallApplies(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	applied := map[string]bool{}
 	for _, obj := range append(foundationDBObjects(cp),
 		append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
@@ -44,7 +44,7 @@ func TestEveryWatchedComponentIsOneTheInstallApplies(t *testing.T) {
 // rolled one at a time with no surge. That combination is what lets a pod be
 // replaced while the control plane keeps answering.
 func TestTheManagementAPIRunsTwoInstancesSpreadAcrossHosts(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
 
@@ -76,8 +76,8 @@ func TestTheManagementAPIRunsTwoInstancesSpreadAcrossHosts(t *testing.T) {
 // it costs is stated in the design rather than prevented here, and this pins that
 // the spec is honored.
 func TestASingleManagementAPIInstanceStaysExpressible(t *testing.T) {
-	cp := managedControlPlane()
-	cp.Spec.Source.Managed.Replicas = ptr.To(int32(1))
+	cp := localControlPlane()
+	cp.Spec.Source.Local.Replicas = ptr.To(int32(1))
 
 	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
 
@@ -90,7 +90,7 @@ func TestASingleManagementAPIInstanceStaysExpressible(t *testing.T) {
 // that writes one image onto the entity moves all of them. A workload left on a
 // hard-coded image would be the one the upgrade did not reach.
 func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	for _, name := range []string{
 		ComponentWebAPI, ComponentTasks, ComponentMonitoring, ComponentAdminControl,
@@ -109,7 +109,7 @@ func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
 // it to the control plane's would mean an upgrade replacing a binary that has
 // nothing to do with the control plane's version.
 func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	exporter := findDeployment(t, managementAPIObjects(cp), ComponentFDBExporter)
 
@@ -126,7 +126,7 @@ func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 // coordinator change rewrites that ConfigMap, and a pod holding a connection to
 // the old coordinator has to be recycled to notice.
 func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	for _, name := range []string{
 		ComponentWebAPI, ComponentTasks, ComponentMonitoring, ComponentAdminControl,
@@ -157,7 +157,7 @@ func TestEveryWorkloadThatReachesTheDatabaseIsRolledWhenItMoves(t *testing.T) {
 // service list, and both lists are non-empty. A pool built with no services is a
 // pod that starts and does nothing, which no count would notice.
 func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	for _, tc := range []struct {
 		name     string
@@ -200,7 +200,7 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 // stop the control plane driving the storage nodes' processes, which is not a
 // failure any count reports.
 func TestTheControlPlanesAccountKeepsTheGrantsItCannotWorkWithout(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	role := findClusterRole(t, managementAPIObjects(cp), clusterRoleName)
 
@@ -223,8 +223,8 @@ func TestTheControlPlanesAccountKeepsTheGrantsItCannotWorkWithout(t *testing.T) 
 // cannot be a class this operator provides, because the control plane has to
 // exist before any simplyblock volume can.
 func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
-	cp := managedControlPlane()
-	cp.Spec.Source.Managed.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
+	cp := localControlPlane()
+	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
 		StorageClassName: "fast-local",
 	}
 
@@ -244,7 +244,7 @@ func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
 // create, because a workload waiting on a Secret nobody writes never starts and
 // reports the wait as a pod event rather than on the ControlPlane.
 func TestNoWorkloadWaitsOnASecretTheInstallDoesNotCreate(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	for _, obj := range append(foundationDBObjects(cp),
 		append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {

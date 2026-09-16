@@ -106,11 +106,11 @@ func TestAnAbortIsRefusedOnceARolloutHasStarted(t *testing.T) {
 	}
 }
 
-// An operation naming an external control plane is refused rather than run. The
+// An operation naming a remote control plane is refused rather than run. The
 // webhook catches it at creation, and this is what holds when the webhook was
 // not serving.
-func TestAnOperationAgainstAnExternalControlPlaneFails(t *testing.T) {
-	cp := externalControlPlane("https://sb-control.example.com:5000")
+func TestAnOperationAgainstARemoteControlPlaneFails(t *testing.T) {
+	cp := managedControlPlane("https://sb-control.example.com:5000")
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
 	c := newClient(t, cp, ops)
 	r := &ControlPlaneOpsReconciler{Client: c, Scheme: testScheme(t)}
@@ -128,7 +128,7 @@ func TestAnOperationAgainstAnExternalControlPlaneFails(t *testing.T) {
 	if after.Status.Phase != simplyblockv1alpha2.ControlPlaneOpsPhaseFailed {
 		t.Errorf("status.phase = %s, want Failed", after.Status.Phase)
 	}
-	if !strings.Contains(after.Status.Message, "external") {
+	if !strings.Contains(after.Status.Message, "does not host") {
 		t.Errorf("status.message = %q, want it to say why the target cannot be operated on",
 			after.Status.Message)
 	}
@@ -166,7 +166,7 @@ func TestAnOperationWithNoTargetFails(t *testing.T) {
 // operation will finish, and failing here would make the order two people
 // applied two objects in decide which of them runs.
 func TestASecondOperationWaitsForTheLock(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.ActiveOpsRef = anotherOperation
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
 	c := newClient(t, cp, ops)
@@ -209,7 +209,7 @@ func TestASecondOperationWaitsForTheLock(t *testing.T) {
 // left in the cluster to say why.
 func TestDeletingARunningOperationReleasesTheLock(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.ActiveOpsRef = "an-operation"
 
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
@@ -241,7 +241,7 @@ func TestDeletingARunningOperationReleasesTheLock(t *testing.T) {
 // acquired it, or whose lock was taken over, must not clear somebody else's.
 func TestAnOperationDoesNotReleaseSomebodyElsesLock(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.ActiveOpsRef = anotherOperation
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
 
@@ -359,7 +359,7 @@ func TestTheDrainDoesNotHoldOnFinishedOperations(t *testing.T) {
 // Preflight refuses an upgrade naming the image already running, because rolling
 // a Deployment to its current image produces no change to verify.
 func TestPreflightRefusesAnUpgradeToTheRunningImage(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseAvailable
 
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
@@ -380,7 +380,7 @@ func TestPreflightRefusesAnUpgradeToTheRunningImage(t *testing.T) {
 // Preflight holds rather than fails while the control plane is not Available, so
 // that what the upgrade verifies afterward is a change rather than a recovery.
 func TestPreflightHoldsWhileTheControlPlaneIsNotAvailable(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseUnavailable
 
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
@@ -409,7 +409,7 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 	ctx := context.Background()
 	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"
 
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
 	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{Image: next}
 
@@ -424,8 +424,8 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(cp), &after); err != nil {
 		t.Fatalf("read the control plane back: %v", err)
 	}
-	if got := managedImage(&after); got != next {
-		t.Errorf("spec.source.managed.image = %q, want %q", got, next)
+	if got := localImage(&after); got != next {
+		t.Errorf("spec.source.local.image = %q, want %q", got, next)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 // was asked for, which is what separates an upgrade that completed from a
 // rollout that failed back.
 func TestVerifyingFailsOnAVersionThatDisagrees(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	cp.Status.Endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
 
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
@@ -465,7 +465,7 @@ func TestVerifyingFailsOnAVersionThatDisagrees(t *testing.T) {
 
 // Verifying passes when the reported version is the one asked for.
 func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
 	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
 		Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
@@ -492,7 +492,7 @@ func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
 // has to carry what was and was not verified.
 func TestVerifyingPassesAndSaysSoWhenNoVersionIsServed(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
 	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
 		Image: "quay.io/simplyblock-io/simplyblock:26.3.0",
@@ -558,7 +558,7 @@ func TestARestartNamingSomethingItCannotRollFails(t *testing.T) {
 		{"the database, which no annotation rolls", ComponentFDBCluster},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cp := managedControlPlane()
+			cp := localControlPlane()
 			ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
 			ops.Spec.Restart = &simplyblockv1alpha2.RestartSpec{Components: []string{tc.scope}}
 
@@ -580,7 +580,7 @@ func TestARestartNamingSomethingItCannotRollFails(t *testing.T) {
 // to restart one wedged component would interrupt everything else for nothing.
 func TestAScopedRestartRecyclesOnlyWhatItNamed(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionRestart)
 	ops.Spec.Restart = &simplyblockv1alpha2.RestartSpec{Components: []string{ComponentTasks}}
 

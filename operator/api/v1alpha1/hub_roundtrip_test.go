@@ -31,7 +31,7 @@ func TestControlPlaneRoundTripsFromTheHub(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
 		Spec: v1alpha2.ControlPlaneSpec{
 			Source: v1alpha2.ControlPlaneSource{
-				Managed: &v1alpha2.ManagedControlPlane{Image: testImage},
+				Local: &v1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 		Status: v1alpha2.ControlPlaneStatus{
@@ -66,7 +66,7 @@ func TestControlPlaneRoundTripsFromTheHub(t *testing.T) {
 func TestControlPlaneEmptyManagedBlockSurvivesTheRoundTrip(t *testing.T) {
 	hub := &v1alpha2.ControlPlane{
 		Spec: v1alpha2.ControlPlaneSpec{
-			Source: v1alpha2.ControlPlaneSource{Managed: &v1alpha2.ManagedControlPlane{}},
+			Source: v1alpha2.ControlPlaneSource{Local: &v1alpha2.LocalControlPlane{}},
 		},
 	}
 
@@ -97,7 +97,7 @@ func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
 	hub := &v1alpha2.ControlPlane{
 		Spec: v1alpha2.ControlPlaneSpec{
 			Source: v1alpha2.ControlPlaneSource{
-				External: &v1alpha2.ExternalControlPlane{
+				Managed: &v1alpha2.ManagedControlPlane{
 					Endpoint:             "https://sb-control.example.com:5000",
 					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 				},
@@ -117,12 +117,12 @@ func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
 	if err := stored.ConvertTo(&back); err != nil {
 		t.Fatalf("ConvertTo: %v", err)
 	}
-	if back.Spec.Source.External != nil {
-		t.Errorf("spec.source.external = %+v, want nil: v1alpha1 cannot hold it",
-			back.Spec.Source.External)
+	if back.Spec.Source.Managed != nil {
+		t.Errorf("spec.source.managed = %+v, want nil: v1alpha1 cannot hold it",
+			back.Spec.Source.Managed)
 	}
-	if back.Spec.Source.Managed == nil {
-		t.Error("spec.source.managed is absent, want the upward conversion's managed default")
+	if back.Spec.Source.Local == nil {
+		t.Error("spec.source.local is absent, want the upward conversion's managed default")
 	}
 }
 

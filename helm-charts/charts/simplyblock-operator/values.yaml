@@ -148,25 +148,42 @@ storagenode:
       
 
 controlplane:
-  # Who applies the control plane's workloads: the operator, or this chart.
+  # Whether this cluster hosts its own control plane or is managed by one
+  # elsewhere. One of: standalone, managed.
   #
-  # With this set, the chart writes only the ControlPlane object and the operator
-  # applies the FoundationDB cluster, the object store, and the management API
-  # from its spec (design-controlplane.md §5.1). The control plane's version then
-  # becomes a field the operator reconciles rather than a value baked into a
-  # chart release, an object somebody deleted by hand is put back on the next
-  # reconcile, and everything the install creates becomes a child of the
-  # ControlPlane rather than of a Helm release.
+  # standalone is a control plane this cluster hosts. The chart writes only the
+  # ControlPlane object and the operator applies the FoundationDB cluster, the
+  # object store, and the management API from its spec (design-controlplane.md
+  # §5.1). The control plane's version is then a field the operator reconciles
+  # rather than a value baked into a chart release, an object somebody deleted by
+  # hand is put back on the next reconcile, and everything the install creates is
+  # a child of the ControlPlane rather than of a Helm release.
   #
-  # Set it to false to have the chart render them instead, which is what a
-  # deployment needs when it uses something the ControlPlane spec cannot yet
-  # express. TLS is that thing today: tls.enabled together with this refuses to
-  # install rather than bringing the control plane up in plaintext.
+  # managed is a control plane somewhere else that this cluster's storage is
+  # registered with. Nothing is installed here: the operator resolves the
+  # endpoint under controlplane.managed below, probes it, and reports. The fleet
+  # is administered from wherever that control plane runs.
   #
-  # The operator's install covers the workloads a base control plane consists of.
-  # The observability half below — Graylog, Grafana, Thanos, the document store,
-  # and the log collector — is rendered by this chart either way.
-  managedByOperator: true
+  # Either way the observability half below — Graylog, Grafana, Thanos, the
+  # document store, and the log collector — is this chart's to render.
+  profile: standalone
+
+  # Where the control plane is, for profile: managed. Ignored by standalone.
+  managed:
+    # endpoint is the management API's base URL. Required for this profile, and
+    # rejected if it names a loopback or link-local address, which would point
+    # the operator at its own pod.
+    endpoint: ""
+    # credentialsSecretRef names a Secret in the release namespace holding the
+    # bearer token under `token` or `secret`. Empty means the endpoint is reached
+    # without one, which suits a control plane on the same network that does not
+    # require a token for the readiness read.
+    credentialsSecretRef: ""
+    # caBundleSecretRef names a Secret holding the CA the endpoint's certificate
+    # is verified against, under `ca.crt` or `tls.crt`. Empty means the system
+    # trust store. A Secret that is named and unusable fails rather than falling
+    # back to it.
+    caBundleSecretRef: ""
 
   # Accept a pod's service-account token from the CSI driver's two accounts
   # instead of requiring the static cluster secret. This is the control

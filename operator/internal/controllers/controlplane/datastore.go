@@ -109,7 +109,7 @@ func minioStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet 
 			{
 				Name:            "minio",
 				Image:           minioImage,
-				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Managed),
+				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Local),
 				Args:            []string{"server", "/data", "--console-address=:9001"},
 				Env:             credentials,
 				Ports: []corev1.ContainerPort{
@@ -136,7 +136,7 @@ func minioStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet 
 				// be re-made on every restart forever.
 				Name:            "bucket-init",
 				Image:           minioClientImage,
-				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Managed),
+				ImagePullPolicy: pullPolicyOf(cp.Spec.Source.Local),
 				Command: []string{"sh", "-c", `until mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
   echo "Waiting for the object store..."; sleep 3;
 done
@@ -157,7 +157,7 @@ sleep infinity
 			},
 		},
 	}
-	scheduling(cp.Spec.Source.Managed, &spec)
+	scheduling(cp.Spec.Source.Local, &spec)
 
 	claim := corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: minioDataVolume},

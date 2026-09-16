@@ -42,11 +42,11 @@ const (
 	// removing the clusters resolves it, and nothing else can.
 	ClustersStillPresent = "ClustersStillPresent"
 
-	// EndpointUnreachable is an external control plane that could not be
+	// EndpointUnreachable is a remote control plane that could not be
 	// resolved or reached.
 	EndpointUnreachable = "EndpointUnreachable"
 
-	// CredentialsError is an external control plane whose Secret is missing or
+	// CredentialsError is a remote control plane whose Secret is missing or
 	// carries no token. It is separate from EndpointUnreachable because the two
 	// have different fixes.
 	CredentialsError = "CredentialsError"

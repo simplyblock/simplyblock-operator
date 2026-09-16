@@ -110,10 +110,11 @@ func (r *ControlPlaneOpsReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// The webhook refuses this at creation. It is repeated here because an
 	// object may carry a source the webhook was not serving to check, and
 	// because spec.source is immutable so the answer cannot have changed since.
-	if !isManaged(target) {
+	if !isLocal(target) {
 		return r.failAndRelease(ctx, &ops, target,
-			fmt.Sprintf("ControlPlane %q is external, and every action of this kind acts on "+
-				"something the operator installed", target.Name))
+			fmt.Sprintf("ControlPlane %q names a control plane this cluster does not host, "+
+				"and every action of this kind acts on something the operator installed",
+				target.Name))
 	}
 
 	if ops.Status.Phase != simplyblockv1alpha2.ControlPlaneOpsPhaseRunning {
@@ -286,7 +287,7 @@ func (r *ControlPlaneOpsReconciler) preflight(
 			"the control plane is %s; an upgrade starts from Available so that what it verifies "+
 				"afterward is a change rather than a recovery", target.Status.Phase), nil
 	}
-	if managedImage(target) == ops.Spec.Upgrade.Image {
+	if localImage(target) == ops.Spec.Upgrade.Image {
 		return false, "", &terminalStepError{message: fmt.Sprintf(
 			"the control plane already runs %s, so there is no rollout to verify",
 			ops.Spec.Upgrade.Image)}
@@ -490,7 +491,7 @@ func (r *ControlPlaneOpsReconciler) applyUpgrade(
 	}
 
 	base := target.DeepCopy()
-	target.Spec.Source.Managed.Image = ops.Spec.Upgrade.Image
+	target.Spec.Source.Local.Image = ops.Spec.Upgrade.Image
 	if err := r.Patch(ctx, target, client.MergeFrom(base)); err != nil {
 		return false, "", err
 	}
@@ -542,7 +543,7 @@ func (r *ControlPlaneOpsReconciler) verify(
 ) (bool, string, error) {
 	endpoint := target.Status.Endpoint
 	if endpoint == "" {
-		endpoint = managedEndpoint(target.Namespace)
+		endpoint = localEndpoint(target.Namespace)
 	}
 
 	prober := r.Prober

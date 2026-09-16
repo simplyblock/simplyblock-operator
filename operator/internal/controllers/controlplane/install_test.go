@@ -109,7 +109,7 @@ func TestTheStepEnumAndTheGraphAgree(t *testing.T) {
 // step a no-op, and therefore why the machine carries no triggered flag.
 func TestReApplyingAStepCorrectsWhatWasChangedUnderIt(t *testing.T) {
 	ctx := context.Background()
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	c := newClient(t, cp)
 	scheme := testScheme(t)
 
@@ -166,7 +166,7 @@ func TestReApplyingAStepCorrectsWhatWasChangedUnderIt(t *testing.T) {
 // cluster-scoped object owned by a namespaced one, so it carries the managed-by
 // label the finalizer deletes on instead.
 func TestOwnershipFollowsTheObjectsScope(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	scheme := testScheme(t)
 
 	for _, obj := range append(foundationDBObjects(cp), managementAPIObjects(cp)...) {
@@ -275,7 +275,7 @@ func TestReadingAnAbsentFoundationDBClusterIsNotAnError(t *testing.T) {
 // AwaitingAPI holds on the probe rather than on the pod counts, because the
 // question it answers is whether the control plane can be reached at all.
 func TestAwaitingAPIHoldsUntilTheProbePasses(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 	prober := &stubProber{ready: false, readyMessage: "connection refused"}
 	r := &ControlPlaneReconciler{
 		Client: newClient(t, cp), Scheme: testScheme(t), Prober: prober,
@@ -315,8 +315,8 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 		{5, "triple"},
 		{7, "triple"},
 	} {
-		cp := managedControlPlane()
-		cp.Spec.Source.Managed.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
+		cp := localControlPlane()
+		cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
 			Replicas: &tc.replicas,
 		}
 
@@ -338,7 +338,7 @@ func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 // string, which is the difference between the cluster's default class and a
 // class literally named nothing.
 func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	claim := volumeClaimSpec(foundationDBSpecOf(cp))
 
@@ -346,7 +346,7 @@ func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 		t.Error("storageClassName is written for a spec that states none")
 	}
 
-	cp.Spec.Source.Managed.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
+	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
 		StorageClassName: "fast",
 	}
 	claim = volumeClaimSpec(foundationDBSpecOf(cp))
@@ -359,9 +359,9 @@ func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 // that missed it would be scheduled somewhere the deployment deliberately kept
 // the control plane off.
 func TestSchedulingReachesEveryPodTheInstallCreates(t *testing.T) {
-	cp := managedControlPlane()
-	cp.Spec.Source.Managed.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}
-	cp.Spec.Source.Managed.Tolerations = []corev1.Toleration{{
+	cp := localControlPlane()
+	cp.Spec.Source.Local.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}
+	cp.Spec.Source.Local.Tolerations = []corev1.Toleration{{
 		Key: "simplyblock.io/dedicated", Operator: corev1.TolerationOpExists,
 	}}
 

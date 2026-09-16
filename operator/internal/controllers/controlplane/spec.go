@@ -12,11 +12,11 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// managedImage is the control plane's own image, empty when the object names an
-// external control plane. The workload builders call it rather than reaching
+// localImage is the control plane's own image, empty when the object names an
+// remote control plane. The workload builders call it rather than reaching
 // through the source themselves.
-func managedImage(cp *simplyblockv1alpha2.ControlPlane) string {
-	if managed := cp.Spec.Source.Managed; managed != nil {
+func localImage(cp *simplyblockv1alpha2.ControlPlane) string {
+	if managed := cp.Spec.Source.Local; managed != nil {
 		return managed.Image
 	}
 	return ""
@@ -25,7 +25,7 @@ func managedImage(cp *simplyblockv1alpha2.ControlPlane) string {
 // foundationDBSpecOf is the sizing block, which is optional inside an optional
 // member. A nil return is the API's defaults rather than an error.
 func foundationDBSpecOf(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alpha2.FoundationDBSpec {
-	if managed := cp.Spec.Source.Managed; managed != nil {
+	if managed := cp.Spec.Source.Local; managed != nil {
 		return managed.FoundationDB
 	}
 	return nil
@@ -34,23 +34,23 @@ func foundationDBSpecOf(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alph
 // apiReplicas is how many management API instances to run. Two is the default
 // and the number the phases assume: a single instance makes Degraded unreachable
 // for this component and turns every restart into an outage.
-func apiReplicas(managed *simplyblockv1alpha2.ManagedControlPlane) int32 {
+func apiReplicas(managed *simplyblockv1alpha2.LocalControlPlane) int32 {
 	if managed == nil || managed.Replicas == nil {
 		return 2
 	}
 	return *managed.Replicas
 }
 
-// isManaged reports whether the operator installs this control plane. It is the
+// isLocal reports whether the operator installs this control plane. It is the
 // branch every path in the reconciler takes first, and the one the operations
 // are refused on.
-func isManaged(cp *simplyblockv1alpha2.ControlPlane) bool {
-	return cp.Spec.Source.Managed != nil
+func isLocal(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return cp.Spec.Source.Local != nil
 }
 
-// isExternal reports whether the control plane already exists somewhere the
+// isManaged reports whether the control plane already exists somewhere the
 // operator does not own. A source with neither member set is neither, which is
 // what the reconciler reports rather than guessing at.
-func isExternal(cp *simplyblockv1alpha2.ControlPlane) bool {
-	return cp.Spec.Source.External != nil
+func isManaged(cp *simplyblockv1alpha2.ControlPlane) bool {
+	return cp.Spec.Source.Managed != nil
 }

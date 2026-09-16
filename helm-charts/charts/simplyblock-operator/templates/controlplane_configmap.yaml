@@ -1,17 +1,4 @@
 {{- if .Values.operator.enabled }}
-{{- if include "simplyblock.chartInstallsControlPlane" . }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: simplyblock-config
-  namespace: {{ .Release.Namespace }}
-
-data:
-  LOG_LEVEL: {{ .Values.controlplane.observability.level }}
-  LOG_DELETION_INTERVAL: {{ .Values.controlplane.observability.deletionInterval }}
-
-{{- end }}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1
@@ -168,25 +155,6 @@ data:
       {{- end }}
   {{- end }}
   
-{{- if include "simplyblock.chartInstallsControlPlane" . }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: simplyblock-objstore-config
-  labels:
-    app: simplyblock-thanos
-  namespace: {{ .Release.Namespace }}
-data:
-  objstore.yml: |
-    type: S3
-    config:
-      bucket: {{ .Values.controlplane.observability.minio.bucket }}
-      endpoint: simplyblock-minio:9000
-      access_key: {{ .Values.controlplane.observability.minio.accessKey }}
-      secret_key: {{ .Values.controlplane.observability.minio.secretKey }}
-      insecure: true
-{{- end }}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1

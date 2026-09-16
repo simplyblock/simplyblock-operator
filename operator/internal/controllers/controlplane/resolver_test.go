@@ -18,12 +18,12 @@ import (
 )
 
 // A published endpoint is what callers get. This is the whole point of the
-// field: an external control plane is somewhere the environment variable does
+// field: a remote control plane is somewhere the environment variable does
 // not name.
 func TestTheResolverAnswersWithThePublishedEndpoint(t *testing.T) {
 	const endpoint = "https://sb-control.example.com:5000"
 
-	cp := externalControlPlane(endpoint)
+	cp := managedControlPlane(endpoint)
 	cp.Status.Endpoint = endpoint
 
 	resolve := NewEndpointResolver(newClient(t, cp), testNamespace)
@@ -36,7 +36,7 @@ func TestTheResolverAnswersWithThePublishedEndpoint(t *testing.T) {
 // A control plane that has published nothing yet resolves to nothing, and the
 // caller keeps its own default rather than being pointed at an empty address.
 func TestAControlPlaneWithNoEndpointResolvesToNothing(t *testing.T) {
-	cp := managedControlPlane()
+	cp := localControlPlane()
 
 	resolve := NewEndpointResolver(newClient(t, cp), testNamespace)
 
@@ -60,7 +60,7 @@ func TestAnAbsentControlPlaneResolvesToNothing(t *testing.T) {
 // reconciler ignores, so reading an endpoint off it would send every caller
 // somewhere nothing reconciles.
 func TestOnlyTheSingletonAnswers(t *testing.T) {
-	other := managedControlPlane()
+	other := localControlPlane()
 	other.Name = "a-second-one"
 	other.Status.Endpoint = "https://not-the-singleton.example.com:5000"
 
@@ -76,7 +76,7 @@ func TestOnlyTheSingletonAnswers(t *testing.T) {
 func TestAChangedEndpointReachesTheNextCaller(t *testing.T) {
 	ctx := context.Background()
 
-	cp := externalControlPlane("https://first.example.com:5000")
+	cp := managedControlPlane("https://first.example.com:5000")
 	cp.Status.Endpoint = "https://first.example.com:5000"
 	c := newClient(t, cp)
 
