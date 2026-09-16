@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -264,4 +263,3 @@ webhooks:
     resources:
     - storagepools
   sideEffects: None
-{{- end }}
