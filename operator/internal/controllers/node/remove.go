@@ -61,6 +61,22 @@ func (r *StorageNodeOpsReconciler) performRemoveStep(
 		return false, err
 	}
 
+	// A node the control plane does not have is what this operation was for, so
+	// every step of it is already done. The last step reads a 404 as success for
+	// the same reason; the earlier ones did not, and a removal that found its
+	// node missing at Suspending reported the 404 as a step that could not be
+	// advanced and retried it for as long as the operator ran.
+	//
+	// The node can be gone before the step that would have removed it in more
+	// than one way: an earlier attempt got that far and lost its response, the
+	// add that was being undone never registered it, or somebody else removed it.
+	// None of them is a failure of this operation.
+	if gone, err := r.nodeGone(ctx, clusterID, nodeID); err != nil {
+		return false, err
+	} else if gone {
+		return true, nil
+	}
+
 	switch current {
 	case stepValidating:
 		return r.drainValidate(ctx, ops, clusterID, nodeID)
@@ -75,6 +91,23 @@ func (r *StorageNodeOpsReconciler) performRemoveStep(
 	default:
 		return false, fatalf("step %s does not belong to the Remove action", current)
 	}
+}
+
+// nodeGone reports whether the control plane has forgotten the node.
+//
+// It asks the control plane rather than the stream's cache, because the cache
+// not having a node and the control plane not having one are different facts and
+// only the second one ends a removal. A cache that has not synced reports every
+// node missing, and treating that as "already removed" would finish a drain that
+// never moved a volume.
+func (r *StorageNodeOpsReconciler) nodeGone(
+	ctx context.Context, clusterID, nodeID string,
+) (bool, error) {
+	_, found, err := r.API.StorageNode(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, fmt.Errorf("read node %s: %w", nodeID, err)
+	}
+	return !found, nil
 }
 
 // drainValidate classifies the node's volumes and refuses to go on while any of
