@@ -257,7 +257,7 @@ func TestNodePluginProbesVDOCapability(t *testing.T) {
 
 	node := containerNamed(spec.Containers, "csi-node")
 	script := node.Lifecycle.PostStart.Exec.Command[2]
-	for _, want := range []string{"modprobe dm-vdo", vdoCapableMountDir + "/marker"} {
+	for _, want := range []string{"modprobe dm-vdo", "modprobe kvdo", vdoCapableMountDir + "/marker"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("postStart script missing %q:\n%s", want, script)
 		}

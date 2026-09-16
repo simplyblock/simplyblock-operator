@@ -202,20 +202,23 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 // The vdo-capable probe rides the same hook for the same reason the NVMe-oF
 // transports do: it has to run on every node that might stage a volume, and
 // again whenever the node's kernel changes, which is exactly when this pod
-// restarts. modprobe either finds dm-vdo in-tree or it does not — a live
-// question of the running kernel rather than a version check — and the
-// marker records whichever answer that was, in the literal string "true" or
-// "false" so the node plugin's advertiser (design-issue-277 §4.1, §4.3) has
-// something to read regardless of the outcome. Neither branch is fatal to
-// the pod: a node that cannot run VDO is still a node that can stage every
-// other volume.
+// restarts. It tries two module names, because "VDO in the kernel" means two
+// different things depending on the node OS: dm-vdo is upstream's in-tree
+// name (kernel 6.9+), and kvdo is the name RHEL-family systems still ship it
+// under via the separate kmod-kvdo package, verified live on a real
+// Rocky/RHEL 9 kernel that has no dm-vdo at all. Either one loading means the
+// node can run VDO. The marker records the answer as the literal string
+// "true" or "false" so the node plugin's advertiser (design-issue-277 §4.1,
+// §4.3) has something to read regardless of the outcome. Neither branch is
+// fatal to the pod: a node that cannot run VDO is still a node that can
+// stage every other volume.
 var nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
 	`modprobe nvme-rdma || echo failed to modprobe nvme-rdma && ` +
 	`if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && ` +
 	`cp /var/lib/nvme/hostid /etc/nvme/hostid && ` +
 	`echo "nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)" > /etc/nvme/hostnqn && ` +
 	`mkdir -p ` + vdoCapableMountDir + ` && ` +
-	`if modprobe dm-vdo; then echo -n true > ` + kube.VDOCapableMarkerPath + `; ` +
+	`if modprobe dm-vdo || modprobe kvdo; then echo -n true > ` + kube.VDOCapableMarkerPath + `; ` +
 	`else echo -n false > ` + kube.VDOCapableMarkerPath + `; fi`
 
 func nodeVolumes(n objectNames, driver string) []corev1.Volume {
