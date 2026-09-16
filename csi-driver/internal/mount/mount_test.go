@@ -117,7 +117,7 @@ func TestFlagsForXFSCarriesNouuid(t *testing.T) {
 
 func TestFormatOptions(t *testing.T) {
 	if got := FormatOptions("ext4", nil, false); got != nil {
-		t.Errorf("FormatOptions(ext4) = %v, want none — only XFS is tuned at mkfs time", got)
+		t.Errorf("FormatOptions(ext4, vdo=false) = %v, want none", got)
 	}
 
 	got := FormatOptions("xfs", map[string]string{"xfs_su": "32k", "xfs_sw": "4"}, false)
@@ -147,20 +147,36 @@ func TestFormatOptionsDefaultsTheStripeGeometry(t *testing.T) {
 // them regardless of what the volume context says — the feature options still
 // apply, because on-disk feature compatibility has nothing to do with the
 // backend's layout.
-func TestFormatOptionsSkipsStripeAlignmentWhenAsked(t *testing.T) {
+// mke2fs discards the whole device by default too, confirmed live to cost the
+// same order of magnitude as mkfs.xfs's: 12.08s vs. 0.09s formatting a 20G
+// VDO volume, "Discarding device blocks" being the whole difference.
+func TestFormatOptionsForVDOSkipsDiscardOnExt4Too(t *testing.T) {
+	got := FormatOptions("ext4", nil, true)
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "nodiscard") {
+		t.Errorf("FormatOptions(ext4, vdo=true) = %q, want -E nodiscard to skip mke2fs's discard", joined)
+	}
+}
+
+func TestFormatOptionsForVDOSkipsStripeAlignmentAndDiscard(t *testing.T) {
 	got := FormatOptions("xfs", map[string]string{"xfs_su": "32k", "xfs_sw": "4"}, true)
 	joined := strings.Join(got, " ")
 	if strings.Contains(joined, "su=") || strings.Contains(joined, "sw=") {
-		t.Errorf("FormatOptions(xfs, skipStripeAlignment=true) = %q, want no stripe options at all", joined)
+		t.Errorf("FormatOptions(xfs, vdo=true) = %q, want no stripe options at all", joined)
 	}
-	// The feature options still apply unconditionally: skipping stripe
-	// alignment must produce exactly what xfsFeatureOptions() alone would,
-	// whatever that is in this environment (it depends on a config file this
-	// sandbox does not carry), rather than an empty result of its own. Compared
-	// as joined text: an empty and a nil slice both mean "no options" and
-	// reflect.DeepEqual would wrongly tell them apart.
-	if want := strings.Join(xfsFeatureOptions(), " "); joined != want {
-		t.Errorf("FormatOptions(xfs, skipStripeAlignment=true) = %q, want exactly the feature options %q", joined, want)
+	// -K skips mkfs.xfs's default full-device discard, confirmed live to be the
+	// difference between an 11.5s and a 0.13s format on the same 20G VDO
+	// volume: VDO's block map processes a discard proportionally to the
+	// volume's size, and a freshly created volume has nothing worth discarding.
+	if !strings.Contains(joined, "-K") {
+		t.Errorf("FormatOptions(xfs, vdo=true) = %q, want -K to skip mkfs.xfs's discard", joined)
+	}
+	// The feature options still apply unconditionally: whatever
+	// xfsFeatureOptions() alone would produce in this environment (it depends
+	// on a config file this sandbox does not carry) must still be there ahead
+	// of -K, not replaced by it.
+	if want := strings.Join(xfsFeatureOptions(), " "); !strings.HasPrefix(joined, want) {
+		t.Errorf("FormatOptions(xfs, vdo=true) = %q, want it to start with the feature options %q", joined, want)
 	}
 }
 
