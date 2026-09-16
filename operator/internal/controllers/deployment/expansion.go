@@ -221,6 +221,10 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// document said.
 		workload.SocketsToUse = template.SocketsToUse
 		workload.NodesPerSocket = template.NodesPerSocket
+		// The document says a drive is to be formatted; this is where that is
+		// resolved to how. NVMe is the class the cluster's own field covers, and
+		// the logical-block half has no field to carry it yet.
+		workload.EnableFormat4K = template.EnableDriveFormat
 	}
 
 	for _, set := range config.Spec.NodeSets {

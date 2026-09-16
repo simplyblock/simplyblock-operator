@@ -96,6 +96,23 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  enableDriveFormat:
+                    description: |-
+                      EnableDriveFormat formats every device the document names before a storage
+                      node takes it, which is how a drive carrying anything already is made
+                      usable.
+
+                      It says what is wanted rather than how, because the how differs by device
+                      class: an NVMe device is formatted to a 4K block size, and a logical block
+                      device has its signatures wiped. One field covers both, so a document does
+                      not have to know which class the expansion will resolve it to.
+
+                      It is on the document rather than defaulted further down because it is
+                      destructive and the document is what somebody approves. A reviewer reading
+                      a draft has to see that the drives it lists will be formatted, and be able
+                      to strike it before approving; the cluster's own field is immutable once
+                      the cluster exists, so a default nobody saw could not be undone either.
+                    type: boolean
                   enableFailureDomains:
                     description: |-
                       EnableFailureDomains opts the cluster into failure-domain mode, in which
