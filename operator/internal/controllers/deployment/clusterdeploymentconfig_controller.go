@@ -87,6 +87,7 @@ type ClusterDeploymentConfigReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
@@ -244,6 +245,8 @@ func (r *ClusterDeploymentConfigReconciler) performStep(
 		return r.awaitCluster(ctx, config)
 	case stepCreatingNodes:
 		return r.createNodes(ctx, config)
+	case stepActivating:
+		return r.activateCluster(ctx, config)
 	default:
 		return false, fmt.Errorf("step %s belongs to no expansion this operator runs", current)
 	}

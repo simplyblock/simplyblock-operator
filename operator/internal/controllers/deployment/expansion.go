@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
@@ -42,6 +43,7 @@ const (
 	stepCreatingCluster = simplyblockv1alpha2.ClusterDeploymentConfigStepCreatingCluster
 	stepAwaitingCluster = simplyblockv1alpha2.ClusterDeploymentConfigStepAwaitingCluster
 	stepCreatingNodes   = simplyblockv1alpha2.ClusterDeploymentConfigStepCreatingNodes
+	stepActivating      = simplyblockv1alpha2.ClusterDeploymentConfigStepActivating
 )
 
 // How long each step may take before it is reported as stuck.
@@ -54,6 +56,11 @@ const (
 	creatingClusterDeadline = 5 * time.Minute
 	awaitingClusterDeadline = 30 * time.Minute
 	creatingNodesDeadline   = 10 * time.Minute
+
+	// activatingDeadline covers every node this document created coming online,
+	// which is a node add per worker and the cap serializes them. It is the
+	// longest step for that reason rather than because activating is slow.
+	activatingDeadline = 60 * time.Minute
 )
 
 // expansionGraph declares the document's one state graph.
@@ -78,7 +85,11 @@ func expansionGraph() statemachine.Config[configStep] {
 				To:      []configStep{stepCreatingNodes},
 				OnEnter: deadline(awaitingClusterDeadline),
 			},
-			stepCreatingNodes: {OnEnter: deadline(creatingNodesDeadline)},
+			stepCreatingNodes: {
+				To:      []configStep{stepActivating},
+				OnEnter: deadline(creatingNodesDeadline),
+			},
+			stepActivating: {OnEnter: deadline(activatingDeadline)},
 		},
 	}
 }
@@ -169,6 +180,72 @@ func (r *ClusterDeploymentConfigReconciler) createCluster(
 	r.emit(config, corev1.EventTypeNormal, ClusterCreated,
 		fmt.Sprintf("Created StorageCluster %s", name))
 	return true, r.recordCluster(ctx, config, name)
+}
+
+// activateCluster waits for the nodes this document created and then asks for
+// the cluster to be activated.
+//
+// The wait is over status.nodeRefs rather than over whatever nodes happen to
+// name the cluster, because the document is answering for what it built: a node
+// somebody else added later is not one this deployment is waiting on, and a node
+// this deployment made that never came up is one it must not pass over.
+//
+// The activation is a StorageClusterOps like any other, raised by name so that
+// re-entering the step finds the one it raised rather than asking twice. What
+// happens to it afterward is that operation's business; this document has
+// described a deployment and asked for it, which is where its own job ends.
+func (r *ClusterDeploymentConfigReconciler) activateCluster(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (bool, error) {
+	if config.Status.ClusterRef == "" {
+		return false, refusef(ClusterNotFound,
+			"the document records no cluster to activate")
+	}
+
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				// A node the document created and somebody has since removed is
+				// not one to wait for. The deployment it described is what it
+				// built, and this is no longer part of it.
+				continue
+			}
+			return false, fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
+			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
+				"StorageNode %s is %s rather than Online", name, node.Status.Phase))
+			return false, nil
+		}
+	}
+
+	name := config.Status.ClusterRef + "-activate"
+	ops := &simplyblockv1alpha2.StorageClusterOps{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
+		Spec: simplyblockv1alpha2.StorageClusterOpsSpec{
+			ClusterRef: config.Status.ClusterRef,
+			Action:     simplyblockv1alpha2.StorageClusterOpsActionActivate,
+		},
+	}
+	if err := controllerutil.SetControllerReference(config, ops, r.Scheme); err != nil {
+		return false, err
+	}
+	if err := r.Create(ctx, ops); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("asking for cluster %s to be activated: %w",
+				config.Status.ClusterRef, err)
+		}
+		// Raised on an earlier pass, which is the step being re-entered rather
+		// than anything having gone wrong.
+		return true, nil
+	}
+
+	r.emit(config, corev1.EventTypeNormal, ActivationRequested, fmt.Sprintf(
+		"Every node is online, so cluster %s was asked to activate",
+		config.Status.ClusterRef))
+	return true, nil
 }
 
 // buildCluster is the StorageCluster the document's template describes.

@@ -66,6 +66,15 @@ const (
 	ClusterDeploymentConfigStepCreatingCluster ClusterDeploymentConfigStep = "CreatingCluster"
 	ClusterDeploymentConfigStepAwaitingCluster ClusterDeploymentConfigStep = "AwaitingCluster"
 	ClusterDeploymentConfigStepCreatingNodes   ClusterDeploymentConfigStep = "CreatingNodes"
+
+	// ClusterDeploymentConfigStepActivating waits for the nodes this document
+	// created and then asks for the cluster to be activated.
+	//
+	// The document knows how many nodes it made, so it knows when the deployment
+	// it describes is whole. Stopping at "the objects exist" would leave a
+	// cluster that serves nothing behind a document reporting Expanded, with
+	// nothing saying that one more thing is required of anybody.
+	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -350,7 +359,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
