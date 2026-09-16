@@ -212,13 +212,12 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	return ns, nil
 }
 
-// advertiseVDOCapability runs the vdo-capable probe's advertisement once, in
-// the background, the same reasoning as the guardian above: a service that
-// fails to construct one should not fail the whole node plugin, so a marker
-// the postStart hook never got to write, or a node the API is unreachable
-// for, degrades to "not yet advertised" rather than blocking startup.
+// advertiseVDOCapability runs once in the background, same as the guardian
+// above: a failure here degrades to "not yet advertised" rather than
+// blocking node plugin startup.
 func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
-	if err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName, kube.VDOCapableMarkerPath); err != nil {
+	err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName, kube.VDOCapableMarkerPath)
+	if err != nil {
 		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
 	}
 }

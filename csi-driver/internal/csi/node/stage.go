@@ -164,11 +164,11 @@ func (ns *Server) NodeUnstageVolume(
 	}
 
 	if compression, deduplication, wantsVDO := vdoParams(volumeContext); wantsVDO {
-		// VDO comes down before the raw device underneath it goes away.
-		// Deactivate only, never destroy: this fires whenever no pod on this
-		// node needs the volume mounted, an ordinary pod delete and recreate
-		// included.
-		if err := ns.vdo.Down(ctx, vdoLvolID(volumeID), volumeContext["rawDevicePath"], compression, deduplication); err != nil {
+		// Deactivate, never destroy: this fires on every routine unstage, pod
+		// restarts included, not only when the volume is being deleted.
+		lvolID := vdoLvolID(volumeID)
+		rawDevicePath := volumeContext["rawDevicePath"]
+		if err := ns.vdo.Down(ctx, lvolID, rawDevicePath, compression, deduplication); err != nil {
 			klog.Errorf("failed to release VDO stack, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}

@@ -23,7 +23,7 @@ func writeMarker(t *testing.T, content string) string {
 }
 
 func TestAdvertiseVDOCapability_WritesTrue(t *testing.T) {
-	marker := writeMarker(t, "true")
+	marker := writeMarker(t, vdoCapableTrue)
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 
 	if err := AdvertiseVDOCapability(context.Background(), client, "node-a", marker); err != nil {
@@ -34,7 +34,7 @@ func TestAdvertiseVDOCapability_WritesTrue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get node: %v", err)
 	}
-	if node.Labels[kube.LabelVDOCapable] != "true" {
+	if node.Labels[kube.LabelVDOCapable] != vdoCapableTrue {
 		t.Errorf("label = %q, want true", node.Labels[kube.LabelVDOCapable])
 	}
 	if node.Annotations[kube.AnnoVDOCapableManagedBy] != kube.AnnoVDOCapableManagedByAutoDetect {
@@ -57,14 +57,12 @@ func TestAdvertiseVDOCapability_WritesFalse(t *testing.T) {
 	}
 }
 
-// An operator's hand-set label — present without the managed-by annotation —
-// is the escape hatch a golden-image node depends on, so the probe leaves it
-// alone (design-issue-277 §4.3).
+// A label with no managed-by annotation is an operator's, left alone.
 func TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone(t *testing.T) {
 	marker := writeMarker(t, "false")
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name:   "node-a",
-		Labels: map[string]string{kube.LabelVDOCapable: "true"},
+		Labels: map[string]string{kube.LabelVDOCapable: vdoCapableTrue},
 	}})
 
 	if err := AdvertiseVDOCapability(context.Background(), client, "node-a", marker); err != nil {
@@ -72,7 +70,7 @@ func TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone(t *testing.T) {
 	}
 
 	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
-	if node.Labels[kube.LabelVDOCapable] != "true" {
+	if node.Labels[kube.LabelVDOCapable] != vdoCapableTrue {
 		t.Errorf("label = %q, want the operator's true left untouched", node.Labels[kube.LabelVDOCapable])
 	}
 	if _, ok := node.Annotations[kube.AnnoVDOCapableManagedBy]; ok {
@@ -80,14 +78,13 @@ func TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone(t *testing.T) {
 	}
 }
 
-// A label the probe itself wrote before (carrying the managed-by annotation)
-// is exactly the label a later run of the same probe may overwrite — this is
-// what lets capability lost (a kernel downgrade) flip the label back to false.
+// A label the probe wrote before (has the managed-by annotation) is fair
+// game to overwrite, which is how a lost capability flips back to false.
 func TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel(t *testing.T) {
 	marker := writeMarker(t, "false")
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name:        "node-a",
-		Labels:      map[string]string{kube.LabelVDOCapable: "true"},
+		Labels:      map[string]string{kube.LabelVDOCapable: vdoCapableTrue},
 		Annotations: map[string]string{kube.AnnoVDOCapableManagedBy: kube.AnnoVDOCapableManagedByAutoDetect},
 	}})
 

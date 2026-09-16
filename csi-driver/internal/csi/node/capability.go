@@ -1,7 +1,5 @@
-// Advertising this node's VDO capability (issue #277 §4.3): reading the
-// postStart hook's probe result and turning it into the node label the
-// topology gate (controller-side vdoCapableSegment) and an operator both key
-// off.
+// Reads the postStart hook's VDO probe result and turns it into a node label
+// (issue #277 §4.3).
 package node
 
 import (
@@ -19,24 +17,22 @@ import (
 	"github.com/simplyblock/atlas/kube"
 )
 
+// vdoCapableTrue is the marker file's positive content.
+const vdoCapableTrue = "true"
+
 // AdvertiseVDOCapability reads markerPath (kube.VDOCapableMarkerPath in
-// production) and patches nodeName's storage.simplyblock.io/vdo-capable label
-// to match, stamping it with kube.AnnoVDOCapableManagedBy so a later run of
-// this same probe knows the label is its own to overwrite.
+// production) and sets nodeName's vdo-capable label to match.
 //
-// An operator's hand-set label — present without that annotation — is left
-// untouched: it is the escape hatch a golden-image node depends on, and this
-// probe only manages labels it or an earlier version of it wrote.
+// An operator's hand-set label (no managed-by annotation) is left alone —
+// that's the override an admin uses to skip auto-detection.
 //
-// Runs once, at process start (see internal/driver.startNodeServer).
-// Re-checking on an interval, so a node that gains capability without a
-// restart is not stuck advertising false, is open (design-issue-277 §14 Q12).
+// Runs once at process start. No periodic re-check yet (§14 Q12).
 func AdvertiseVDOCapability(ctx context.Context, kubeClient kubernetes.Interface, nodeName, markerPath string) error {
 	marker, err := os.ReadFile(markerPath)
 	if err != nil {
 		return fmt.Errorf("read vdo-capable marker %s: %w", markerPath, err)
 	}
-	capable := strings.TrimSpace(string(marker)) == "true"
+	capable := strings.TrimSpace(string(marker)) == vdoCapableTrue
 
 	node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
@@ -46,8 +42,7 @@ func AdvertiseVDOCapability(ctx context.Context, kubeClient kubernetes.Interface
 	_, hasLabel := node.Labels[kube.LabelVDOCapable]
 	_, managedByThisProbe := node.Annotations[kube.AnnoVDOCapableManagedBy]
 	if hasLabel && !managedByThisProbe {
-		// An operator's own label. Not this probe's to manage.
-		return nil
+		return nil // an operator's own label
 	}
 
 	patch, err := json.Marshal(map[string]any{
