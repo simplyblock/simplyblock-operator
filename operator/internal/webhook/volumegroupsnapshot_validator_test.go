@@ -81,6 +81,9 @@ func newVGSValidator(t *testing.T, pvcs []vgsPVC, apiURL string) *VolumeGroupSna
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add corev1: %v", err)
 	}
+	if err := volumegroupsnapshotv1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add volumegroupsnapshot v1beta1: %v", err)
+	}
 	var objs []crclient.Object
 	for _, p := range pvcs {
 		labels := map[string]string{"app": "db"}
@@ -105,11 +108,20 @@ func newVGSValidator(t *testing.T, pvcs []vgsPVC, apiURL string) *VolumeGroupSna
 		}
 		objs = append(objs, pvc)
 	}
+	objs = append(objs,
+		&volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "sb-class"},
+			Driver:     "csi.simplyblock.io",
+		},
+		&volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "foreign-class"},
+			Driver:     "ebs.csi.aws.com",
+		})
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return &VolumeGroupSnapshotValidator{Client: cl, APIClient: webapi.NewClient(apiURL)}
 }
 
-func vgsRequest(t *testing.T, appSelector string) admission.Request {
+func vgsRequest(t *testing.T, appSelector, className string) admission.Request {
 	t.Helper()
 	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Name: "gen", Namespace: "sb"},
@@ -118,6 +130,9 @@ func vgsRequest(t *testing.T, appSelector string) admission.Request {
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": appSelector}},
 			},
 		},
+	}
+	if className != "" {
+		vgs.Spec.VolumeGroupSnapshotClassName = &className
 	}
 	raw, err := json.Marshal(vgs)
 	if err != nil {
@@ -130,12 +145,41 @@ func vgsRequest(t *testing.T, appSelector string) admission.Request {
 
 func TestVolumeGroupSnapshotValidator(t *testing.T) {
 	tests := []struct {
-		name     string
-		pvcs     []vgsPVC
-		selector string
-		backend  vgsBackend
-		allowed  bool
+		name        string
+		pvcs        []vgsPVC
+		selector    string
+		backend     vgsBackend
+		className   string
+		noClassName bool
+		allowed     bool
 	}{
+		{
+			name: "a foreign driver's class is admitted untouched",
+			pvcs: []vgsPVC{
+				{name: "a", cgLabel: "", volumeID: "v1", bound: true},
+			},
+			selector:  "db",
+			className: "foreign-class",
+			allowed:   true,
+		},
+		{
+			name: "a missing class is admitted (snapshot-controller surfaces it)",
+			pvcs: []vgsPVC{
+				{name: "a", cgLabel: "", volumeID: "v1", bound: true},
+			},
+			selector:  "db",
+			className: "no-such-class",
+			allowed:   true,
+		},
+		{
+			name: "no class name is admitted (not attributable)",
+			pvcs: []vgsPVC{
+				{name: "a", cgLabel: "", volumeID: "v1", bound: true},
+			},
+			selector:    "db",
+			noClassName: true,
+			allowed:     true,
+		},
 		{
 			name: "selector equals membership is admitted",
 			pvcs: []vgsPVC{
@@ -211,8 +255,15 @@ func TestVolumeGroupSnapshotValidator(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			className := tc.className
+			if className == "" {
+				className = "sb-class"
+			}
+			if tc.noClassName {
+				className = ""
+			}
 			v := newVGSValidator(t, tc.pvcs, tc.backend.server(t))
-			resp := v.Handle(context.Background(), vgsRequest(t, tc.selector))
+			resp := v.Handle(context.Background(), vgsRequest(t, tc.selector, className))
 			if resp.Allowed != tc.allowed {
 				t.Fatalf("Allowed = %v, want %v (msg: %s)", resp.Allowed, tc.allowed, resp.Result.Message)
 			}

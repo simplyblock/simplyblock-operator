@@ -15,10 +15,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-func opsCreateRequest(t *testing.T, ops *simplyblockv1alpha1.VolumeGroupSnapshotOps) admission.Request {
+func opsCreateRequest(t *testing.T, ops *simplyblockv1alpha2.VolumeGroupSnapshotOps) admission.Request {
 	t.Helper()
 	raw, err := json.Marshal(ops)
 	if err != nil {
@@ -43,11 +43,11 @@ func TestVolumeGroupSnapshotOpsValidator_RefResolution(t *testing.T) {
 	).Build()
 	validator := &VolumeGroupSnapshotOpsValidator{Client: cl}
 
-	ops := &simplyblockv1alpha1.VolumeGroupSnapshotOps{
+	ops := &simplyblockv1alpha2.VolumeGroupSnapshotOps{
 		ObjectMeta: metav1.ObjectMeta{Name: "op1", Namespace: "default"},
-		Spec: simplyblockv1alpha1.VolumeGroupSnapshotOpsSpec{
+		Spec: simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec{
 			VolumeGroupSnapshotRef: "vgs1",
-			Action:                 simplyblockv1alpha1.VolumeGroupSnapshotOpsActionRestore,
+			Action:                 simplyblockv1alpha2.VolumeGroupSnapshotOpsActionRestore,
 		},
 	}
 	if resp := validator.Handle(context.Background(), opsCreateRequest(t, ops)); !resp.Allowed {

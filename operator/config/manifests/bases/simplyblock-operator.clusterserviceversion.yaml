@@ -185,7 +185,7 @@ spec:
       displayName: Volume Group Snapshot Ops
       kind: VolumeGroupSnapshotOps
       name: volumegroupsnapshotops.storage.simplyblock.io
-      version: v1alpha1
+      version: v1alpha2
     - description: VolumeMigration is the Schema for the volumemigrations API.
       displayName: Volume Migration
       kind: VolumeMigration

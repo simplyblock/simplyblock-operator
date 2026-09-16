@@ -183,6 +183,7 @@ rules:
 - apiGroups:
   - groupsnapshot.storage.k8s.io
   resources:
+  - volumegroupsnapshotclasses
   - volumegroupsnapshotcontents
   - volumegroupsnapshots
   verbs:

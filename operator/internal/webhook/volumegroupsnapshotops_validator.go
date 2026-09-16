@@ -19,10 +19,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=volumegroupsnapshotops,verbs=create,versions=v1alpha1,name=vvolumegroupsnapshotops.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=volumegroupsnapshotops,verbs=create,versions=v1alpha2,name=vvolumegroupsnapshotops.simplyblock.io,admissionReviewVersions=v1
 
 // VolumeGroupSnapshotOpsValidator resolves spec.volumeGroupSnapshotRef on
 // create and refuses the object when no such VolumeGroupSnapshot exists in the
@@ -36,7 +36,7 @@ func (v *VolumeGroupSnapshotOpsValidator) Handle(ctx context.Context, req admiss
 		return admission.Allowed("")
 	}
 
-	var ops simplyblockv1alpha1.VolumeGroupSnapshotOps
+	var ops simplyblockv1alpha2.VolumeGroupSnapshotOps
 	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}

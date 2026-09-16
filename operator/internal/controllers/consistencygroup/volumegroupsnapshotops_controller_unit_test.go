@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func boolPtr(b bool) *bool    { return &b }
@@ -78,12 +78,12 @@ func groupRestoreFixture() []client.Object {
 	return objects
 }
 
-func restoreOps(name string, restore *simplyblockv1alpha1.RestoreOpsSpec) *simplyblockv1alpha1.VolumeGroupSnapshotOps {
-	return &simplyblockv1alpha1.VolumeGroupSnapshotOps{
+func restoreOps(name string, restore *simplyblockv1alpha2.RestoreOpsSpec) *simplyblockv1alpha2.VolumeGroupSnapshotOps {
+	return &simplyblockv1alpha2.VolumeGroupSnapshotOps{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec: simplyblockv1alpha1.VolumeGroupSnapshotOpsSpec{
+		Spec: simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec{
 			VolumeGroupSnapshotRef: "vgs1",
-			Action:                 simplyblockv1alpha1.VolumeGroupSnapshotOpsActionRestore,
+			Action:                 simplyblockv1alpha2.VolumeGroupSnapshotOpsActionRestore,
 			Restore:                restore,
 		},
 	}
@@ -92,11 +92,11 @@ func restoreOps(name string, restore *simplyblockv1alpha1.RestoreOpsSpec) *simpl
 func newGroupOpsReconciler(t *testing.T, objects ...client.Object) (*VolumeGroupSnapshotOpsReconciler, client.Client, *events.FakeRecorder) {
 	t.Helper()
 	scheme := newTestScheme(t,
-		simplyblockv1alpha1.AddToScheme, corev1.AddToScheme,
+		simplyblockv1alpha2.AddToScheme, corev1.AddToScheme,
 		volumegroupsnapshotv1beta1.AddToScheme, snapshotv1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha1.VolumeGroupSnapshotOps{}, &corev1.PersistentVolumeClaim{}).
+		WithStatusSubresource(&simplyblockv1alpha2.VolumeGroupSnapshotOps{}, &corev1.PersistentVolumeClaim{}).
 		WithObjects(objects...).
 		Build()
 	recorder := events.NewFakeRecorder(32)
@@ -105,7 +105,7 @@ func newGroupOpsReconciler(t *testing.T, objects ...client.Object) (*VolumeGroup
 
 // reconcileSettle drives the reconciler until the operation stops moving, so a
 // test asserts the settled outcome rather than one pass's intermediate step.
-func reconcileSettle(t *testing.T, r *VolumeGroupSnapshotOpsReconciler, cl client.Client, name string) *simplyblockv1alpha1.VolumeGroupSnapshotOps {
+func reconcileSettle(t *testing.T, r *VolumeGroupSnapshotOpsReconciler, cl client.Client, name string) *simplyblockv1alpha2.VolumeGroupSnapshotOps {
 	t.Helper()
 	key := types.NamespacedName{Name: name, Namespace: "default"}
 	for range 10 {
@@ -113,7 +113,7 @@ func reconcileSettle(t *testing.T, r *VolumeGroupSnapshotOpsReconciler, cl clien
 			t.Fatalf("reconcile: %v", err)
 		}
 	}
-	ops := &simplyblockv1alpha1.VolumeGroupSnapshotOps{}
+	ops := &simplyblockv1alpha2.VolumeGroupSnapshotOps{}
 	if err := cl.Get(context.Background(), key, ops); err != nil {
 		t.Fatalf("get ops: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestGroupRestore_CreatesOneClaimPerMember(t *testing.T) {
 // U-26: an explicit namePrefix replaces the operation-name default.
 func TestGroupRestore_HonorsNamePrefix(t *testing.T) {
 	objects := append(groupRestoreFixture(),
-		restoreOps("op1", &simplyblockv1alpha1.RestoreOpsSpec{NamePrefix: "restored"}))
+		restoreOps("op1", &simplyblockv1alpha2.RestoreOpsSpec{NamePrefix: "restored"}))
 	r, cl, _ := newGroupOpsReconciler(t, objects...)
 
 	reconcileSettle(t, r, cl, "op1")
@@ -186,7 +186,7 @@ func TestGroupRestore_HonorsNamePrefix(t *testing.T) {
 // restored claim, and its absence leaves the claims unlabeled.
 func TestGroupRestore_ConsistencyGroupLabel(t *testing.T) {
 	objects := append(groupRestoreFixture(),
-		restoreOps("op1", &simplyblockv1alpha1.RestoreOpsSpec{ConsistencyGroup: "db-restored"}))
+		restoreOps("op1", &simplyblockv1alpha2.RestoreOpsSpec{ConsistencyGroup: "db-restored"}))
 	r, cl, _ := newGroupOpsReconciler(t, objects...)
 	reconcileSettle(t, r, cl, "op1")
 	for name, claim := range restoredClaims(t, cl) {
@@ -226,7 +226,7 @@ func TestGroupRestore_IncompleteGenerationFails(t *testing.T) {
 
 	ops := reconcileSettle(t, r, cl, "op1")
 
-	if ops.Status.Phase != simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseFailed {
+	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
 	}
 	if !strings.Contains(ops.Status.Message, "2 of 3") {
@@ -241,7 +241,7 @@ func TestGroupRestore_IncompleteGenerationFails(t *testing.T) {
 // reports the expected count against it.
 func TestGroupRestore_PartialRestore(t *testing.T) {
 	objects := append(withoutMember(groupRestoreFixture(), "snap-pvc-c"),
-		restoreOps("op1", &simplyblockv1alpha1.RestoreOpsSpec{EnablePartialRestore: true}))
+		restoreOps("op1", &simplyblockv1alpha2.RestoreOpsSpec{EnablePartialRestore: true}))
 	r, cl, _ := newGroupOpsReconciler(t, objects...)
 
 	ops := reconcileSettle(t, r, cl, "op1")
@@ -271,7 +271,7 @@ func TestGroupRestore_ClaimCollisionFails(t *testing.T) {
 
 	ops := reconcileSettle(t, r, cl, "op1")
 
-	if ops.Status.Phase != simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseFailed {
+	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", ops.Status.Phase)
 	}
 	if !strings.Contains(ops.Status.Message, "op1-pvc-b") {
@@ -290,7 +290,7 @@ func TestGroupRestore_WaitsForTargetReady(t *testing.T) {
 	r, cl, recorder := newGroupOpsReconciler(t, objects...)
 
 	ops := reconcileSettle(t, r, cl, "op1")
-	if ops.Status.Phase != simplyblockv1alpha1.VolumeGroupSnapshotOpsPhasePending {
+	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhasePending {
 		t.Fatalf("phase = %q, want Pending while the target is not ready", ops.Status.Phase)
 	}
 	if claims := restoredClaims(t, cl); len(claims) != 0 {
@@ -327,7 +327,7 @@ func TestGroupRestore_SucceedsWhenAllClaimsBind(t *testing.T) {
 	r, cl, _ := newGroupOpsReconciler(t, objects...)
 
 	ops := reconcileSettle(t, r, cl, "op1")
-	if ops.Status.Phase == simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseSucceeded {
+	if ops.Status.Phase == simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseSucceeded {
 		t.Fatal("operation succeeded before any claim bound")
 	}
 
@@ -343,7 +343,7 @@ func TestGroupRestore_SucceedsWhenAllClaimsBind(t *testing.T) {
 	}
 
 	ops = reconcileSettle(t, r, cl, "op1")
-	if ops.Status.Phase != simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseSucceeded {
+	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseSucceeded {
 		t.Fatalf("phase = %q, want Succeeded", ops.Status.Phase)
 	}
 	if ops.Status.MembersBound != 3 {

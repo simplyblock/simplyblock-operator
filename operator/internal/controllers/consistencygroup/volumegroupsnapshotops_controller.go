@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	"github.com/simplyblock/atlas/statemachine"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -64,19 +64,19 @@ type VolumeGroupSnapshotOpsReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 
 // step aliases keep the graph literal readable.
-type restoreStep = simplyblockv1alpha1.VolumeGroupSnapshotOpsStep
+type restoreStep = simplyblockv1alpha2.VolumeGroupSnapshotOpsStep
 
 const (
-	stepValidating     = simplyblockv1alpha1.VolumeGroupSnapshotOpsStepValidating
-	stepCreatingClaims = simplyblockv1alpha1.VolumeGroupSnapshotOpsStepCreatingClaims
-	stepWaitingForBind = simplyblockv1alpha1.VolumeGroupSnapshotOpsStepWaitingForBind
+	stepValidating     = simplyblockv1alpha2.VolumeGroupSnapshotOpsStepValidating
+	stepCreatingClaims = simplyblockv1alpha2.VolumeGroupSnapshotOpsStepCreatingClaims
+	stepWaitingForBind = simplyblockv1alpha2.VolumeGroupSnapshotOpsStepWaitingForBind
 )
 
 // stepGraphs declares one state graph per action (design-crd-model.md §3.1):
 // the graph, not the step enum, is what ties a step to its action.
 func stepGraphs() statemachine.MultiConfig[restoreStep] {
 	return statemachine.MultiConfig[restoreStep]{
-		statemachine.Action(simplyblockv1alpha1.VolumeGroupSnapshotOpsActionRestore): {
+		statemachine.Action(simplyblockv1alpha2.VolumeGroupSnapshotOpsActionRestore): {
 			Initial: stepValidating,
 			States: map[restoreStep]statemachine.StateDef[restoreStep]{
 				stepValidating:     {To: []restoreStep{stepCreatingClaims}},
@@ -90,15 +90,15 @@ func stepGraphs() statemachine.MultiConfig[restoreStep] {
 }
 
 func (r *VolumeGroupSnapshotOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	ops := &simplyblockv1alpha1.VolumeGroupSnapshotOps{}
+	ops := &simplyblockv1alpha2.VolumeGroupSnapshotOps{}
 	if err := r.Get(ctx, req.NamespacedName, ops); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// A terminal operation re-reconciles to nothing.
 	switch ops.Status.Phase {
-	case simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseSucceeded,
-		simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseFailed:
+	case simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseSucceeded,
+		simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed:
 		return ctrl.Result{}, nil
 	}
 
@@ -129,7 +129,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) Reconcile(ctx context.Context, req ct
 // operation can be interrupted in is readable from status.
 func (r *VolumeGroupSnapshotOpsReconciler) advance(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
 	machine *statemachine.Machine[restoreStep],
 ) (ctrl.Result, error) {
 	switch machine.CurrentState() {
@@ -149,7 +149,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) advance(
 // effect).
 func (r *VolumeGroupSnapshotOpsReconciler) validate(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
 	machine *statemachine.Machine[restoreStep],
 ) (ctrl.Result, error) {
 	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{}
@@ -185,7 +185,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) validate(
 	if prefix == "" {
 		prefix = ops.Name
 	}
-	plan := make([]simplyblockv1alpha1.RestoredMemberStatus, 0, len(members))
+	plan := make([]simplyblockv1alpha2.RestoredMemberStatus, 0, len(members))
 	for _, member := range members {
 		source := ""
 		if member.Spec.Source.PersistentVolumeClaimName != nil {
@@ -195,7 +195,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) validate(
 			return ctrl.Result{}, r.fail(ctx, ops, fmt.Sprintf(
 				"member snapshot %q names no source PersistentVolumeClaim", member.Name))
 		}
-		plan = append(plan, simplyblockv1alpha1.RestoredMemberStatus{
+		plan = append(plan, simplyblockv1alpha2.RestoredMemberStatus{
 			VolumeSnapshotName:        member.Name,
 			PersistentVolumeClaimName: prefix + "-" + source,
 		})
@@ -204,8 +204,8 @@ func (r *VolumeGroupSnapshotOpsReconciler) validate(
 	if err := machine.TransitionTo(ctx, stepCreatingClaims); err != nil {
 		return ctrl.Result{}, err
 	}
-	err = r.writeStatus(ctx, ops, func(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus) {
-		status.Phase = simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseRunning
+	err = r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus) {
+		status.Phase = simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseRunning
 		status.Message = fmt.Sprintf("restoring %d member snapshot(s)", len(plan))
 		status.MembersExpected = expected
 		status.Members = plan
@@ -226,7 +226,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) validate(
 // operation, leaving claims already created in place (design §7.4).
 func (r *VolumeGroupSnapshotOpsReconciler) createClaims(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
 	machine *statemachine.Machine[restoreStep],
 ) (ctrl.Result, error) {
 	for _, member := range ops.Status.Members {
@@ -254,7 +254,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) createClaims(
 	if err := machine.TransitionTo(ctx, stepWaitingForBind); err != nil {
 		return ctrl.Result{}, err
 	}
-	err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus) {
+	err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus) {
 		status.Message = fmt.Sprintf("waiting for %d claim(s) to bind", len(ops.Status.Members))
 		setStep(status, machine)
 	})
@@ -269,10 +269,10 @@ func (r *VolumeGroupSnapshotOpsReconciler) createClaims(
 // and the requeue is the fallback.
 func (r *VolumeGroupSnapshotOpsReconciler) waitForBind(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
 ) (ctrl.Result, error) {
 	bound := 0
-	members := make([]simplyblockv1alpha1.RestoredMemberStatus, len(ops.Status.Members))
+	members := make([]simplyblockv1alpha2.RestoredMemberStatus, len(ops.Status.Members))
 	copy(members, ops.Status.Members)
 	for i := range members {
 		claim := &corev1.PersistentVolumeClaim{}
@@ -287,11 +287,11 @@ func (r *VolumeGroupSnapshotOpsReconciler) waitForBind(
 	}
 
 	complete := bound == len(members) && len(members) > 0
-	err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus) {
+	err := r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus) {
 		status.Members = members
 		status.MembersBound = bound
 		if complete {
-			status.Phase = simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseSucceeded
+			status.Phase = simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseSucceeded
 			status.Message = fmt.Sprintf("restored %d member(s)", bound)
 			status.CompletedAt = &metav1.Time{Time: time.Now()}
 		} else {
@@ -315,8 +315,8 @@ func (r *VolumeGroupSnapshotOpsReconciler) waitForBind(
 // restore size, in that order.
 func (r *VolumeGroupSnapshotOpsReconciler) buildClaim(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
-	member simplyblockv1alpha1.RestoredMemberStatus,
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
+	member simplyblockv1alpha2.RestoredMemberStatus,
 ) (*corev1.PersistentVolumeClaim, error) {
 	snapshot := &snapshotv1.VolumeSnapshot{}
 	if err := r.Get(ctx, types.NamespacedName{Name: member.VolumeSnapshotName, Namespace: ops.Namespace}, snapshot); err != nil {
@@ -425,18 +425,18 @@ func (r *VolumeGroupSnapshotOpsReconciler) expectedMembers(
 
 // restoreSpec returns the restore parameters, defaulted when the block is
 // absent.
-func restoreSpec(ops *simplyblockv1alpha1.VolumeGroupSnapshotOps) simplyblockv1alpha1.RestoreOpsSpec {
+func restoreSpec(ops *simplyblockv1alpha2.VolumeGroupSnapshotOps) simplyblockv1alpha2.RestoreOpsSpec {
 	if ops.Spec.Restore == nil {
-		return simplyblockv1alpha1.RestoreOpsSpec{}
+		return simplyblockv1alpha2.RestoreOpsSpec{}
 	}
 	return *ops.Spec.Restore
 }
 
 // setStep persists the machine's position, deadline included, so a restart
 // restores exactly where the operation stood.
-func setStep(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus, machine *statemachine.Machine[restoreStep]) {
+func setStep(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus, machine *statemachine.Machine[restoreStep]) {
 	snap := machine.Snapshot()
-	status.Step = simplyblockv1alpha1.VolumeGroupSnapshotOpsStepSnapshot{State: snap.State}
+	status.Step = simplyblockv1alpha2.VolumeGroupSnapshotOpsStepSnapshot{State: snap.State}
 	if !snap.Deadline.IsZero() {
 		status.Step.Deadline = &metav1.Time{Time: snap.Deadline}
 	}
@@ -445,14 +445,14 @@ func setStep(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus, machine *
 // block parks the operation in Pending with the reason, evented once per
 // distinct message so a held restore is visible without spamming.
 func (r *VolumeGroupSnapshotOpsReconciler) block(
-	ctx context.Context, ops *simplyblockv1alpha1.VolumeGroupSnapshotOps, message string,
+	ctx context.Context, ops *simplyblockv1alpha2.VolumeGroupSnapshotOps, message string,
 ) error {
 	if ops.Status.Message != message {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, eventReasonGroupRestoreBlocked,
 			eventReasonGroupRestoreBlocked, "%s", message)
 	}
-	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus) {
-		status.Phase = simplyblockv1alpha1.VolumeGroupSnapshotOpsPhasePending
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus) {
+		status.Phase = simplyblockv1alpha2.VolumeGroupSnapshotOpsPhasePending
 		status.Message = message
 	})
 }
@@ -461,12 +461,12 @@ func (r *VolumeGroupSnapshotOpsReconciler) block(
 // permanent verdict, so it is recorded and evented rather than returned as an
 // error to retry.
 func (r *VolumeGroupSnapshotOpsReconciler) fail(
-	ctx context.Context, ops *simplyblockv1alpha1.VolumeGroupSnapshotOps, message string,
+	ctx context.Context, ops *simplyblockv1alpha2.VolumeGroupSnapshotOps, message string,
 ) error {
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, eventReasonGroupRestoreBlocked,
 		eventReasonGroupRestoreBlocked, "%s", message)
-	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus) {
-		status.Phase = simplyblockv1alpha1.VolumeGroupSnapshotOpsPhaseFailed
+	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus) {
+		status.Phase = simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed
 		status.Message = message
 		status.CompletedAt = &metav1.Time{Time: time.Now()}
 	})
@@ -477,11 +477,11 @@ func (r *VolumeGroupSnapshotOpsReconciler) fail(
 // stamps observedGeneration on every write.
 func (r *VolumeGroupSnapshotOpsReconciler) writeStatus(
 	ctx context.Context,
-	ops *simplyblockv1alpha1.VolumeGroupSnapshotOps,
-	mutate func(*simplyblockv1alpha1.VolumeGroupSnapshotOpsStatus),
+	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
+	mutate func(*simplyblockv1alpha2.VolumeGroupSnapshotOpsStatus),
 ) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		fresh := &simplyblockv1alpha1.VolumeGroupSnapshotOps{}
+		fresh := &simplyblockv1alpha2.VolumeGroupSnapshotOps{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(ops), fresh); err != nil {
 			return err
 		}
@@ -499,7 +499,7 @@ func (r *VolumeGroupSnapshotOpsReconciler) writeStatus(
 // events through the ownership label as well as on the operation itself.
 func (r *VolumeGroupSnapshotOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.VolumeGroupSnapshotOps{}).
+		For(&simplyblockv1alpha2.VolumeGroupSnapshotOps{}).
 		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(
 			func(_ context.Context, object client.Object) []ctrl.Request {
 				owner := object.GetLabels()[restoreOpsLabel]

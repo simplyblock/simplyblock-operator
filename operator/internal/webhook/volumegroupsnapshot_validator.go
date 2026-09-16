@@ -13,10 +13,13 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
+
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// +kubebuilder:webhook:path=/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshots,verbs=create,versions=v1beta1,name=volumegroupsnapshot-validator.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshots,verbs=create,versions=v1beta1,name=vvolumegroupsnapshot.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:rbac:groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshotclasses,verbs=get;list;watch
 
 // VolumeGroupSnapshotValidator rejects, at kubectl apply, a VolumeGroupSnapshot
 // whose selector does not resolve to exactly one consistency group's current
@@ -36,12 +39,47 @@ type VolumeGroupSnapshotValidator struct {
 	APIClient *webapi.Client
 }
 
+// ownsVolumeGroupSnapshot reports whether the object belongs to this driver,
+// decided through spec.volumeGroupSnapshotClassName: the class's driver field
+// is the attribution the upstream API defines. Every undecidable case admits,
+// because with failurePolicy=fail a webhook error would block every
+// VolumeGroupSnapshot in the cluster, foreign drivers included:
+//
+//   - no class name: attribution is impossible here (a default class may
+//     apply); the GroupController backstops simplyblock's own objects (§9.2).
+//   - class not found or unreadable: the snapshot-controller will surface the
+//     broken class on its own; refusing here would punish other drivers.
+func (v *VolumeGroupSnapshotValidator) ownsVolumeGroupSnapshot(
+	ctx context.Context, vgs *volumegroupsnapshotv1beta1.VolumeGroupSnapshot,
+) (bool, string) {
+	className := vgs.Spec.VolumeGroupSnapshotClassName
+	if className == nil || *className == "" {
+		return false, "no volumeGroupSnapshotClassName; not attributable to this driver"
+	}
+	class := &volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{}
+	if err := v.Client.Get(ctx, client.ObjectKey{Name: *className}, class); err != nil {
+		return false, fmt.Sprintf("volume group snapshot class %q not readable; not validating", *className)
+	}
+	if class.Driver != kube.DriverName {
+		return false, fmt.Sprintf("class %q belongs to driver %q; not validating", *className, class.Driver)
+	}
+	return true, ""
+}
+
 func (v *VolumeGroupSnapshotValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	log := logf.FromContext(ctx).WithValues("volumegroupsnapshot", req.Name, "namespace", req.Namespace)
 
 	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{}
 	if err := json.Unmarshal(req.Object.Raw, vgs); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// The webhook is registered for every VolumeGroupSnapshot in the cluster,
+	// because groupsnapshot.storage.k8s.io is a shared upstream group. Only
+	// objects whose class names this driver are simplyblock's to validate;
+	// everything else is admitted untouched.
+	if ours, reason := v.ownsVolumeGroupSnapshot(ctx, vgs); !ours {
+		return admission.Allowed(reason)
 	}
 
 	pvcs, groupName, denied := v.labelCheck(ctx, req.Namespace, vgs)

@@ -310,7 +310,7 @@ Because the group is a first-class control-plane object, `sbctl` offers a single
 `VolumeGroupSnapshotOps` is the Ops kind for a `VolumeGroupSnapshot`: a one-shot, namespaced operation that names one group snapshot in its own namespace and an action to perform on it. The one action this design defines is `Restore`. The operator reconciles the object to completion and records the result, after which the object is inert, in the way of every other `Ops` kind in this API group. The full type is Appendix A. The fields the mechanism turns on are:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: VolumeGroupSnapshotOps
 metadata:
   name: restore-db-gen4
@@ -565,7 +565,7 @@ The `VolumeGroupSnapshotOps` kind as it is to be written, in file order. The arg
 // action, Restore, creates one PersistentVolumeClaim per member snapshot of the
 // target's generation and waits for every claim to bind.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

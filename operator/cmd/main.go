@@ -59,8 +59,8 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
-	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
+	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
@@ -852,7 +852,7 @@ func main() {
 			}})
 		setupLog.Info("registered volumegroupsnapshot validating webhook")
 
-		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-volumegroupsnapshotops",
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops",
 			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered volumegroupsnapshotops validating webhook")
 

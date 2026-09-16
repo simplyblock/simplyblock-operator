@@ -14,7 +14,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-volumemigration,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=volumemigrations,verbs=create,versions=v1alpha1,name=volumemigration-validator.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-volumemigration,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=volumemigrations,verbs=create,versions=v1alpha1,name=vvolumemigration.simplyblock.io,admissionReviewVersions=v1
 
 // VolumeMigrationValidator rejects, at admission, a VolumeMigration whose target
 // volume (or a sibling sharing its NVMe subsystem) is a consistency-group

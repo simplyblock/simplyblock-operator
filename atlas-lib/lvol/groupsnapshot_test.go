@@ -29,14 +29,14 @@ func TestParseGroupSnapshotHandleTrimsWhitespace(t *testing.T) {
 
 func TestParseGroupSnapshotHandleRejectsMalformed(t *testing.T) {
 	cases := map[string]string{
-		"three segments":     gsCluster + ":pool-1:" + gsGroup,
-		"five segments":      gsCluster + ":pool-1:" + gsGroup + ":1:extra",
-		"non-numeric seq":    gsCluster + ":pool-1:" + gsGroup + ":one",
-		"negative seq":       gsCluster + ":pool-1:" + gsGroup + ":-1",
-		"empty pool":         gsCluster + "::" + gsGroup + ":1",
-		"non-UUID cluster":   "not-a-uuid:pool-1:" + gsGroup + ":1",
-		"non-UUID group":     gsCluster + ":pool-1:not-a-uuid:1",
-		"empty string":       "",
+		"three segments":      gsCluster + ":pool-1:" + gsGroup,
+		"five segments":       gsCluster + ":pool-1:" + gsGroup + ":1:extra",
+		"non-numeric seq":     gsCluster + ":pool-1:" + gsGroup + ":one",
+		"negative seq":        gsCluster + ":pool-1:" + gsGroup + ":-1",
+		"empty pool":          gsCluster + "::" + gsGroup + ":1",
+		"non-UUID cluster":    "not-a-uuid:pool-1:" + gsGroup + ":1",
+		"non-UUID group":      gsCluster + ":pool-1:not-a-uuid:1",
+		"empty string":        "",
 		"plain volume handle": gsCluster + ":pool-1:" + gsGroup,
 	}
 	for name, raw := range cases {

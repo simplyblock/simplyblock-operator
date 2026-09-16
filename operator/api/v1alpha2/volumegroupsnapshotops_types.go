@@ -2,8 +2,12 @@
 // operation on a VolumeGroupSnapshot (design-consistency-groups.md §7.4). Its one
 // action, Restore, creates one PersistentVolumeClaim per member snapshot of the
 // target's generation and waits for every claim to bind.
+//
+// The kind is declared here rather than in v1alpha1 because it is new: every
+// newly introduced kind is born at v1alpha2, so it never needs a conversion
+// from a version it never had.
 
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -218,8 +218,8 @@ func sameLvolSet(requested map[string]string, members []string) bool {
 	if len(requested) != len(members) {
 		return false
 	}
-	for _, lvol := range members {
-		if _, ok := requested[lastPathSegment(lvol)]; !ok {
+	for _, member := range members {
+		if _, ok := requested[lastPathSegment(member)]; !ok {
 			return false
 		}
 	}
