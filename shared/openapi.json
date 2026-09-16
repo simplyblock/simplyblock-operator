@@ -775,6 +775,131 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/alerts/": {
+      "get": {
+        "summary": "Clusters:Alerts:List",
+        "description": "The conditions in this cluster that currently need an operator.\n\nThis is not the event log. An alert appears only while it is still true\nand disappears on its own once it is not: the node comes back ONLINE, the\ndevice comes back, the cluster leaves degraded. Conditions an operator\ncaused on purpose -- a node they shut down, a device they removed -- are\nnot alerts and are not listed.\n\nBy default only what is wrong NOW is returned -- every entry has\n``status: firing``. Pass ``history=true`` to also get the ones that have\nsince resolved, each with its ``resolved_at``, or ``history_seconds=N``\nfor just the recent past. Either way both transitions are written to the\ncluster event log as ALERT_RAISED / ALERT_RESOLVED, so a resolution\nreaches an operator whether or not anyone asks for history here.\n\nCritical sorts before warning, and firing before resolved.",
+        "operationId": "clusters_alerts_list_api_v2_clusters__cluster_id__alerts__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "critical",
+                    "warning"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only return alerts of this severity",
+              "title": "Severity"
+            },
+            "description": "Only return alerts of this severity"
+          },
+          {
+            "name": "history",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Also return alerts that have already resolved",
+              "default": false,
+              "title": "History"
+            },
+            "description": "Also return alerts that have already resolved"
+          },
+          {
+            "name": "history_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Limit the history to alerts resolved within this many seconds. Implies history=true.",
+              "title": "History Seconds"
+            },
+            "description": "Limit the history to alerts resolved within this many seconds. Implies history=true."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "firing",
+                    "resolved"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only return alerts in this state",
+              "title": "Status"
+            },
+            "description": "Only return alerts in this state"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertDTO"
+                  },
+                  "title": "Response Clusters Alerts List Api V2 Clusters  Cluster Id  Alerts  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/storage-nodes/": {
       "get": {
         "summary": "Clusters:Storage-Nodes:List",
@@ -6873,6 +6998,122 @@
   },
   "components": {
     "schemas": {
+      "AlertDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "warning"
+            ],
+            "title": "Severity"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "firing",
+              "resolved"
+            ],
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "severity",
+          "status",
+          "message",
+          "cluster_id",
+          "node_id",
+          "device_id",
+          "since",
+          "first_seen",
+          "resolved_at",
+          "details"
+        ],
+        "title": "AlertDTO",
+        "description": "One condition that currently needs an operator.\n\nDeliberately NOT an EventObj. An event is a journal entry -- it happened,\nit is kept forever, and nothing ever retracts it. An alert is a claim\nabout the present that goes away by itself when it stops being true, so\nit carries the object it is about and the time the condition started\nrather than the time something was logged. ``id`` is derived from the\nkind and the object, so it is stable across polls and a consumer can\ndedupe on it without keeping state."
+      },
       "BackupConfigParams": {
         "properties": {
           "access_key_id": {

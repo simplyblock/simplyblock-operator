@@ -16,6 +16,42 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AlertDTOSeverity.
+const (
+	AlertDTOSeverityCritical AlertDTOSeverity = "critical"
+	AlertDTOSeverityWarning  AlertDTOSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOSeverity enum.
+func (e AlertDTOSeverity) Valid() bool {
+	switch e {
+	case AlertDTOSeverityCritical:
+		return true
+	case AlertDTOSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AlertDTOStatus.
+const (
+	AlertDTOStatusFiring   AlertDTOStatus = "firing"
+	AlertDTOStatusResolved AlertDTOStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOStatus enum.
+func (e AlertDTOStatus) Valid() bool {
+	switch e {
+	case AlertDTOStatusFiring:
+		return true
+	case AlertDTOStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
@@ -487,6 +523,42 @@ func (e ClustersCreateApiV2ClustersPostParamsResponseFormat) Valid() bool {
 	}
 }
 
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "critical"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning  ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring   ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "firing"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat.
 const (
 	ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormatEmpty      ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat = "empty"
@@ -633,6 +705,36 @@ func (e ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMig
 		return false
 	}
 }
+
+// AlertDTO One condition that currently needs an operator.
+//
+// Deliberately NOT an EventObj. An event is a journal entry -- it happened,
+// it is kept forever, and nothing ever retracts it. An alert is a claim
+// about the present that goes away by itself when it stops being true, so
+// it carries the object it is about and the time the condition started
+// rather than the time something was logged. “id“ is derived from the
+// kind and the object, so it is stable across polls and a consumer can
+// dedupe on it without keeping state.
+type AlertDTO struct {
+	ClusterId  openapi_types.UUID     `json:"cluster_id"`
+	Details    map[string]interface{} `json:"details"`
+	DeviceId   *openapi_types.UUID    `json:"device_id"`
+	FirstSeen  *string                `json:"first_seen"`
+	Id         string                 `json:"id"`
+	Kind       string                 `json:"kind"`
+	Message    string                 `json:"message"`
+	NodeId     *openapi_types.UUID    `json:"node_id"`
+	ResolvedAt *string                `json:"resolved_at"`
+	Severity   AlertDTOSeverity       `json:"severity"`
+	Since      *string                `json:"since"`
+	Status     AlertDTOStatus         `json:"status"`
+}
+
+// AlertDTOSeverity defines model for AlertDTO.Severity.
+type AlertDTOSeverity string
+
+// AlertDTOStatus defines model for AlertDTO.Status.
+type AlertDTOStatus string
 
 // BackupConfigParams defines model for BackupConfigParams.
 type BackupConfigParams struct {
@@ -1399,6 +1501,27 @@ type ClustersDetailApiV2ClustersClusterIdGetParams struct {
 	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams struct {
+	// Severity Only return alerts of this severity
+	Severity *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+
+	// History Also return alerts that have already resolved
+	History *bool `form:"history,omitempty" json:"history,omitempty"`
+
+	// HistorySeconds Limit the history to alerts resolved within this many seconds. Implies history=true.
+	HistorySeconds *int `form:"history_seconds,omitempty" json:"history_seconds,omitempty"`
+
+	// Status Only return alerts in this state
+	Status *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 	ResponseFormat *ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -2026,6 +2149,9 @@ type ServerInterface interface {
 	// ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost Clusters:Addreplication
 	// (POST /api/v2/clusters/{cluster_id}/addreplication)
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
+	// (GET /api/v2/clusters/{cluster_id}/alerts/)
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams)
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/)
 	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -2605,6 +2731,87 @@ func (siw *ServerInterfaceWrapper) ClustersAddreplicationApiV2ClustersClusterIdA
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams
+
+	// ------------- Optional query parameter "severity" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "severity", r.URL.Query(), &params.Severity, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "severity"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "severity", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "history" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "history", r.URL.Query(), &params.History, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "history"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "history", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "history_seconds" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "history_seconds", r.URL.Query(), &params.HistorySeconds, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "history_seconds"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "history_seconds", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7165,6 +7372,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/{$}", wrapper.ClustersUpdateApiV2ClustersClusterIdPut)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/activate", wrapper.ClustersActivateApiV2ClustersClusterIdActivatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/addreplication", wrapper.ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/alerts/{$}", wrapper.ClustersAlertsListApiV2ClustersClusterIdAlertsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsListApiV2ClustersClusterIdBackupsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{backup_id}/{$}", wrapper.ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet)
