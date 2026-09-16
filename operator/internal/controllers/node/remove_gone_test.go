@@ -68,7 +68,7 @@ func aRemover(t *testing.T) *StorageNodeOpsReconciler {
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "a-cluster", Namespace: "simplyblock"},
 	}
-	cluster.Status.UUID = "cluster-uuid"
+	cluster.Status.UUID = aBackendClusterID
 
 	ops := aRemoveOps()
 	apiClient := fake.NewClientBuilder().WithScheme(scheme).

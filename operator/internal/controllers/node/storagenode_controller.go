@@ -489,9 +489,45 @@ func (r *StorageNodeReconciler) awaitSlot(
 			inFlight[sibling.Spec.WorkerNode] = struct{}{}
 		}
 	}
-	if int32(len(inFlight)) >= limit {
+	available := limit - int32(len(inFlight))
+	if available <= 0 {
 		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
 			"waiting for a node-add slot, %d of %d in flight", len(inFlight), limit)
+	}
+
+	// Which of the waiting workers may take the free slots is decided from the
+	// set that is waiting, not from who has already written a claim.
+	//
+	// The difference is the whole of the cap. Reconciles are serialized per
+	// object and not across objects, so every node waiting for a slot reads the
+	// in-flight count before any of them has recorded taking one: the first add
+	// is correctly alone, and the instant it finishes every remaining node sees
+	// the same free slot and takes it. A cap that counts other people's writes
+	// holds exactly once.
+	//
+	// Ordering the contenders and admitting the first few needs nobody to have
+	// written anything. Two nodes reading one set reach one answer, and the
+	// answer does not change between passes, so a node told to wait is not
+	// overtaken by one told to wait beside it.
+	contenders := []string{node.Spec.WorkerNode}
+	for i := range siblings {
+		sibling := &siblings[i]
+		if sibling.Spec.WorkerNode == node.Spec.WorkerNode || claimedWorker(sibling) {
+			continue
+		}
+		if nodeStep(sibling.Status.Step.State) != stepAwaitingSlot {
+			// Not waiting for a slot yet, so not competing for this one.
+			continue
+		}
+		contenders = append(contenders, sibling.Spec.WorkerNode)
+	}
+	slices.Sort(contenders)
+	contenders = slices.Compact(contenders)
+
+	if rank := slices.Index(contenders, node.Spec.WorkerNode); int32(rank) >= available {
+		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
+			"waiting for a node-add slot, %d of %d in flight and %d worker(s) ahead",
+			len(inFlight), limit, rank)
 	}
 
 	// A FoundationDB worker waits for every other FoundationDB worker, whatever
