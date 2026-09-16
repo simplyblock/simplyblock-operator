@@ -226,6 +226,23 @@ type ClusterTemplate struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// EnableDriveFormat formats every device the document names before a storage
+	// node takes it, which is how a drive carrying anything already is made
+	// usable.
+	//
+	// It says what is wanted rather than how, because the how differs by device
+	// class: an NVMe device is formatted to a 4K block size, and a logical block
+	// device has its signatures wiped. One field covers both, so a document does
+	// not have to know which class the expansion will resolve it to.
+	//
+	// It is on the document rather than defaulted further down because it is
+	// destructive and the document is what somebody approves. A reviewer reading
+	// a draft has to see that the drives it lists will be formatted, and be able
+	// to strike it before approving; the cluster's own field is immutable once
+	// the cluster exists, so a default nobody saw could not be undone either.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
 	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
 	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
 	// each worker runs, so a group of two workers on a two-socket layout expands

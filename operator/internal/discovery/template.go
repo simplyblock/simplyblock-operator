@@ -62,7 +62,14 @@ func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
 	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{
 		Name:              name,
 		MaxSubsystemCount: ptr.To(DefaultMaxSubsystemCount),
+		EnableDriveFormat: ptr.To(true),
 	}}
+
+	out.Notes = append(out.Notes,
+		"enableDriveFormat is set, so every drive listed here is formatted before "+
+			"a storage node takes it: a drive that carries anything is not usable "+
+			"otherwise. This is the line to remove if any of them should be left "+
+			"alone.")
 
 	vcpus, note := vcpuCountFor(plan)
 	out.Template.VCPUCount = ptr.To(vcpus)

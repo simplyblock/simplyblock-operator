@@ -338,3 +338,29 @@ func TestAClusterThisDocumentDidNotCreateIsStillRefused(t *testing.T) {
 		t.Errorf("the failure is %v, want a ClusterExists refusal", err)
 	}
 }
+
+// The document's drive-format decision reaches the cluster it creates.
+//
+// A reviewer approves a document, and what the deployment then does has to be
+// what the document said. The flag is destructive and immutable on the cluster,
+// so a document that states it and an expansion that drops it would format
+// nothing while the draft said it would, or the reverse once somebody strikes it.
+func TestTheDriveFormatDecisionReachesTheCluster(t *testing.T) {
+	for _, stated := range []*bool{ptr.To(true), ptr.To(false), nil} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Cluster.EnableDriveFormat = stated
+		})
+		r := reconcilerFor(t)
+
+		workload := r.buildWorkload(config)
+		switch {
+		case stated == nil && workload.EnableFormat4K != nil:
+			t.Errorf("a document that says nothing produced %v", *workload.EnableFormat4K)
+		case stated != nil && workload.EnableFormat4K == nil:
+			t.Errorf("a document that said %v produced nothing", *stated)
+		case stated != nil && *workload.EnableFormat4K != *stated:
+			t.Errorf("the cluster got %v, want the document's %v",
+				*workload.EnableFormat4K, *stated)
+		}
+	}
+}

@@ -284,6 +284,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.EnableDriveFormat != nil {
+		in, out := &in.EnableDriveFormat, &out.EnableDriveFormat
+		*out = new(bool)
+		**out = **in
+	}
 	if in.SocketsToUse != nil {
 		in, out := &in.SocketsToUse, &out.SocketsToUse
 		*out = make([]string, len(*in))
