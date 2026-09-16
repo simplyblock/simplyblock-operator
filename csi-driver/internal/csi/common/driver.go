@@ -13,7 +13,20 @@ type CSIDriver struct {
 	version string
 	cap     []*csi.ControllerServiceCapability
 	vc      []*csi.VolumeCapability_AccessMode
+	// groupController records whether the driver serves the GroupController
+	// service (VolumeGroupSnapshot, design §9). The identity server advertises
+	// GROUP_CONTROLLER_SERVICE only when it is set, so a driver built without
+	// it (the sanity harness) does not draw the generic group-snapshot tests,
+	// which assume arbitrary volumes can be group-snapshotted rather than the
+	// persistent, placement-pinned groups this driver requires (§3, §11.6).
+	groupController bool
 }
+
+// EnableGroupController marks the driver as serving the GroupController service.
+func (d *CSIDriver) EnableGroupController() { d.groupController = true }
+
+// GroupControllerEnabled reports whether the GroupController service is served.
+func (d *CSIDriver) GroupControllerEnabled() bool { return d.groupController }
 
 // NewCSIDriver creates a driver object. Assumes vendor version is equal to driver version &
 // does not support optional driver plugin info manifest field. Refer to CSI spec for more details.

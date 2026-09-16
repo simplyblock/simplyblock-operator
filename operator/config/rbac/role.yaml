@@ -181,6 +181,16 @@ rules:
   - create
   - patch
 - apiGroups:
+  - groupsnapshot.storage.k8s.io
+  resources:
+  - volumegroupsnapshotclasses
+  - volumegroupsnapshotcontents
+  - volumegroupsnapshots
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
@@ -218,6 +228,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - storage.k8s.io
@@ -326,6 +344,7 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - tasks/status
+  - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
   - get
@@ -341,4 +360,12 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - volumegroupsnapshotops
+  verbs:
+  - get
+  - list
   - watch
