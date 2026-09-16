@@ -86,6 +86,10 @@ func (f *fakeDevices) ByUUID(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, errors.New("not used")
 }
 
+func (f *fakeDevices) ByNGUID(context.Context, string) (nvme.Device, error) {
+	return nvme.Device{}, errors.New("not used")
+}
+
 func (f *fakeDevices) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, errors.New("not used")
 }

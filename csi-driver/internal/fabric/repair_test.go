@@ -432,6 +432,9 @@ func (f fakeDevs) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) (
 }
 
 func (f fakeDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, errs404 }
+func (f fakeDevs) ByNGUID(context.Context, string) (nvme.Device, error) {
+	return nvme.Device{}, errs404
+}
 func (f fakeDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, errs404
 }
