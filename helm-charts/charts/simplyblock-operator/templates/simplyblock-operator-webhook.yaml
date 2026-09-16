@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -93,18 +92,19 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
-      path: /validate-v1-pvc-vdo-size
-  failurePolicy: Ignore
-  name: vdo-size-floor-validator.simplyblock.io
+      path: /validate-storage-simplyblock-io-v1alpha2-controlplaneops
+  failurePolicy: Fail
+  name: vcontrolplaneops.simplyblock.io
   rules:
   - apiGroups:
-    - ""
+    - storage.simplyblock.io
     apiVersions:
-    - v1
+    - v1alpha2
     operations:
     - CREATE
+    - DELETE
     resources:
-    - persistentvolumeclaims
+    - controlplaneops
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -263,61 +263,3 @@ webhooks:
     resources:
     - storagepools
   sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: {{ .Release.Namespace }}
-      path: /validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot
-  failurePolicy: Fail
-  name: vvolumegroupsnapshot.simplyblock.io
-  rules:
-  - apiGroups:
-    - groupsnapshot.storage.k8s.io
-    apiVersions:
-    - v1beta1
-    operations:
-    - CREATE
-    resources:
-    - volumegroupsnapshots
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: {{ .Release.Namespace }}
-      path: /validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops
-  failurePolicy: Fail
-  name: vvolumegroupsnapshotops.simplyblock.io
-  rules:
-  - apiGroups:
-    - storage.simplyblock.io
-    apiVersions:
-    - v1alpha2
-    operations:
-    - CREATE
-    resources:
-    - volumegroupsnapshotops
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: {{ .Release.Namespace }}
-      path: /validate-storage-simplyblock-io-v1alpha1-volumemigration
-  failurePolicy: Fail
-  name: vvolumemigration.simplyblock.io
-  rules:
-  - apiGroups:
-    - storage.simplyblock.io
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - volumemigrations
-  sideEffects: None
-{{- end }}

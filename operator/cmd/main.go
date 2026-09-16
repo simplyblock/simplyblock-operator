@@ -59,6 +59,7 @@ import (
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
+	controlplanecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
@@ -482,7 +483,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.ControlPlaneReconciler{
+	// Where the control plane is, read from the ControlPlane object rather than
+	// from the environment (design-controlplane.md §3.3). Every control-plane
+	// client below shares it, so an external control plane is reachable and a
+	// change to its endpoint reaches every caller without a rollout.
+	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
+		mgr.GetClient(), operatorNamespace)
+
+	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
@@ -490,11 +498,19 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
+	if err := (&controlplanecontroller.ControlPlaneOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
+		os.Exit(1)
+	}
 	if err := (&clustercontroller.StorageClusterReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -635,7 +651,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenode-controller"),
-		API:      nodecontroller.NewControlPlane(),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
 		Nodes:    nodeSubscription,
 		Registries: []nodecontroller.NodeObjectRegistry{
 			deviceSubscription, nodeSubscription,
@@ -651,7 +667,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
-		API:      nodecontroller.NewControlPlane(),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
 		Nodes:    nodeSubscription,
 		Clusters: clusterSubscription,
 		Workload: storageNodeWorkload,
@@ -714,7 +730,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
@@ -858,6 +874,10 @@ func main() {
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
 			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagebackupops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-controlplaneops",
+			&webhook.Admission{Handler: &internalwebhook.ControlPlaneOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered controlplaneops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{

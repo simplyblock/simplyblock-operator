@@ -67,7 +67,33 @@ multiCluster:
     secret:
     workers:
 
+deployment:
+  # One of: standalone, managed.
+  #
+  # standalone hosts its own control plane. The operator installs FoundationDB,
+  # the object store, and the management API from the ControlPlane object this
+  # chart writes.
+  #
+  # managed registers this cluster's storage with a control plane elsewhere,
+  # named by controlplane.managed below. Nothing is installed here.
+  #
+  # Observability under controlplane is rendered for standalone only: it stores
+  # what it collects in the object store a hosted control plane brings.
+  profile: standalone
+
 controlplane:
+  # Where the control plane is, for deployment.profile: managed.
+  managed:
+    # Base URL of the management API. Required for that profile. A loopback or
+    # link-local address is rejected.
+    endpoint: ""
+    # Secret in this namespace holding the bearer token, under `token` or
+    # `secret`. Empty sends no token.
+    credentialsSecretRef: ""
+    # Secret holding the CA the endpoint is verified against, under `ca.crt` or
+    # `tls.crt`. Empty uses the system trust store. Named and unusable fails.
+    caBundleSecretRef: ""
+
   # Accept a pod's service-account token from the CSI driver's two accounts
   # instead of requiring the static cluster secret. This is the control
   # plane's half of the switch: set it together with
@@ -284,7 +310,6 @@ controlplane:
           memory: 128Mi
 
 operator:
-  enabled: true
   openShiftCluster: true
 
 # The CSI link: the CSI node and controller pods dial the operator and hold the
@@ -411,6 +436,9 @@ opensearch:
     enabled: false
 
 reloader:
+  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
+  # move. Off means they pick the change up on their next restart instead.
+  enabled: true
   nameOverride: simplyblock-reloader
   fullnameOverride: simplyblock-reloader
   reloader:
@@ -422,6 +450,9 @@ reloader:
       tolerations: []
 
 prometheus:
+  # Where the control plane pushes what it measures. A managed deployment
+  # reports to the control plane administering it, so it can turn this off.
+  enabled: true
   simplyblock:
     prometheusURL: simplyblock-prometheus
     prometheusPORT: 9090   

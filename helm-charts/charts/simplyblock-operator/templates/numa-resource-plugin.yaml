@@ -1,5 +1,3 @@
-{{- $operatorEnabled := .Values.operator.enabled -}}
-{{- if $operatorEnabled -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -106,5 +104,3 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
-
-{{- end -}}

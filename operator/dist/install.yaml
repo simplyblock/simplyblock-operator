@@ -751,15 +751,41 @@ spec:
               document carries no field for it.
             properties:
               approved:
+                default: false
                 description: |-
                   Approved is the review gate. A document is expanded only once it is set,
                   and is validated but otherwise inert before that, which is what makes
                   reviewing a wrong document safe.
+
+                  It is defaulted and serialized rather than omitted when false, and the
+                  two are the same requirement read twice. A reviewer has to see the gate
+                  they are being asked to open, and the rules above have to find the field
+                  they read: a bool omitted when false is a key the apiserver never stores,
+                  so a rule reading it fails rather than reading false, and the first rule
+                  guarding approval denied every approval there could ever be. The has()
+                  guards are what carry documents written before the default existed.
                 type: boolean
               cluster:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  enableDriveFormat:
+                    description: |-
+                      EnableDriveFormat formats every device the document names before a storage
+                      node takes it, which is how a drive carrying anything already is made
+                      usable.
+
+                      It says what is wanted rather than how, because the how differs by device
+                      class: an NVMe device is formatted to a 4K block size, and a logical block
+                      device has its signatures wiped. One field covers both, so a document does
+                      not have to know which class the expansion will resolve it to.
+
+                      It is on the document rather than defaulted further down because it is
+                      destructive and the document is what somebody approves. A reviewer reading
+                      a draft has to see that the drives it lists will be formatted, and be able
+                      to strike it before approving; the cluster's own field is immutable once
+                      the cluster exists, so a default nobody saw could not be undone either.
+                    type: boolean
                   enableFailureDomains:
                     description: |-
                       EnableFailureDomains opts the cluster into failure-domain mode, in which
@@ -1020,9 +1046,9 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: an approved deployment config is immutable
-              rule: '!oldSelf.approved || self == oldSelf'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
-              rule: '!oldSelf.approved || self.approved'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
             - message: 'every group must name the same device class: all nvme or all
                 block'
               rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
@@ -1084,7 +1110,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'',''Activating'']'
             type: object
         type: object
     served: true
@@ -1114,6 +1140,8 @@ spec:
     kind: ControlPlane
     listKind: ControlPlaneList
     plural: controlplanes
+    shortNames:
+    - cp
     singular: controlplane
   scope: Namespaced
   versions:
@@ -1163,102 +1191,13 @@ spec:
               image:
                 description: |-
                   Image is the container image used for all simplyblock control-plane and
-                  storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+                  storage-node workloads (e.g., `quay.io/simplyblock-io/simplyblock:26.2.2`).
                   StorageNodeSet CRs that omit spec.clusterImage inherit this value.
-                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                  Must reference one of the trusted registries (`quay.io/simplyblock-io`,
+                  `docker.io/simplyblock`, `public.ecr.aws/simply-block`). Digest pinning
+                  (@sha256:...) is recommended.
                 pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
-            type: object
-          status:
-            description: |-
-              ControlPlaneStatus reflects the observed readiness of the simplyblock
-              control plane (FDB + management API).
-            properties:
-              lastChecked:
-                description: LastChecked is the timestamp of the most recent FDB health
-                  probe.
-                format: date-time
-                type: string
-              message:
-                description: |-
-                  Message contains a human-readable explanation of the current phase,
-                  for example the FDB error returned by the health endpoint.
-                type: string
-              phase:
-                description: |-
-                  Phase is Initializing while the control plane is not yet healthy,
-                  and Ready once the FDB health check passes.
-                enum:
-                - Initializing
-                - Ready
-                type: string
-            type: object
-        type: object
-    served: true
-    storage: false
-    subresources:
-      status: {}
-  - additionalPrinterColumns:
-    - description: Initializing while FDB is not ready; Available once the control
-        plane is operational
-      jsonPath: .status.phase
-      name: Phase
-      type: string
-    - description: Human-readable status detail
-      jsonPath: .status.message
-      name: Message
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha2
-    schema:
-      openAPIV3Schema:
-        description: |-
-          ControlPlane is a singleton resource (one per namespace, named "simplyblock")
-          that reflects the readiness of the simplyblock control plane. It is created
-          automatically by the Helm chart and should not be created or deleted manually.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: ControlPlaneSpec holds configuration for the singleton ControlPlane
-              resource.
-            properties:
-              source:
-                description: |-
-                  Source says where the control plane comes from. It replaces the top-level
-                  image field of v1alpha1, which conflated the control plane's own image with
-                  the default every StorageNodeSet inherited.
-                properties:
-                  managed:
-                    description: Managed is the control plane the operator installs
-                      and owns.
-                    properties:
-                      image:
-                        description: |-
-                          Image is the container image used for the simplyblock control-plane
-                          workloads (e.g., quay.io/simplyblock-io/simplyblock:26.2.2).
-                          Must reference one of the trusted registries (`quay.io/simplyblock-io`, `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning (@sha256:...) is recommended.
-                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
-                        type: string
-                    type: object
-                type: object
             type: object
           status:
             description: |-
@@ -1278,10 +1217,474 @@ spec:
               phase:
                 description: |-
                   Phase is Initializing while the control plane is not yet healthy,
-                  and Available once the FDB health check passes.
+                  and Ready once the FDB health check passes.
                 enum:
                 - Initializing
+                - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.endpoint
+      name: Endpoint
+      type: string
+    - jsonPath: .status.version
+      name: Version
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ControlPlane is the simplyblock control plane for one Kubernetes cluster:
+          FoundationDB together with the management API, either installed by the
+          operator or already existing. It is a singleton named `simplyblock`, and it is
+          the root of the ownership spine: nothing else in this API group reconciles
+          meaningfully before it reports Available.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ControlPlaneSpec is the desired state of the simplyblock control plane for one
+              namespace.
+            properties:
+              source:
+                description: |-
+                  Source selects whether this cluster hosts its control plane or is managed
+                  by one elsewhere. Switching a live deployment between the two is not a
+                  reconfiguration, because the clusters and their volumes live in the
+                  FoundationDB behind the old one, so which mode is chosen is frozen at
+                  creation. What is inside the chosen mode stays editable.
+
+                  Both rules are declared on ControlPlaneSource rather than here. See the
+                  type for why.
+                properties:
+                  local:
+                    description: Local is a control plane the operator installs.
+                    properties:
+                      foundationDB:
+                        description: FoundationDB sizes the FoundationDB the management
+                          API stores its state in.
+                        properties:
+                          replicas:
+                            default: 3
+                            description: |-
+                              Replicas is the number of coordinators. Three is the smallest count that
+                              survives one loss, which is why it is the default.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          resources:
+                            description: Resources sets requests and limits for the
+                              coordinator pods.
+                            properties:
+                              claims:
+                                description: |-
+                                  Claims lists the names of resources, defined in spec.resourceClaims,
+                                  that are used by this container.
+
+                                  This field depends on the
+                                  DynamicResourceAllocation feature gate.
+
+                                  This field is immutable. It can only be set for containers.
+                                items:
+                                  description: ResourceClaim references one entry
+                                    in PodSpec.ResourceClaims.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        Name must match the name of one entry in pod.spec.resourceClaims of
+                                        the Pod where this field is used. It makes that resource available
+                                        inside a container.
+                                      type: string
+                                    request:
+                                      description: |-
+                                        Request is the name chosen for a request in the referenced claim.
+                                        If empty, everything from the claim is made available, otherwise
+                                        only the result of this request.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                - name
+                                x-kubernetes-list-type: map
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          storageClassName:
+                            description: |-
+                              StorageClassName is the class the coordinators' volumes are provisioned
+                              from. It cannot be a class this operator provides, because the control
+                              plane has to exist before any simplyblock volume can.
+                            type: string
+                        type: object
+                      image:
+                        description: |-
+                          Image is the management API and control-plane image.
+                          Must reference one of the trusted registries (`quay.io/simplyblock-io`,
+                          `docker.io/simplyblock`, `public.ecr.aws/simply-block`); digest pinning
+                          (@sha256:...) is recommended.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      imagePullPolicy:
+                        default: IfNotPresent
+                        description: ImagePullPolicy controls when that image is pulled.
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          NodeSelector pins every pod the operator installs for the control plane.
+                          It is a selector rather than an affinity term because that is what the
+                          chart it replaces took, and a deployment migrating off the chart has the
+                          value already written down.
+                        type: object
+                      replicas:
+                        default: 2
+                        description: |-
+                          Replicas is the number of management API instances. Two is what the chart
+                          ships and what the phases assume: a single instance makes Degraded
+                          unreachable for this component and every restart an outage (§5.1).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      resources:
+                        description: Resources sets requests and limits for the management
+                          API pods.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      tolerations:
+                        description: |-
+                          Tolerations are applied to every pod the operator installs for the control
+                          plane.
+                        items:
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
+                          properties:
+                            effect:
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                              type: string
+                            operator:
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
+                                Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                              type: string
+                            tolerationSeconds:
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
+                              format: int64
+                              type: integer
+                            value:
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
+                              type: string
+                          type: object
+                        type: array
+                    required:
+                    - image
+                    type: object
+                  managed:
+                    description: Managed is a control plane that already exists.
+                    properties:
+                      caBundleSecretRef:
+                        description: |-
+                          CABundleSecretRef names a Secret holding the CA certificate the endpoint
+                          is verified against. Absent means the system trust store.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      credentialsSecretRef:
+                        description: |-
+                          CredentialsSecretRef names a Secret in this namespace holding the bearer
+                          token the operator authenticates with. It is a reference rather than a
+                          field because a token in a spec is a token in every `kubectl get -o yaml`.
+
+                          Absent means the endpoint is reached without one, which is the in-cluster
+                          case: a control plane the Helm chart installed answers on a ClusterIP
+                          Service in this namespace and does not require a token for the readiness
+                          read. Naming a Secret that does not exist stays an error, because naming
+                          one is a statement that the control plane needs it.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      endpoint:
+                        description: |-
+                          Endpoint is the management API's base URL. It is validated against the
+                          same outbound-URL guard every other outbound endpoint in this group uses,
+                          so a loopback or link-local address is rejected.
+                        pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                        type: string
+                    required:
+                    - endpoint
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: set exactly one of local or managed
+                  rule: '(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) ==
+                    1'
+                - message: 'spec.source is immutable: a control plane the operator
+                    installed and one it did not are different deployments, and the
+                    clusters and their volumes live in the FoundationDB behind the
+                    old one'
+                  rule: has(self.local) == has(oldSelf.local) && has(self.managed)
+                    == has(oldSelf.managed)
+            required:
+            - source
+            type: object
+          status:
+            description: ControlPlaneStatus is the observed state of the control plane.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef names the ControlPlaneOps currently allowed to act on this
+                  control plane. Empty when none is running.
+                type: string
+              components:
+                description: |-
+                  Components is the per-component readiness the phase is derived from
+                  (§4.3), one entry per workload the managed install applies. It is empty
+                  for a remote control plane, which has no components the operator owns.
+                  Without it a Degraded phase says that something is wrong and not what.
+                items:
+                  description: |-
+                    ControlPlaneComponentStatus is one workload of a managed control plane and how
+                    much of it is running. The phase is the worst verdict across these and the
+                    readiness probe, and only an essential component at zero ready can make it
+                    Unavailable.
+                  properties:
+                    desired:
+                      description: |-
+                        Desired is how many replicas the component should have. For the component
+                        carrying its own operator it is that resource's own count, because a
+                        FoundationDBCluster reports quorum rather than replicas.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    essential:
+                      description: |-
+                        Essential states whether this component at zero ready makes the control
+                        plane Unavailable rather than Degraded. It is decided by the table in
+                        §4.3 rather than by a user, and it is reported here so that a phase can be
+                        explained without reading the operator's source.
+                      type: boolean
+                    name:
+                      description: Name is the workload's name, as applied.
+                      type: string
+                    ready:
+                      description: Ready is how many of them are.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              endpoint:
+                description: |-
+                  Endpoint is the resolved management API base URL, derived in the local
+                  case and echoed in the managed one. It is what every controller in the
+                  operator reads to reach the control plane, so that one object answers
+                  where it is.
+                type: string
+              lastChecked:
+                description: LastChecked is when the readiness probe last ran.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the control plane moves, and never a log. On a failed probe it is the
+                  control plane's own error rather than a paraphrase of it.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from, so a stale status can be told from a current one.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of the control plane.
+                enum:
+                - Installing
                 - Available
+                - Degraded
+                - Unavailable
+                type: string
+              step:
+                description: |-
+                  Step is the position of the installation machine within Installing. The
+                  rule repeats the ControlPlaneStep enum because a marker cannot reach a
+                  field of the shared snapshot type.
+                properties:
+                  deadline:
+                    description: |-
+                      Deadline is when that state expires, absent when it has none. It is an
+                      absolute instant, so a state whose deadline passed while the controller
+                      was down restores as already expired.
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      State is the state the machine was in. Empty means the resource has not
+                      been reconciled yet, and restores to the graph's initial state.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: unknown step
+                  rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+              version:
+                description: Version is the version the management API reports.
                 type: string
             type: object
         type: object
@@ -5569,6 +5972,8 @@ spec:
                 enum:
                 - Pending
                 - Creating
+                - Provisioning
+                - Activating
                 - Online
                 - Degraded
                 - Unavailable
@@ -6444,47 +6849,6 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
-                  blkForceFormat:
-                    description: |-
-                      BlkForceFormat overrides whether partitioned lblk devices are force-wiped
-                      (wipefs) to become eligible whole-disk devices on this node.
-                    type: boolean
-                  blkNames:
-                    description: |-
-                      BlkNames overrides the block-device kernel-name selector for this node.
-                      Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
-                    items:
-                      type: string
-                    maxItems: 64
-                    type: array
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      optionalOldSelf: true
-                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-                  blkNamesExclude:
-                    description: |-
-                      BlkNamesExclude overrides the kernel-name exclusion selector for this node.
-                      Immutable once set (see BlkNames).
-                    items:
-                      type: string
-                    maxItems: 64
-                    type: array
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      optionalOldSelf: true
-                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-                  blkSerials:
-                    description: |-
-                      BlkSerials overrides the block-device serial/WWN selector for this node.
-                      Immutable once set (see BlkNames).
-                    items:
-                      type: string
-                    maxItems: 64
-                    type: array
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      optionalOldSelf: true
-                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -6499,11 +6863,6 @@ spec:
                   enableCpuTopology:
                     description: EnableCpuTopology overrides topology-aware CPU handling
                       for this node.
-                    type: boolean
-                  enableLblk:
-                    description: |-
-                      EnableLblk overrides whether this node uses lblk devices instead of NVMe.
-                      Only meaningful when the cluster's spec.deviceMode is "lblk."
                     type: boolean
                   expand:
                     description: |-
@@ -6533,12 +6892,6 @@ spec:
                         format: int32
                         type: integer
                     type: object
-                  lblkJournalPercent:
-                    description: |-
-                      LblkJournalPercent overrides the lblk journal-partition capacity percentage for
-                      this node.
-                    format: int32
-                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.
@@ -6583,16 +6936,6 @@ spec:
                       this node.
                     type: boolean
                 type: object
-                x-kubernetes-validations:
-                - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
-                    are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
-                  rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
-                    && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
-                    > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) &&
-                    ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) ||
-                    (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel)
-                    && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
-                    > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
                   (e.g. "0", "1"). Immutable.
@@ -7347,52 +7690,6 @@ spec:
           spec:
             description: spec defines the desired state of StorageNodeSet
             properties:
-              blkForceFormat:
-                description: |-
-                  BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
-                  partitioned lblk devices so they become eligible whole-disk devices. Destructive —
-                  only set this when reusing a disk whose old data is no longer needed.
-                type: boolean
-              blkNames:
-                description: |-
-                  BlkNames selects block devices by kernel name (e.g., sdb, sdc) when EnableLblk is
-                  set. Empty selects every eligible whole disk. At most one of BlkNames,
-                  BlkNamesExclude, BlkSerials may be set. Immutable once set — including unset-to-set,
-                  since the backend (node_configure.py) silently ignores a selector change on an
-                  already-provisioned node.
-                items:
-                  type: string
-                maxItems: 64
-                type: array
-                x-kubernetes-validations:
-                - message: field is immutable
-                  optionalOldSelf: true
-                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-              blkNamesExclude:
-                description: |-
-                  BlkNamesExclude excludes block devices by kernel name when EnableLblk is set.
-                  Immutable once set (see BlkNames).
-                items:
-                  type: string
-                maxItems: 64
-                type: array
-                x-kubernetes-validations:
-                - message: field is immutable
-                  optionalOldSelf: true
-                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-              blkSerials:
-                description: |-
-                  BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
-                  stable across device-name changes, unlike BlkNames. Immutable once set (see
-                  BlkNames).
-                items:
-                  type: string
-                maxItems: 64
-                type: array
-                x-kubernetes-validations:
-                - message: field is immutable
-                  optionalOldSelf: true
-                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
@@ -7494,15 +7791,6 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
-              enableLblk:
-                description: |-
-                  EnableLblk selects lblk devices instead of NVMe for this fleet. Only meaningful
-                  when the cluster's spec.deviceMode is "lblk"; mutually exclusive with the NVMe
-                  PCIe selectors below.
-                type: boolean
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               expand:
                 description: |-
                   Expand indicates that storage nodes added from this StorageNodeSet are being
@@ -7599,13 +7887,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              lblkJournalPercent:
-                description: |-
-                  LblkJournalPercent is the journal-partition capacity percentage, used when the
-                  smallest selected lblk device is a partition. Ignored for whole disks; backend
-                  defaults to 3.
-                format: int32
-                type: integer
               maxParallelNodeAdds:
                 default: 1
                 description: |-
@@ -7635,47 +7916,6 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
-                    blkForceFormat:
-                      description: |-
-                        BlkForceFormat overrides whether partitioned lblk devices are force-wiped
-                        (wipefs) to become eligible whole-disk devices on this node.
-                      type: boolean
-                    blkNames:
-                      description: |-
-                        BlkNames overrides the block-device kernel-name selector for this node.
-                        Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
-                      items:
-                        type: string
-                      maxItems: 64
-                      type: array
-                      x-kubernetes-validations:
-                      - message: field is immutable
-                        optionalOldSelf: true
-                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-                    blkNamesExclude:
-                      description: |-
-                        BlkNamesExclude overrides the kernel-name exclusion selector for this node.
-                        Immutable once set (see BlkNames).
-                      items:
-                        type: string
-                      maxItems: 64
-                      type: array
-                      x-kubernetes-validations:
-                      - message: field is immutable
-                        optionalOldSelf: true
-                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
-                    blkSerials:
-                      description: |-
-                        BlkSerials overrides the block-device serial/WWN selector for this node.
-                        Immutable once set (see BlkNames).
-                      items:
-                        type: string
-                      maxItems: 64
-                      type: array
-                      x-kubernetes-validations:
-                      - message: field is immutable
-                        optionalOldSelf: true
-                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -7690,11 +7930,6 @@ spec:
                     enableCpuTopology:
                       description: EnableCpuTopology overrides topology-aware CPU
                         handling for this node.
-                      type: boolean
-                    enableLblk:
-                      description: |-
-                        EnableLblk overrides whether this node uses lblk devices instead of NVMe.
-                        Only meaningful when the cluster's spec.deviceMode is "lblk."
                       type: boolean
                     expand:
                       description: |-
@@ -7725,12 +7960,6 @@ spec:
                           format: int32
                           type: integer
                       type: object
-                    lblkJournalPercent:
-                      description: |-
-                        LblkJournalPercent overrides the lblk journal-partition capacity percentage for
-                        this node.
-                      format: int32
-                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.
@@ -7775,17 +8004,6 @@ spec:
                         this node.
                       type: boolean
                   type: object
-                  x-kubernetes-validations:
-                  - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
-                      are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
-                    rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
-                      && size(self.blkNames) > 0) || (has(self.blkNamesExclude) &&
-                      size(self.blkNamesExclude) > 0) || (has(self.blkSerials) &&
-                      size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) &&
-                      size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) &&
-                      size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel)
-                      > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
-                      > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
                 description: |-
                   NodeConfigs allows per-worker-node configuration overrides keyed by the
                   Kubernetes worker node name. Entries are propagated to the corresponding
@@ -7931,19 +8149,8 @@ spec:
               rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
             - message: field nodesPerSocket is immutable once set
               rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
-            - message: field enableLblk is immutable once set
-              rule: '!has(oldSelf.enableLblk) || has(self.enableLblk)'
             - message: field forceFormat4K is immutable once set
               rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
-            - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
-                are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
-              rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
-                && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
-                > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList)
-                && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList)
-                > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange)
-                && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames)
-                > 0)))'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
@@ -8696,22 +8903,6 @@ spec:
                   Kubernetes API: a pool whose defaults changed would have a class the
                   operator cannot update. Changing them means creating a new pool.
                 properties:
-                  enableClientCompression:
-                    description: |-
-                      EnableClientCompression compresses each volume on the node that consumes
-                      it (VDO), before a write ever reaches the wire, rather than on the storage
-                      node. Distinct from EnableCompression, and independent of
-                      EnableClientDeduplication: either, both, or neither may be set. A volume
-                      requesting this is pinned to a node whose kernel can run dm-vdo.
-                    type: boolean
-                  enableClientDeduplication:
-                    description: |-
-                      EnableClientDeduplication deduplicates each volume on the node that
-                      consumes it (VDO), independent of EnableClientCompression. It carries a
-                      significant fixed RAM cost per volume for VDO's index, so it is meant for
-                      the pools where duplicate data is actually expected (VM images, container
-                      layers, backup targets) rather than enabled by default.
-                    type: boolean
                   enableCompression:
                     description: EnableCompression compresses logical volumes.
                     type: boolean
@@ -9012,240 +9203,6 @@ spec:
             type: object
         required:
         - spec
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
-  name: volumegroupsnapshotops.storage.simplyblock.io
-spec:
-  group: storage.simplyblock.io
-  names:
-    kind: VolumeGroupSnapshotOps
-    listKind: VolumeGroupSnapshotOpsList
-    plural: volumegroupsnapshotops
-    shortNames:
-    - vgsops
-    singular: volumegroupsnapshotops
-  scope: Namespaced
-  versions:
-  - additionalPrinterColumns:
-    - jsonPath: .spec.volumeGroupSnapshotRef
-      name: GroupSnapshot
-      type: string
-    - jsonPath: .spec.action
-      name: Action
-      type: string
-    - jsonPath: .status.phase
-      name: Phase
-      type: string
-    - jsonPath: .status.step.state
-      name: Step
-      type: string
-    - jsonPath: .status.membersBound
-      name: Bound
-      type: integer
-    - jsonPath: .status.message
-      name: Message
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha2
-    schema:
-      openAPIV3Schema:
-        description: |-
-          VolumeGroupSnapshotOps is a one-shot operation on a VolumeGroupSnapshot,
-          analogous to a Kubernetes Job: it drives its action to completion, records
-          the result, and is then inert. The Restore action creates one
-          PersistentVolumeClaim per member snapshot of the target's generation and
-          waits for every claim to bind.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: |-
-              VolumeGroupSnapshotOpsSpec defines the requested operation. The whole spec is
-              immutable: the object is a request.
-            properties:
-              action:
-                description: Action is the operation to perform.
-                enum:
-                - Restore
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              restore:
-                description: |-
-                  Restore carries the parameters of the Restore action. Ignored for any
-                  other action.
-                properties:
-                  consistencyGroup:
-                    description: |-
-                      ConsistencyGroup labels every restored claim with
-                      storage.simplyblock.io/consistency-group: <value>, so the clones form a
-                      new group at provisioning under the mandatory placement rule. Empty
-                      leaves the clones as independent, mutually consistent volumes.
-                    type: string
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
-                  enablePartialRestore:
-                    description: |-
-                      EnablePartialRestore restores the members an incomplete generation still
-                      has instead of failing the operation. Off by default: an incomplete
-                      generation fails, naming the missing members.
-                    type: boolean
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
-                  namePrefix:
-                    description: |-
-                      NamePrefix prefixes every restored claim's name:
-                      <namePrefix>-<source PVC name>, the source name read from the member
-                      snapshot's spec.source.persistentVolumeClaimName. Defaults to the
-                      operation's own name.
-                    type: string
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
-                  storageClassName:
-                    description: |-
-                      StorageClassName is the class every restored claim requests. When empty,
-                      each claim inherits the class of its member snapshot's source claim, and
-                      the restore fails for a member whose source claim no longer exists.
-                    type: string
-                    x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
-                type: object
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-                - message: field namePrefix is immutable once set
-                  rule: '!has(oldSelf.namePrefix) || has(self.namePrefix)'
-                - message: field storageClassName is immutable once set
-                  rule: '!has(oldSelf.storageClassName) || has(self.storageClassName)'
-                - message: field consistencyGroup is immutable once set
-                  rule: '!has(oldSelf.consistencyGroup) || has(self.consistencyGroup)'
-                - message: field enablePartialRestore is immutable once set
-                  rule: '!has(oldSelf.enablePartialRestore) || has(self.enablePartialRestore)'
-              volumeGroupSnapshotRef:
-                description: |-
-                  VolumeGroupSnapshotRef names the VolumeGroupSnapshot, in this namespace,
-                  the operation acts on. Resolved at admission: a create naming a
-                  VolumeGroupSnapshot that does not exist is rejected.
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-            required:
-            - action
-            - volumeGroupSnapshotRef
-            type: object
-            x-kubernetes-validations:
-            - message: field restore is immutable once set
-              rule: '!has(oldSelf.restore) || has(self.restore)'
-          status:
-            description: VolumeGroupSnapshotOpsStatus holds the observed state of
-              the operation.
-            properties:
-              completedAt:
-                description: CompletedAt is when the operation finished, successfully
-                  or not.
-                format: date-time
-                type: string
-              members:
-                description: Members records each member snapshot and its restored
-                  claim.
-                items:
-                  description: |-
-                    RestoredMemberStatus records one member snapshot and the claim restored
-                    from it.
-                  properties:
-                    bound:
-                      description: Bound reports whether the restored claim has bound.
-                      type: boolean
-                    persistentVolumeClaimName:
-                      description: PersistentVolumeClaimName is the restored claim.
-                      type: string
-                    volumeSnapshotName:
-                      description: VolumeSnapshotName is the member VolumeSnapshot
-                        the claim restores from.
-                      type: string
-                  required:
-                  - persistentVolumeClaimName
-                  - volumeSnapshotName
-                  type: object
-                type: array
-              membersBound:
-                description: MembersBound is how many restored claims have bound.
-                type: integer
-              membersExpected:
-                description: MembersExpected is the member count of the target generation.
-                type: integer
-              message:
-                description: |-
-                  Message is the reason the phase is what it is: one sentence, replaced as
-                  the phase moves.
-                type: string
-              observedGeneration:
-                description: ObservedGeneration is the spec generation this status
-                  was computed from.
-                format: int64
-                type: integer
-              phase:
-                description: Phase is the high-level lifecycle phase.
-                enum:
-                - Pending
-                - Running
-                - Succeeded
-                - Failed
-                type: string
-              startedAt:
-                description: StartedAt is when the operation began.
-                format: date-time
-                type: string
-              step:
-                description: Step is the durable position of the action's state machine.
-                properties:
-                  deadline:
-                    format: date-time
-                    type: string
-                  state:
-                    description: |-
-                      VolumeGroupSnapshotOpsStep is one step of a running operation. The enum is the
-                      union of every action's steps. Which steps belong to which action is declared
-                      by the action's state-machine graph rather than by this type.
-                    enum:
-                    - Validating
-                    - CreatingClaims
-                    - WaitingForBind
-                    type: string
-                type: object
-            type: object
         type: object
     served: true
     storage: true
@@ -9665,7 +9622,21 @@ rules:
   - apps
   resources:
   - daemonsets
+  - deployments
   - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.foundationdb.org
+  resources:
+  - foundationdbbackups
+  - foundationdbclusters
   verbs:
   - create
   - delete
@@ -9715,16 +9686,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - groupsnapshot.storage.k8s.io
-  resources:
-  - volumegroupsnapshotclasses
-  - volumegroupsnapshotcontents
-  - volumegroupsnapshots
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
@@ -9741,6 +9702,8 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
+  - rolebindings
+  - roles
   verbs:
   - bind
   - create
@@ -9762,14 +9725,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - snapshot.storage.k8s.io
-  resources:
-  - volumesnapshots
-  verbs:
-  - get
-  - list
   - watch
 - apiGroups:
   - storage.k8s.io
@@ -9799,6 +9754,7 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - controlplaneops
   - controlplanes
   - operatorops
   - replicationops
@@ -9832,6 +9788,8 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - controlplaneops/finalizers
+  - controlplanes/finalizers
   - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
@@ -9857,6 +9815,7 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - clusterdeploymentconfigs/status
+  - controlplaneops/status
   - controlplanes/status
   - operatorops/status
   - replicationops/status
@@ -9876,7 +9835,6 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - tasks/status
-  - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
   - get
@@ -9897,7 +9855,6 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagenodesets
-  - volumegroupsnapshotops
   verbs:
   - get
   - list
@@ -10511,18 +10468,19 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
-      path: /validate-v1-pvc-vdo-size
-  failurePolicy: Ignore
-  name: vdo-size-floor-validator.simplyblock.io
+      path: /validate-storage-simplyblock-io-v1alpha2-controlplaneops
+  failurePolicy: Fail
+  name: vcontrolplaneops.simplyblock.io
   rules:
   - apiGroups:
-    - ""
+    - storage.simplyblock.io
     apiVersions:
-    - v1
+    - v1alpha2
     operations:
     - CREATE
+    - DELETE
     resources:
-    - persistentvolumeclaims
+    - controlplaneops
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -10680,61 +10638,4 @@ webhooks:
     - CREATE
     resources:
     - storagepools
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: simplyblock-operator-system
-      path: /validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot
-  failurePolicy: Fail
-  name: vvolumegroupsnapshot.simplyblock.io
-  rules:
-  - apiGroups:
-    - groupsnapshot.storage.k8s.io
-    apiVersions:
-    - v1beta1
-    operations:
-    - CREATE
-    resources:
-    - volumegroupsnapshots
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: simplyblock-operator-system
-      path: /validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops
-  failurePolicy: Fail
-  name: vvolumegroupsnapshotops.simplyblock.io
-  rules:
-  - apiGroups:
-    - storage.simplyblock.io
-    apiVersions:
-    - v1alpha2
-    operations:
-    - CREATE
-    resources:
-    - volumegroupsnapshotops
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: simplyblock-operator-webhook-service
-      namespace: simplyblock-operator-system
-      path: /validate-storage-simplyblock-io-v1alpha1-volumemigration
-  failurePolicy: Fail
-  name: vvolumemigration.simplyblock.io
-  rules:
-  - apiGroups:
-    - storage.simplyblock.io
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    resources:
-    - volumemigrations
   sideEffects: None

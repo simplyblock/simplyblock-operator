@@ -25,7 +25,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -134,12 +136,29 @@ type ControlPlane interface {
 	DeleteVolume(ctx context.Context, clusterID, poolID, volumeID string) error
 }
 
-// httpControlPlane is the ControlPlane the operator runs with: the shared webapi
-// client, with one method per endpoint of §12.
-type httpControlPlane struct{ client *webapi.Client }
+// httpControlPlane is the ControlPlane the operator runs with: one method per
+// endpoint of §12, over a client whose address comes from the ControlPlane object.
+type httpControlPlane struct {
+	// client is the startup client, built from the environment. It is what a
+	// call uses until the ControlPlane publishes an endpoint.
+	client *webapi.Client
+
+	// resolve answers where the control plane is, per call. Nil means the
+	// startup client is the only one.
+	resolve controlplane.EndpointResolver
+
+	// mu guards resolved, which is rebuilt when the published endpoint changes.
+	mu       sync.Mutex
+	resolved *webapi.Client
+}
 
 // NewControlPlane returns the HTTP-backed control-plane surface.
-func NewControlPlane() ControlPlane { return &httpControlPlane{client: webapi.NewClient()} }
+//
+// The resolver may be nil, which is what a test passes: calls then go to the
+// startup client and nothing reads a ControlPlane object.
+func NewControlPlane(resolve controlplane.EndpointResolver) ControlPlane {
+	return &httpControlPlane{client: webapi.NewClient(), resolve: resolve}
+}
 
 func (c *httpControlPlane) AddNode(
 	ctx context.Context, clusterID string, params utils.StorageNodeSetAddParams,
@@ -276,7 +295,7 @@ func (c *httpControlPlane) delete(ctx context.Context, path string) error {
 func (c *httpControlPlane) call(
 	ctx context.Context, method, path string, body any,
 ) ([]byte, error) {
-	response, status, err := c.client.Do(ctx, method, path, body)
+	response, status, err := c.clientFor(ctx).Do(ctx, method, path, body)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -306,4 +325,32 @@ type ControlPlaneError struct {
 
 func (e *ControlPlaneError) Error() string {
 	return fmt.Sprintf("the control plane answered %d: %s", e.Status, e.Body)
+}
+
+// clientFor is the client this call goes out on.
+//
+// The endpoint comes from ControlPlane.status.endpoint where the object has
+// published one, which is what makes a remote control plane reachable: the
+// client built at startup resolves SIMPLYBLOCK_WEBAPI_BASE_URL or the in-cluster
+// default, and neither is where somebody else's control plane is
+// (design-controlplane.md §3.3).
+//
+// With no resolver, or with one that answers nothing, the startup client is used
+// unchanged. That is what keeps this additive: a deployment whose ControlPlane
+// has not published an endpoint behaves as it did before.
+func (c *httpControlPlane) clientFor(ctx context.Context) *webapi.Client {
+	if c.resolve == nil {
+		return c.client
+	}
+	endpoint := c.resolve(ctx)
+	if endpoint == "" || endpoint == c.client.BaseURL {
+		return c.client
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.resolved == nil || c.resolved.BaseURL != endpoint {
+		c.resolved = webapi.NewClient(endpoint)
+	}
+	return c.resolved
 }
