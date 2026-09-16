@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
@@ -22,4 +21,4 @@ allowedTopologies:
     - {{ . }}
 {{- end }}
 {{- end }}
-{{- end }}
+

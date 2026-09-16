@@ -1,5 +1,4 @@
 ---
-{{- if .Values.operator.enabled }}
 {{- if .Values.controlplane.observability.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -438,4 +437,4 @@ type: Opaque
 stringData:
   password: {{ .Values.controlplane.observability.secret }}
 {{- end }}
-{{- end }}
+

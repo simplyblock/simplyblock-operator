@@ -1,4 +1,4 @@
-{{- if and .Values.operator.enabled .Values.metricsAPI.enabled }}
+{{- if .Values.metricsAPI.enabled }}
 # The cluster-facing half of the aggregated metrics API: the Service the
 # kube-apiserver proxies to, the APIService that registers
 # metrics.simplyblock.io, and the two bindings that let the operator delegate

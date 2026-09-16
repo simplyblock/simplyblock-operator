@@ -6,10 +6,9 @@ deployment that comes up and is quietly wrong: one serving plaintext where TLS
 was asked for, and one pointed at no control plane at all.
 */}}
 
-{{- if .Values.operator.enabled }}
 
-{{- if not (has .Values.controlplane.profile (list "standalone" "managed")) -}}
-{{- fail (printf "controlplane.profile is %q: it is one of standalone (this cluster hosts its own control plane) or managed (a control plane elsewhere manages this cluster's storage)." .Values.controlplane.profile) -}}
+{{- if not (has .Values.deployment.profile (list "standalone" "managed")) -}}
+{{- fail (printf "deployment.profile is %q: it is one of standalone (this cluster hosts its own control plane) or managed (a control plane elsewhere manages this cluster's storage)." .Values.deployment.profile) -}}
 {{- end -}}
 
 {{/*
@@ -22,8 +21,8 @@ itself. It cannot any more, so a TLS deployment has nowhere to go and the honest
 answer is to refuse rather than to install something quieter than what was asked
 for.
 */}}
-{{- if and (eq .Values.controlplane.profile "standalone") .Values.tls.enabled -}}
-{{- fail "controlplane.profile=standalone cannot serve TLS: the ControlPlane spec has no field for it, so the operator's install would bring the control plane up in plaintext. Until the spec can express it, a TLS deployment needs a control plane this cluster does not host (controlplane.profile=managed), or an operator release that carries the field." -}}
+{{- if and (eq .Values.deployment.profile "standalone") .Values.tls.enabled -}}
+{{- fail "deployment.profile=standalone cannot serve TLS: the ControlPlane spec has no field for it, so the operator's install would bring the control plane up in plaintext. Until the spec can express it, a TLS deployment needs a control plane this cluster does not host (deployment.profile=managed), or an operator release that carries the field." -}}
 {{- end -}}
 
 {{/*
@@ -31,8 +30,8 @@ The managed profile needs somewhere to point. The CR template requires the
 endpoint too, and this exists so the message names the value rather than the
 field of a CRD the reader has not seen.
 */}}
-{{- if and (eq .Values.controlplane.profile "managed") (not .Values.controlplane.managed.endpoint) -}}
-{{- fail "controlplane.profile=managed needs controlplane.managed.endpoint: it is where the control plane that manages this cluster answers, and nothing is installed locally to fall back to." -}}
+{{- if and (eq .Values.deployment.profile "managed") (not .Values.controlplane.managed.endpoint) -}}
+{{- fail "deployment.profile=managed needs controlplane.managed.endpoint: it is where the control plane that manages this cluster answers, and nothing is installed locally to fall back to." -}}
 {{- end -}}
 
 {{/*
@@ -52,4 +51,4 @@ The lookup finds nothing on a fresh install, so only an upgrade can trip this.
 {{- fail "this namespace holds a control plane installed by an earlier release of this chart, and upgrading in place would delete it, FoundationDB included. Annotate what it owns so Helm keeps it first:\n\n  for k in deployment/simplyblock-webappapi deployment/simplyblock-tasks deployment/simplyblock-monitoring deployment/simplyblock-admin-control deployment/simplyblock-fdb-controller-manager deployment/simplyblock-fdb-exporter statefulset/simplyblock-minio foundationdbcluster/simplyblock-fdb-cluster; do\n    kubectl -n <namespace> annotate $k helm.sh/resource-policy=keep --overwrite\n  done\n\nthen upgrade. The operator adopts them in place." -}}
 {{- end -}}
 
-{{- end -}}
+

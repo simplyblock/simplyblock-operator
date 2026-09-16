@@ -19,7 +19,7 @@ cluster managed from elsewhere has neither, and the control plane that manages i
 collects for it.
 */}}
 {{- define "simplyblock.hostsControlPlane" -}}
-{{- if and .Values.operator.enabled (eq .Values.controlplane.profile "standalone") -}}
+{{- if eq .Values.deployment.profile "standalone" -}}
 true
 {{- end -}}
 {{- end -}}
@@ -27,7 +27,7 @@ true
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}
-{{- else if .Values.operator.enabled -}}
+{{- else -}}
 http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
 {{- end -}}
 {{- end -}}

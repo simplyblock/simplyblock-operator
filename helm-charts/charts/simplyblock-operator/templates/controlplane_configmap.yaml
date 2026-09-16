@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1
@@ -1871,4 +1870,4 @@ data:
           path: /var/lib/grafana/dashboards
           foldersFromFilesStructure: true
 {{- end }}
-{{- end }}
+

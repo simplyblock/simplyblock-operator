@@ -147,11 +147,14 @@ storagenode:
         value:
       
 
-controlplane:
-  # Whether this cluster hosts its own control plane or is managed by one
-  # elsewhere. One of: standalone, managed.
+# What shape of deployment this is. It selects more than the control plane, and
+# more will hang off it: a managed deployment describes an edge cluster somebody
+# else administers, and the settings that follow from that belong here rather
+# than repeated across the blocks they touch.
+deployment:
+  # One of: standalone, managed.
   #
-  # standalone is a control plane this cluster hosts. The chart writes only the
+  # standalone hosts its own control plane. The chart writes only the
   # ControlPlane object and the operator applies the FoundationDB cluster, the
   # object store, and the management API from its spec (design-controlplane.md
   # §5.1). The control plane's version is then a field the operator reconciles
@@ -159,16 +162,19 @@ controlplane:
   # hand is put back on the next reconcile, and everything the install creates is
   # a child of the ControlPlane rather than of a Helm release.
   #
-  # managed is a control plane somewhere else that this cluster's storage is
-  # registered with. Nothing is installed here: the operator resolves the
-  # endpoint under controlplane.managed below, probes it, and reports. The fleet
-  # is administered from wherever that control plane runs.
+  # managed registers this cluster's storage with a control plane somewhere else.
+  # Nothing is installed here: the operator resolves the endpoint under
+  # controlplane.managed, probes it, and reports. The fleet is administered from
+  # wherever that control plane runs.
   #
-  # Either way the observability half below — Graylog, Grafana, Thanos, the
-  # document store, and the log collector — is this chart's to render.
+  # The observability half under controlplane below is rendered only for
+  # standalone, because what it collects is stored in the object store and the
+  # document store a hosted control plane brings with it.
   profile: standalone
 
-  # Where the control plane is, for profile: managed. Ignored by standalone.
+controlplane:
+  # Where the control plane is, for deployment.profile: managed. Ignored by
+  # standalone, which installs one here.
   managed:
     # endpoint is the management API's base URL. Required for this profile, and
     # rejected if it names a loopback or link-local address, which would point
@@ -405,7 +411,6 @@ controlplane:
           memory: 128Mi
 
 operator:
-  enabled: true
   openShiftCluster: true
 
 # The CSI link: the CSI node and controller pods dial the operator and hold the
@@ -535,6 +540,10 @@ opensearch:
     enabled: false
 
 reloader:
+  # The reloader rolls the workloads that mount the FoundationDB cluster file
+  # when the coordinators move. Without it a coordinator change reaches them on
+  # their next restart instead of at once, which is a delay rather than a break.
+  enabled: true
   nameOverride: simplyblock-reloader
   fullnameOverride: simplyblock-reloader
   reloader:
@@ -546,6 +555,10 @@ reloader:
       tolerations: []
 
 prometheus:
+  # Where the control plane pushes what it measures. A standalone deployment
+  # needs one, and a managed deployment reports to the control plane that
+  # administers it, so this can be turned off there.
+  enabled: true
   simplyblock:
     prometheusURL: simplyblock-prometheus
     prometheusPORT: 9090   
