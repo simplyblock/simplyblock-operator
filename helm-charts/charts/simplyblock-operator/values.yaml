@@ -147,48 +147,31 @@ storagenode:
         value:
       
 
-# What shape of deployment this is. It selects more than the control plane, and
-# more will hang off it: a managed deployment describes an edge cluster somebody
-# else administers, and the settings that follow from that belong here rather
-# than repeated across the blocks they touch.
 deployment:
   # One of: standalone, managed.
   #
-  # standalone hosts its own control plane. The chart writes only the
-  # ControlPlane object and the operator applies the FoundationDB cluster, the
-  # object store, and the management API from its spec (design-controlplane.md
-  # §5.1). The control plane's version is then a field the operator reconciles
-  # rather than a value baked into a chart release, an object somebody deleted by
-  # hand is put back on the next reconcile, and everything the install creates is
-  # a child of the ControlPlane rather than of a Helm release.
+  # standalone hosts its own control plane. The operator installs FoundationDB,
+  # the object store, and the management API from the ControlPlane object this
+  # chart writes.
   #
-  # managed registers this cluster's storage with a control plane somewhere else.
-  # Nothing is installed here: the operator resolves the endpoint under
-  # controlplane.managed, probes it, and reports. The fleet is administered from
-  # wherever that control plane runs.
+  # managed registers this cluster's storage with a control plane elsewhere,
+  # named by controlplane.managed below. Nothing is installed here.
   #
-  # The observability half under controlplane below is rendered only for
-  # standalone, because what it collects is stored in the object store and the
-  # document store a hosted control plane brings with it.
+  # Observability under controlplane is rendered for standalone only: it stores
+  # what it collects in the object store a hosted control plane brings.
   profile: standalone
 
 controlplane:
-  # Where the control plane is, for deployment.profile: managed. Ignored by
-  # standalone, which installs one here.
+  # Where the control plane is, for deployment.profile: managed.
   managed:
-    # endpoint is the management API's base URL. Required for this profile, and
-    # rejected if it names a loopback or link-local address, which would point
-    # the operator at its own pod.
+    # Base URL of the management API. Required for that profile. A loopback or
+    # link-local address is rejected.
     endpoint: ""
-    # credentialsSecretRef names a Secret in the release namespace holding the
-    # bearer token under `token` or `secret`. Empty means the endpoint is reached
-    # without one, which suits a control plane on the same network that does not
-    # require a token for the readiness read.
+    # Secret in this namespace holding the bearer token, under `token` or
+    # `secret`. Empty sends no token.
     credentialsSecretRef: ""
-    # caBundleSecretRef names a Secret holding the CA the endpoint's certificate
-    # is verified against, under `ca.crt` or `tls.crt`. Empty means the system
-    # trust store. A Secret that is named and unusable fails rather than falling
-    # back to it.
+    # Secret holding the CA the endpoint is verified against, under `ca.crt` or
+    # `tls.crt`. Empty uses the system trust store. Named and unusable fails.
     caBundleSecretRef: ""
 
   # Accept a pod's service-account token from the CSI driver's two accounts
@@ -540,9 +523,8 @@ opensearch:
     enabled: false
 
 reloader:
-  # The reloader rolls the workloads that mount the FoundationDB cluster file
-  # when the coordinators move. Without it a coordinator change reaches them on
-  # their next restart instead of at once, which is a delay rather than a break.
+  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
+  # move. Off means they pick the change up on their next restart instead.
   enabled: true
   nameOverride: simplyblock-reloader
   fullnameOverride: simplyblock-reloader
@@ -555,9 +537,8 @@ reloader:
       tolerations: []
 
 prometheus:
-  # Where the control plane pushes what it measures. A standalone deployment
-  # needs one, and a managed deployment reports to the control plane that
-  # administers it, so this can be turned off there.
+  # Where the control plane pushes what it measures. A managed deployment
+  # reports to the control plane administering it, so it can turn this off.
   enabled: true
   simplyblock:
     prometheusURL: simplyblock-prometheus
