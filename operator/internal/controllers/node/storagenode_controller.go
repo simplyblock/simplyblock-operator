@@ -213,7 +213,7 @@ func (r *StorageNodeReconciler) Reconcile(
 	}
 
 	if !node.DeletionTimestamp.IsZero() {
-		return r.teardown(ctx, &node, cluster)
+		return r.teardown(ctx, &node)
 	}
 
 	if !controllerutil.ContainsFinalizer(&node, NodeFinalizer) {
@@ -887,18 +887,13 @@ func (r *StorageNodeReconciler) raiseMaintenance(
 func (r *StorageNodeReconciler) teardown(
 	ctx context.Context,
 	node *simplyblockv1alpha2.StorageNode,
-	cluster *simplyblockv1alpha2.StorageCluster,
 ) (ctrl.Result, error) {
-	clusterID := ""
-	if cluster != nil {
-		clusterID = cluster.Status.UUID
-	}
 	if !controllerutil.ContainsFinalizer(node, NodeFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
 	if node.Status.UUID == "" {
-		r.unregister(node, clusterID)
+		r.unregister(node)
 		controllerutil.RemoveFinalizer(node, NodeFinalizer)
 		return ctrl.Result{}, r.Update(ctx, node)
 	}
@@ -916,7 +911,7 @@ func (r *StorageNodeReconciler) teardown(
 		return ctrl.Result{RequeueAfter: nodeRetry}, nil
 	}
 
-	r.unregister(node, clusterID)
+	r.unregister(node)
 	controllerutil.RemoveFinalizer(node, NodeFinalizer)
 	return ctrl.Result{}, r.Update(ctx, node)
 }
@@ -983,14 +978,20 @@ func (r *StorageNodeReconciler) register(
 // The scope goes first: no further device event can arrive once the stream is
 // closed, so the name mappings are dropped second and nothing is left naming
 // objects after a node on its way out.
-func (r *StorageNodeReconciler) unregister(
-	node *simplyblockv1alpha2.StorageNode, clusterID string,
-) {
+//
+// It closes by the node's own id rather than by the cluster-and-node key it was
+// opened under, because the two happen at different moments with different
+// things readable. The open has the node freshly placed in its cluster, so the
+// cluster's id is there; the teardown may run with the cluster already gone,
+// which is the ordinary case when a cluster is deleted with its nodes. Requiring
+// the cluster's id here left the scope in the set, and the stream behind it
+// reconnecting against a 404 for the life of the process.
+func (r *StorageNodeReconciler) unregister(node *simplyblockv1alpha2.StorageNode) {
 	if node.Status.UUID == "" {
 		return
 	}
-	if r.DeviceScopes != nil && clusterID != "" {
-		r.DeviceScopes.Remove(cpinformer.Scope{clusterID, node.Status.UUID})
+	if r.DeviceScopes != nil {
+		r.DeviceScopes.RemoveLeaf(node.Status.UUID)
 	}
 	for _, registry := range r.Registries {
 		registry.UnregisterNode(node.Status.UUID)
