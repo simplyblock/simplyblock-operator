@@ -26,6 +26,24 @@ func containerNamed(containers []corev1.Container, name string) *corev1.Containe
 	return nil
 }
 
+func volumeMountNamed(mounts []corev1.VolumeMount, name string) *corev1.VolumeMount {
+	for i := range mounts {
+		if mounts[i].Name == name {
+			return &mounts[i]
+		}
+	}
+	return nil
+}
+
+func volumeNamed(volumes []corev1.Volume, name string) *corev1.Volume {
+	for i := range volumes {
+		if volumes[i].Name == name {
+			return &volumes[i]
+		}
+	}
+	return nil
+}
+
 func argValue(c *corev1.Container, flag string) (string, bool) {
 	for _, a := range c.Args {
 		if strings.HasPrefix(a, flag+"=") {
@@ -226,6 +244,51 @@ func TestNodePluginKeepsThePrivilegeItNeeds(t *testing.T) {
 	if !spec.HostNetwork || spec.DNSPolicy != corev1.DNSClusterFirstWithHostNet {
 		t.Errorf("hostNetwork = %v with dnsPolicy %q, want host networking with the matching policy",
 			spec.HostNetwork, spec.DNSPolicy)
+	}
+}
+
+// The vdo-capable probe (issue #277) rides the same postStart hook as the
+// NVMe-oF transport modprobes, and its marker survives a plugin restart the
+// same way the NVMe host id and guardian's own state do: a host path mounted
+// into the container, not container-local storage.
+func TestNodePluginProbesVDOCapability(t *testing.T) {
+	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
+	spec := ds.Spec.Template.Spec
+
+	node := containerNamed(spec.Containers, "csi-node")
+	script := node.Lifecycle.PostStart.Exec.Command[2]
+	for _, want := range []string{"modprobe dm-vdo", vdoCapableMountDir + "/marker"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("postStart script missing %q:\n%s", want, script)
+		}
+	}
+
+	wantMounts := map[string]string{
+		"vdo-capable": vdoCapableMountDir,
+		"vdo-stacks":  vdoStacksMountDir,
+	}
+	for name, path := range wantMounts {
+		mount := volumeMountNamed(node.VolumeMounts, name)
+		if mount == nil {
+			t.Fatalf("csi-node has no %q volume mount", name)
+		}
+		if mount.MountPath != path {
+			t.Errorf("%s mount path = %q, want %q", name, mount.MountPath, path)
+		}
+	}
+
+	wantHostPaths := map[string]string{
+		"vdo-capable": vdoCapableHostDir,
+		"vdo-stacks":  vdoStacksHostDir,
+	}
+	for name, hostPath := range wantHostPaths {
+		vol := volumeNamed(spec.Volumes, name)
+		if vol == nil || vol.HostPath == nil {
+			t.Fatalf("no host-path volume named %q", name)
+		}
+		if vol.HostPath.Path != hostPath {
+			t.Errorf("%s host path = %q, want %q", name, vol.HostPath.Path, hostPath)
+		}
 	}
 }
 

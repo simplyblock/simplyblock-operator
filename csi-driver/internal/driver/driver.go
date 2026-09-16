@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
@@ -206,7 +207,20 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
 
+	go advertiseVDOCapability(kubeClient, nodeName)
+
 	return ns, nil
+}
+
+// advertiseVDOCapability runs the vdo-capable probe's advertisement once, in
+// the background, the same reasoning as the guardian above: a service that
+// fails to construct one should not fail the whole node plugin, so a marker
+// the postStart hook never got to write, or a node the API is unreachable
+// for, degrades to "not yet advertised" rather than blocking startup.
+func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
+	if err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName, kube.VDOCapableMarkerPath); err != nil {
+		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
+	}
 }
 
 // markBroken is the monitor's hook into the guardian, tolerant of there being

@@ -34,6 +34,19 @@ func (ns *Server) NodeExpandVolume(
 		return nil, status.Errorf(codes.Internal, "could not find device path for volume %s", volumeID)
 	}
 
+	if compression, deduplication, wantsVDO := vdoParams(volumeContext); wantsVDO {
+		rawDevicePath := volumeContext["rawDevicePath"]
+		if rawDevicePath == "" {
+			return nil, status.Errorf(codes.Internal, "could not find raw device path for VDO volume %s", volumeID)
+		}
+		// Grows the pool and the logical volume to the raw device's now larger
+		// physical size, ahead of the filesystem resize below, which still
+		// targets devicePath: the VDO device the filesystem actually sits on.
+		if err := ns.vdo.Grow(ctx, vdoLvolID(volumeID), rawDevicePath, compression, deduplication); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to grow VDO stack for volume %s: %v", volumeID, err)
+		}
+	}
+
 	// For raw block volumes, the block device has already been resized at the
 	// storage layer, so neither resize tool should be invoked. resize2fs (ext4)
 	// can operate on an unmounted raw device, which is why it worked by

@@ -65,15 +65,17 @@ const (
 // names the field's path in the hub, so that reading the metadata of a stored
 // object says which field each value belongs to without consulting this file.
 const (
-	annoEnableCompression       = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableCompression"
-	annoEnableReplication       = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableReplication"
-	annoPriorityClass           = "storage.simplyblock.io/conversion-spec.volumeDefaults.priorityClass"
-	annoStatusPhase             = "storage.simplyblock.io/conversion-status.phase"
-	annoStatusClassNames        = "storage.simplyblock.io/conversion-status.storageClassNames"
-	annoStatusDefaultClassName  = "storage.simplyblock.io/conversion-status.defaultStorageClassName"
-	annoStatusActiveOpsRef      = "storage.simplyblock.io/conversion-status.activeOpsRef"
-	annoStatusMessage           = "storage.simplyblock.io/conversion-status.message"
-	annoStatusObservedGeneraton = "storage.simplyblock.io/conversion-status.observedGeneration"
+	annoEnableCompression         = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableCompression"
+	annoEnableClientCompression   = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableClientCompression"
+	annoEnableClientDeduplication = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableClientDeduplication"
+	annoEnableReplication         = "storage.simplyblock.io/conversion-spec.volumeDefaults.enableReplication"
+	annoPriorityClass             = "storage.simplyblock.io/conversion-spec.volumeDefaults.priorityClass"
+	annoStatusPhase               = "storage.simplyblock.io/conversion-status.phase"
+	annoStatusClassNames          = "storage.simplyblock.io/conversion-status.storageClassNames"
+	annoStatusDefaultClassName    = "storage.simplyblock.io/conversion-status.defaultStorageClassName"
+	annoStatusActiveOpsRef        = "storage.simplyblock.io/conversion-status.activeOpsRef"
+	annoStatusMessage             = "storage.simplyblock.io/conversion-status.message"
+	annoStatusObservedGeneraton   = "storage.simplyblock.io/conversion-status.observedGeneration"
 
 	// enableDHCHAP is stashed for a narrower reason than the rest: v1alpha1 has
 	// a field for it, but a bool rather than a pointer, so it can say true and
@@ -143,6 +145,12 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 		if err := stash(meta, annoEnableCompression, d.EnableCompression); err != nil {
 			return err
 		}
+		if err := stash(meta, annoEnableClientCompression, d.EnableClientCompression); err != nil {
+			return err
+		}
+		if err := stash(meta, annoEnableClientDeduplication, d.EnableClientDeduplication); err != nil {
+			return err
+		}
 		if err := stash(meta, annoEnableReplication, d.EnableReplication); err != nil {
 			return err
 		}
@@ -155,8 +163,8 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 	} else {
 		// The block itself is gone, so any value stashed from an earlier write
 		// is stale: leaving it would restore defaults the hub no longer states.
-		clear(meta, annoEnableCompression, annoEnableReplication, annoPriorityClass,
-			annoEnableDHCHAP)
+		clear(meta, annoEnableCompression, annoEnableClientCompression, annoEnableClientDeduplication,
+			annoEnableReplication, annoPriorityClass, annoEnableDHCHAP)
 	}
 
 	status := src.Status
@@ -183,12 +191,20 @@ func stashHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StoragePool) error {
 // about them.
 func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 	var (
-		compression *bool
-		replication *bool
-		dhchap      *bool
-		priority    string
+		compression         *bool
+		clientCompression   *bool
+		clientDeduplication *bool
+		replication         *bool
+		dhchap              *bool
+		priority            string
 	)
 	if err := unstash(meta, annoEnableCompression, &compression); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoEnableClientCompression, &clientCompression); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoEnableClientDeduplication, &clientDeduplication); err != nil {
 		return err
 	}
 	if err := unstash(meta, annoEnableReplication, &replication); err != nil {
@@ -200,13 +216,16 @@ func restoreHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StoragePool) error {
 	if err := unstash(meta, annoEnableDHCHAP, &dhchap); err != nil {
 		return err
 	}
-	if compression != nil || replication != nil || dhchap != nil || priority != "" {
+	if compression != nil || clientCompression != nil || clientDeduplication != nil ||
+		replication != nil || dhchap != nil || priority != "" {
 		// The block is allocated only when something restored into it, for the
 		// reason volumeDefaultsToHub returns nil rather than an empty struct.
 		if dst.Spec.VolumeDefaults == nil {
 			dst.Spec.VolumeDefaults = &v1alpha2.VolumeDefaults{}
 		}
 		dst.Spec.VolumeDefaults.EnableCompression = compression
+		dst.Spec.VolumeDefaults.EnableClientCompression = clientCompression
+		dst.Spec.VolumeDefaults.EnableClientDeduplication = clientDeduplication
 		dst.Spec.VolumeDefaults.EnableReplication = replication
 		dst.Spec.VolumeDefaults.PriorityClass = priority
 		// The stash is the authority when there is one, because it can say

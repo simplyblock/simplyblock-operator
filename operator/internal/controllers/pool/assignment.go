@@ -172,6 +172,8 @@ func ClassParameters(p *simplyblockv1alpha2.StoragePool, clusterUUID string) map
 	}
 	setBool(kube.ParamEncryption, defaults.EnableEncryption)
 	setBool(kube.ParamCompression, defaults.EnableCompression)
+	setBool(kube.ParamClientCompression, defaults.EnableClientCompression)
+	setBool(kube.ParamClientDeduplication, defaults.EnableClientDeduplication)
 	setBool(kube.ParamReplication, defaults.EnableReplication)
 	setInt(kube.ParamMaxNamespacePerSubsys, defaults.MaxNamespacesPerSubsystem)
 	if defaults.PriorityClass != "" {

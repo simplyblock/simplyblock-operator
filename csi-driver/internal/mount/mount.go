@@ -101,11 +101,22 @@ func FlagsFor(fsType string) []string {
 
 // FormatOptions returns the mkfs options for fsType, given the provisioning
 // parameters carried in the volume context.
-func FormatOptions(fsType string, volumeContext map[string]string) []string {
+//
+// skipStripeAlignment omits the stripe hints below regardless of what the
+// volume context says: they describe the erasure-coded backend device, and
+// once a layer such as VDO virtualizes and relocates blocks, the filesystem no
+// longer sits directly on that device at all. Applying them there would be
+// misleading rather than merely useless, which is why the caller — the one
+// place that knows whether such a layer is in play — decides rather than this
+// package inferring it from a parameter of its own.
+func FormatOptions(fsType string, volumeContext map[string]string, skipStripeAlignment bool) []string {
 	if fsType != "xfs" {
 		return nil
 	}
 	options := append([]string{}, xfsFeatureOptions()...)
+	if skipStripeAlignment {
+		return options
+	}
 	return append(options, xfsStripeOptions(volumeContext)...)
 }
 

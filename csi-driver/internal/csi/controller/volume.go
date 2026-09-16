@@ -92,6 +92,16 @@ func (cs *Server) CreateVolume(
 		}
 		topologySegments[key] = val
 	}
+	// Same mechanism for client-side compression/deduplication (issue #277): the
+	// PV is pinned to a vdo-capable node the same way, and for the same reason
+	// neither this nor DHCHAP's segment above is expressed as StorageClass
+	// allowedTopologies (see vdoCapableSegment's own comment).
+	if key, val := vdoCapableSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
 
 	if len(topologySegments) > 0 {
 		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: topologySegments}}

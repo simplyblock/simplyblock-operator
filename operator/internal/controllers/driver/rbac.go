@@ -35,7 +35,13 @@ var (
 // component in its name.
 var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 	nodeComponent: {
-		rule(core, []string{"nodes"}, "get", "list", "watch"),
+		// patch (issue #277): the node plugin labels its own node with
+		// storage.simplyblock.io/vdo-capable after the postStart hook's probe.
+		// Node objects are cluster-scoped, so this is the narrowest verb set
+		// that self-labeling allows: a node plugin cannot patch only its own
+		// Node object through RBAC alone, and the plugin already runs
+		// privileged on every node.
+		rule(core, []string{"nodes"}, "get", "list", "watch", "patch"),
 		rule(core, []string{"pods"}, "get", "list", "watch", "delete"),
 		rule(core, []string{"persistentvolumeclaims"}, "get", "list", "watch", "patch"),
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch"),

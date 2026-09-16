@@ -75,6 +75,14 @@ const (
 	ParamReplication   = "replicate"
 	ParamPriorityClass = "priority_class"
 
+	// ParamClientCompression and ParamClientDeduplication opt a volume into
+	// client-side (VDO) compression and deduplication, independently of each
+	// other and of the server-side ParamCompression above. Either one being
+	// true is what the CSI driver and the topology gate key off (see
+	// LabelVDOCapable).
+	ParamClientCompression   = "client_compression"
+	ParamClientDeduplication = "client_deduplication"
+
 	// The QoS limits' older spelling. Empty or absent means unset (0). These are
 	// read for as long as a class carrying them exists, which is indefinitely: a
 	// class's parameters are immutable, so one an older operator generated can
@@ -132,6 +140,27 @@ const (
 	// a StoragePool's AllowedNodes
 	LabelPoolPrefix  = "storage.simplyblock.io/storage-pool."
 	LabelPoolAllowed = "allowed"
+	// LabelVDOCapable marks a node whose kernel loaded dm-vdo, self-probed and
+	// self-applied by the CSI node plugin. A volume requesting either client-side
+	// parameter is pinned to a node carrying this label (see
+	// ParamClientCompression, ParamClientDeduplication).
+	LabelVDOCapable = "storage.simplyblock.io/vdo-capable"
+	// AnnoVDOCapableManagedBy stamps every LabelVDOCapable value the node
+	// plugin's own probe writes, with AnnoVDOCapableManagedByAutoDetect. A label
+	// carrying this annotation is the probe's to overwrite on its next run; one
+	// without it — an operator's hand-set override — is left alone.
+	AnnoVDOCapableManagedBy = "storage.simplyblock.io/vdo-capable-managed-by"
+	// AnnoVDOCapableManagedByAutoDetect is AnnoVDOCapableManagedBy's one value.
+	AnnoVDOCapableManagedByAutoDetect = "auto-detect"
+
+	// VDOCapableMarkerPath is where the csi-node DaemonSet's postStart hook
+	// writes its vdo-capable probe result ("true" or "false"), and where the
+	// node plugin reads it from. A contract between the operator, which builds
+	// the DaemonSet spec (mounting the host path this is backed by), and the
+	// CSI driver, which reads it — not a Kubernetes API object, so it lives
+	// here rather than with the labels above only because both sides of that
+	// contract import this package already.
+	VDOCapableMarkerPath = "/var/run/simplyblock/vdo-capable/marker"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads

@@ -2457,6 +2457,16 @@ func (in *VolumeDefaults) DeepCopyInto(out *VolumeDefaults) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableClientCompression != nil {
+		in, out := &in.EnableClientCompression, &out.EnableClientCompression
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableClientDeduplication != nil {
+		in, out := &in.EnableClientDeduplication, &out.EnableClientDeduplication
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableEncryption != nil {
 		in, out := &in.EnableEncryption, &out.EnableEncryption
 		*out = new(bool)

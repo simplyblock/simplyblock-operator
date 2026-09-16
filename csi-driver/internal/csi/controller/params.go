@@ -5,6 +5,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -57,6 +58,29 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 		return "", ""
 	}
 	return key, kube.LabelPoolAllowed
+}
+
+// vdoCapableSegment returns the vdo-capable topology key/value to pin
+// PersistentVolume.spec.nodeAffinity to, or an empty key and value for a
+// volume that requested neither client-side parameter. Either
+// client_compression or client_deduplication needs a working VDO stack on the
+// node, so either one alone is enough to require the segment.
+//
+// Built straight from the StorageClass parameters and never from
+// req.GetAccessibilityRequirements(), for the same reason
+// dhchapAllowedNodeSegment is: unlike DHCHAP's per-pool label, vdo-capable is a
+// node self-probed capability the csi-node DaemonSet applies asynchronously
+// after it starts, so it is never present in the node's CSINode object at
+// plugin-registration time. A generated StorageClass carries no
+// allowedTopologies of its own for this reason — see design-issue-277's §5.
+func vdoCapableSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	params := req.GetParameters()
+	compression, _ := strconv.ParseBool(params[kube.ParamClientCompression])
+	deduplication, _ := strconv.ParseBool(params[kube.ParamClientDeduplication])
+	if !compression && !deduplication {
+		return "", ""
+	}
+	return kube.LabelVDOCapable, "true"
 }
 
 func parseStringMap(raw, paramName string) (map[string]string, error) {

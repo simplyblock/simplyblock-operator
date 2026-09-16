@@ -27,6 +27,15 @@ RUN dnf update -y  --nogpgcheck
 RUN dnf install -y nvme-cli iscsi-initiator-utils e2fsprogs xfsprogs lvm2 util-linux kmod wget sudo rpm --nogpgcheck && \
     dnf clean all
 
+# vdo provides vdoformat, which lvcreate --type vdo invokes internally to
+# format a new VDO pool (client-side compression/deduplication, issue #277).
+# No aarch64 build exists in this repository's package set, so the feature is
+# x86_64-only until that packaging gap closes; the arm64 leg of the multi-arch
+# build stays green without it. Same TARGETPLATFORM check as the OracleLinux
+# release RPM above, rather than uname -m, for the same reason: this Dockerfile
+# has no BUILDPLATFORM builder stage of its own to tell the two apart otherwise.
+RUN if [ "$TARGETPLATFORM" != "linux/arm64" ]; then dnf install -y vdo --nogpgcheck && dnf clean all; fi
+
 # Trimmed to reduce the CVE surface picked up by the security scan. Guarded with
 # rpm -q so the build does not depend on whether the base still ships them, while a
 # package that IS present and fails to uninstall still fails the build.

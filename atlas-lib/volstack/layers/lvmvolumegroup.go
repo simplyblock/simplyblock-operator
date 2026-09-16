@@ -61,6 +61,27 @@ type membership struct {
 func (l *LVMVolumeGroup) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
+	if len(below.Devices) == 0 {
+		// Total path loss, not an interrupted bring-up: every member this group
+		// was built on is gone rather than merely unlabeled, and membership
+		// cannot be read off a device that is not there to read. That is not
+		// evidence the group itself is gone too — content-based identity needs a
+		// device and there is none left, but the group may still be mapped as
+		// live device-mapper nodes this host has to release. Misreporting Absent
+		// here would have Down skip Release and strand exactly that mapping,
+		// which is the one case RemoveOrphanedDMNodes's force path exists for, so
+		// existence is answered independently of any member instead.
+		has, err := l.cfg.Manager.HasOrphanedDMNodes(ctx, l.group())
+		if err != nil {
+			return volstack.StateAbsent, volstack.Artifact{}, fmt.Errorf(
+				"lvmVolumeGroup: check for device-mapper nodes with no member device to read: %w", err)
+		}
+		if !has {
+			return volstack.StateAbsent, volstack.Artifact{}, nil
+		}
+		return volstack.StateReady, volstack.Artifact{}, nil
+	}
+
 	held, err := l.membership(ctx, below)
 	if err != nil {
 		return volstack.StateAbsent, volstack.Artifact{}, err
@@ -160,12 +181,22 @@ func (l *LVMVolumeGroup) Ensure(ctx context.Context, below volstack.Artifact) (v
 // longer reach the metadata it wants to update and every retry fails, so the
 // device-mapper nodes are removed directly. That escaping has to double the
 // dashes the way device-mapper does, or it matches nothing.
-func (l *LVMVolumeGroup) Release(ctx context.Context, _ volstack.Artifact) error {
+func (l *LVMVolumeGroup) Release(ctx context.Context, below volstack.Artifact) error {
 	if err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group()); err == nil {
 		return nil
 	}
 	if err := l.cfg.Manager.RemoveOrphanedDMNodes(ctx, l.group()); err != nil {
 		return fmt.Errorf("lvmVolumeGroup: %w", err)
+	}
+	// The same failure that forced the device-mapper cleanup above is what makes
+	// this device's entry in /etc/lvm/devices/system.devices stale: the device is
+	// already gone, so nothing will ever clean the entry up on its own. This is
+	// hygiene rather than correctness, so a failure here is logged and never
+	// fails the release a volume's whole teardown depends on.
+	for _, dev := range below.Devices {
+		if err := l.cfg.Manager.ForgetDevice(ctx, dev.Path); err != nil {
+			warnf("lvmVolumeGroup: forget device %s: %v", dev.Path, err)
+		}
 	}
 	return nil
 }
