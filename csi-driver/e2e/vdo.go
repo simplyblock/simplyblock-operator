@@ -186,12 +186,20 @@ var _ = ginkgo.Describe("SPDKCSI-VDO", func() {
 // csi-node pod. LVM mangles a literal '-' in a device-mapper name as '--', so
 // matching the escaped id is what actually appears under /dev/mapper,
 // regardless of the volume group/logical volume naming scheme in use.
+//
+// A lvol's VDO stack always shows two matching /dev/mapper entries: the pool
+// device itself (suffix "-vdopool-vpool," what vdostats operates on) and its
+// backing data volume (suffix "-vdopool_vdata," vdostats refuses it outright
+// as "Not a valid running VDO device") — the trailing "-vpool" anchor is what
+// tells the two apart.
 func vdoDeviceName(f *framework.Framework, podName, container, lvolID string) string {
 	mangled := strings.ReplaceAll(lvolID, "-", "--")
 	out := execInPod(f, driverNamespace(), podName, container,
-		fmt.Sprintf("ls /dev/mapper | grep %s | grep vdopool", mangled))
+		fmt.Sprintf("ls /dev/mapper | grep %s | grep -- -vpool$", mangled))
 	name := strings.TrimSpace(out)
 	gomega.Expect(name).NotTo(gomega.BeEmpty(), "find VDO pool device for lvol %s", lvolID)
+	gomega.Expect(name).NotTo(gomega.ContainSubstring("\n"),
+		"expected exactly one VDO pool device for lvol %s, got:\n%s", lvolID, name)
 	return name
 }
 
@@ -207,9 +215,15 @@ type vdoStats struct {
 
 // readVDOStats runs vdostats --verbose against device inside the csi-node pod
 // and parses the two fields vdoStats needs.
+//
+// device is passed bare, not as /dev/mapper/<device>: confirmed live that
+// vdostats 8.3.2.1 reliably resolves a device by its dmsetup name but
+// intermittently reports "Not a valid running VDO device" for the identical
+// target given as a full /dev/mapper path, even with dmsetup itself reporting
+// the mapping ACTIVE/LIVE at that moment.
 func readVDOStats(f *framework.Framework, podName, container, device string) vdoStats {
 	out := execInPod(f, driverNamespace(), podName, container,
-		"vdostats --verbose /dev/mapper/"+device)
+		"vdostats --verbose "+device)
 	return vdoStats{
 		dataBlocksUsed:    vdoStatField(out, "data blocks used"),
 		logicalBlocksUsed: vdoStatField(out, "logical blocks used"),
