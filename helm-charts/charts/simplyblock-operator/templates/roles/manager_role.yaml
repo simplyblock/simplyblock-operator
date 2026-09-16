@@ -121,7 +121,21 @@ rules:
   - apps
   resources:
   - daemonsets
+  - deployments
   - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.foundationdb.org
+  resources:
+  - foundationdbbackups
+  - foundationdbclusters
   verbs:
   - create
   - delete
@@ -187,6 +201,8 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
+  - rolebindings
+  - roles
   verbs:
   - bind
   - create
@@ -237,6 +253,7 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - controlplaneops
   - controlplanes
   - operatorops
   - replicationops
@@ -270,6 +287,8 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - controlplaneops/finalizers
+  - controlplanes/finalizers
   - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
@@ -295,6 +314,7 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - clusterdeploymentconfigs/status
+  - controlplaneops/status
   - controlplanes/status
   - operatorops/status
   - replicationops/status

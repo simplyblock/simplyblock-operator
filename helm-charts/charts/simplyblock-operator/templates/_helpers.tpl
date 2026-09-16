@@ -10,10 +10,24 @@ labels:
   chartVersion: "{{ .Chart.Version }}"
 {{- end -}}
 
+{{/*
+Whether this cluster hosts its own control plane.
+
+It gates the observability workloads, which store what they collect in the
+object store and the document store a hosted control plane brings with it. A
+cluster managed from elsewhere has neither, and the control plane that manages it
+collects for it.
+*/}}
+{{- define "simplyblock.hostsControlPlane" -}}
+{{- if eq .Values.deployment.profile "standalone" -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}
-{{- else if .Values.operator.enabled -}}
+{{- else -}}
 http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
 {{- end -}}
 {{- end -}}

@@ -6,10 +6,14 @@ on:
       - main
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
+      - "helm-charts/scripts/**"
+      - "csi-driver/charts/spdk-csi/latest/**"
       - ".github/workflows/helm_lint.yaml"
   pull_request:
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
+      - "helm-charts/scripts/**"
+      - "csi-driver/charts/spdk-csi/latest/**"
       - ".github/workflows/helm_lint.yaml"
 
 jobs:
@@ -29,3 +33,11 @@ jobs:
 
       - name: Template
         run: helm template simplyblock-operator helm-charts/charts/simplyblock-operator
+
+      - name: Required objects
+        run: helm-charts/scripts/check-rendered-objects.sh
+
+      - name: Value references
+        run: |
+          make -C operator yq
+          helm-charts/scripts/check-values-references.sh

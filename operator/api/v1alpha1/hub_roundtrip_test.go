@@ -30,8 +30,8 @@ func TestControlPlaneRoundTripsFromTheHub(t *testing.T) {
 	hub := &v1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock", Namespace: "sb"},
 		Spec: v1alpha2.ControlPlaneSpec{
-			Source: &v1alpha2.ControlPlaneSource{
-				Managed: &v1alpha2.ManagedControlPlane{Image: testImage},
+			Source: v1alpha2.ControlPlaneSource{
+				Local: &v1alpha2.LocalControlPlane{Image: testImage},
 			},
 		},
 		Status: v1alpha2.ControlPlaneStatus{
@@ -55,18 +55,18 @@ func TestControlPlaneRoundTripsFromTheHub(t *testing.T) {
 	}
 }
 
-// A managed block with no image normalizes to an absent source, and that is the
-// intended behavior rather than an accident worth stashing.
+// A managed block with no image survives the round trip as a managed block with
+// no image, which is what makes the trip lossless for every hub object v1alpha1
+// can hold.
 //
-// v1alpha1 states the image as one optional string, so it cannot express "a
-// source block was present but empty" — the information does not exist in the
-// stored shape. Since an empty managed block selects nothing and configures
-// nothing, dropping it loses no meaning, and the alternative would be an
-// annotation carrying the fact that a user wrote two empty braces.
-func TestControlPlaneEmptyManagedBlockNormalizesAway(t *testing.T) {
+// v1alpha1 states the image as one optional string, so an empty managed block
+// and an absent source are the same stored shape. The upward conversion resolves
+// that ambiguity toward managed, because every object stored at v1alpha1 is one
+// the chart installed and the hub requires exactly one member of spec.source.
+func TestControlPlaneEmptyManagedBlockSurvivesTheRoundTrip(t *testing.T) {
 	hub := &v1alpha2.ControlPlane{
 		Spec: v1alpha2.ControlPlaneSpec{
-			Source: &v1alpha2.ControlPlaneSource{Managed: &v1alpha2.ManagedControlPlane{}},
+			Source: v1alpha2.ControlPlaneSource{Local: &v1alpha2.LocalControlPlane{}},
 		},
 	}
 
@@ -79,8 +79,49 @@ func TestControlPlaneEmptyManagedBlockNormalizesAway(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if back.Spec.Source != nil {
-		t.Errorf("spec.source = %+v, want nil", back.Spec.Source)
+	if diff := cmp.Diff(hub, &back); diff != "" {
+		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// A control plane this cluster is managed by has no v1alpha1 spelling, so
+// storing one at that version and reading it back loses which control plane the
+// object meant. The conversion is lossy here rather than failing: the object
+// stays readable and comes back describing a local control plane with no image.
+//
+// Nothing stores one at v1alpha1 in practice, because the mode did not exist
+// before the storage version moved to v1alpha2. What this pins is the behavior
+// if something ever does.
+func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
+	hub := &v1alpha2.ControlPlane{
+		Spec: v1alpha2.ControlPlaneSpec{
+			Source: v1alpha2.ControlPlaneSource{
+				Managed: &v1alpha2.ManagedControlPlane{
+					Endpoint:             "https://sb-control.example.com:5000",
+					CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
+				},
+			},
+		},
+	}
+
+	var stored ControlPlane
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	if stored.Spec.Image != "" {
+		t.Errorf("spec.image = %q, want empty for a remote control plane", stored.Spec.Image)
+	}
+
+	var back v1alpha2.ControlPlane
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if back.Spec.Source.Managed != nil {
+		t.Errorf("spec.source.managed = %+v, want nil: v1alpha1 cannot hold it",
+			back.Spec.Source.Managed)
+	}
+	if back.Spec.Source.Local == nil {
+		t.Error("spec.source.local is absent, want the upward conversion's managed default")
 	}
 }
 

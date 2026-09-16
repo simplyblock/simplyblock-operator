@@ -95,8 +95,9 @@ echo "==> Syncing webhook manifests..."
 # kustomize namePrefix (see utils.WebhookServiceName / *ConfigurationName).
 KUSTOMIZE_BIN="${KUSTOMIZE:-$HELM_CHARTS_DIR/../.bin/kustomize}"
 command -v "$KUSTOMIZE_BIN" >/dev/null 2>&1 || KUSTOMIZE_BIN="kustomize"
+# The admission configurations are unconditional: the operator serves every
+# handler it registers, so the chart routes to all of them.
 {
-  echo "{{- if .Values.operator.enabled }}"
   "$KUSTOMIZE_BIN" build "$WEBHOOK_SRC" | sed \
     -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
     -e 's|name: mutating-webhook-configuration|name: simplyblock-operator-mutating-webhook-configuration|' \
@@ -104,7 +105,6 @@ command -v "$KUSTOMIZE_BIN" >/dev/null 2>&1 || KUSTOMIZE_BIN="kustomize"
     -e 's|namespace: system|namespace: {{ .Release.Namespace }}|' \
     -e 's|control-plane: controller-manager|control-plane: simplyblock-operator|' \
     -e 's|app.kubernetes.io/name: simplyblock-operator|app: simplyblock-operator|'
-  echo "{{- end }}"
 } > "$WEBHOOK_DST"
 echo "  copied: webhook.yaml (from kustomize build config/webhook)"
 
