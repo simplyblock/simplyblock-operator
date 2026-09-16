@@ -135,25 +135,25 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	switch {
 	case isManaged(&cp):
-		return r.reconcileExternal(ctx, &cp)
-	case isLocal(&cp):
 		return r.reconcileManaged(ctx, &cp)
+	case isLocal(&cp):
+		return r.reconcileLocal(ctx, &cp)
 	default:
 		// The API's CEL rule refuses this at admission, so reaching it means an
 		// object written before the rule shipped or one a conversion produced.
 		// It holds and says so rather than picking a mode on the user's behalf.
 		return ctrl.Result{RequeueAfter: steadyStateInterval}, r.report(ctx, &cp,
 			simplyblockv1alpha2.ControlPlanePhaseInstalling,
-			"spec.source names neither a managed nor a remote control plane, so there is "+
+			"spec.source names neither a local nor a managed control plane, so there is "+
 				"nothing to install and nowhere to probe")
 	}
 }
 
-// reconcileExternal resolves the endpoint, probes it, and reports. The operator
+// reconcileManaged resolves the endpoint, probes it, and reports. The operator
 // installs nothing and owns no components here, so status.components stays empty
 // and the probe is the only signal: the phase is Available or Unavailable, and
 // Degraded is unreachable (§4.3).
-func (r *ControlPlaneReconciler) reconcileExternal(
+func (r *ControlPlaneReconciler) reconcileManaged(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
 	access, err := resolveManaged(ctx, r.Client, cp)
@@ -184,9 +184,9 @@ func (r *ControlPlaneReconciler) reconcileExternal(
 	})
 }
 
-// reconcileManaged runs the installation machine, and then the steady state it
+// reconcileLocal runs the installation machine, and then the steady state it
 // settles into.
-func (r *ControlPlaneReconciler) reconcileManaged(
+func (r *ControlPlaneReconciler) reconcileLocal(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
 	// The FoundationDB kinds are a prerequisite rather than something to wait

@@ -175,15 +175,15 @@ func containers(services []service, image string, pullPolicy corev1.PullPolicy) 
 // scheduling is what every pod the install creates carries from the spec: where
 // it may run and what it tolerates. It is one function so that a pod added later
 // cannot silently miss the fields an operator set.
-func scheduling(managed *simplyblockv1alpha2.LocalControlPlane, spec *corev1.PodSpec) {
-	if managed == nil {
+func scheduling(local *simplyblockv1alpha2.LocalControlPlane, spec *corev1.PodSpec) {
+	if local == nil {
 		return
 	}
-	if len(managed.NodeSelector) > 0 {
-		spec.NodeSelector = managed.NodeSelector
+	if len(local.NodeSelector) > 0 {
+		spec.NodeSelector = local.NodeSelector
 	}
-	if len(managed.Tolerations) > 0 {
-		spec.Tolerations = managed.Tolerations
+	if len(local.Tolerations) > 0 {
+		spec.Tolerations = local.Tolerations
 	}
 }
 
@@ -205,9 +205,9 @@ func spreadAcrossHosts(app string) *corev1.Affinity {
 // pullPolicyOf is the spec's pull policy, or the default the API declares. A
 // zero value reaches this only from an object written before the default landed
 // or built in a test, and IfNotPresent is what the marker says.
-func pullPolicyOf(managed *simplyblockv1alpha2.LocalControlPlane) corev1.PullPolicy {
-	if managed == nil || managed.ImagePullPolicy == "" {
+func pullPolicyOf(local *simplyblockv1alpha2.LocalControlPlane) corev1.PullPolicy {
+	if local == nil || local.ImagePullPolicy == "" {
 		return corev1.PullIfNotPresent
 	}
-	return managed.ImagePullPolicy
+	return local.ImagePullPolicy
 }

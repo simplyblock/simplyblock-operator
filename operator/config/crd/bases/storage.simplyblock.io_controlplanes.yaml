@@ -161,7 +161,7 @@ spec:
                     type for why.
                   properties:
                     local:
-                      description: Managed is a control plane the operator installs.
+                      description: Local is a control plane the operator installs.
                       properties:
                         foundationDB:
                           description: FoundationDB sizes the FoundationDB the management API stores its state in.
@@ -379,7 +379,7 @@ spec:
                         - image
                       type: object
                     managed:
-                      description: External is a control plane that already exists.
+                      description: Managed is a control plane that already exists.
                       properties:
                         caBundleSecretRef:
                           description: |-
@@ -492,8 +492,8 @@ spec:
                   x-kubernetes-list-type: map
                 endpoint:
                   description: |-
-                    Endpoint is the resolved management API base URL, derived in the managed
-                    case and echoed in the external one. It is what every controller in the
+                    Endpoint is the resolved management API base URL, derived in the local
+                    case and echoed in the managed one. It is what every controller in the
                     operator reads to reach the control plane, so that one object answers
                     where it is.
                   type: string

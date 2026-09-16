@@ -192,11 +192,11 @@ type ManagedControlPlane struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
 // +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
-	// Managed is a control plane the operator installs.
+	// Local is a control plane the operator installs.
 	// +optional
 	Local *LocalControlPlane `json:"local,omitempty"`
 
-	// External is a control plane that already exists.
+	// Managed is a control plane that already exists.
 	// +optional
 	Managed *ManagedControlPlane `json:"managed,omitempty"`
 }
@@ -258,8 +258,8 @@ type ControlPlaneStatus struct {
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
-	// Endpoint is the resolved management API base URL, derived in the managed
-	// case and echoed in the external one. It is what every controller in the
+	// Endpoint is the resolved management API base URL, derived in the local
+	// case and echoed in the managed one. It is what every controller in the
 	// operator reads to reach the control plane, so that one object answers
 	// where it is.
 	// +optional

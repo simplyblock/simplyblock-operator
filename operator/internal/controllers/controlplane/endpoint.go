@@ -75,19 +75,19 @@ type managedAccess struct {
 // The endpoint is validated here as well as by the spec's pattern, because the
 // pattern admits a loopback address and this does not. An operator pointed at
 // 127.0.0.1 would probe itself, which is the request-forgery shape every
-// external endpoint in this group is guarded against.
+// managed endpoint in this group is guarded against.
 func resolveManaged(
 	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
 ) (managedAccess, error) {
-	external := cp.Spec.Source.Managed
-	if external == nil {
+	managed := cp.Spec.Source.Managed
+	if managed == nil {
 		return managedAccess{}, fmt.Errorf("spec.source.managed is not set")
 	}
 
-	if err := validateEndpoint(external.Endpoint); err != nil {
+	if err := validateEndpoint(managed.Endpoint); err != nil {
 		return managedAccess{}, err
 	}
-	access := managedAccess{endpoint: external.Endpoint}
+	access := managedAccess{endpoint: managed.Endpoint}
 
 	transport, err := caBundleTransport(ctx, c, cp)
 	if err != nil {
@@ -97,17 +97,17 @@ func resolveManaged(
 
 	// No reference means no token, which is the in-cluster case the chart writes
 	// when it installs the control plane itself.
-	if external.CredentialsSecretRef == nil || external.CredentialsSecretRef.Name == "" {
+	if managed.CredentialsSecretRef == nil || managed.CredentialsSecretRef.Name == "" {
 		return access, nil
 	}
 
 	var secret corev1.Secret
-	key := client.ObjectKey{Namespace: cp.Namespace, Name: external.CredentialsSecretRef.Name}
+	key := client.ObjectKey{Namespace: cp.Namespace, Name: managed.CredentialsSecretRef.Name}
 	if err := c.Get(ctx, key, &secret); err != nil {
 		if errors.IsNotFound(err) {
 			return managedAccess{}, &credentialsError{message: fmt.Sprintf(
 				"Secret %s/%s does not exist, and it is what holds the bearer token this "+
-					"control plane is reached with", cp.Namespace, external.CredentialsSecretRef.Name)}
+					"control plane is reached with", cp.Namespace, managed.CredentialsSecretRef.Name)}
 		}
 		return managedAccess{}, err
 	}
@@ -120,7 +120,7 @@ func resolveManaged(
 	}
 	return managedAccess{}, &credentialsError{message: fmt.Sprintf(
 		"Secret %s/%s carries no %s key, so there is no token to authenticate with",
-		cp.Namespace, external.CredentialsSecretRef.Name, strings.Join(credentialKeys, " or "))}
+		cp.Namespace, managed.CredentialsSecretRef.Name, strings.Join(credentialKeys, " or "))}
 }
 
 // caBundleTransport builds the HTTP client that verifies the endpoint against
@@ -199,7 +199,7 @@ func validateEndpoint(raw string) error {
 	return nil
 }
 
-// isLoopbackOrLinkLocal reports the hosts an external endpoint may not name.
+// isLoopbackOrLinkLocal reports the hosts a managed endpoint may not name.
 // They are matched by spelling rather than by resolution, because resolving a
 // name at admission time answers for the moment of admission and not for the
 // life of the object.

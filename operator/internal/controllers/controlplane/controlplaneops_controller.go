@@ -7,7 +7,7 @@
 // and runs when the lock frees.
 //
 // Every action requires a managed control plane, since each acts on something
-// the operator installed. The webhook refuses one naming an external control
+// the operator installed. The webhook refuses one naming a managed control
 // plane at creation; this reconciler repeats the check, because an object may
 // have been created while the webhook was not serving.
 //

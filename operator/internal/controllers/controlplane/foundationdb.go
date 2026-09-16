@@ -361,8 +361,8 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				},
 			},
 		}
-		if managed := cp.Spec.Source.Local; managed != nil && len(managed.NodeSelector) > 0 {
-			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(managed.NodeSelector)
+		if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
+			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(local.NodeSelector)
 		}
 		return map[string]any{"podTemplate": template}
 	}
@@ -387,9 +387,9 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"spec": volumeClaimSpec(fdb),
 		},
 	}
-	if managed := cp.Spec.Source.Local; managed != nil && len(managed.NodeSelector) > 0 {
+	if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] =
-			toAnyMap(managed.NodeSelector)
+			toAnyMap(local.NodeSelector)
 	}
 
 	obj := &unstructured.Unstructured{Object: map[string]any{

@@ -28,7 +28,7 @@ import (
 // ControlPlaneOpsAction is the operation a ControlPlaneOps performs. Every
 // action acts on what the operator installed, so every action requires a managed
 // control plane, and the validating webhook of §6 rejects an operation naming an
-// external one at creation rather than letting it be created and fail.
+// managed one at creation rather than letting it be created and fail.
 // +kubebuilder:validation:Enum=Restart;Upgrade;Backup
 type ControlPlaneOpsAction string
 

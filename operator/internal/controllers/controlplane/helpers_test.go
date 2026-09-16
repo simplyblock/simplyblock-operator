@@ -68,7 +68,7 @@ func localControlPlane() *simplyblockv1alpha2.ControlPlane {
 	}
 }
 
-// externalControlPlane names a control plane that already exists.
+// managedControlPlane names a control plane that already exists.
 func managedControlPlane(endpoint string) *simplyblockv1alpha2.ControlPlane {
 	return &simplyblockv1alpha2.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: testNamespace},

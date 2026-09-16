@@ -36,8 +36,8 @@ import (
 func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 	apiClient := apiServer(t)
 
-	managed := &simplyblockv1alpha2.LocalControlPlane{Image: testImage}
-	external := &simplyblockv1alpha2.ManagedControlPlane{
+	localSource := &simplyblockv1alpha2.LocalControlPlane{Image: testImage}
+	managedSource := &simplyblockv1alpha2.ManagedControlPlane{
 		Endpoint:             "https://sb-control.example.com:5000",
 		CredentialsSecretRef: &corev1.LocalObjectReference{Name: "cp-token"},
 	}
@@ -49,15 +49,15 @@ func TestControlPlaneCELRequiresExactlyOneSource(t *testing.T) {
 	}{
 		{
 			name:   "managed alone is what a fresh deployment writes",
-			source: simplyblockv1alpha2.ControlPlaneSource{Local: managed},
+			source: simplyblockv1alpha2.ControlPlaneSource{Local: localSource},
 		},
 		{
-			name:   "external alone is a control plane that already exists",
-			source: simplyblockv1alpha2.ControlPlaneSource{Managed: external},
+			name:   "managed alone is a control plane that already exists",
+			source: simplyblockv1alpha2.ControlPlaneSource{Managed: managedSource},
 		},
 		{
 			name:       "both would install one control plane and probe another",
-			source:     simplyblockv1alpha2.ControlPlaneSource{Local: managed, Managed: external},
+			source:     simplyblockv1alpha2.ControlPlaneSource{Local: localSource, Managed: managedSource},
 			wantDenied: true,
 		},
 		{
@@ -118,7 +118,7 @@ func TestControlPlaneCELRefusesToChangeTheSource(t *testing.T) {
 	}
 	err := apiClient.Update(ctx, cp)
 	if err == nil {
-		t.Fatal("the source was changed from managed to external, and the data behind the " +
+		t.Fatal("the source was changed from local to managed, and the data behind the " +
 			"old one does not move with it")
 	}
 	if !strings.Contains(err.Error(), "immutable") {
