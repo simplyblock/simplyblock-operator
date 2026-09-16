@@ -1227,6 +1227,8 @@ func (r *StorageClusterReconciler) observePhase(cluster *simplyblockv1alpha2.Sto
 var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 	simplyblockv1alpha2.StorageClusterPhasePending,
 	simplyblockv1alpha2.StorageClusterPhaseCreating,
+	simplyblockv1alpha2.StorageClusterPhaseProvisioning,
+	simplyblockv1alpha2.StorageClusterPhaseActivating,
 	simplyblockv1alpha2.StorageClusterPhaseOnline,
 	simplyblockv1alpha2.StorageClusterPhaseDegraded,
 	simplyblockv1alpha2.StorageClusterPhaseUnavailable,
@@ -1326,10 +1328,18 @@ func phaseFor(status string) simplyblockv1alpha2.StorageClusterPhase {
 		return simplyblockv1alpha2.StorageClusterPhaseSuspended
 	case "":
 		return simplyblockv1alpha2.StorageClusterPhasePending
+	case "in_activation":
+		// Activation is asked for, and by more than a deployment: an expansion
+		// ends in one and so does recovering from a suspension.
+		return simplyblockv1alpha2.StorageClusterPhaseActivating
+	case utils.ClusterStatusUnready, "in_creation", "in_expansion":
+		// The cluster exists and is being built up. Not serving, and nothing
+		// wrong with it.
+		return simplyblockv1alpha2.StorageClusterPhaseProvisioning
 	default:
-		// Everything else the control plane reports — unready, in_expansion,
-		// in_activation — is the cluster not serving for a reason nobody asked
-		// for, which is what Unavailable means.
+		// A status this operator has no reading for, which is what makes
+		// Unavailable worth reporting rather than the name for every cluster
+		// that is not currently serving.
 		return simplyblockv1alpha2.StorageClusterPhaseUnavailable
 	}
 }

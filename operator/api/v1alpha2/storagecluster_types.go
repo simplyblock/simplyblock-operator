@@ -29,7 +29,7 @@ import (
 // first two values are the operator's own creation path; the rest are its
 // reading of the lifecycle status.status carries in the control plane's own
 // spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -39,6 +39,20 @@ const (
 
 	// StorageClusterPhaseCreating: the creation machine is running.
 	StorageClusterPhaseCreating StorageClusterPhase = "Creating"
+
+	// StorageClusterPhaseProvisioning: the cluster exists in the control plane
+	// and is being built up — its first nodes are joining, or an expansion is
+	// adding more. It is not serving and there is nothing wrong with it, which
+	// is the distinction Unavailable cannot carry.
+	StorageClusterPhaseProvisioning StorageClusterPhase = "Provisioning"
+
+	// StorageClusterPhaseActivating: the control plane is activating the
+	// cluster.
+	//
+	// It is a phase of its own rather than part of Provisioning because it is
+	// not only the last step of a deployment: an expansion ends in one, and so
+	// does recovering from a suspension, long after anything was being built.
+	StorageClusterPhaseActivating StorageClusterPhase = "Activating"
 
 	// StorageClusterPhaseOnline: the control plane reports the cluster active
 	// and serving.
@@ -50,6 +64,11 @@ const (
 
 	// StorageClusterPhaseUnavailable: not serving, and not because anybody
 	// asked.
+	//
+	// It is what is left once the statuses that mean something has been asked
+	// for are read as themselves, which is what keeps it worth reporting: a
+	// cluster in this phase is one whose status this operator has no reading
+	// for, rather than every cluster that is not currently serving.
 	StorageClusterPhaseUnavailable StorageClusterPhase = "Unavailable"
 
 	// StorageClusterPhaseSuspended: shut down deliberately, which is where a
