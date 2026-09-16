@@ -92,6 +92,10 @@ func (r *SysfsDeviceResolver) ByUUID(ctx context.Context, uuid string) (Device, 
 	return r.pick(ctx, DeviceSelector{UUID: uuid})
 }
 
+func (r *SysfsDeviceResolver) ByNGUID(ctx context.Context, nguid string) (Device, error) {
+	return r.pick(ctx, DeviceSelector{NGUID: nguid})
+}
+
 func (r *SysfsDeviceResolver) ByDevicePath(ctx context.Context, devicePath string) (Device, error) {
 	return r.pick(ctx, DeviceSelector{DevicePath: devicePath})
 }

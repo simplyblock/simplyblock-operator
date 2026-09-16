@@ -128,6 +128,16 @@ func (r *DeviceResolver) ByUUID(ctx context.Context, uuid string) (nvme.Device, 
 	return r.device(resp.GetDevice(), "uuid="+uuid)
 }
 
+// ByNGUID returns the device whose namespace NGUID matches. It reports
+// errs.ErrNotFound when nothing matches.
+func (r *DeviceResolver) ByNGUID(ctx context.Context, nguid string) (nvme.Device, error) {
+	resp, err := r.client.GetDeviceByNGUID(ctx, &storagev1.GetDeviceByNGUIDRequest{Nguid: nguid})
+	if err != nil {
+		return nvme.Device{}, fmt.Errorf("node: device nguid=%s: %w", nguid, class.FromStatus(err))
+	}
+	return r.device(resp.GetDevice(), "nguid="+nguid)
+}
+
 // ByDevicePath returns the device for a block node such as "/dev/nvme0n1". It
 // reports errs.ErrNotFound when nothing matches.
 func (r *DeviceResolver) ByDevicePath(ctx context.Context, devicePath string) (nvme.Device, error) {

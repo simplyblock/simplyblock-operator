@@ -113,6 +113,7 @@ func TestSelectorRoundTrip(t *testing.T) {
 		NQN:        "nqn.2023-01.io.simplyblock:lvol",
 		NSID:       3,
 		UUID:       "6f1a4d1e-0b8f-4a0e-9a3f-2f1c0e3d4b5a",
+		NGUID:      "0123456789abcdef0123456789abcdef",
 		DevicePath: "/dev/nvme0n3",
 	}
 	requireFullyPopulated(t, "nvme.DeviceSelector", reflect.ValueOf(selector))

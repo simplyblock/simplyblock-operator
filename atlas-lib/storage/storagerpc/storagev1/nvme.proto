@@ -45,6 +45,12 @@ service DeviceService {
   // (simplyblock: the lvol UUID). NOT_FOUND when nothing matches.
   rpc GetDeviceByUUID(GetDeviceByUUIDRequest) returns (GetDeviceByUUIDResponse);
 
+  // GetDeviceByNGUID returns the device whose namespace NGUID matches. It is
+  // the lookup a pNFS client needs: the block layout an MDS hands out names
+  // the device by NGUID rather than by the lvol UUID. NOT_FOUND when nothing
+  // matches.
+  rpc GetDeviceByNGUID(GetDeviceByNGUIDRequest) returns (GetDeviceByNGUIDResponse);
+
   // GetDeviceByDevicePath returns the device for a block node such as
   // "/dev/nvme0n1". NOT_FOUND when nothing matches.
   rpc GetDeviceByDevicePath(GetDeviceByDevicePathRequest) returns (GetDeviceByDevicePathResponse);
@@ -164,6 +170,7 @@ message DeviceSelector {
   uint32 nsid = 2; // 0: any
   string uuid = 3;
   string device_path = 4;
+  string nguid = 5;
 }
 
 message ListSubsystemsRequest {}
@@ -199,6 +206,14 @@ message GetDeviceByUUIDRequest {
 }
 
 message GetDeviceByUUIDResponse {
+  Device device = 1;
+}
+
+message GetDeviceByNGUIDRequest {
+  string nguid = 1;
+}
+
+message GetDeviceByNGUIDResponse {
   Device device = 1;
 }
 

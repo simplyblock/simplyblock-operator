@@ -117,6 +117,18 @@ func (s Accessor) DeviceByUUID(ctx context.Context, uuid string) (nvme.Device, e
 	return devices.ByUUID(ctx, uuid)
 }
 
+// DeviceByNGUID returns the device whose namespace NGUID matches. It is the
+// lookup a pNFS client needs: the block layout an MDS hands out names the
+// device by NGUID rather than by the lvol UUID. It reports errs.ErrNotFound
+// when nothing matches.
+func (s Accessor) DeviceByNGUID(ctx context.Context, nguid string) (nvme.Device, error) {
+	devices, err := s.devices()
+	if err != nil {
+		return nvme.Device{}, err
+	}
+	return devices.ByNGUID(ctx, nguid)
+}
+
 // DeviceByPath returns the device for a block node such as "/dev/nvme0n1" (the
 // subsystem multipath head). It reports errs.ErrNotFound when nothing matches.
 func (s Accessor) DeviceByPath(ctx context.Context, devicePath string) (nvme.Device, error) {
