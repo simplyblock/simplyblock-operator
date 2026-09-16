@@ -3,9 +3,8 @@
 // owned by a remote control plane, expressed as one object.
 //
 // Two things distinguish it from the registered kind it replaces. spec.source
-// says which control plane the object means, so reusing an external one is a
-// field rather than the SIMPLYBLOCK_WEBAPI_BASE_URL environment variable
-// (§5.2). And status.endpoint publishes the resolved base URL, which the
+// says which control plane the object means, so naming a remote one is a field
+// rather than the SIMPLYBLOCK_WEBAPI_BASE_URL environment variable (§5.2). And status.endpoint publishes the resolved base URL, which the
 // operator's control-plane clients resolve per call, so one object answers where
 // the control plane is and a change to it reaches every caller without a
 // Deployment rollout (§3.3).

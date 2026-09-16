@@ -46,8 +46,8 @@ func TestAControlPlaneWithNoEndpointResolvesToNothing(t *testing.T) {
 }
 
 // A singleton that cannot be read resolves to nothing rather than to an error.
-// Every control-plane call in the operator goes through this, so failing here
-// would fail all of them while the object was briefly unreadable.
+// Every control-plane call in the operator goes through this, so an unreadable
+// object is a transient miss rather than a failed call.
 func TestAnAbsentControlPlaneResolvesToNothing(t *testing.T) {
 	resolve := NewEndpointResolver(newClient(t), testNamespace)
 
@@ -56,9 +56,8 @@ func TestAnAbsentControlPlaneResolvesToNothing(t *testing.T) {
 	}
 }
 
-// Only the singleton answers. A ControlPlane under another name is one the
-// reconciler ignores, so reading an endpoint off it would send every caller
-// somewhere nothing reconciles.
+// Only the singleton answers, because a ControlPlane under another name is one
+// the reconciler ignores.
 func TestOnlyTheSingletonAnswers(t *testing.T) {
 	other := localControlPlane()
 	other.Name = "a-second-one"

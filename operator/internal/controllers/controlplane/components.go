@@ -166,7 +166,7 @@ func observe(
 			// processes are. Publishing its process groups as the two counts
 			// keeps the field meaning the same thing for every component, and
 			// the health is folded in by reporting zero ready when the cluster
-			// is not available at all — which is the state that makes this
+			// is not available at all, which is the state that makes this
 			// component's verdict Unavailable.
 			status.Desired = health.desired
 			status.Ready = health.reconciled

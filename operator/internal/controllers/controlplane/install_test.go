@@ -29,9 +29,8 @@ import (
 )
 
 // The graph is a line from the first apply to the readiness wait, and every step
-// declares a successor except the last. A graph that branched would make the
-// reconciler's "the first edge is the only edge" wrong without anything saying
-// so.
+// declares a successor except the last. The reconciler takes the first edge as
+// the only edge, which holds exactly while that is true.
 func TestTheInstallationGraphIsALine(t *testing.T) {
 	graph := installGraph()
 
@@ -62,8 +61,7 @@ func TestTheInstallationGraphIsALine(t *testing.T) {
 }
 
 // Every step has a budget, and the machine is built from the same table the
-// reconciler sets the first step's deadline from. A step missing from that table
-// would be the one step that cannot time out.
+// reconciler sets the first step's deadline from, so every step can time out.
 func TestEveryInstallationStepHasABudget(t *testing.T) {
 	for step := range installGraph().States {
 		if _, ok := installStepBudgets[step]; !ok {
@@ -303,8 +301,8 @@ func TestAwaitingAPIHoldsUntilTheProbePasses(t *testing.T) {
 }
 
 // The FoundationDBCluster is built with the coordinator count and the redundancy
-// mode agreeing. A deployment that got one without the other would have a
-// database told to keep more copies than it has processes to keep them on.
+// mode agreeing, so the database is never told to keep more copies than it has
+// processes to keep them on.
 func TestTheCoordinatorCountAndTheRedundancyModeAgree(t *testing.T) {
 	for _, tc := range []struct {
 		replicas int32
@@ -355,9 +353,8 @@ func TestAnUnsetStorageClassIsAbsentRatherThanEmpty(t *testing.T) {
 	}
 }
 
-// The scheduling an operator set reaches every pod the install creates. A pod
-// that missed it would be scheduled somewhere the deployment deliberately kept
-// the control plane off.
+// The scheduling an operator set reaches every pod the install creates, so the
+// control plane stays where the deployment put it.
 func TestSchedulingReachesEveryPodTheInstallCreates(t *testing.T) {
 	cp := localControlPlane()
 	cp.Spec.Source.Local.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}

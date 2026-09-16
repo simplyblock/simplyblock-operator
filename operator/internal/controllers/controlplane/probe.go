@@ -5,10 +5,10 @@
 // (design-crd-model.md §7.7 makes the stream the way state arrives, and this is
 // the one read that cannot depend on it).
 //
-// It is an interface rather than a function so that the reconciler's branches —
-// a control plane that answers, one that does not, one whose version disagrees
-// with what an upgrade asked for — are unit-testable without an HTTP server. The
-// live implementation is one http.Client and two paths.
+// It is an interface rather than a function so that the reconciler's branches
+// are unit-testable without an HTTP server: a control plane that answers, one
+// that does not, and one whose version disagrees with what an upgrade asked for.
+// The live implementation is one http.Client and two paths.
 
 package controlplane
 
@@ -138,10 +138,9 @@ func (p *HTTPProber) get(ctx context.Context, endpoint, path string) ([]byte, in
 // parseVersion pulls the version out of whatever the endpoint returns.
 //
 // The read does not exist yet (design-controlplane.md §8), so its response shape
-// is not settled either. What is handled is the two shapes it could reasonably
-// take — a bare string, or a JSON object with a version field — and anything
-// else reads as no version, which publishes nothing rather than publishing
-// noise.
+// is not settled either. Two shapes are handled, a bare string and a JSON object
+// with a version field, and anything else reads as no version, which publishes
+// nothing rather than publishing noise.
 func parseVersion(body []byte) string {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {

@@ -49,10 +49,8 @@ func TestControlPlaneConvertToRegroupsImage(t *testing.T) {
 }
 
 // Every v1alpha1 ControlPlane is one the chart installed, so an absent image
-// still converts into a managed source. The hub requires exactly one member of
-// spec.source, and an object arriving with neither is one the reconciler reads
-// as neither managed nor external and therefore refuses to act on — which for a
-// control plane that is plainly running is the wrong answer.
+// still converts into a local source. The hub requires exactly one member of
+// spec.source, and the reconciler classifies an object by which member is set.
 func TestControlPlaneConvertToStillNamesManagedWhenImageEmpty(t *testing.T) {
 	src := &ControlPlane{Spec: ControlPlaneSpec{Image: ""}}
 

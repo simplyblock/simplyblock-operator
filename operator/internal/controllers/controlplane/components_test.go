@@ -3,8 +3,8 @@
 //
 // The pairs matter more than the individual rows. Only a component the table
 // marks essential may produce Unavailable, because Unavailable holds every
-// controller in the operator — so each case here is stated twice, once for an
-// essential component and once for a non-essential one at the same counts.
+// controller in the operator. Each case here is therefore stated twice, once for
+// an essential component and once for a non-essential one at the same counts.
 
 package controlplane
 
@@ -101,9 +101,8 @@ func TestThePhaseIsTheWorstVerdictAcrossEveryComponent(t *testing.T) {
 }
 
 // A workload the apply just created and the cache has not caught up with reads
-// as zero desired, which is nothing asked for rather than something missing.
-// Reporting it as an outage would make every install flap through Unavailable on
-// the pass that created the workloads.
+// as zero desired, which is nothing asked for rather than something missing. An
+// install therefore settles without passing through Unavailable.
 func TestZeroDesiredIsNotAnOutage(t *testing.T) {
 	components := []simplyblockv1alpha2.ControlPlaneComponentStatus{
 		componentStatus(ComponentWebAPI, 0, 0, true),

@@ -183,9 +183,8 @@ func TestARemoteControlPlaneIsProbedAndNothingIsInstalled(t *testing.T) {
 // is a ClusterIP Service in the same namespace, the readiness probe there is
 // unauthenticated, and there is no static token to point at.
 //
-// It is the field that lets the chart hand the install back. Without it the CR
-// would have to claim a managed source whichever side installed, and the
-// operator would apply the workloads the chart had just rendered.
+// It is the field that lets the chart hand the install back: the CR names a
+// remote source, and the operator resolves it rather than installing.
 func TestARemoteControlPlaneMayNameNoCredentials(t *testing.T) {
 	ctx := context.Background()
 	const endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
@@ -218,9 +217,9 @@ func TestARemoteControlPlaneMayNameNoCredentials(t *testing.T) {
 	}
 }
 
-// A credentials Secret that is named and absent is still an error. Naming one is
-// a statement that the control plane needs it, so falling back to an
-// unauthenticated probe would turn a misconfiguration into a silent downgrade.
+// A credentials Secret that is named and absent is still an error. Naming one
+// states that the control plane needs it, and the probe is refused until it is
+// there.
 func TestANamedButMissingCredentialsSecretIsStillAnError(t *testing.T) {
 	cp := managedControlPlane("https://sb-control.example.com:5000")
 	c := newClient(t, cp)
@@ -415,9 +414,8 @@ func TestDeletionReleasesOnceTheClustersAreGone(t *testing.T) {
 	}
 }
 
-// The event marks the arrival at a phase rather than the phase itself. A
-// thirty-second probe that emitted on every failure would produce two thousand
-// events a day from one outage.
+// The event marks the arrival at a phase rather than the phase itself, which
+// bounds one outage to one event rather than one per thirty-second probe.
 func TestTheEventMarksTheTransitionRatherThanTheState(t *testing.T) {
 	recorder := &recordingRecorder{}
 	cp := localControlPlane()

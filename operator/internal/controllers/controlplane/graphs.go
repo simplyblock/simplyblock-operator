@@ -221,16 +221,13 @@ var opsInitialDeadlines = map[statemachine.Action]time.Duration{
 // abortableSteps are the steps from which an abort stops the operation cleanly.
 //
 // The line is whether anything has been changed yet. Draining and Preflight have
-// performed no side effect at all. Requesting has not yet created the backup.
-// Everything past those has either rolled a Deployment or written an image onto
-// the entity, and an abort there would leave a rollout half-done with nothing
-// driving it either way — which is worse than letting it finish, since the
-// rollout completing is what makes the control plane describable again.
+// performed no side effect at all, and Requesting has not yet created the
+// backup. Everything past those has rolled a Deployment or written an image onto
+// the entity, and the operation is what drives that rollout to completion.
 //
-// It is a table beside the graph rather than an edge in it, because a terminal
-// Aborted step would be an eighth value in the API and the phase already carries
-// that meaning. A test asserts every step here is one some graph declares, so
-// the two cannot drift.
+// It is a table beside the graph rather than an edge in it: the phase already
+// carries what a terminal Aborted step would say. A test asserts every step here
+// is one some graph declares, so the two cannot drift.
 var abortableSteps = map[opsStep]bool{
 	stepDraining:   true,
 	stepPreflight:  true,

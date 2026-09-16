@@ -39,9 +39,8 @@ import (
 
 const (
 	// FinalizerControlPlaneOps is what guarantees the lock is released even when
-	// the operation is deleted while it holds one. Without it, deleting a
-	// Running operation would leave the control plane locked against every later
-	// one, with nothing left in the cluster to say why.
+	// the operation is deleted while it holds one, so that the control plane is
+	// never left locked by an object that no longer exists.
 	FinalizerControlPlaneOps = "storage.simplyblock.io/controlplaneops-finalizer"
 
 	// opsRetry is how long an operation waits before looking again at something
@@ -129,9 +128,9 @@ func (r *ControlPlaneOpsReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // acquireLock takes the target's status.activeOpsRef, which is the mutual
 // exclusion every Ops kind in this group uses. An operation that finds the lock
-// held by another stays Pending and asks again, rather than failing: the other
-// operation will finish, and failing here would make the order two people
-// applied two objects in decide which of them runs.
+// held by another stays Pending and asks again: the other operation finishes,
+// and the wait is what keeps the outcome independent of the order two objects
+// were applied in.
 func (r *ControlPlaneOpsReconciler) acquireLock(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,
@@ -474,8 +473,8 @@ func stampTemplate(template *corev1.PodTemplateSpec, stamp string) {
 // it applies is the one in its own spec.
 //
 // Writing it to the spec rather than to the Deployment is what keeps the entity
-// describing what is running. An upgrade that patched the Deployment directly
-// would be reconciled back to the old image on the entity's next pass.
+// describing what is running: the entity's next pass re-applies its workloads
+// from the spec.
 func (r *ControlPlaneOpsReconciler) applyUpgrade(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,
@@ -532,10 +531,9 @@ func (r *ControlPlaneOpsReconciler) await(
 //
 // A control plane that reports no version at all is a control plane whose
 // /_meta/version read does not exist yet, which design-controlplane.md §8
-// records as a prerequisite. The step passes there rather than failing, because
-// failing every upgrade on a deployment that cannot answer would make the
-// action unusable — and it says so in the message, so the record of the
-// operation carries what was and was not verified.
+// records as a prerequisite. The step passes there rather than failing, and says
+// so in the message, so the record of the operation carries what was and was not
+// verified.
 func (r *ControlPlaneOpsReconciler) verify(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,
@@ -708,9 +706,8 @@ func (r *ControlPlaneOpsReconciler) awaitBackup(
 // arrived too late rather than half-undoing the work.
 //
 // The refusal is the point. A step past the drain has rolled a Deployment or
-// written an image onto the entity, and stopping there would leave a rollout
-// half-done with nothing driving it either way. Letting it finish is what makes
-// the control plane describable again.
+// written an image onto the entity, and this operation is what drives that
+// rollout to completion.
 func (r *ControlPlaneOpsReconciler) unwind(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,

@@ -3,8 +3,8 @@
 // Two properties move (design-property-renames.md §2.4 and §2.5): the top-level
 // image regroups under spec.source.local, and the readiness phase Ready becomes
 // Available. Everything else this version declares is carried across unchanged,
-// and everything the hub adds — the step, the endpoint, the version, the
-// components, the lock, and the observed generation — has no v1alpha1 spelling
+// and everything the hub adds (the step, the endpoint, the version, the
+// components, the lock, and the observed generation) has no v1alpha1 spelling
 // and is dropped on the way down, which is what a spoke that predates a field
 // does with it.
 //
@@ -80,12 +80,10 @@ func (src *ControlPlane) ConvertTo(dstRaw conversion.Hub) error {
 
 	dst.ObjectMeta = src.ObjectMeta
 
-	// Every v1alpha1 ControlPlane is one the chart installed, so the managed
-	// member is the one it converts into, and it is set even when the image is
-	// empty. The hub requires exactly one member (design-controlplane.md §3.2),
-	// and an object arriving upward with neither is one nothing downstream can
-	// classify: the reconciler would read it as neither managed nor external and
-	// refuse to act on a control plane that is plainly running.
+	// Every v1alpha1 ControlPlane is one the chart installed, so the local member
+	// is the one it converts into, and it is set even when the image is empty.
+	// The hub requires exactly one member (design-controlplane.md §3.2), and the
+	// reconciler classifies an object by which member is set.
 	dst.Spec.Source = v1alpha2.ControlPlaneSource{
 		Local: &v1alpha2.LocalControlPlane{Image: src.Spec.Image},
 	}

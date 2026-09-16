@@ -314,9 +314,8 @@ func webAPIService(namespace string) *corev1.Service {
 // keeps state about. They are one pod rather than ten because each is a small
 // polling loop and the pod is what shares the cluster file and the log level.
 //
-// The pod runs on the host network, which is what lets the node and device
-// monitors reach the storage nodes' management addresses directly rather than
-// through a Service that would have to exist for every node.
+// The pod runs on the host network, which is how the node and device monitors
+// reach the storage nodes' management addresses directly.
 func monitoringServices() []service {
 	return []service{
 		{name: "storage-node-monitor", module: "simplyblock_core/services/storage_node_monitor.py"},
@@ -415,7 +414,7 @@ func servicePoolDeployment(
 
 // adminControlDeployment runs nothing. It is a pod with the control plane's
 // tooling, its cluster file, and its account, kept alive so that an
-// administrator can exec into it — which is how the command-line surface is
+// administrator can exec into it, which is how the command-line surface is
 // reached on a deployment that has no shell access to the control plane's hosts.
 func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	managed := cp.Spec.Source.Local
@@ -590,7 +589,7 @@ func fdbExporterService(namespace string) *corev1.Service {
 }
 
 // intstrFromInt names a numeric target port, which is what every Service here
-// takes except the exporter's — that one names its container port, because the
+// takes except the exporter's. That one names its container port, because the
 // port is declared with a name and matching on it survives a renumber.
 func intstrFromInt(port int32) intstr.IntOrString {
 	return intstr.FromInt32(port)

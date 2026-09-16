@@ -11,10 +11,8 @@
 //
 // What a base deployment does run is an object store, so that is what the step
 // applies. The store holds what outlives a process: the metric history the
-// control plane keeps and the backups it writes. Nothing here creates the bucket
-// — a sidecar beside the server does, because the store has to be answering
-// before a bucket can be made in it, and a Job would have to be retried against
-// exactly that.
+// control plane keeps and the backups it writes. The bucket is made by a sidecar
+// beside the server, which is where it can wait for the store to answer.
 
 package controlplane
 
@@ -31,13 +29,11 @@ import (
 
 // The object store's images and its fixed configuration.
 //
-// The credentials are the chart's, and they are constants rather than a
-// generated Secret for one reason worth stating plainly: the store listens only
-// on a ClusterIP Service inside the namespace, and every consumer of it is a
-// workload this same install creates. Making them a Secret the operator
-// generated would be a real improvement and is not one this change makes,
-// because the value is also written into the objstore configuration the chart
-// still renders for the observability half, and the two have to agree.
+// The credentials are the chart's, and they are constants: the store listens
+// only on a ClusterIP Service inside the namespace, and every consumer of it is
+// a workload this same install creates. They stay constants while the chart
+// still renders the same value into the observability half's objstore
+// configuration, because the two have to agree.
 const (
 	minioImage       = "quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z"
 	minioClientImage = "quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z"

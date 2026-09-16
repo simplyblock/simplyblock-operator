@@ -87,8 +87,7 @@ func TestASingleManagementAPIInstanceStaysExpressible(t *testing.T) {
 }
 
 // Every workload built from the control plane's own image runs it, so an upgrade
-// that writes one image onto the entity moves all of them. A workload left on a
-// hard-coded image would be the one the upgrade did not reach.
+// that writes one image onto the entity moves all of them.
 func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
 	cp := localControlPlane()
 
@@ -105,9 +104,8 @@ func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
 	}
 }
 
-// The exporter is deliberately not on that image: it is upstream's, and pinning
-// it to the control plane's would mean an upgrade replacing a binary that has
-// nothing to do with the control plane's version.
+// The exporter is deliberately not on that image: it is upstream's, and its
+// version is independent of the control plane's.
 func TestTheExporterDoesNotRunTheControlPlanesImage(t *testing.T) {
 	cp := localControlPlane()
 

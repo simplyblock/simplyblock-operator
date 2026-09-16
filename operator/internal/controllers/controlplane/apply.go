@@ -13,7 +13,7 @@
 // deleted. A cluster-scoped one cannot: Kubernetes treats a cluster-scoped
 // object owned by a namespaced one as having an owner it cannot resolve and
 // never collects it. Those carry storage.simplyblock.io/managed-by instead, and
-// the finalizer deletes the ones it marked — the same split
+// the finalizer deletes the ones it marked. That is the split
 // design-simplyblockdriver.md §4.1 makes, for the same reason.
 
 package controlplane
@@ -33,8 +33,7 @@ import (
 const (
 	// fieldOwner is the field manager every apply here writes under. Taking
 	// ownership from a Helm release's manager happens under this name, so it has
-	// to stay stable across releases: a rename would leave the release still
-	// owning every field it set.
+	// to stay stable across releases.
 	fieldOwner = client.FieldOwner("simplyblock-operator")
 
 	// managedByLabel marks a cluster-scoped object this operator created without
@@ -142,7 +141,7 @@ func applyConfiguration(obj client.Object, scheme *runtime.Scheme) (runtime.Appl
 	u := &unstructured.Unstructured{Object: content}
 	u.SetGroupVersionKind(gvk)
 	// A built object has no status, and an apply carrying an empty one claims
-	// ownership of a field this controller does not set — which for a Deployment
+	// ownership of a field this controller does not set. For a Deployment that
 	// means fighting the Deployment controller over its own replica counts.
 	unstructured.RemoveNestedField(u.Object, "status")
 	unstructured.RemoveNestedField(u.Object, "metadata", "creationTimestamp")

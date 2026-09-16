@@ -22,7 +22,7 @@
 // that cannot see v1beta2 holds and names it, because creating a
 // FoundationDBCluster against a group the API server does not know is not a wait
 // but an error. The controller is applied, under the name the chart gave it, in
-// the namespace the ControlPlane is in — which is what ships today, so a cluster
+// the namespace the ControlPlane is in. That is what ships today, so a cluster
 // that also runs a FoundationDB operator of its own is in the same position it
 // was in before the install moved.
 

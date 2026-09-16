@@ -68,17 +68,15 @@ spec:
 
               Everything except spec.abort is frozen once the object is admitted, which is
               what makes the status an audit of the request that ran rather than of whatever
-              the object says now. The parameters are consumed several steps apart —
-              Preflight reads spec.upgrade.image and Applying writes it, Draining reads
-              spec.restart.components and Restarting recycles them — so an edit in between
+              the object says now. The parameters are consumed several steps apart:
+              Preflight reads spec.upgrade.image and Applying writes it, and Draining reads
+              spec.restart.components before Restarting recycles them. An edit in between
               produces an operation that checked one thing and did another.
 
-              The rules are declared here rather than as +k8s:immutable on each field for
-              two reasons. That marker emits a second, parent-level rule for an optional
-              field, so three of them would put four rules on this type in an order
-              controller-gen does not fix. And it freezes a block whole, where what has to
-              be frozen is the block's presence and its contents together, which is what
-              these say.
+              The rules are declared here rather than as +k8s:immutable on each field.
+              controller-gen emits that marker's rules in an order that varies between runs
+              once a type carries several, and it freezes a block whole; what has to be
+              frozen is each block's presence together with its contents.
             properties:
               abort:
                 description: |-
@@ -90,8 +88,8 @@ spec:
                 type: boolean
               action:
                 description: |-
-                  Action is the operation to perform. Immutable: an operation that changed
-                  what it was doing halfway through would have a status describing neither.
+                  Action is the operation to perform. Immutable, so that the status describes
+                  the operation that ran.
                 enum:
                 - Restart
                 - Upgrade

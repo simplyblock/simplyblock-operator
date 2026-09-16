@@ -84,15 +84,14 @@ func TestControlPlaneEmptyManagedBlockSurvivesTheRoundTrip(t *testing.T) {
 	}
 }
 
-// An external control plane has no v1alpha1 spelling at all, so storing one at
-// that version and reading it back loses which control plane the object meant.
-// The conversion is lossy here rather than failing, and this records how: the
-// object stays readable and comes back describing a managed control plane with
-// no image.
+// A control plane this cluster is managed by has no v1alpha1 spelling, so
+// storing one at that version and reading it back loses which control plane the
+// object meant. The conversion is lossy here rather than failing: the object
+// stays readable and comes back describing a local control plane with no image.
 //
-// Nothing stores an external ControlPlane at v1alpha1 in practice, because the
-// mode did not exist before the storage version moved to v1alpha2. What this
-// pins is the behavior if something ever does.
+// Nothing stores one at v1alpha1 in practice, because the mode did not exist
+// before the storage version moved to v1alpha2. What this pins is the behavior
+// if something ever does.
 func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
 	hub := &v1alpha2.ControlPlane{
 		Spec: v1alpha2.ControlPlaneSpec{
@@ -110,7 +109,7 @@ func TestControlPlaneExternalSourceDoesNotSurviveV1Alpha1(t *testing.T) {
 		t.Fatalf("ConvertFrom: %v", err)
 	}
 	if stored.Spec.Image != "" {
-		t.Errorf("spec.image = %q, want empty for an external control plane", stored.Spec.Image)
+		t.Errorf("spec.image = %q, want empty for a remote control plane", stored.Spec.Image)
 	}
 
 	var back v1alpha2.ControlPlane

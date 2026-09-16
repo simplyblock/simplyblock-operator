@@ -4,12 +4,12 @@
 // desired state, because the entity re-applies what it installed on every pass:
 // changing the image is an edit, scaling FoundationDB is an edit, and an object
 // somebody deleted by hand is put back. What is left is what this kind carries,
-// and it is three things — recycling a workload, moving it to a new version, and
+// and it is three things: recycling a workload, moving it to a new version, and
 // asking FoundationDB for a backup.
 //
-// Every action requires a managed control plane, since each acts on something
-// the operator installed. An operation naming an external one is rejected at
-// admission rather than created and failed, which is what
+// Every action requires a control plane this cluster hosts, since each acts on
+// something the operator installed. An operation naming a remote one is rejected
+// at admission rather than created and failed, which is what
 // ControlPlaneOpsValidator is for.
 //
 // The kind is introduced by the redesign, so it has no v1alpha1 spelling, no
@@ -139,17 +139,15 @@ type BackupSpec struct {
 //
 // Everything except spec.abort is frozen once the object is admitted, which is
 // what makes the status an audit of the request that ran rather than of whatever
-// the object says now. The parameters are consumed several steps apart —
-// Preflight reads spec.upgrade.image and Applying writes it, Draining reads
-// spec.restart.components and Restarting recycles them — so an edit in between
+// the object says now. The parameters are consumed several steps apart:
+// Preflight reads spec.upgrade.image and Applying writes it, and Draining reads
+// spec.restart.components before Restarting recycles them. An edit in between
 // produces an operation that checked one thing and did another.
 //
-// The rules are declared here rather than as +k8s:immutable on each field for
-// two reasons. That marker emits a second, parent-level rule for an optional
-// field, so three of them would put four rules on this type in an order
-// controller-gen does not fix. And it freezes a block whole, where what has to
-// be frozen is the block's presence and its contents together, which is what
-// these say.
+// The rules are declared here rather than as +k8s:immutable on each field.
+// controller-gen emits that marker's rules in an order that varies between runs
+// once a type carries several, and it freezes a block whole; what has to be
+// frozen is each block's presence together with its contents.
 // +kubebuilder:validation:XValidation:rule="has(self.upgrade) == has(oldSelf.upgrade) && (!has(self.upgrade) || self.upgrade == oldSelf.upgrade)",message="spec.upgrade is immutable: Preflight checked the image the operation was admitted with, and Applying writes it several steps later"
 // +kubebuilder:validation:XValidation:rule="has(self.restart) == has(oldSelf.restart) && (!has(self.restart) || self.restart == oldSelf.restart)",message="spec.restart is immutable: the drain is decided from the component list, so widening it afterward skips a drain the wider list would have required"
 // +kubebuilder:validation:XValidation:rule="has(self.backup) == has(oldSelf.backup) && (!has(self.backup) || self.backup == oldSelf.backup)",message="spec.backup is immutable: the destination is what Requesting created the FoundationDBBackup against"
@@ -162,8 +160,8 @@ type ControlPlaneOpsSpec struct {
 	// +k8s:immutable
 	ControlPlaneRef string `json:"controlPlaneRef"`
 
-	// Action is the operation to perform. Immutable: an operation that changed
-	// what it was doing halfway through would have a status describing neither.
+	// Action is the operation to perform. Immutable, so that the status describes
+	// the operation that ran.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	Action ControlPlaneOpsAction `json:"action"`

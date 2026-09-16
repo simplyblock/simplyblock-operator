@@ -162,9 +162,8 @@ func TestAnOperationWithNoTargetFails(t *testing.T) {
 	}
 }
 
-// A second operation stays Pending and asks again rather than failing. The other
-// operation will finish, and failing here would make the order two people
-// applied two objects in decide which of them runs.
+// A second operation stays Pending and asks again rather than failing, so the
+// outcome does not depend on the order two objects were applied in.
 func TestASecondOperationWaitsForTheLock(t *testing.T) {
 	cp := localControlPlane()
 	cp.Status.ActiveOpsRef = anotherOperation
@@ -204,9 +203,8 @@ func TestASecondOperationWaitsForTheLock(t *testing.T) {
 	}
 }
 
-// Deleting an operation while it holds the lock releases the lock. Without it
-// the control plane would be locked against every later operation with nothing
-// left in the cluster to say why.
+// Deleting an operation while it holds the lock releases the lock, so the
+// control plane is never left locked by an object that no longer exists.
 func TestDeletingARunningOperationReleasesTheLock(t *testing.T) {
 	ctx := context.Background()
 	cp := localControlPlane()
@@ -404,7 +402,7 @@ func TestPreflightHoldsWhileTheControlPlaneIsNotAvailable(t *testing.T) {
 
 // Applying an upgrade writes the image onto the entity rather than onto the
 // Deployment, because the entity re-applies its workloads from its own spec on
-// every pass: a patched Deployment would be reconciled back to the old image.
+// every pass.
 func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 	ctx := context.Background()
 	const next = "quay.io/simplyblock-io/simplyblock:26.3.0"

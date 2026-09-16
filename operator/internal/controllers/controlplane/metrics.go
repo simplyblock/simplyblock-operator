@@ -90,8 +90,8 @@ var (
 		prometheus.HistogramOpts{
 			Name: "simplyblock_controlplane_install_step_duration_seconds",
 			Help: "How long one step of the control plane's installation took.",
-			// An install step is minutes rather than milliseconds, so the
-			// default buckets would put every observation in the last one.
+			// An install step is minutes rather than milliseconds, which is
+			// past the default buckets.
 			Buckets: []float64{10, 30, 60, 120, 300, 600, 1200, 2400, 4800},
 		},
 		[]string{"namespace", "step"},

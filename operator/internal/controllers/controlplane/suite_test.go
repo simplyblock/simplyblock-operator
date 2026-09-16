@@ -41,10 +41,9 @@ func TestMain(m *testing.M) {
 // apiServer returns a client against a real apiserver with this repository's
 // CRDs installed, starting one on first use.
 //
-// Only v1alpha2 is exercised through it. The CRDs carry a conversion webhook
-// that envtest does not run, so a read at any other version would fail on an
-// unreachable webhook rather than on anything the test is about, and v1alpha2 is
-// the storage version, which is what makes reading it need no conversion at all.
+// Only v1alpha2 is exercised through it. It is the storage version, so reading
+// it needs no conversion, and the CRDs' conversion webhook is one envtest does
+// not run.
 func apiServer(t *testing.T) client.Client {
 	t.Helper()
 	sharedEnvOnce.Do(func() {

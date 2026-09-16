@@ -134,7 +134,5 @@ const (
 
 // appLabel is the selector key every workload here is matched by. It is `app`
 // rather than one of the recommended Kubernetes labels because that is what the
-// running deployments already carry, and a Deployment's selector is immutable:
-// changing it would make every apply fail against a live object rather than
-// update it.
+// running deployments carry, and a Deployment's selector is immutable.
 const appLabel = "app"

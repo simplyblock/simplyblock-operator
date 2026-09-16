@@ -7,9 +7,9 @@
 // Two paths leave Reconcile, and they are different in what the operator owns.
 // A managed control plane is installed, watched, and re-applied on every pass,
 // which is what puts back an object somebody deleted and corrects one somebody
-// edited — and it is why no operation exists for checking the install. An
-// external one is resolved, probed, and reported, and the operator touches
-// nothing behind its endpoint.
+// edited, and it is why no operation exists for checking the install. A remote
+// one is resolved, probed, and reported, and the operator touches nothing behind
+// its endpoint.
 //
 // design-controlplane.md §4 is the specification.
 
@@ -488,9 +488,8 @@ func nextStep(machine *statemachine.Machine[installStep]) (installStep, bool) {
 }
 
 // recordStepDuration measures how long a step took from the budget it was given
-// and the deadline left on it. It is derived rather than timestamped because the
-// deadline is already persisted and a second timestamp would be a field of the
-// API that exists to be subtracted from another one.
+// and the deadline left on it. The deadline is already persisted, so the
+// arithmetic costs the API no second timestamp.
 func (r *ControlPlaneReconciler) recordStepDuration(
 	cp *simplyblockv1alpha2.ControlPlane, step installStep,
 ) {
@@ -525,9 +524,8 @@ func (r *ControlPlaneReconciler) recordComponents(
 
 // announce emits the phase's event, and only on a transition.
 //
-// A thirty-second probe that emitted on every failure would produce two thousand
-// events a day from one outage, so what is worth an event is the arrival at a
-// phase rather than the phase itself.
+// What is worth an event is the arrival at a phase rather than the phase itself,
+// which bounds one outage to one event rather than one per thirty-second probe.
 func (r *ControlPlaneReconciler) announce(
 	cp *simplyblockv1alpha2.ControlPlane,
 	phase simplyblockv1alpha2.ControlPlanePhase,
@@ -552,8 +550,8 @@ func (r *ControlPlaneReconciler) announce(
 //
 // The refusal is the point: deleting a ControlPlane with a managed source
 // deletes a database, and the clusters, their UUIDs, and their volumes live in
-// it. It is a hold rather than a failure — removing the clusters resolves it,
-// and nothing else can.
+// it. It is a hold rather than a failure: removing the clusters resolves it, and
+// nothing else can.
 //
 // The same hold applies to a remote control plane, because a namespace whose
 // clusters have no control plane to reach is a namespace of objects nothing can
@@ -704,8 +702,8 @@ func (r *ControlPlaneReconciler) emit(
 		return
 	}
 	// The action is the reason, as every other recorder call in this operator
-	// passes it. It is a required field, and the phase would be empty on the
-	// first event an object ever emits.
+	// passes it. It is a required field, and the phase is empty on the first
+	// event an object ever emits.
 	r.Recorder.Eventf(object, nil, eventType, reason, reason, "%s", message)
 }
 
@@ -728,10 +726,10 @@ func errorsAs[T error](err error, target *T) bool {
 
 // SetupWithManager registers the reconciler.
 //
-// The workloads are watched as well as the ControlPlane itself, because a
-// component's ready count changing is what moves the phase between Available and
-// Degraded, and waiting out the steady-state interval to notice would make the
-// phase lag an outage by half a minute.
+// The workloads are watched as well as the ControlPlane itself: a component's
+// ready count changing is what moves the phase between Available and Degraded,
+// and the watch is what keeps that within the event rather than the
+// steady-state interval.
 //
 // The ControlPlane's own watch is filtered to generation changes. Every probe
 // stamps status.lastChecked, and an unfiltered watch turns that write into

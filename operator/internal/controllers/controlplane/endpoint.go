@@ -127,9 +127,8 @@ func resolveManaged(
 // the CA the spec names, or nil where it names none.
 //
 // A Secret that is named and unusable is an error rather than a fall back to the
-// system trust store. Naming a CA is a statement that the endpoint is signed by
-// it, so quietly verifying against something else would turn a misconfiguration
-// into a connection to a control plane nobody vouched for.
+// system trust store. Naming a CA states that the endpoint is signed by it, and
+// the connection is refused until that holds.
 func caBundleTransport(
 	ctx context.Context, c client.Reader, cp *simplyblockv1alpha2.ControlPlane,
 ) (*http.Client, error) {

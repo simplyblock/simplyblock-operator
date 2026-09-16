@@ -45,9 +45,9 @@ type EndpointResolver func(ctx context.Context) string
 //
 // It never returns an error. A control plane that cannot be read is one whose
 // endpoint is not known, which is the same situation as one that has not
-// published it, and both mean the caller keeps its default. Returning an error
-// instead would make every control-plane call in the operator fail while the
-// singleton was briefly unreadable.
+// published it, and both mean the caller keeps its default. Every
+// control-plane call in the operator resolves through this, so an unreadable
+// singleton is a transient miss rather than a failed call.
 func NewEndpointResolver(reader client.Reader, namespace string) EndpointResolver {
 	var (
 		mu       sync.Mutex

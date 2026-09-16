@@ -2,9 +2,9 @@
 // spec.controlPlaneRef at creation and refuses an operation naming a control
 // plane none of its actions can act on.
 //
-// Every action acts on what the operator installed — Restart recycles a
-// workload, Upgrade replaces its image, and Backup asks the FoundationDBCluster
-// the operator applied — so an operation naming a remote control plane is one
+// Every action acts on what the operator installed: Restart recycles a workload,
+// Upgrade replaces its image, and Backup asks the FoundationDBCluster the
+// operator applied. An operation naming a remote control plane is therefore one
 // that can only fail. Admission is where the check belongs, because an operation
 // that can only fail belongs in an error message on the terminal that wrote it
 // rather than in a Failed object somebody has to go and read.
@@ -55,7 +55,8 @@ type ControlPlaneOpsValidator struct {
 // the next operation starts against a half-applied one.
 //
 // It is the same guard StorageBackupOps carries, and the stronger of the two the
-// operation has: the finalizer alone does not catch a --force --grace-period=0.
+// operation has: the finalizer alone does not catch a forced delete with no
+// grace period.
 var undeletableControlPlaneSteps = map[simplyblockv1alpha2.ControlPlaneOpsStep]string{
 	simplyblockv1alpha2.ControlPlaneOpsStepRestarting: "the workloads are being recycled",
 	simplyblockv1alpha2.ControlPlaneOpsStepApplying:   "the new image is being written onto the control plane",
@@ -124,10 +125,9 @@ func (v *ControlPlaneOpsValidator) admitCreate(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	// v1alpha2 is the stored version. Reading the target at v1alpha1 would be
-	// answered only by the conversion webhook, which a fresh install does not
-	// deploy, and this guard would then deny every operation for naming a
-	// control plane the cluster has.
+	// v1alpha2 is the stored version, and it is read directly. A read at
+	// v1alpha1 is answered only by the conversion webhook, which a fresh install
+	// does not deploy.
 	var target simplyblockv1alpha2.ControlPlane
 	key := client.ObjectKey{Name: ops.Spec.ControlPlaneRef, Namespace: ops.Namespace}
 	err := v.Client.Get(ctx, key, &target)

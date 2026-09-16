@@ -272,7 +272,7 @@ func (e *ControlPlaneError) Error() string {
 // clientFor is the client this call goes out on.
 //
 // The endpoint comes from ControlPlane.status.endpoint where the object has
-// published one, which is what makes an external control plane reachable: the
+// published one, which is what makes a remote control plane reachable: the
 // client built at startup resolves SIMPLYBLOCK_WEBAPI_BASE_URL or the in-cluster
 // default, and neither is where somebody else's control plane is
 // (design-controlplane.md §3.3).

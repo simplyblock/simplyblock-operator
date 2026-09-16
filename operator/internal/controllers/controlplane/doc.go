@@ -27,7 +27,7 @@
 //   - The management API, the services beside it, their shared account, the
 //     configuration they read, and the Service the endpoint resolves to.
 //
-// What it does not apply is the observability half — Graylog, Grafana, Thanos,
+// What it does not apply is the observability half: Graylog, Grafana, Thanos,
 // the document store behind them, and the log collector. Those are gated behind
 // one chart value, none of them appears in a step of the installation machine,
 // and every one is non-essential in the phase table, so they stay where they

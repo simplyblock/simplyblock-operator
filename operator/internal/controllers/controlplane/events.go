@@ -15,9 +15,8 @@ const (
 	// will not create, a node that will not add, and a volume that will not
 	// provision are one event on one object.
 	//
-	// It is emitted on transition rather than on every probe. A thirty-second
-	// probe that emitted on every failure would produce two thousand events a
-	// day from one outage.
+	// It is emitted on transition rather than on every probe, which bounds one
+	// outage to one event rather than one every thirty seconds.
 	ControlPlaneNotReady = "ControlPlaneNotReady"
 
 	// ControlPlaneDegraded fires while every request is still being served, so
