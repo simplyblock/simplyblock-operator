@@ -593,32 +593,45 @@ func (r *StorageClusterOpsReconciler) acquireLock(
 func (r *StorageClusterOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
 ) error {
-	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}
-	err := r.Get(ctx, key, &cluster)
+
+	// The conflict is retried here rather than reported, and the compare-and-swap
+	// is what makes that safe rather than a shortcut: every attempt re-reads the
+	// cluster and checks the lock is still this operation's, so a release that
+	// lost a race to somebody taking the lock finds that on the next read and
+	// clears nothing. Swallowing the conflict without the re-read is the thing
+	// that would be wrong — it would let the caller reach a terminal phase and
+	// drop its finalizer while the cluster stayed locked by an object that no
+	// longer exists.
+	//
+	// Reporting it failed the reconcile instead, which preserved the same
+	// property by a longer route: a stack trace for an operation that had just
+	// succeeded, over a conflict with the cluster's own reconciler writing the
+	// status it writes on every pass.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cluster simplyblockv1alpha2.StorageCluster
+		if err := r.Get(ctx, key, &cluster); err != nil {
+			return err
+		}
+		if cluster.Status.ActiveOpsRef != ops.Name {
+			// Never held, already released, or taken by somebody else between
+			// two attempts. None of them is this operation's to undo.
+			return nil
+		}
+
+		patch := client.MergeFromWithOptions(cluster.DeepCopy(),
+			client.MergeFromWithOptimisticLock{})
+		cluster.Status.ActiveOpsRef = ""
+		return r.Status().Patch(ctx, &cluster, patch)
+	})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
-		return err
-	}
-	if cluster.Status.ActiveOpsRef != ops.Name {
-		return nil
+		return fmt.Errorf("release the lock on cluster %s: %w", ops.Spec.ClusterRef, err)
 	}
 
-	patch := client.MergeFromWithOptions(cluster.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	cluster.Status.ActiveOpsRef = ""
-	if err := r.Status().Patch(ctx, &cluster, patch); err != nil {
-		// A conflict is reported rather than swallowed, and that is the whole
-		// point of returning an error here. Somebody else wrote the cluster's
-		// status between the read and the write, so the lock this operation
-		// still holds was not cleared; treating that as a release lets the
-		// caller reach a terminal phase and the finalizer go, and the cluster
-		// stays locked by an object that no longer exists. Reporting it
-		// retries the read and the release on the next pass.
-		return fmt.Errorf("release the lock on cluster %s: %w", cluster.Name, err)
-	}
-	operationActiveState.WithLabelValues(cluster.Name).Set(0)
+	operationActiveState.WithLabelValues(ops.Spec.ClusterRef).Set(0)
 	return nil
 }
 
