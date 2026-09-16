@@ -22,8 +22,16 @@ const (
 	// NoManagementInterface is a group that names no interface for the storage
 	// nodes to bind their management address to.
 	NoManagementInterface = "NoManagementInterface"
-	DeviceNotFound        = "DeviceNotFound"
-	DeviceClassMismatch   = "DeviceClassMismatch"
+
+	// AwaitingNodes is the expansion waiting for a node it created to come
+	// online before it asks for the cluster to be activated.
+	AwaitingNodes = "AwaitingNodes"
+
+	// ActivationRequested is the expansion having asked, which is the last thing
+	// a document does.
+	ActivationRequested = "ActivationRequested"
+	DeviceNotFound      = "DeviceNotFound"
+	DeviceClassMismatch = "DeviceClassMismatch"
 
 	// AwaitingApproval is the one that changes how the kind is used. A valid draft
 	// nobody has approved looks identical to a controller that has not noticed it,
