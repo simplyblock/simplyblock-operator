@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	migCluster = "cluster-uuid"
-	migPool    = "pool-uuid"
-	migVolume  = "vol-uuid"
+	migCluster = "11111111-1111-1111-1111-111111111111"
+	migPool    = "22222222-2222-2222-2222-222222222222"
+	migVolume  = "33333333-3333-3333-3333-333333333333"
 	migPVName  = "pv-mig"
 )
 
@@ -69,7 +69,7 @@ func newMigrationValidator(t *testing.T, apiURL string) *VolumeMigrationValidato
 		ObjectMeta: metav1.ObjectMeta{Name: migPVName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
-				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: migCluster + ":" + migPool + ":" + migVolume},
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: "csi.simplyblock.io", VolumeHandle: migCluster + ":" + migPool + ":" + migVolume},
 			},
 		},
 	}

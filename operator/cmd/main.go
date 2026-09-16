@@ -58,6 +58,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
+	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
@@ -727,7 +728,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
 		os.Exit(1)
 	}
-	if err := (&controller.VolumeGroupSnapshotOpsReconciler{
+	if err := (&consistencygroupcontrollers.VolumeGroupSnapshotOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("volumegroupsnapshotops-controller"),

@@ -3,7 +3,7 @@
 // PersistentVolumeClaim per member snapshot of the target VolumeGroupSnapshot's
 // generation and waits for every claim to bind. The restore composes the
 // per-member dataSource path. There is no new CSI verb and no backend call.
-package controller
+package consistencygroup
 
 import (
 	"context"

@@ -25,9 +25,9 @@ const (
 	pinClusterName = "sb-cluster"
 	pinPVCName     = "data-pvc"
 	pinPVName      = "pv-data"
-	pinCluster     = "cluster-uuid"
-	pinPool        = "pool-uuid"
-	pinVolume      = "vol-uuid"
+	pinCluster     = "55555555-5555-5555-5555-555555555555"
+	pinPool        = "66666666-6666-6666-6666-666666666666"
+	pinVolume      = "77777777-7777-7777-7777-777777777777"
 	pinNodeA       = "node-a"
 	pinNodeB       = "node-b"
 )

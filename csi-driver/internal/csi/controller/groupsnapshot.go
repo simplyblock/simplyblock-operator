@@ -9,11 +9,11 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,32 +24,10 @@ import (
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
-// A group snapshot id is {clusterID}:{poolID}:{groupUUID}:{groupSeq}. It embeds
-// the generation identity the design names ({group_uuid}:{group_seq}) and adds
-// the cluster and pool so Delete and Get resolve the group without re-reading a
-// source volume, which a delete-after-group-gone no longer has.
-func makeGroupSnapshotID(clusterID, poolID, groupID string, seq int) string {
-	return fmt.Sprintf("%s:%s:%s:%d", clusterID, poolID, lastPathSegment(groupID), seq)
-}
-
-type groupSnapshotID struct {
-	clusterID string
-	poolID    string
-	groupUUID string
-	seq       int
-}
-
-func parseGroupSnapshotID(id string) (groupSnapshotID, error) {
-	parts := strings.Split(id, ":")
-	if len(parts) != 4 {
-		return groupSnapshotID{}, fmt.Errorf("invalid group snapshot id format: %s", id)
-	}
-	seq, err := strconv.Atoi(parts[3])
-	if err != nil {
-		return groupSnapshotID{}, fmt.Errorf("invalid generation in group snapshot id %q: %w", id, err)
-	}
-	return groupSnapshotID{clusterID: parts[0], poolID: parts[1], groupUUID: parts[2], seq: seq}, nil
-}
+// A group snapshot id is {clusterID}:{poolID}:{groupUUID}:{groupSeq}; its
+// grammar lives in atlas (lvol.GroupSnapshotHandle) beside the volume handle,
+// because both are read back out of Kubernetes objects by more than one
+// consumer.
 
 func lastPathSegment(id string) string {
 	if i := strings.LastIndex(id, "/"); i >= 0 {
@@ -154,19 +132,19 @@ func (cs *Server) DeleteVolumeGroupSnapshot(
 	if gsID == "" {
 		return nil, status.Error(codes.InvalidArgument, "group snapshot id is required")
 	}
-	parsed, err := parseGroupSnapshotID(gsID)
-	if err != nil {
+	parsed, ok := lvol.ParseGroupSnapshotHandle(gsID)
+	if !ok {
 		// An unparsable id names nothing to delete; treat as already gone.
-		klog.Warningf("DeleteVolumeGroupSnapshot: %v, treating as deleted", err)
+		klog.Warningf("DeleteVolumeGroupSnapshot: invalid group snapshot id %q, treating as deleted", gsID)
 		return &csi.DeleteVolumeGroupSnapshotResponse{}, nil
 	}
-	klog.Infof("DeleteVolumeGroupSnapshot: group=%s gen=%d", parsed.groupUUID, parsed.seq)
+	klog.Infof("DeleteVolumeGroupSnapshot: group=%s gen=%d", parsed.GroupID, parsed.Seq)
 
-	sbclient, err := clusters.Client(ctx, parsed.clusterID, parsed.poolID)
+	sbclient, err := clusters.Client(ctx, parsed.ClusterID, parsed.PoolRef)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	if err := sbclient.DeleteConsistencyGroupGeneration(ctx, parsed.groupUUID, parsed.seq); err != nil {
+	if err := sbclient.DeleteConsistencyGroupGeneration(ctx, parsed.GroupID, parsed.Seq); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete group generation: %v", err)
 	}
 	return &csi.DeleteVolumeGroupSnapshotResponse{}, nil
@@ -181,15 +159,15 @@ func (cs *Server) GetVolumeGroupSnapshot(
 	if gsID == "" {
 		return nil, status.Error(codes.InvalidArgument, "group snapshot id is required")
 	}
-	parsed, err := parseGroupSnapshotID(gsID)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	parsed, ok := lvol.ParseGroupSnapshotHandle(gsID)
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid group snapshot id %q", gsID)
 	}
-	sbclient, err := clusters.Client(ctx, parsed.clusterID, parsed.poolID)
+	sbclient, err := clusters.Client(ctx, parsed.ClusterID, parsed.PoolRef)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	gen, err := sbclient.GetConsistencyGroupGeneration(ctx, parsed.groupUUID, parsed.seq)
+	gen, err := sbclient.GetConsistencyGroupGeneration(ctx, parsed.GroupID, parsed.Seq)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to read group generation: %v", err)
 	}
@@ -197,11 +175,11 @@ func (cs *Server) GetVolumeGroupSnapshot(
 	// Get carries no original selector.
 	handleByLvol := make(map[string]string, len(gen.Members))
 	for _, m := range gen.Members {
-		handleByLvol[m.LvolID] = fmt.Sprintf("%s:%s:%s", parsed.clusterID, parsed.poolID, m.LvolID)
+		handleByLvol[m.LvolID] = fmt.Sprintf("%s:%s:%s", parsed.ClusterID, parsed.PoolRef, m.LvolID)
 	}
-	groupRef := fmt.Sprintf("%s/%s", parsed.clusterID, parsed.groupUUID)
+	groupRef := fmt.Sprintf("%s/%s", parsed.ClusterID, parsed.GroupID)
 	return &csi.GetVolumeGroupSnapshotResponse{
-		GroupSnapshot: buildVolumeGroupSnapshot(parsed.clusterID, parsed.poolID, groupRef, gen, handleByLvol),
+		GroupSnapshot: buildVolumeGroupSnapshot(parsed.ClusterID, parsed.PoolRef, groupRef, gen, handleByLvol),
 	}, nil
 }
 
@@ -213,7 +191,7 @@ func buildVolumeGroupSnapshot(
 	gen *controlplane.ConsistencyGroupGeneration,
 	handleByLvol map[string]string,
 ) *csi.VolumeGroupSnapshot {
-	groupSnapshotID := makeGroupSnapshotID(clusterID, poolID, groupID, gen.GroupSeq)
+	groupSnapshotID := lvol.NewGroupSnapshotHandle(clusterID, poolID, lastPathSegment(groupID), gen.GroupSeq).String()
 	creationTime := timestamppb.New(time.Unix(gen.CreatedAt, 0))
 
 	snapshots := make([]*csi.Snapshot, 0, len(gen.Members))

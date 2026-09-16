@@ -2,6 +2,8 @@ package webhook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +21,16 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-const vgsCluster = "cluster-uuid"
+const vgsCluster = "44444444-4444-4444-4444-444444444444"
+
+// vgsUUID maps a short fixture id to a deterministic canonical UUID, since
+// the handle grammar (atlas lvol.ParseHandle) accepts only canonical UUIDs
+// for the cluster and volume segments.
+func vgsUUID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	h := hex.EncodeToString(sum[:16])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
 
 // vgsPVC describes a test PVC: its consistency-group label value ("" for none),
 // its backing volume UUID, and whether it is bound.
@@ -49,7 +60,7 @@ func (b vgsBackend) server(t *testing.T) string {
 			if strings.HasSuffix(r.URL.Path, "/members") {
 				rows := make([]map[string]any, 0, len(b.members))
 				for _, m := range b.members {
-					rows = append(rows, map[string]any{"lvol_id": m})
+					rows = append(rows, map[string]any{"lvol_id": vgsUUID(m)})
 				}
 				_ = json.NewEncoder(w).Encode(rows)
 				return
@@ -86,7 +97,8 @@ func newVGSValidator(t *testing.T, pvcs []vgsPVC, apiURL string) *VolumeGroupSna
 				ObjectMeta: metav1.ObjectMeta{Name: pvName},
 				Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
 					CSI: &corev1.CSIPersistentVolumeSource{
-						VolumeHandle: vgsCluster + ":pool:" + p.volumeID,
+						Driver:       "csi.simplyblock.io",
+						VolumeHandle: vgsCluster + ":pool:" + vgsUUID(p.volumeID),
 					},
 				}},
 			})

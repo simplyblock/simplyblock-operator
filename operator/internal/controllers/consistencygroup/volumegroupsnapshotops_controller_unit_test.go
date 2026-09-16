@@ -2,7 +2,7 @@
 // test plan U-25 … U-32): claim derivation, group-label stamping, the
 // incomplete-generation gate, collision handling, readiness waiting, and the
 // terminal contract, against a fake client with no backend involved.
-package controller
+package consistencygroup
 
 import (
 	"context"

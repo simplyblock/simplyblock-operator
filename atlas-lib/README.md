@@ -91,6 +91,8 @@ atlas/
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
+│   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
 ├── kube/                   lvol ↔ PV / PVC / VolumeAttachment mapping
