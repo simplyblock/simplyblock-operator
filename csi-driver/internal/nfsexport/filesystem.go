@@ -99,3 +99,22 @@ func run(ctx context.Context, name string, args []string) error {
 	}
 	return nil
 }
+
+// HostMounter is what the node plugin mounts a pNFS export with. It is the
+// same host filesystem the metadata server assembles through, narrowed to what
+// a client does: mount, unmount, and ask whether a path is already a mount.
+//
+// A client needs the host for a reason of its own. mount(8) hands an NFS mount
+// to /sbin/mount.nfs, a helper from nfs-utils that this image does not carry
+// and should not -- a host that may run a ReadWriteMany pod needs nfs-utils
+// anyway, and two copies of it would be two things to keep in step. Mounting
+// there also puts the mount directly where kubelet looks, rather than relying
+// on it propagating out of the container.
+type HostMounter interface {
+	Mount(ctx context.Context, source, target, fsType string, options []string) error
+	Unmount(ctx context.Context, target string) error
+	IsMountPoint(ctx context.Context, path string) (bool, error)
+}
+
+// HostFilesystem returns that mounter.
+func HostFilesystem() HostMounter { return hostFilesystem{} }

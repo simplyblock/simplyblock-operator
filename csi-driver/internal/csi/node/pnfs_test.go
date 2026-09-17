@@ -24,7 +24,7 @@ type fakeNFSMounter struct {
 	mountErr  error
 }
 
-func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) error {
+func (m *fakeNFSMounter) Mount(_ context.Context, source, target, fsType string, options []string) error {
 	if m.mountErr != nil {
 		return m.mountErr
 	}
@@ -33,13 +33,15 @@ func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) 
 	return nil
 }
 
-func (m *fakeNFSMounter) Unmount(target string) error {
+func (m *fakeNFSMounter) Unmount(_ context.Context, target string) error {
 	m.unmounts = append(m.unmounts, target)
 	m.isMounted = false
 	return nil
 }
 
-func (m *fakeNFSMounter) IsMounted(string) (bool, error) { return m.isMounted, nil }
+func (m *fakeNFSMounter) IsMountPoint(context.Context, string) (bool, error) {
+	return m.isMounted, nil
+}
 
 // The kernel builds its lookup path from the designator as plain lowercase hex.
 // Both spellings the NGUID arrives in have to reduce to that one.

@@ -138,20 +138,20 @@ func mountOptions(extra string) []string {
 	return opts
 }
 
-// NFSMounter is the mounting a pNFS stage needs. It is separate from the block
-// mounter because nothing here formats: the filesystem was made by the MDS, and
-// a client that could format one would be a client that could destroy it.
-type NFSMounter interface {
-	Mount(source, target, fsType string, options []string) error
-	Unmount(target string) error
-	IsMounted(target string) (bool, error)
-}
-
-// stagePNFS attaches the export at the staging path. The namespace is expected
-// to be connected already, by the same path a block volume uses.
+// stagePNFS attaches the export at the staging path.
+//
+// The mounter is the host's, not the driver's own. mount(8) hands an NFS mount
+// to /sbin/mount.nfs, a helper from nfs-utils that this image does not carry --
+// and a host that may run a ReadWriteMany pod needs nfs-utils anyway, so
+// shipping a second copy would be two things to keep in step. Mounting on the
+// host also puts the mount straight where kubelet looks instead of relying on
+// it propagating out of the container.
+//
+// Nothing here formats. The filesystem was made by the metadata server, and a
+// client that could format one would be a client that could destroy it.
 func stagePNFS(
-	_ context.Context,
-	mounter NFSMounter,
+	ctx context.Context,
+	mounter nfsexport.HostMounter,
 	stagingPath, serviceAddress, exportPath, nguid, devicePath, extraOptions string,
 ) error {
 	if _, err := ensureDeviceAlias(nguid, devicePath); err != nil {
@@ -161,31 +161,36 @@ func stagePNFS(
 		// feature exists for is worse than a refused one.
 		return err
 	}
-	mounted, err := mounter.IsMounted(stagingPath)
+	mounted, err := mounter.IsMountPoint(ctx, stagingPath)
 	if err != nil {
 		return fmt.Errorf("pnfs: checking %s: %w", stagingPath, err)
 	}
 	if mounted {
 		return nil
 	}
+	// Made in this container, which is the host's directory: the staging tree
+	// is a bidirectionally propagated hostPath, so the host mount below has
+	// somewhere to land.
 	if err := os.MkdirAll(stagingPath, 0o750); err != nil {
 		return fmt.Errorf("pnfs: creating %s: %w", stagingPath, err)
 	}
 	source := nfsSource(serviceAddress, exportPath)
-	if err := mounter.Mount(source, stagingPath, "nfs", mountOptions(extraOptions)); err != nil {
+	if err := mounter.Mount(ctx, source, stagingPath, "nfs", mountOptions(extraOptions)); err != nil {
 		return fmt.Errorf("pnfs: mounting %s at %s: %w", source, stagingPath, err)
 	}
 	return nil
 }
 
 // unstagePNFS detaches the export and drops the alias.
-func unstagePNFS(_ context.Context, mounter NFSMounter, stagingPath, nguid string) error {
-	mounted, err := mounter.IsMounted(stagingPath)
+func unstagePNFS(
+	ctx context.Context, mounter nfsexport.HostMounter, stagingPath, nguid string,
+) error {
+	mounted, err := mounter.IsMountPoint(ctx, stagingPath)
 	if err != nil {
 		return fmt.Errorf("pnfs: checking %s: %w", stagingPath, err)
 	}
 	if mounted {
-		if err := mounter.Unmount(stagingPath); err != nil {
+		if err := mounter.Unmount(ctx, stagingPath); err != nil {
 			return fmt.Errorf("pnfs: unmounting %s: %w", stagingPath, err)
 		}
 	}
@@ -263,7 +268,7 @@ func (ns *Server) stagePNFSVolume(
 		return err
 	}
 
-	return stagePNFS(ctx, ns.mounter, stagingTargetPath,
+	return stagePNFS(ctx, nfsexport.HostFilesystem(), stagingTargetPath,
 		service, exportPath, nguid, devicePath, volumeContext[ctxMountOptions])
 }
 
@@ -340,7 +345,7 @@ func (ns *Server) unstagePNFSVolume(
 	if device, err := storage.Local(nvme.SysfsConfig{}).DeviceByUUID(ctx, spec.VolumeUUID); err == nil {
 		nguid = device.Namespace.NGUID
 	}
-	if err := unstagePNFS(ctx, ns.mounter, stagingTargetPath, nguid); err != nil {
+	if err := unstagePNFS(ctx, nfsexport.HostFilesystem(), stagingTargetPath, nguid); err != nil {
 		return err
 	}
 	return ns.detachBacking(ctx, spec)

@@ -65,3 +65,30 @@ func TestMountPointIsCheckedOnTheHost(t *testing.T) {
 		t.Errorf("check = %s %v, want the host's mountpoint", name, args)
 	}
 }
+
+// A client mounts NFS, and mount(8) hands that to /sbin/mount.nfs -- a helper
+// from nfs-utils, which this image does not carry and should not. The host has
+// it, because a host that may run a ReadWriteMany pod needs nfs-utils anyway.
+//
+// So the client's mount goes to the host for the same reason the server's does,
+// and lands directly where kubelet looks rather than relying on propagation out
+// of the container.
+func TestNFSMountUsesTheHostsHelper(t *testing.T) {
+	fs := HostFilesystem()
+	name, args := mountCommand(
+		"192.168.10.83:/mnt/team-a-shared", "/var/lib/kubelet/staging", "nfs", []string{"vers=4.1"})
+
+	if fs == nil {
+		t.Fatal("no host filesystem is exposed for the node plugin to mount with")
+	}
+	joined := strings.Join(args, " ")
+	if name != "nsenter" {
+		t.Fatalf("the NFS mount runs as %q, want the host's", name)
+	}
+	if !strings.Contains(joined, "-- mount -t nfs -o vers=4.1") {
+		t.Errorf("args = %v, want the host's mount with the version option", args)
+	}
+	if !strings.HasSuffix(joined, "192.168.10.83:/mnt/team-a-shared /var/lib/kubelet/staging") {
+		t.Errorf("args = %v, want source then target last", args)
+	}
+}
