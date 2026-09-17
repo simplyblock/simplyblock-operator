@@ -123,6 +123,23 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 	}
 }
 
+// initialDeadline is the budget of the step every operation is born in. A
+// machine is already in its initial state when it is built, so that state's
+// OnEnter never runs and the graph's deadline for it is never set. Setting it
+// explicitly is what stops the first step from being the one step that cannot
+// time out.
+const initialDeadline = validatingDeadline
+
+// stepBudgets is what each step's deadline was set from, which is the other
+// half of the arithmetic that measures how long a step took: the deadline is in
+// status and the start is not, so the start is the deadline less the budget.
+// Migrating is absent because its budget is not a constant, and copyDeadline is
+// what answers for it.
+var stepBudgets = map[step]time.Duration{
+	stepValidating: validatingDeadline,
+	stepVerifying:  verifyingDeadline,
+}
+
 // UnabortableSteps are the declared steps an abort cannot be honored from,
 // sorted.
 //

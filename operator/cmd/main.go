@@ -62,6 +62,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
+	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -620,6 +621,18 @@ func main() {
 		Recorder: mgr.GetEventRecorder("backupimport-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
+		os.Exit(1)
+	}
+	// The volume band. It shares the backup band's control-plane client because
+	// there is one control plane and one endpoint; what differs is which of its
+	// endpoints each band calls.
+	if err := (&volumecontrollers.PersistentVolumeOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeMigrationReconciler{

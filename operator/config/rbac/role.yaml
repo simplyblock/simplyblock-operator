@@ -55,6 +55,7 @@ rules:
   - create
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -256,6 +257,7 @@ rules:
   - controlplaneops
   - controlplanes
   - operatorops
+  - persistentvolumeops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -290,6 +292,7 @@ rules:
   - controlplaneops/finalizers
   - controlplanes/finalizers
   - operatorops/finalizers
+  - persistentvolumeops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -317,6 +320,7 @@ rules:
   - controlplaneops/status
   - controlplanes/status
   - operatorops/status
+  - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
