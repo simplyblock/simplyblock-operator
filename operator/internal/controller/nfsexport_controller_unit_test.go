@@ -32,6 +32,15 @@ const (
 	testExportName = "nfsexp-7b41c0e2a9"
 )
 
+// testMDSHost and testOtherHost are the two storage nodes these tests bind
+// exports to. They are constants because the binding is the thing under test:
+// a typo in one of eleven literals would assert against a node that does not
+// exist, and the assertion would pass.
+const (
+	testMDSHost   = "sn-worker-1-0"
+	testOtherHost = "sn-worker-2-0"
+)
+
 // fakeAssembler records what it was asked to do and can be made to fail or to
 // report a node unreachable.
 type fakeAssembler struct {
@@ -134,7 +143,7 @@ func loadExport(t *testing.T, cl client.Client) *simplyblockv1alpha2.NFSExport {
 // reconcile dying mid-assembly finds it rather than picking a second host.
 func TestPendingBindsAnEligibleHost(t *testing.T) {
 	asm := &fakeAssembler{}
-	r, cl := newExportReconciler(t, asm, testExport(nil), testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, testExport(nil), testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 
@@ -142,7 +151,7 @@ func TestPendingBindsAnEligibleHost(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseAssembling {
 		t.Errorf("phase = %q, want Assembling", got.Status.Phase)
 	}
-	if got.Status.StorageNodeRef != "sn-worker-1-0" {
+	if got.Status.StorageNodeRef != testMDSHost {
 		t.Errorf("storageNodeRef = %q, want sn-worker-1-0", got.Status.StorageNodeRef)
 	}
 	if len(asm.created) != 0 {
@@ -157,10 +166,10 @@ func TestPendingBindsAnEligibleHost(t *testing.T) {
 // refusal that emits nothing is indistinguishable from a reconcile that never
 // ran.
 func TestPendingWaitsWhenNoHostIsEligible(t *testing.T) {
-	offline := testNode("sn-worker-1-0", func(n *simplyblockv1alpha1.StorageNode) {
-		n.Status.Status = "offline"
+	offline := testNode(testMDSHost, func(n *simplyblockv1alpha1.StorageNode) {
+		n.Status.Status = nodeStatusOffline
 	})
-	busy := testNode("sn-worker-2-0", func(n *simplyblockv1alpha1.StorageNode) {
+	busy := testNode(testOtherHost, func(n *simplyblockv1alpha1.StorageNode) {
 		n.Status.ActiveOpsRef = "some-ops"
 	})
 	r, cl := newExportReconciler(t, &fakeAssembler{}, testExport(nil), offline, busy)
@@ -184,9 +193,9 @@ func TestAssemblingReachesReady(t *testing.T) {
 	asm := &fakeAssembler{}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 
@@ -194,7 +203,7 @@ func TestAssemblingReachesReady(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
 		t.Errorf("phase = %q, want Ready", got.Status.Phase)
 	}
-	if len(asm.created) != 1 || asm.created[0] != "sn-worker-1-0" {
+	if len(asm.created) != 1 || asm.created[0] != testMDSHost {
 		t.Errorf("CreateExport calls = %v, want one for sn-worker-1-0", asm.created)
 	}
 	if got.Status.PhaseDeadline != nil {
@@ -216,9 +225,9 @@ func TestAssemblingWaitsForAnUnreachableNode(t *testing.T) {
 	asm := &fakeAssembler{noSessions: true}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	res := reconcileExport(t, r)
 
@@ -239,10 +248,10 @@ func TestAssemblingGivesUpAtTheDeadline(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 		e.Status.PhaseDeadline = &past
 	})
-	r, cl := newExportReconciler(t, &fakeAssembler{}, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, &fakeAssembler{}, export, testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 
@@ -262,20 +271,20 @@ func TestPhaseSurvivesARestart(t *testing.T) {
 	asm := &fakeAssembler{}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-2-0"
+		e.Status.StorageNodeRef = testOtherHost
 	})
 	// A different node is eligible. If the machine restarted at Pending it would
 	// select from the whole set and could pick this one instead.
 	r, cl := newExportReconciler(t, asm, export,
-		testNode("sn-worker-1-0", nil), testNode("sn-worker-2-0", nil))
+		testNode(testMDSHost, nil), testNode(testOtherHost, nil))
 
 	reconcileExport(t, r)
 
 	got := loadExport(t, cl)
-	if got.Status.StorageNodeRef != "sn-worker-2-0" {
+	if got.Status.StorageNodeRef != testOtherHost {
 		t.Errorf("binding moved to %q on restart; it must not", got.Status.StorageNodeRef)
 	}
-	if len(asm.created) != 1 || asm.created[0] != "sn-worker-2-0" {
+	if len(asm.created) != 1 || asm.created[0] != testOtherHost {
 		t.Errorf("assembled on %v, want the already-bound sn-worker-2-0", asm.created)
 	}
 }
@@ -288,11 +297,11 @@ func TestDegradedIsTerminal(t *testing.T) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseDegraded
 		e.Status.Message = "assembly timed out"
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	res := reconcileExport(t, r)
 
-	if res.Requeue || res.RequeueAfter != 0 {
+	if res.RequeueAfter != 0 {
 		t.Errorf("Degraded requeued: %+v", res)
 	}
 	if len(asm.created) != 0 {
@@ -312,13 +321,13 @@ func TestDeleteTearsDownThenReleases(t *testing.T) {
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.DeletionTimestamp = &now
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 
-	if len(asm.deleted) != 1 || asm.deleted[0] != "sn-worker-1-0" {
+	if len(asm.deleted) != 1 || asm.deleted[0] != testMDSHost {
 		t.Errorf("DeleteExport calls = %v, want one for sn-worker-1-0", asm.deleted)
 	}
 	var e simplyblockv1alpha2.NFSExport
@@ -340,9 +349,9 @@ func TestDeleteWaitsForAnUnreachableNode(t *testing.T) {
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.DeletionTimestamp = &now
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	res := reconcileExport(t, r)
 
@@ -364,9 +373,9 @@ func TestAssemblyErrorIsRetried(t *testing.T) {
 	asm := &fakeAssembler{createErr: errors.New("mount: device busy")}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
@@ -423,9 +432,9 @@ func TestAssemblingRecordsTheObservedNGUID(t *testing.T) {
 	asm := &fakeAssembler{nguid: observed}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 
@@ -443,10 +452,10 @@ func TestAssemblingKeepsAKnownNGUID(t *testing.T) {
 	asm := &fakeAssembler{}
 	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
 		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
-		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.StorageNodeRef = testMDSHost
 		e.Status.NGUID = known
 	})
-	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
 
 	reconcileExport(t, r)
 

@@ -67,6 +67,11 @@ const (
 	// Assembling before the phase is given up on. Assembly is a filesystem
 	// make and a mount on one host; minutes are generous.
 	nfsExportAssembleDeadline = 5 * time.Minute
+	// nfsExportFreshCopyRequeue comes back with a re-read object after a write
+	// that bumped resourceVersion. Nothing is being waited on, so it is as
+	// short as a named interval sensibly gets: the next pass exists only so
+	// that status is not written over a copy this one already made stale.
+	nfsExportFreshCopyRequeue = time.Second
 )
 
 // ExportAssembler is the host-side half of an export: the operations this
@@ -142,7 +147,7 @@ func (r *NFSExportReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	} else if added {
 		// The finalizer write bumped resourceVersion; come back with a fresh
 		// copy rather than writing status over a stale one.
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: nfsExportFreshCopyRequeue}, nil
 	}
 
 	machine, err := r.restore(ctx, &export)
@@ -161,7 +166,7 @@ func (r *NFSExportReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case phaseAssembling:
 		return r.reconcileAssembling(ctx, &export, machine, logger)
 	case phaseReady:
-		return r.reconcileReady(ctx, &export)
+		return ctrl.Result{}, r.reconcileReady(ctx, &export)
 	case phaseFailingOver:
 		// Failover is the next milestone. Until it exists, an export that
 		// somehow reached the phase is parked rather than half-driven.
@@ -217,7 +222,7 @@ func (r *NFSExportReconciler) reconcilePending(
 		return ctrl.Result{}, err
 	}
 	r.event(export, corev1.EventTypeNormal, "MDSSelected", fmt.Sprintf("bound to %s", node))
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: nfsExportFreshCopyRequeue}, nil
 }
 
 // reconcileAssembling asks the bound host to build the export.
@@ -283,11 +288,11 @@ func (r *NFSExportReconciler) reconcileAssembling(
 func (r *NFSExportReconciler) reconcileReady(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
-) (ctrl.Result, error) {
+) error {
 	if export.Status.ObservedGeneration == export.Generation {
-		return ctrl.Result{}, nil
+		return nil
 	}
-	return ctrl.Result{}, r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {})
+	return r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {})
 }
 
 // reconcileDelete tears the export down and drops the finalizer. The finalizer

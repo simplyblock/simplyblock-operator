@@ -43,6 +43,16 @@ const (
 	// rotates it and the agent re-reads the file on every attempt, so this is a
 	// bound on replay rather than on the link's lifetime.
 	linkTokenExpirySeconds = 3600
+
+	// defaultLinkName is the CRD's default for both spec.link.serviceName and
+	// spec.link.audience. They are one string deliberately: the audience a
+	// token is bound to is the operator the plugin dials, and two defaults that
+	// could drift apart would be a token the operator refuses.
+	defaultLinkName = "simplyblock-csi-link"
+
+	// defaultCABundleKey is the CRD's default for spec.link.caKey, and the
+	// conventional name of a CA bundle in a ConfigMap or a Secret.
+	defaultCABundleKey = "ca.crt"
 )
 
 // linkEnabled applies the CRD's default, mirroring tlsEnabled: code reading
@@ -58,7 +68,7 @@ func linkServiceName(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	if d.Spec.Link.ServiceName != "" {
 		return d.Spec.Link.ServiceName
 	}
-	return "simplyblock-csi-link"
+	return defaultLinkName
 }
 
 func linkPort(d *simplyblockv1alpha2.SimplyblockDriver) int32 {
@@ -72,21 +82,21 @@ func linkCAConfigMap(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	if d.Spec.Link.CAConfigMap != "" {
 		return d.Spec.Link.CAConfigMap
 	}
-	return "simplyblock-csi-link-ca"
+	return defaultLinkName + "-ca"
 }
 
 func linkCAKey(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	if d.Spec.Link.CAKey != "" {
 		return d.Spec.Link.CAKey
 	}
-	return "ca.crt"
+	return defaultCABundleKey
 }
 
 func linkAudience(d *simplyblockv1alpha2.SimplyblockDriver) string {
 	if d.Spec.Link.Audience != "" {
 		return d.Spec.Link.Audience
 	}
-	return "simplyblock-csi-link"
+	return defaultLinkName
 }
 
 // linkServerName is the name the plugins verify against the operator's
