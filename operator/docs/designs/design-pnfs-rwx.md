@@ -108,6 +108,22 @@ is enforceable rather than aspirational.
 through it, on stock kube-proxy. The eBPF kube-proxy-replacement case in §13.3
 remains untested.
 
+**Turning pNFS on deadlocked an adopted driver, and the fix was not in this
+design.** `SimplyblockDriver`'s `adoptionRefusal` runs on every reconcile rather
+than only the first, so `spec.link.enableLink` set on a deployment whose node
+plugin had no `--link` was refused with "the handover stops until the running
+deployment and the spec agree" -- and the apply being refused was the only thing
+that could ever make them agree. Reproduced on the .81 cluster with
+`status.origin: Adopted`, which is every cluster upgraded from a chart install.
+
+Writing that refusal is what exposed the same shape in `spec.tls`, which had
+carried it since the field was added and had never been exercised: turning TLS on
+after adoption was refused for the identical reason. Both are fixed by ending the
+comparison at the handover -- before it, a disagreement means the spec does not
+describe the running deployment yet, and after it, the objects are the operator's
+and the same disagreement is an administrator asking for a change. `driverName`
+stays unconditional, because it is immutable and so can never be that change.
+
 **New: persistent-reservation keys are never released.** Three mount, unmount and
 disconnect cycles held steady at two registrants, so there is no per-mount leak. But
 a client that detaches entirely leaves its key registered forever, and PTPL makes
