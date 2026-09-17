@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -780,5 +781,29 @@ func TestARunRefusedDeviceByDeviceSaysWhichReasonMatters(t *testing.T) {
 	// reach is one nobody finishes reading.
 	if strings.Contains(ops.Status.Message, "whole disk") {
 		t.Errorf("the failure reports devices that were never candidates: %s", ops.Status.Message)
+	}
+}
+
+// A step that outlives its deadline says what outliving it means for this run,
+// not only that it happened. Probing's partial reports survive in ConfigMaps
+// labeled for the run, and a failure message that did not say so would leave a
+// reviewer with the evidence in the cluster and no way to know it is there.
+func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
+	ops := discoverRun(nil)
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
+	ops.Status.Workers = []string{"worker-1"}
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+
+	r := newRunner(t, ops, worker("worker-1"))
+	_, got := r.step()
+
+	if got.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed on a step past its deadline", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "ConfigMaps") {
+		t.Errorf("the failure does not say where the reports that did arrive are: %q",
+			got.Status.Message)
 	}
 }

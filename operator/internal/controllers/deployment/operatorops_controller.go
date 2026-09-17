@@ -26,6 +26,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -45,6 +46,7 @@ import (
 
 	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
 	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
@@ -69,6 +71,33 @@ const (
 	// when the caller named nothing.
 	configNamePrefix  = "discovered-"
 	clusterNameSuffix = "-cluster"
+)
+
+// The reasons a discovery run emits. They are constants rather than literals at
+// the call site because a reason is an API: it is what somebody greps a cluster's
+// events for and what an alert matches on, and a literal typed twice is two
+// reasons nobody can tell apart from the outside.
+const (
+	// The run's own lifecycle.
+	OperationStarted   = "OperationStarted"
+	OperationSucceeded = "OperationSucceeded"
+	OperationAborted   = "OperationAborted"
+	OperationFailed    = "OperationFailed"
+
+	// What Inspecting concluded about a worker, and about the cluster.
+	WorkerDeclined            = "WorkerDeclined"
+	ControlPlaneNodeIncluded  = "ControlPlaneNodeIncluded"
+	EnvironmentPartiallyRead  = "EnvironmentPartiallyRead"
+	DiscoveryStepDeadlineGone = "StepDeadlineExceeded"
+
+	// What Probing found.
+	DeviceInspectionFailed = "DeviceInspectionFailed"
+	ReportUnreadable       = "ReportUnreadable"
+
+	// What Writing produced, and what it left out.
+	ConfigWritten  = "ConfigWritten"
+	ConfigExists   = "ConfigExists"
+	DeviceDeclined = "DeviceDeclined"
 )
 
 // OperatorOpsReconciler runs operations against the operator itself.
@@ -149,36 +178,140 @@ func (r *OperatorOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	log.Info("advancing discovery", "step", ops.Status.Step.State, "phase", ops.Status.Phase)
+	return r.advance(ctx, &ops)
+}
 
-	switch simplyblockv1alpha2.OperatorOpsStep(ops.Status.Step.State) {
-	case "":
-		return r.startInspecting(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepInspecting:
-		return r.inspect(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepProbing:
-		return r.probe(ctx, &ops)
-	case simplyblockv1alpha2.OperatorOpsStepWriting:
-		return r.write(ctx, &ops)
+// advance runs the graph of the run's action forward by at most one step.
+//
+// The graph decides the order and the deadlines, and this decides nothing: the
+// step to perform is where the machine is, the step that follows is the edge out
+// of it, and a step that is not finished requeues against the same position.
+// That is the whole of what replacing the switch bought — the ordering is
+// declared in one place rather than spread across the returns of three methods.
+func (r *OperatorOpsReconciler) advance(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps,
+) (ctrl.Result, error) {
+	graph, declared := operatorOpsGraphs()[statemachine.Action(ops.Spec.Action)]
+	if !declared {
+		// Admission's enum refuses an unknown action, so reaching here means an
+		// older CRD served the object or the schema was bypassed.
+		return r.fail(ctx, ops, fmt.Sprintf("action %q declares no state graph", ops.Spec.Action))
+	}
+
+	machine, err := statemachine.NewFromSnapshot(ctx, graph,
+		statemachine.FromKube[discoveryStep](ops.Status.Step))
+	if err != nil {
+		// An unrecognized step is a downgrade, a hand-edited object, or a rename
+		// that shipped without a conversion, and none of them resolve by
+		// reconciling again.
+		return r.fail(ctx, ops, fmt.Sprintf("the run cannot be resumed: %v", err))
+	}
+	defer machine.Close()
+
+	// A machine is born already in its initial state, so that state's entry hook
+	// never runs and no deadline is set for it. Recording the birth here is what
+	// stops the first step being the one step that cannot time out, and it is
+	// also the run's own start: a crash between this write and the work is
+	// visible as a run that started rather than as one that never did.
+	if ops.Status.Step.State == "" {
+		return r.begin(ctx, ops, machine.CurrentState())
+	}
+
+	current := machine.CurrentState()
+	if machine.TimeoutReached() {
+		expired := discoveryTimeoutMessage(current)
+		r.event(ops, corev1.EventTypeWarning, DiscoveryStepDeadlineGone, expired)
+		return r.fail(ctx, ops, expired)
+	}
+
+	done, err := r.performStep(ctx, ops, current)
+	if err != nil {
+		var refusal *refusedError
+		if errors.As(err, &refusal) {
+			r.event(ops, corev1.EventTypeWarning, refusal.reason, refusal.Error())
+			return r.fail(ctx, ops, refusal.Error())
+		}
+		return ctrl.Result{}, err
+	}
+	if !done {
+		// The step wrote whatever it concluded and is waiting on something
+		// outside this reconcile. Probing is the only one that does.
+		return ctrl.Result{RequeueAfter: probingRequeue}, nil
+	}
+
+	if machine.IsTerminal() {
+		return ctrl.Result{}, r.succeed(ctx, ops)
+	}
+
+	next, ok := nextDiscoveryStep(machine)
+	if !ok {
+		return r.fail(ctx, ops, fmt.Sprintf("step %s declares no successor and is not terminal", current))
+	}
+	if err := machine.TransitionTo(ctx, next); err != nil {
+		return ctrl.Result{}, fmt.Errorf("enter step %s: %w", next, err)
+	}
+	return r.enter(ctx, ops, next, statemachine.ToKube(machine.Snapshot()).Deadline)
+}
+
+// performStep runs one step and reports whether it has finished.
+func (r *OperatorOpsReconciler) performStep(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps, current discoveryStep,
+) (bool, error) {
+	switch current {
+	case stepInspecting:
+		return r.inspect(ctx, ops)
+	case stepProbing:
+		return r.probe(ctx, ops)
+	case stepWriting:
+		return r.write(ctx, ops)
 	default:
-		return r.fail(ctx, &ops, fmt.Sprintf("step %q is not one this action has", ops.Status.Step.State))
+		return false, fmt.Errorf("step %s belongs to no run this operator performs", current)
 	}
 }
 
-// startInspecting records that the run has begun before it does anything, so
-// that a crash between the two is visible as a run that started rather than one
-// that never did.
-func (r *OperatorOpsReconciler) startInspecting(
-	ctx context.Context,
-	ops *simplyblockv1alpha2.OperatorOps,
+// begin records that the run has started, in the step the graph begins at and
+// with that step's budget.
+//
+// It writes before anything is done, so a crash between the two is visible as a
+// run that started rather than as one that never did.
+func (r *OperatorOpsReconciler) begin(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps, initial discoveryStep,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
+	deadline := metav1.NewTime(now.Add(initialDiscoveryDeadline))
 	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepInspecting)
+	ops.Status.Step.State = string(initial)
+	ops.Status.Step.Deadline = &deadline
 	ops.Status.Message = "reading the cluster's workers"
-	r.event(ops, corev1.EventTypeNormal, "OperationStarted", "discovery started")
+	r.event(ops, corev1.EventTypeNormal, OperationStarted, "discovery started")
 
 	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+}
+
+// enter records the step the machine has moved into, with the deadline its
+// entry hook set.
+func (r *OperatorOpsReconciler) enter(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.OperatorOps,
+	next discoveryStep,
+	deadline *metav1.Time,
+) (ctrl.Result, error) {
+	ops.Status.Step.State = string(next)
+	ops.Status.Step.Deadline = deadline
+	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+}
+
+// succeed ends a run that reached the end of its graph.
+func (r *OperatorOpsReconciler) succeed(
+	ctx context.Context, ops *simplyblockv1alpha2.OperatorOps,
+) error {
+	now := metav1.Now()
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseSucceeded
+	ops.Status.CompletedAt = &now
+	ops.Status.Step.Deadline = nil
+	r.event(ops, corev1.EventTypeNormal, OperationSucceeded, ops.Status.Message)
+	return r.status(ctx, ops)
 }
 
 // inspect settles what the run is about: which workers, and which distribution.
@@ -190,7 +323,7 @@ func (r *OperatorOpsReconciler) startInspecting(
 func (r *OperatorOpsReconciler) inspect(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
@@ -202,12 +335,12 @@ func (r *OperatorOpsReconciler) inspect(
 		options = append(options, client.MatchingLabels(spec.NodeSelector))
 	}
 	if err := r.List(ctx, &nodes, options...); err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
 	taken, err := r.workersAlreadyTaken(ctx, ops.Namespace)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
 	// A worker that looked fine and was not used owes the run a reason. Both
@@ -225,7 +358,7 @@ func (r *OperatorOpsReconciler) inspect(
 		// before this one and its being the storage tier went unnoticed.
 		role := discoverypkg.RoleOf(node)
 		if !UsableWorker(node, useControlPlane) {
-			r.event(ops, corev1.EventTypeNormal, "WorkerDeclined",
+			r.event(ops, corev1.EventTypeNormal, WorkerDeclined,
 				fmt.Sprintf("%s is not used: %s", node.Name, declinedBecause(node, role)))
 			continue
 		}
@@ -233,7 +366,7 @@ func (r *OperatorOpsReconciler) inspect(
 			// The reviewer asked for these and still has to see which machines
 			// they got, because the draft's control-plane node set is otherwise
 			// just another block of hostnames.
-			r.event(ops, corev1.EventTypeWarning, "ControlPlaneNodeIncluded", fmt.Sprintf(
+			r.event(ops, corev1.EventTypeWarning, ControlPlaneNodeIncluded, fmt.Sprintf(
 				"%s is %s and is in the draft because spec.discover.enableControlPlaneNodes is set",
 				node.Name, role.Describe()))
 		}
@@ -247,12 +380,12 @@ func (r *OperatorOpsReconciler) inspect(
 	if err != nil {
 		// Half the evidence still yields a conclusion, and the field is one a
 		// reviewer corrects, so this is recorded and not fatal.
-		r.event(ops, corev1.EventTypeWarning, "EnvironmentPartiallyRead",
+		r.event(ops, corev1.EventTypeWarning, EnvironmentPartiallyRead,
 			fmt.Sprintf("the API groups could not be listed, so the distribution was concluded from the nodes alone: %v", err))
 	}
 
 	if len(workers) == 0 {
-		return r.fail(ctx, ops,
+		return false, refusef(OperationFailed,
 			"no worker is free: every node either carries a StorageNode already, is "+
 				"unschedulable, is reserved for the control plane or for infrastructure, "+
 				"or does not match the run's selector")
@@ -260,13 +393,10 @@ func (r *OperatorOpsReconciler) inspect(
 
 	ops.Status.Workers = workers
 	ops.Status.Environment = simplyblockv1alpha2.KubernetesEnvironment(environment.Distribution)
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
-	deadline := metav1.NewTime(time.Now().Add(probingDeadline))
-	ops.Status.Step.Deadline = &deadline
 	ops.Status.Message = fmt.Sprintf("probing %d worker(s) of a %s cluster",
 		len(workers), orUnknown(string(environment.Distribution)))
 
-	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+	return true, r.status(ctx, ops)
 }
 
 // workersAlreadyTaken is the set of workers a StorageNode already runs on.
@@ -300,21 +430,15 @@ func (r *OperatorOpsReconciler) workersAlreadyTaken(
 func (r *OperatorOpsReconciler) probe(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	log := logf.FromContext(ctx)
-
-	if deadline, has := ops.Status.Step.KubeDeadline(); has && time.Now().After(deadline) {
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"the probes did not all finish within %s; the reports that did arrive are in the "+
-				"ConfigMaps labelled for this run", probingDeadline))
-	}
 
 	owner := metav1.NewControllerRef(ops,
 		simplyblockv1alpha2.GroupVersion.WithKind("OperatorOps"))
 
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
 	waiting, failed := 0, []string{}
@@ -332,19 +456,19 @@ func (r *OperatorOpsReconciler) probe(
 			Owner:              owner,
 		})
 		if err != nil {
-			return r.fail(ctx, ops, fmt.Sprintf("a probe Job could not be built: %v", err))
+			return false, refusef(OperationFailed, "a probe Job could not be built: %v", err)
 		}
 
 		var existing batchv1.Job
 		switch err := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); {
 		case apierrors.IsNotFound(err):
 			if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
-				return ctrl.Result{}, err
+				return false, err
 			}
 			log.Info("created a probe Job", "worker", worker, "job", job.Name)
 			waiting++
 		case err != nil:
-			return ctrl.Result{}, err
+			return false, err
 		case existing.Status.Failed > 0 && jobExhausted(&existing):
 			// A Job that has used its retries and written no report is a
 			// worker this run cannot describe. It does not fail the run: the
@@ -359,32 +483,27 @@ func (r *OperatorOpsReconciler) probe(
 	if waiting > 0 {
 		ops.Status.Message = fmt.Sprintf("%d of %d worker(s) reported; waiting for %d",
 			len(reports), len(ops.Status.Workers), waiting)
-		if err := r.status(ctx, ops); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: probingRequeue}, nil
+		return false, r.status(ctx, ops)
 	}
 
 	if len(reports) == 0 {
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"no worker reported: every one of the %d probe Jobs failed", len(ops.Status.Workers)))
+		return false, refusef(OperationFailed,
+			"no worker reported: every one of the %d probe Jobs failed", len(ops.Status.Workers))
 	}
 	for _, worker := range failed {
-		r.event(ops, corev1.EventTypeWarning, "DeviceInspectionFailed",
+		r.event(ops, corev1.EventTypeWarning, DeviceInspectionFailed,
 			fmt.Sprintf("the probe on %s failed, so it is not in the draft", worker))
 	}
 
-	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepWriting)
-	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("%d worker(s) reported; writing the draft", len(reports))
-	return ctrl.Result{Requeue: true}, r.status(ctx, ops)
+	return true, r.status(ctx, ops)
 }
 
 // write turns the reports into a ClusterDeploymentConfig in Draft.
 func (r *OperatorOpsReconciler) write(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
-) (ctrl.Result, error) {
+) (bool, error) {
 	spec := ops.Spec.Discover
 	if spec == nil {
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
@@ -392,10 +511,11 @@ func (r *OperatorOpsReconciler) write(
 
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 	if len(reports) == 0 {
-		return r.fail(ctx, ops, "the probe reports are gone, so there is nothing to write")
+		return false, refusef(OperationFailed,
+			"the probe reports are gone, so there is nothing to write")
 	}
 
 	collected := make([]nodeprobe.Report, 0, len(reports))
@@ -410,7 +530,7 @@ func (r *OperatorOpsReconciler) write(
 	// memory is reporting something truer than a copy taken minutes ago.
 	kubeNodes, err := r.kubeNodesFor(ctx, ops)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 
 	filter := spec.DeviceFilter
@@ -428,48 +548,42 @@ func (r *OperatorOpsReconciler) write(
 		// out as events, and the worker-level ones go into the message as well,
 		// because the message is what `kubectl get operatorops` shows.
 		for _, refusal := range plan.RefusalLines() {
-			r.event(ops, corev1.EventTypeNormal, "DeviceDeclined", refusal)
+			r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
 		}
 		why := plan.Explain()
 		if len(why) == 0 {
 			// No machine was refused by name, so the run had no worker to refuse.
-			return r.fail(ctx, ops, fmt.Sprintf(
-				"no worker has a device this run would use: %s", plan.Summary()))
+			return false, refusef(OperationFailed,
+				"no worker has a device this run would use: %s", plan.Summary())
 		}
-		return r.fail(ctx, ops, fmt.Sprintf(
-			"no worker has a device this run would use: %s", strings.Join(why, "; ")))
+		return false, refusef(OperationFailed,
+			"no worker has a device this run would use: %s", strings.Join(why, "; "))
 	}
 
 	config, notes := r.draftFor(ops, spec, plan)
 	if err := r.Create(ctx, config); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, err
+			return false, err
 		}
 		// A run whose name was reused, or one that crashed after creating the
 		// document and before recording it. The document is what matters and
 		// it exists, so the run adopts it rather than failing.
-		r.event(ops, corev1.EventTypeNormal, "ConfigExists",
+		r.event(ops, corev1.EventTypeNormal, ConfigExists,
 			fmt.Sprintf("%s already existed and was left as it is", config.Name))
 	}
 
 	for _, note := range notes {
-		r.event(ops, corev1.EventTypeNormal, "ConfigWritten", note)
+		r.event(ops, corev1.EventTypeNormal, ConfigWritten, note)
 	}
-	r.event(ops, corev1.EventTypeNormal, "ConfigWritten",
+	r.event(ops, corev1.EventTypeNormal, ConfigWritten,
 		fmt.Sprintf("wrote %s in Draft: %s", config.Name, plan.Summary()))
 	for _, refusal := range plan.RefusalLines() {
-		r.event(ops, corev1.EventTypeNormal, "DeviceDeclined", refusal)
+		r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
 	}
 
-	now := metav1.Now()
 	ops.Status.ConfigRef = config.Name
-	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseSucceeded
-	ops.Status.CompletedAt = &now
-	ops.Status.Step.Deadline = nil
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
-	r.event(ops, corev1.EventTypeNormal, "OperationSucceeded", ops.Status.Message)
-
-	return ctrl.Result{}, r.status(ctx, ops)
+	return true, r.status(ctx, ops)
 }
 
 // draftFor builds the document, and the notes explaining the numbers in it that
@@ -566,7 +680,7 @@ func (r *OperatorOpsReconciler) reportsFor(
 	for i := range maps.Items {
 		report, err := nodeprobe.ReportFromConfigMap(&maps.Items[i])
 		if err != nil {
-			r.event(ops, corev1.EventTypeWarning, "ReportUnreadable", err.Error())
+			r.event(ops, corev1.EventTypeWarning, ReportUnreadable, err.Error())
 			continue
 		}
 		if !slices.Contains(ops.Status.Workers, report.Node) {
@@ -599,7 +713,7 @@ func (r *OperatorOpsReconciler) abort(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = "aborted; discovery changes nothing, so nothing was undone"
-	r.event(ops, corev1.EventTypeNormal, "OperationAborted", ops.Status.Message)
+	r.event(ops, corev1.EventTypeNormal, OperationAborted, ops.Status.Message)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 
@@ -641,7 +755,7 @@ func (r *OperatorOpsReconciler) fail(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = reason
-	r.event(ops, corev1.EventTypeWarning, "OperationFailed", reason)
+	r.event(ops, corev1.EventTypeWarning, OperationFailed, reason)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 
