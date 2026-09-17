@@ -907,6 +907,12 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
 		setupLog.Info("registered storagenodeops validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-persistentvolumeops",
+			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeOpsValidator{
+				Client: mgr.GetClient(),
+			}})
+		setupLog.Info("registered persistentvolumeops validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
 				Client:    mgr.GetClient(),
