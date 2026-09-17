@@ -286,6 +286,7 @@ rules:
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedeviceops
   - storagedevices
   - storagenodeops
   - storagenodes
@@ -320,6 +321,7 @@ rules:
   - storagebackuppolicies/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
+  - storagedeviceops/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagepoolops/finalizers
@@ -349,6 +351,7 @@ rules:
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedeviceops/status
   - storagedevices/status
   - storagenodeops/status
   - storagenodes/status

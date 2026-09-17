@@ -552,12 +552,25 @@ Declared in `operator/api/v1alpha2/storagedeviceops_types.go`, short name
 `operator/internal/controller/storagedeviceops_controller.go`. The type is
 Appendix B.
 
-**Nothing in this section is implemented.** The device's own lock is declared and
-empty (§4.2), the two operation metrics of §8.2 have no source, and §11 Q1 is the
-open question the actions wait on.
+**One of the five actions is implemented, and it is the one the kind exists
+for.** `Restart` is built: the kind, its graph, the reconciler, and the device
+lock §4.2 declared empty against this section arriving. The other four are
+blocked on control-plane verbs the v2 API does not offer, and the ask is
+`v1alpha2.ExternalDependencies` — a value in the repository rather than a
+paragraph here, so each row names the endpoint to build and the action ships when
+the row does.
+
+**The enum admits only what the operator can perform.** Declaring all five now
+would accept an object whose first reconcile can only fail, and an API that takes
+a request it will never carry out is worse than one that refuses it at admission:
+the refusal names the missing capability, and the failure names nothing a user
+can act on. Widening an enum is additive, so each action arrives with its
+endpoint.
 
 ```go
-// +kubebuilder:validation:Enum=Restart;SelfTest;Fail;Replace;Migrate
+// What ships today. The other four constants are declared without being in the
+// marker, so the names exist where the reasons do.
+// +kubebuilder:validation:Enum=Restart
 type StorageDeviceOpsAction string
 ```
 
@@ -796,6 +809,13 @@ than degrading it.
 `remove`, its
 `Adding` step is the adopt call, and its `Rebuilding` step is a wait on the device
 stream. The action is a graph over calls the other actions already need.
+
+**Measured against the shipped v2 API, three device verbs exist and four do
+not.** `restart`, `remove`, and `reset` are served; `self-test`, `fail`,
+`detach`, and `adopt` are not. `Restart` is built on the first. `remove` exists
+and buys no action on its own: it is a step of `Replace` and of `Migrate`, and
+both also need the adopt call that names the device arriving. `reset` is a verb
+this document did not ask for and no action uses.
 
 **The device stream and the hardware fields are in use, and the per-action verbs are
 what remain.** The stream reports a PCI address, a serial number, a model, an NVMe
