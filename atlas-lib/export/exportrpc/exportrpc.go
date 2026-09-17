@@ -135,6 +135,8 @@ func (c *Client) Delete(ctx context.Context, spec export.Spec) error {
 func specToProto(s export.Spec) *exportv1.ExportSpec {
 	return &exportv1.ExportSpec{
 		VolumeUuid: s.VolumeUUID,
+		ClusterId:  s.ClusterID,
+		PoolId:     s.PoolID,
 		Path:       s.Path,
 		Fsid:       s.FSID,
 		Clients:    s.Clients,
@@ -147,6 +149,8 @@ func specFromProto(s *exportv1.ExportSpec) export.Spec {
 	}
 	return export.Spec{
 		VolumeUUID: s.GetVolumeUuid(),
+		ClusterID:  s.GetClusterId(),
+		PoolID:     s.GetPoolId(),
 		Path:       s.GetPath(),
 		FSID:       s.GetFsid(),
 		Clients:    s.GetClients(),

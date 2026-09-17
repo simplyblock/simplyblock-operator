@@ -22,9 +22,16 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog"
+
+	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
+
+	"github.com/simplyblock/csi-driver/internal/nfsexport"
 )
 
 // aliasDir is where the kernel looks for the device the layout names.
@@ -197,12 +204,35 @@ const (
 	accessProtocolNFS = "nfs"
 )
 
-// stagePNFSVolume attaches the export at the staging path.
+// backingVolumeOf reads the backing namespace out of a pNFS volume handle, in
+// the shape the attacher wants it.
 //
-// The namespace is already connected by the time this runs: connecting it is
-// the ordinary block path, unchanged, because a pNFS client is an NVMe-oF
-// initiator for the same namespace the MDS made the filesystem on. What is
-// added here is the device alias and the NFS mount.
+// Only the four-part `nfs:` form is accepted. A block handle has one field
+// fewer, so reading it here would shift every field and attach whatever the
+// shifted values happened to name.
+func backingVolumeOf(volumeHandle string) (export.Spec, bool) {
+	handle, ok := lvol.ParseNFSHandle(lvol.VolumeHandle(volumeHandle))
+	if !ok {
+		return export.Spec{}, false
+	}
+	// The namespace UUID of a simplyblock volume is the logical volume's own
+	// id, which is what the handle's export UUID carries.
+	return export.Spec{
+		VolumeUUID: handle.ExportUUID,
+		ClusterID:  handle.ClusterID,
+		PoolID:     handle.PoolRef,
+	}, true
+}
+
+// stagePNFSVolume connects the backing namespace and mounts the export.
+//
+// The connect is not optional and not somebody else's: a pNFS client is an
+// NVMe-oF initiator for the same namespace the MDS made the filesystem on --
+// that is what lets the data path bypass the metadata server -- and the block
+// branch of NodeStageVolume is the other branch, so for a pNFS volume it never
+// runs. Without this the mount still succeeds, the client finds no local device
+// for the layout, and every byte routes through the metadata server, which
+// looks exactly like working.
 func (ns *Server) stagePNFSVolume(
 	ctx context.Context,
 	req *csi.NodeStageVolumeRequest,
@@ -217,6 +247,14 @@ func (ns *Server) stagePNFSVolume(
 			req.GetVolumeId(), service, exportPath)
 	}
 
+	spec, ok := backingVolumeOf(req.GetVolumeId())
+	if !ok {
+		return fmt.Errorf("pnfs: %q is not a pNFS volume handle", req.GetVolumeId())
+	}
+	if err := ns.attachBacking(ctx, spec); err != nil {
+		return err
+	}
+
 	// The NGUID is read from the attached device rather than taken from the
 	// volume context, because it is assigned by the target: only a host with
 	// the namespace attached can know it, and the controller never has one.
@@ -227,6 +265,35 @@ func (ns *Server) stagePNFSVolume(
 
 	return stagePNFS(ctx, ns.mounter, stagingTargetPath,
 		service, exportPath, nguid, devicePath, volumeContext[ctxMountOptions])
+}
+
+// attachBacking connects the namespace behind a pNFS volume, through the same
+// path the export service uses on the metadata-server host. One implementation
+// serves both, so a client and a server cannot disagree about how a namespace
+// is connected or under which host identity.
+func (ns *Server) attachBacking(ctx context.Context, spec export.Spec) error {
+	return nfsexport.Attach(ctx, spec, ns.hostNQN)
+}
+
+// detachBacking gives it up again, after the export has been unmounted.
+func (ns *Server) detachBacking(ctx context.Context, spec export.Spec) error {
+	return nfsexport.Detach(ctx, spec, ns.hostNQN)
+}
+
+// hostNQN is this node's NVMe qualified name, derived from the Kubernetes
+// node's UID exactly as the block staging path derives it, so the control plane
+// sees one identity for this host however the namespace was connected.
+func (ns *Server) hostNQN(ctx context.Context) string {
+	if ns.kubeClient == nil {
+		return ""
+	}
+	nodeName := ns.Driver.GetNodeID()
+	node, err := ns.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("pnfs: reading node %s for the host NQN: %v", nodeName, err)
+		return ""
+	}
+	return nqn.Host(string(node.UID))
 }
 
 // namespaceIdentity finds the locally attached namespace for a pNFS volume and
@@ -253,4 +320,28 @@ func (ns *Server) namespaceIdentity(
 		nguid = hintedNGUID
 	}
 	return nguid, device.Namespace.DevicePath, nil
+}
+
+// unstagePNFSVolume unmounts the export, drops the device alias, and gives the
+// namespace back.
+//
+// The order is the reverse of staging and it matters: detaching under a live
+// mount leaves a filesystem over a device that is gone, which is an EIO every
+// process in it has to be killed to clear.
+//
+// The NGUID is read before the unmount, because the alias is named by it and
+// the device is what reports it: once the namespace is detached there is
+// nothing left to ask, and the alias would be left behind pointing at a device
+// node the next attach may hand to something else.
+func (ns *Server) unstagePNFSVolume(
+	ctx context.Context, stagingTargetPath string, spec export.Spec,
+) error {
+	var nguid string
+	if device, err := storage.Local(nvme.SysfsConfig{}).DeviceByUUID(ctx, spec.VolumeUUID); err == nil {
+		nguid = device.Namespace.NGUID
+	}
+	if err := unstagePNFS(ctx, ns.mounter, stagingTargetPath, nguid); err != nil {
+		return err
+	}
+	return ns.detachBacking(ctx, spec)
 }

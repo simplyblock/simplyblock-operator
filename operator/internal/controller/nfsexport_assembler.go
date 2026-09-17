@@ -19,6 +19,7 @@ import (
 	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/export/exportrpc"
 	"github.com/simplyblock/atlas/link"
+	atlaslvol "github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -142,8 +143,23 @@ func specFor(nfsExport *simplyblockv1alpha2.NFSExport) (export.Spec, error) {
 			"export %s: no allowed clients resolved yet: %w",
 			nfsExport.Name, export.ErrInvalidSpec)
 	}
+	// The cluster and the pool come from the handle rather than from separate
+	// status fields, because the handle is what provisioning wrote and the one
+	// place the three identifiers are guaranteed to agree with each other.
+	handle, ok := atlaslvol.ParseNFSHandle(atlaslvol.VolumeHandle(nfsExport.Spec.VolumeRef))
+	if !ok {
+		// Refused rather than passed on half-filled: a host with no cluster
+		// cannot attach the namespace, and it would report a device that is not
+		// there, which names the wrong problem and sends a reader at the fabric.
+		return export.Spec{}, fmt.Errorf(
+			"export %s: volumeRef %q is not a pNFS volume handle: %w",
+			nfsExport.Name, nfsExport.Spec.VolumeRef, export.ErrInvalidSpec)
+	}
+
 	return export.Spec{
 		VolumeUUID: nfsExport.Status.LVolID,
+		ClusterID:  handle.ClusterID,
+		PoolID:     handle.PoolRef,
 		Path:       nfsExport.Spec.ExportPath,
 		FSID:       nfsExport.Spec.FSID,
 		Clients:    clients,

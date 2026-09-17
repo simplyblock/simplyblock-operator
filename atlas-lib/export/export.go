@@ -62,6 +62,13 @@ type Spec struct {
 	// is read back from the device, which the provisioning side cannot do.
 	VolumeUUID string
 
+	// ClusterID and PoolID identify the volume to the control plane, which is
+	// what an Attach needs to ask where the namespace is served from and to be
+	// allowed to connect to it. They are not used to find the device -- the
+	// UUID does that -- and a Config with no Attach ignores them.
+	ClusterID string
+	PoolID    string
+
 	// Path is the mount point and the exported directory. It carries namespace
 	// and volume information, because a PVC name is unique only within a
 	// namespace and two same-named claims must not collide on one host.
@@ -140,6 +147,24 @@ type Config struct {
 
 	// ExportsDir is the drop-in directory, conventionally /etc/exports.d.
 	ExportsDir string
+
+	// Attach makes the namespace present on this host, and Detach gives it up.
+	// Both are optional: a host whose fabric something else manages leaves them
+	// nil and assembles against a device that is already there, which is how
+	// this package behaved before they existed.
+	//
+	// They are injected rather than implemented here because connecting an
+	// NVMe-oF namespace means asking the control plane where it is served from
+	// and running an initiator with this host's identity, and this package
+	// knows about neither. The CSI driver owns that path already, with its
+	// reconnect handling and its device-wait, and a second implementation of it
+	// is the thing atlas exists to avoid.
+	//
+	// Why the metadata server needs one at all: it is an initiator for the
+	// volume exactly like a client is, and no CSI call ever targets it, so
+	// unless assembly attaches the namespace nothing on that host will.
+	Attach func(ctx context.Context, spec Spec) error
+	Detach func(ctx context.Context, spec Spec) error
 }
 
 // Assembler builds and removes exports on the host it runs on.
@@ -173,6 +198,16 @@ func New(cfg Config) (*Assembler, error) {
 func (a *Assembler) Create(ctx context.Context, spec Spec) error {
 	if err := spec.Validate(); err != nil {
 		return err
+	}
+
+	// Attach first, because everything below looks for a device that is not
+	// there until this has run. A failure here stops the assembly rather than
+	// falling through to a lookup whose only possible answer is not-found,
+	// which would report a missing device and name the wrong problem.
+	if a.cfg.Attach != nil {
+		if err := a.cfg.Attach(ctx, spec); err != nil {
+			return fmt.Errorf("export %s: attaching the namespace: %w", spec.Path, err)
+		}
 	}
 
 	device, err := a.cfg.Devices.ByUUID(ctx, spec.VolumeUUID)
@@ -253,6 +288,15 @@ func (a *Assembler) Delete(ctx context.Context, spec Spec) error {
 		var pathErr *os.PathError
 		if !errors.As(err, &pathErr) {
 			return fmt.Errorf("export %s: removing the mount point: %w", spec.Path, err)
+		}
+	}
+
+	// Detach last, and only after the unmount above: giving up the namespace
+	// under a live mount leaves the host with a filesystem over a device that
+	// is gone, which is an EIO every process in it has to be killed to clear.
+	if a.cfg.Detach != nil {
+		if err := a.cfg.Detach(ctx, spec); err != nil {
+			return fmt.Errorf("export %s: detaching the namespace: %w", spec.Path, err)
 		}
 	}
 	return nil

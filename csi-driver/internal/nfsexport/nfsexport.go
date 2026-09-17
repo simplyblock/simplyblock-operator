@@ -53,10 +53,17 @@ func (f filesystem) IsMountPoint(_ context.Context, path string) (bool, error) {
 // different answers to "does this device carry a filesystem" on one node is how
 // a device gets formatted twice, and the second time is the one that destroys
 // data.
-func NewAssembler(devices nvme.DeviceResolver, mounter *csimount.Mounter) (*export.Assembler, error) {
+func NewAssembler(
+	devices nvme.DeviceResolver, mounter *csimount.Mounter, hostNQN HostNQNFunc,
+) (*export.Assembler, error) {
+	attach := attacher{hostNQN: hostNQN}
 	return export.New(export.Config{
 		Devices:    devices,
 		Filesystem: filesystem{mounter: mounter},
+		// The MDS host attaches its own namespace, because nothing else does:
+		// no CSI call targets the host serving an export (attach.go).
+		Attach: attach.Attach,
+		Detach: attach.Detach,
 		Blank: func(ctx context.Context, devicePath string) (bool, error) {
 			fsType, err := mounter.Probe(ctx, devicePath)
 			if err != nil {

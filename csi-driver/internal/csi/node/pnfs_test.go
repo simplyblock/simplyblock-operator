@@ -162,3 +162,38 @@ func TestStageReportsAMountFailure(t *testing.T) {
 		t.Fatal("a failed mount returned no error")
 	}
 }
+
+// A pNFS client is an NVMe-oF initiator for the same namespace the metadata
+// server made the filesystem on -- that is the whole point, and it is what lets
+// the data path bypass the metadata server. So staging has to connect it, just
+// as the block path does.
+//
+// The earlier shape of this assumed the namespace was "already connected by the
+// time this runs," which was true of nothing: the block branch of
+// NodeStageVolume is the other branch, so for a pNFS volume it never runs.
+func TestPNFSVolumeContextIdentifiesTheBackingVolume(t *testing.T) {
+	const (
+		cluster = "f0bb9077-78c4-4482-9ccf-a5693ce2df78"
+		pool    = "9d016dd4-34d7-42f0-b549-52a5af2f1399"
+		volume  = "bfc56677-d602-4017-804b-975f3b929e3f"
+	)
+	handle := "nfs:" + cluster + ":" + pool + ":" + volume
+
+	spec, ok := backingVolumeOf(handle)
+	if !ok {
+		t.Fatalf("%q was not recognized as a pNFS handle", handle)
+	}
+	if spec.ClusterID != cluster || spec.PoolID != pool || spec.VolumeUUID != volume {
+		t.Errorf("backing volume = %+v, want cluster %s pool %s volume %s",
+			spec, cluster, pool, volume)
+	}
+}
+
+// A block handle is not a pNFS one, and must not be mistaken for it: the two
+// forms differ by a field, and reading a three-part handle as a four-part one
+// would attach whatever the shifted fields happened to name.
+func TestBlockHandleIsNotABackingVolume(t *testing.T) {
+	if _, ok := backingVolumeOf("f0bb9077:9d016dd4:bfc56677"); ok {
+		t.Error("a block handle was read as a pNFS one")
+	}
+}

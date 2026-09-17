@@ -41,11 +41,14 @@ import (
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
@@ -149,7 +152,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		if err := startLink(ctx, conf, kubeClient); err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
 	}
@@ -165,7 +168,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.Interface) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -191,7 +194,8 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		// mutates the node: it makes filesystems, mounts them, and publishes
 		// them, where storagerpc only reads. Keeping them apart is what lets a
 		// credential be granted the reading and not the writing.
-		assembler, err := nfsexport.NewAssembler(local.DeviceResolver, csimount.New())
+		assembler, err := nfsexport.NewAssembler(
+			local.DeviceResolver, csimount.New(), hostNQNFor(conf.NodeID, kubeClient))
 		if err != nil {
 			return fmt.Errorf("node exports: %w", err)
 		}
@@ -218,6 +222,30 @@ func startLink(ctx context.Context, conf *config.Config) error {
 
 	_, err := csilink.Start(ctx, cfg)
 	return err
+}
+
+// hostNQNFor reports this host's NVMe qualified name the way the node plugin's
+// staging path does: derived from the Kubernetes node's UID, so the control
+// plane sees the same identity whichever path connected the namespace.
+//
+// Two identities for one host would each hold their own reservation key, and the
+// fencing in design-pnfs-rwx.md §13.2 is written against one key per host.
+//
+// An empty answer is not a failure. A volume with no allowed_hosts needs no
+// identity, and the connect below fails with the control plane's own message if
+// one was required, which says more than anything this could say here.
+func hostNQNFor(nodeID string, kubeClient kubernetes.Interface) nfsexport.HostNQNFunc {
+	return func(ctx context.Context) string {
+		if kubeClient == nil || nodeID == "" {
+			return ""
+		}
+		node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+		if err != nil {
+			klog.Warningf("pnfs: reading node %s for the host NQN: %v", nodeID, err)
+			return ""
+		}
+		return nqn.Host(string(node.UID))
+	}
 }
 
 // startNodeServer builds the node service and starts the two background loops

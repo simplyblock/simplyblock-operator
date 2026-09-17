@@ -54,7 +54,13 @@ type ExportSpec struct {
 	Fsid string `protobuf:"bytes,3,opt,name=fsid,proto3" json:"fsid,omitempty"`
 	// clients is the set allowed to mount, as exports(5) spells it. An empty set
 	// is refused rather than widened to everyone.
-	Clients       []string `protobuf:"bytes,4,rep,name=clients,proto3" json:"clients,omitempty"`
+	Clients []string `protobuf:"bytes,4,rep,name=clients,proto3" json:"clients,omitempty"`
+	// cluster_id and pool_id identify the volume to the control plane, which is
+	// what the host needs to ask where the namespace is served from and to be
+	// allowed to connect to it. They do not find the device -- volume_uuid does
+	// that -- and a host that does not attach its own namespaces ignores them.
+	ClusterId     string `protobuf:"bytes,5,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	PoolId        string `protobuf:"bytes,6,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -115,6 +121,20 @@ func (x *ExportSpec) GetClients() []string {
 		return x.Clients
 	}
 	return nil
+}
+
+func (x *ExportSpec) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ExportSpec) GetPoolId() string {
+	if x != nil {
+		return x.PoolId
+	}
+	return ""
 }
 
 type CreateExportRequest struct {
@@ -281,14 +301,17 @@ var File_export_proto protoreflect.FileDescriptor
 
 const file_export_proto_rawDesc = "" +
 	"\n" +
-	"\fexport.proto\x12\x0fatlas.export.v1\"o\n" +
+	"\fexport.proto\x12\x0fatlas.export.v1\"\xa7\x01\n" +
 	"\n" +
 	"ExportSpec\x12\x1f\n" +
 	"\vvolume_uuid\x18\x01 \x01(\tR\n" +
 	"volumeUuid\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04fsid\x18\x03 \x01(\tR\x04fsid\x12\x18\n" +
-	"\aclients\x18\x04 \x03(\tR\aclients\"F\n" +
+	"\aclients\x18\x04 \x03(\tR\aclients\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x05 \x01(\tR\tclusterId\x12\x17\n" +
+	"\apool_id\x18\x06 \x01(\tR\x06poolId\"F\n" +
 	"\x13CreateExportRequest\x12/\n" +
 	"\x04spec\x18\x01 \x01(\v2\x1b.atlas.export.v1.ExportSpecR\x04spec\"\x16\n" +
 	"\x14CreateExportResponse\"F\n" +

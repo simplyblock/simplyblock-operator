@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 )
 
@@ -284,5 +285,152 @@ func TestExportLineCarriesPNFS(t *testing.T) {
 	}
 	if !strings.Contains(line, "fsid="+testFSID) {
 		t.Errorf("the export line does not carry the fsid: %s", line)
+	}
+}
+
+// attachRecorder stands in for the consumer that makes the namespace present.
+type attachRecorder struct {
+	attached []Spec
+	detached []Spec
+	err      error
+	// present is what the device resolver reports: false until Attach runs,
+	// which is the whole ordering this exercises.
+	present *bool
+}
+
+func (a *attachRecorder) attach(_ context.Context, spec Spec) error {
+	if a.err != nil {
+		return a.err
+	}
+	a.attached = append(a.attached, spec)
+	if a.present != nil {
+		*a.present = true
+	}
+	return nil
+}
+
+func (a *attachRecorder) detach(_ context.Context, spec Spec) error {
+	a.detached = append(a.detached, spec)
+	return nil
+}
+
+// newAttachHarness is newHarness with a device that is not there until Attach
+// puts it there.
+func newAttachHarness(t *testing.T) (*harness, *attachRecorder) {
+	t.Helper()
+	root := t.TempDir()
+	h := &harness{fs: &fakeFS{}, exportsD: filepath.Join(root, "exports.d")}
+	h.spec = Spec{
+		VolumeUUID: testUUID,
+		ClusterID:  "f0bb9077-78c4-4482-9ccf-a5693ce2df78",
+		PoolID:     "9d016dd4-34d7-42f0-b549-52a5af2f1399",
+		Path:       filepath.Join(root, "mnt", "team-a-shared-3c81"),
+		FSID:       testFSID,
+		Clients:    []string{"192.168.10.0/24"},
+	}
+	present := false
+	rec := &attachRecorder{present: &present}
+	asm, err := New(Config{
+		Devices:    &presenceDevices{present: &present},
+		Filesystem: h.fs,
+		Blank:      func(context.Context, string) (bool, error) { return true, nil },
+		Run: func(_ context.Context, name string, args ...string) ([]byte, int, error) {
+			h.commands = append(h.commands, name+" "+strings.Join(args, " "))
+			return nil, 0, nil
+		},
+		ExportsDir: h.exportsD,
+		Attach:     rec.attach,
+		Detach:     rec.detach,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h.asm = asm
+	return h, rec
+}
+
+// presenceDevices reports the namespace only once something has attached it.
+type presenceDevices struct {
+	nvme.DeviceResolver
+	present *bool
+}
+
+func (d *presenceDevices) ByUUID(_ context.Context, _ string) (nvme.Device, error) {
+	if !*d.present {
+		return nvme.Device{}, errs.ErrNotFound
+	}
+	return nvme.Device{Namespace: nvme.Namespace{DevicePath: testDev, NGUID: testNGUID}}, nil
+}
+
+// The namespace has to be attached before anything looks for it. The MDS host
+// is an NVMe-oF initiator for the volume exactly like a client is, and nothing
+// else on that host has a reason to connect it: no CSI call targets the metadata
+// server, so if assembly does not attach it, the device is never there.
+func TestCreateAttachesBeforeLookingForTheDevice(t *testing.T) {
+	h, rec := newAttachHarness(t)
+
+	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if len(rec.attached) != 1 {
+		t.Fatalf("Attach ran %d times, want once", len(rec.attached))
+	}
+	if got := rec.attached[0]; got.VolumeUUID != testUUID || got.ClusterID == "" || got.PoolID == "" {
+		t.Errorf("Attach got %+v, want the volume identified to the control plane", got)
+	}
+	if len(h.fs.mounted) != 1 {
+		t.Errorf("mounted = %v, want the export assembled on the attached device", h.fs.mounted)
+	}
+}
+
+// An attach that fails stops the assembly rather than falling through to a
+// device lookup that can only report not-found and blame the wrong thing.
+func TestCreateStopsWhenAttachFails(t *testing.T) {
+	h, rec := newAttachHarness(t)
+	rec.err = errors.New("the control plane refused the host")
+
+	err := h.asm.Create(context.Background(), h.spec)
+	if err == nil {
+		t.Fatal("Create succeeded with no namespace attached")
+	}
+	if !strings.Contains(err.Error(), "refused the host") {
+		t.Errorf("error = %v, want it to carry the attach failure", err)
+	}
+	if len(h.fs.formatted) != 0 || len(h.fs.mounted) != 0 {
+		t.Error("the assembly continued past a failed attach")
+	}
+}
+
+// Teardown detaches, and only after the filesystem is unmounted: detaching a
+// mounted device leaves the host with a mount over a namespace that is gone.
+func TestDeleteDetachesAfterUnmounting(t *testing.T) {
+	h, rec := newAttachHarness(t)
+	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := h.asm.Delete(context.Background(), h.spec); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if len(rec.detached) != 1 {
+		t.Fatalf("Detach ran %d times, want once", len(rec.detached))
+	}
+	if len(h.fs.unmounted) != 1 {
+		t.Fatalf("unmounted = %v, want one unmount", h.fs.unmounted)
+	}
+}
+
+// A configuration with no Attach is still valid, and assembles against a device
+// something else put there. That is how the package behaved before attaching
+// existed, and a host that manages its own fabric should not have to grow one.
+func TestAttachIsOptional(t *testing.T) {
+	h := newHarness(t, true)
+	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(h.fs.mounted) != 1 {
+		t.Errorf("mounted = %v, want one mount", h.fs.mounted)
 	}
 }

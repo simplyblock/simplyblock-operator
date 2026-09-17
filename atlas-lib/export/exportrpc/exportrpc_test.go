@@ -74,14 +74,17 @@ func serve(t *testing.T, assembler Assembler) *Client {
 
 var fullSpec = export.Spec{
 	VolumeUUID: "cb2f293c-6d6f-4687-ad13-eb81fbec7314",
+	ClusterID:  "f0bb9077-78c4-4482-9ccf-a5693ce2df78",
+	PoolID:     "9d016dd4-34d7-42f0-b549-52a5af2f1399",
 	Path:       "/mnt/team-a-shared-3c81",
 	FSID:       "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13",
 	Clients:    []string{"192.168.10.21", "192.168.10.0/24"},
 }
 
-// Every field crosses. A spec that loses its client set publishes to nobody, and
-// one that loses its fsid publishes an export whose handles do not survive a
-// move, so neither can be allowed to go missing quietly.
+// Every field crosses. A spec that loses its client set publishes to nobody, one
+// that loses its fsid publishes an export whose handles do not survive a move,
+// and one that loses its cluster or pool cannot attach the namespace at all, so
+// none of them can be allowed to go missing quietly.
 func TestCreateRoundTripsTheWholeSpec(t *testing.T) {
 	assembler := &recordingAssembler{}
 	client := serve(t, assembler)

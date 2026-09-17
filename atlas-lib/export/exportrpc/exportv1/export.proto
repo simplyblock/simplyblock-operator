@@ -54,6 +54,13 @@ message ExportSpec {
   // clients is the set allowed to mount, as exports(5) spells it. An empty set
   // is refused rather than widened to everyone.
   repeated string clients = 4;
+
+  // cluster_id and pool_id identify the volume to the control plane, which is
+  // what the host needs to ask where the namespace is served from and to be
+  // allowed to connect to it. They do not find the device -- volume_uuid does
+  // that -- and a host that does not attach its own namespaces ignores them.
+  string cluster_id = 5;
+  string pool_id = 6;
 }
 
 message CreateExportRequest {

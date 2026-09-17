@@ -123,6 +123,23 @@ design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
 
+**Nothing attached the backing namespace, on either side.** §6.4(a) says the MDS
+host connects the volume through "the existing csi-node service," and §10 says
+the client does too, and both readings were wrong in the same way: csi-node acts
+only on CSI calls, and no CSI call ever targets the host serving an export.
+kubelet stages a volume on the nodes running the pods.
+
+On the client the error is subtler, because there *is* a CSI call. The block
+branch of `NodeStageVolume` is the branch pNFS does not take, so for an RWX
+volume nothing connected the namespace there either. The mount still succeeds,
+the client finds no local device for the layout, and every byte routes through
+the metadata server -- the exact silent fallback FM-2 describes, arrived at from
+a new direction.
+
+Both sides now attach through the same code, which is deliberate rather than
+tidy: two implementations would mean two host identities, and the fencing in
+§13.2 is written against one reservation key per host.
+
 **A StorageNode name is not a Kubernetes node name, and the link only knows the
 second.** §7.1's `status.storageNodeRef` names a `StorageNode`, which is named
 after the set that created it (`simplyblock-nodes-1kalgm`). The csi-node plugin

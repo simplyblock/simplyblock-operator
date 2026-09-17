@@ -151,6 +151,18 @@ func (ns *Server) NodeUnstageVolume(
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A pNFS volume unstages the way it staged: the NFS mount and the device
+	// alias come off, and then the namespace this node connected is given back.
+	// It is branched on the handle rather than on a stashed volume context,
+	// because the handle is the one thing NodeUnstageVolume is always given.
+	if spec, ok := backingVolumeOf(volumeID); ok {
+		if err := ns.unstagePNFSVolume(ctx, stagingTargetPath, spec); err != nil {
+			klog.Errorf("failed to unstage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
 	err := ns.mounter.Remove(stagingTargetPath) // idempotent
 	if err != nil {
 		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", stagingTargetPath, err)
