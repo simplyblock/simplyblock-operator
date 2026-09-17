@@ -161,6 +161,42 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 	return out, nil
 }
 
+// SubsystemVolumes returns every volume published under the given NVMe-oF
+// subsystem NQN, across every pool of the cluster.
+//
+// It exists because a migration moves a subsystem rather than one volume inside
+// it: whoever asks for one has to know which volumes travel along, and the
+// control plane addresses volumes by pool rather than by subsystem. The
+// members are not required to share a pool, since a subsystem is a
+// cluster-level object, so every pool is asked.
+//
+// An empty NQN is refused rather than answered. Nothing publishes under no
+// name, so the honest answer would be no volumes, and the useful one is that
+// the caller has not resolved the subsystem yet.
+func (c *Client) SubsystemVolumes(ctx context.Context, clusterID, nqn string) ([]lvol.Volume, error) {
+	if nqn == "" {
+		return nil, fmt.Errorf("list the volumes of a subsystem: no NQN was given")
+	}
+	pools, err := c.ListStoragePools(ctx, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("list the volumes of subsystem %s: %w", nqn, err)
+	}
+
+	var members []lvol.Volume
+	for _, pool := range pools {
+		volumes, err := c.ListVolumes(ctx, clusterID, pool.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list the volumes of subsystem %s: pool %s: %w", nqn, pool.ID, err)
+		}
+		for _, volume := range volumes {
+			if volume.NQN == nqn {
+				members = append(members, volume)
+			}
+		}
+	}
+	return members, nil
+}
+
 // ResizeVolume grows the volume to sizeBytes.
 func (c *Client) ResizeVolume(ctx context.Context, h lvol.VolumeHandle, sizeBytes uint64) error {
 	cluster, pool, volume, err := h.Split()
