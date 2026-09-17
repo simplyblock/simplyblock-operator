@@ -127,6 +127,24 @@ design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
 
+**The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
+in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
+run a 5.14 kernel that does not know it. The format succeeded, and the mount
+that followed failed with *Superblock has unknown incompatible features (0x80)* --
+which names a feature flag and not the version skew behind it. Measured on vm03
+with `xfs_db`: the superblock carried `NREXT64`, `BIGTIME`, and `INOBTCNT`.
+
+This is the general case of the `exportfs` finding rather than a second
+coincidence, and the design should state it once as a rule: **an export is the
+host's, so everything that makes state the host kernel must later read runs in
+the host's namespace with the host's tools.** `mkfs`, `mount`, and `exportfs`
+all qualify. What legitimately stays in the container is what is the driver's
+own -- the control-plane client that says where a namespace lives, and the
+`blkid` probe that decides whether formatting would destroy something.
+
+The image is deliberately newer than the hosts, so this skew is permanent and
+not a one-off to be fixed by aligning versions.
+
 **`exportfs` has to run on the host, and §14.1 half said so.** The section asks
 for `nfs-utils` on MDS hosts, which is right, and then has csi-node run
 `exportfs` -- which is in the container, where `/var/lib/nfs/etab` and

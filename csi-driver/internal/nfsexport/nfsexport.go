@@ -2,17 +2,24 @@
 // driver already owns.
 //
 // Everything substantive is in atlas: assembling an export is atlas/export, and
-// carrying the call is atlas/export/exportrpc. What lives here is only the
-// join -- the driver's mounter satisfying the filesystem interface, its blkid
-// probe answering whether a device is blank, and its exec runner running
-// exportfs -- because those are the driver's own seams and atlas has no
+// carrying the call is atlas/export/exportrpc. What lives here is the join --
+// connecting the namespace, answering whether a device is blank, and running
+// the commands -- because those are the driver's own seams and atlas has no
 // business knowing them.
+//
+// The theme running through this package is that an export is the host's, not
+// this container's. Its kernel mounts the filesystem, its nfsd serves it, and
+// its userspace has to be able to make it, so mkfs, mount, and exportfs all run
+// in the host's namespace with the host's tools (filesystem.go, runner in
+// hostCommand). What stays here is what is genuinely the driver's: the
+// control-plane client that says where a namespace lives, and the blkid probe
+// that decides whether formatting one would destroy something.
 package nfsexport
 
 import (
 	"context"
 	"errors"
-	"os/exec"
+	oexec "os/exec"
 
 	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/nvme"
@@ -23,28 +30,6 @@ import (
 // rather than /etc/exports itself so that one export's entry can be written and
 // removed without rewriting a file other things also own.
 const ExportsDir = "/etc/exports.d"
-
-// filesystem adapts the driver's mounter to what atlas/export needs. The
-// signatures differ only by a context, which the mounter predates.
-type filesystem struct {
-	mounter *csimount.Mounter
-}
-
-func (f filesystem) Format(ctx context.Context, device, fsType string, options []string) error {
-	return f.mounter.Format(ctx, device, fsType, options)
-}
-
-func (f filesystem) Mount(_ context.Context, source, target, fsType string, options []string) error {
-	return f.mounter.Mount(source, target, fsType, options)
-}
-
-func (f filesystem) Unmount(_ context.Context, target string) error {
-	return f.mounter.Unmount(target)
-}
-
-func (f filesystem) IsMountPoint(_ context.Context, path string) (bool, error) {
-	return f.mounter.IsMounted(path)
-}
 
 // NewAssembler returns the node's export assembler.
 //
@@ -58,8 +43,12 @@ func NewAssembler(
 ) (*export.Assembler, error) {
 	attach := attacher{hostNQN: hostNQN}
 	return export.New(export.Config{
-		Devices:    devices,
-		Filesystem: filesystem{mounter: mounter},
+		Devices: devices,
+		// The host's tools, not this container's: the image is built on a
+		// newer base than the hosts it runs on, so a filesystem made here
+		// carries on-disk features the host kernel cannot mount
+		// (filesystem.go).
+		Filesystem: hostFilesystem{},
 		// The MDS host attaches its own namespace, because nothing else does:
 		// no CSI call targets the host serving an export (attach.go).
 		Attach: attach.Attach,
@@ -105,10 +94,17 @@ func hostCommand(name string, args ...string) (string, []string) {
 // output and exit code, which is the shape atlas/blockdev already defines.
 func runner(ctx context.Context, name string, args ...string) ([]byte, int, error) {
 	name, args = hostCommand(name, args...)
-	cmd := exec.CommandContext(ctx, name, args...)
+	return exec(ctx, name, args...)
+}
+
+// exec runs an already-built command. It is separate from runner because
+// filesystem.go builds its own, and double-wrapping in nsenter would enter the
+// host namespace from inside the host namespace.
+func exec(ctx context.Context, name string, args ...string) ([]byte, int, error) {
+	cmd := oexec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		var exitErr *exec.ExitError
+		var exitErr *oexec.ExitError
 		if errors.As(err, &exitErr) {
 			// A non-zero exit is the command's answer, not a failure to run it,
 			// so it is reported as a code rather than as an error. The caller
