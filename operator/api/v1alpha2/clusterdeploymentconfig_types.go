@@ -202,9 +202,13 @@ type NodeSet struct {
 // one. It carries the layout fields a cluster cannot change later, so that a
 // reviewer sees them before the cluster exists rather than after.
 type ClusterTemplate struct {
-	// Name is the StorageCluster's name.
+	// Name is the StorageCluster's name, and is therefore held to what such a
+	// name may be rather than to what an object name may be. A longer value is a
+	// document the API server accepts and a CreatingCluster step that can never
+	// succeed, since the cluster it would write is one the API server refuses
+	// (design-api-upgrade.md §19.4).
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
@@ -332,7 +336,11 @@ type ClusterDeploymentConfigSpec struct {
 	// Absent means the document creates the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
-	// +kubebuilder:validation:MaxLength=253
+	//
+	// The maximum is what a StorageCluster name may be and not the 253 an object
+	// name may be: a reference between the two names nothing that can exist
+	// (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 

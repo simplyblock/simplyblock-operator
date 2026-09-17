@@ -109,6 +109,10 @@ spec:
                               creates. It is copied to the draft's own clusterRef, so that re-running
                               discovery after an expansion produces a growth document naming the same
                               cluster.
+
+                              Bounded at what a StorageCluster name may be, since a longer value names
+                              nothing that can exist (design-api-upgrade.md §19.4).
+                            maxLength: 63
                             type: string
                           configName:
                             description: |-
@@ -262,8 +266,12 @@ spec:
                         - message: field is immutable
                           rule: self == oldSelf
                       clusterRef:
-                        description: ClusterRef names the StorageCluster the operation
-                          runs against.
+                        description: |-
+                          ClusterRef names the StorageCluster the operation runs against.
+
+                          Bounded at what a StorageCluster name may be, since a longer value names
+                          nothing that can exist (design-api-upgrade.md §19.4).
+                        maxLength: 63
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
@@ -372,6 +380,10 @@ spec:
                           ClusterRef names the StorageCluster this operation acts on. The operation
                           never owns its target, because deleting the record of an operation must
                           not delete the cluster it operated on.
+
+                          Bounded at what a StorageCluster name may be, since a longer value names
+                          nothing that can exist (design-api-upgrade.md §19.4).
+                        maxLength: 63
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable

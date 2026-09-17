@@ -142,8 +142,13 @@ spec:
                         maxLength: 32
                         type: string
                       name:
-                        description: Name is the StorageCluster's name.
-                        maxLength: 253
+                        description: |-
+                          Name is the StorageCluster's name, and is therefore held to what such a
+                          name may be rather than to what an object name may be. A longer value is a
+                          document the API server accepts and a CreatingCluster step that can never
+                          succeed, since the cluster it would write is one the API server refuses
+                          (design-api-upgrade.md §19.4).
+                        maxLength: 63
                         type: string
                       nodesPerSocket:
                         description: |-
@@ -210,7 +215,11 @@ spec:
                       Absent means the document creates the cluster in Cluster. Setting it to a
                       cluster that does not exist, or leaving it absent when one already does,
                       is refused rather than reconciled.
-                    maxLength: 253
+
+                      The maximum is what a StorageCluster name may be and not the 253 an object
+                      name may be: a reference between the two names nothing that can exist
+                      (design-api-upgrade.md §19.4).
+                    maxLength: 63
                     type: string
                   edgeCluster:
                     description: |-

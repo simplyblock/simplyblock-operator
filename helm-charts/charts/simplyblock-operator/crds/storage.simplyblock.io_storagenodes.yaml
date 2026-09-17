@@ -450,6 +450,10 @@ spec:
                     ClusterRef names the StorageCluster this node belongs to. The cluster also
                     owns this object by controller reference, so deleting the cluster deletes
                     its nodes.
+
+                    Bounded at what a StorageCluster name may be, since a longer value names
+                    nothing that can exist (design-api-upgrade.md §19.4).
+                  maxLength: 63
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -876,6 +880,9 @@ spec:
                   type: string
               type: object
           type: object
+          x-kubernetes-validations:
+            - message: a StorageNode name is at most 63 characters, because it is written into the storage.simplyblock.io/node label on every StorageDevice of this node
+              rule: size(self.metadata.name) <= 63
       served: true
       storage: true
       subresources:

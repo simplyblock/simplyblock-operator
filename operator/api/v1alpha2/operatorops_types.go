@@ -177,6 +177,10 @@ type DiscoverSpec struct {
 	// creates. It is copied to the draft's own clusterRef, so that re-running
 	// discovery after an expansion produces a growth document naming the same
 	// cluster.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 }

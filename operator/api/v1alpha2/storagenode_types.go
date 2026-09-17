@@ -236,6 +236,10 @@ type StorageNodeSpec struct {
 	// ClusterRef names the StorageCluster this node belongs to. The cluster also
 	// owns this object by controller reference, so deleting the cluster deletes
 	// its nodes.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
@@ -491,6 +495,13 @@ type StorageNodeStatus struct {
 // are the ones a fresh install applies. An upgrade of an existing cluster reaches
 // it through the storage rewrite rather than through this marker, for the reason
 // storagenodeops_types.go states.
+//
+// The name is bounded at a label's 63 bytes, because the StorageDevice mirror
+// writes it into storage.simplyblock.io/node on every device this node reports.
+// The operator's own names fit by construction — the formula that builds them
+// carries the same limit — and the rule is what holds a node somebody authored
+// to the same bound (design-api-upgrade.md §19.1, §19.4).
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageNode name is at most 63 characters, because it is written into the storage.simplyblock.io/node label on every StorageDevice of this node"
 // +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

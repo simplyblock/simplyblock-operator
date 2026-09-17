@@ -50,13 +50,18 @@ func Labels() []upgrade.Derivation {
 // The separator is a dot, which is legal inside all three names, so this row is
 // also one of §19.8's ambiguous concatenations: cluster a-b with pool c and
 // cluster a with pool b-c produce one key in one namespace.
+//
+// The advice is a UUID rather than a digest because that is where the product
+// went: the target model writes storage.simplyblock.io/storage-pool.<poolUUID>,
+// which retires the budget and the ambiguity together, and the CSI node plugin
+// reads the key by its prefix rather than by its parts.
 func poolNodeLabelKey() Rule {
 	return Rule{
 		RuleID:     IDPoolNodeLabelKey,
 		Summary:    "bounds the worker label key a pool patches onto the nodes it allows",
 		Where:      "Node label key simplyblock.io/pool.<namespace>.<cluster>.<pool>",
 		Which:      upgrade.ModelCurrent,
-		Resolution: upgrade.FixTruncateAndHash,
+		Resolution: upgrade.FixUseUUID,
 		Unique:     upgrade.SpaceCluster,
 		Build: atlaskube.Formula{
 			Kind:      atlaskube.LabelKeyName,
@@ -81,16 +86,20 @@ func poolNodeLabelKey() Rule {
 // (simplyblockstoragepool_controller.go).
 //
 // A bare name against the bare limit, so a 63-character cluster name works and
-// a 64-character one does not. §19.5 resolves this row by using a UUID rather
-// than by truncating, since nothing reads the value and the label exists to be
-// selected on.
+// a 64-character one does not.
+//
+// §19.5 assumed this row would take a UUID, on the grounds that nothing reads
+// the value. Something does: the label is how a person assigns a class they
+// wrote to a pool, so a value nobody can type is a contract nobody can enter.
+// The row is bounded at the input instead, by the rule on StorageCluster's own
+// metadata.name (§19.4).
 func storageClassClusterLabel() Rule {
 	return Rule{
 		RuleID:     IDStorageClassCluster,
 		Summary:    "bounds the cluster label a generated StorageClass carries",
 		Where:      "StorageClass label storage.simplyblock.io/cluster",
 		Which:      upgrade.ModelCurrent,
-		Resolution: upgrade.FixUseUUID,
+		Resolution: upgrade.FixBoundInput,
 		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {
@@ -108,13 +117,17 @@ func storageClassClusterLabel() Rule {
 
 // storageClassPoolLabel is storage.simplyblock.io/pool on the same object,
 // carrying the pool's own name.
+//
+// It is bounded at the input for the reason the cluster label is, and with one
+// more behind it: the label is the selector a pool lists its own classes with,
+// so an overlong name is a read that fails as well as a write.
 func storageClassPoolLabel() Rule {
 	return Rule{
 		RuleID:     IDStorageClassPool,
 		Summary:    "bounds the pool label a generated StorageClass carries",
 		Where:      "StorageClass label storage.simplyblock.io/pool",
 		Which:      upgrade.ModelCurrent,
-		Resolution: upgrade.FixUseUUID,
+		Resolution: upgrade.FixBoundInput,
 		Unique:     upgrade.SpaceShared,
 		Build:      atlaskube.Formula{Kind: atlaskube.LabelValue},
 		Enumerate: func(_ context.Context, s *upgrade.Scope) ([]upgrade.Input, error) {

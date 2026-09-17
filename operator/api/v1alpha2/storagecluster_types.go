@@ -873,6 +873,19 @@ type StorageClusterStatus struct {
 // `kubectl get sc` reaches storageclasses.storage.k8s.io and never this kind,
 // and the operator writes a StorageClass per pool, which puts both kinds in
 // every cluster this runs in.
+// The name is bounded at 63 rather than at the 253 an object name may be,
+// because it travels into label values this operator writes and cannot shorten:
+// storage.simplyblock.io/cluster on every generated StorageClass and every
+// mirrored StorageDevice, and io.simplyblock.storagenodeset on every worker the
+// cluster claims. Where a name is copied into a label, the label's limit binds
+// and not the object's (design-api-upgrade.md §19.1).
+//
+// It is a rule rather than a MaxLength marker because metadata.name is not this
+// schema's field. It is one of the two metadata fields a validation rule can
+// see, which is what makes the bound expressible at all (§19.4, §19.7), and the
+// alternative is an overflow that surfaces as a reconcile retrying forever on a
+// label write while the cluster says nothing about the name that caused it.
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes"
 // +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

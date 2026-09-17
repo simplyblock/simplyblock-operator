@@ -813,8 +813,13 @@ spec:
                     maxLength: 32
                     type: string
                   name:
-                    description: Name is the StorageCluster's name.
-                    maxLength: 253
+                    description: |-
+                      Name is the StorageCluster's name, and is therefore held to what such a
+                      name may be rather than to what an object name may be. A longer value is a
+                      document the API server accepts and a CreatingCluster step that can never
+                      succeed, since the cluster it would write is one the API server refuses
+                      (design-api-upgrade.md §19.4).
+                    maxLength: 63
                     type: string
                   nodesPerSocket:
                     description: |-
@@ -881,7 +886,11 @@ spec:
                   Absent means the document creates the cluster in Cluster. Setting it to a
                   cluster that does not exist, or leaving it absent when one already does,
                   is refused rather than reconciled.
-                maxLength: 253
+
+                  The maximum is what a StorageCluster name may be and not the 253 an object
+                  name may be: a reference between the two names nothing that can exist
+                  (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
               edgeCluster:
                 description: |-
@@ -1787,6 +1796,10 @@ spec:
                       creates. It is copied to the draft's own clusterRef, so that re-running
                       discovery after an expansion produces a growth document naming the same
                       cluster.
+
+                      Bounded at what a StorageCluster name may be, since a longer value names
+                      nothing that can exist (design-api-upgrade.md §19.4).
+                    maxLength: 63
                     type: string
                   configName:
                     description: |-
@@ -3682,8 +3695,12 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               clusterRef:
-                description: ClusterRef names the StorageCluster the operation runs
-                  against.
+                description: |-
+                  ClusterRef names the StorageCluster the operation runs against.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -3965,6 +3982,10 @@ spec:
                 description: |-
                   ClusterRef names the StorageCluster whose backup target this policy writes
                   to.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -4363,6 +4384,10 @@ spec:
                 description: |-
                   ClusterRef names the StorageCluster whose store this backup was found in.
                   With BackupID it is the whole of this object's identity.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -4780,6 +4805,10 @@ spec:
                   ClusterRef names the StorageCluster this operation acts on. The operation
                   never owns its target, because deleting the record of an operation must
                   not delete the cluster it operated on.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -6539,6 +6568,10 @@ spec:
                 type: integer
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: a StorageCluster name is at most 63 characters, because it is written
+            into label values on StorageClasses, StorageDevices, and worker Nodes
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:
@@ -7582,6 +7615,10 @@ spec:
                   ClusterRef names the StorageCluster this node belongs to. The cluster also
                   owns this object by controller reference, so deleting the cluster deletes
                   its nodes.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -8016,6 +8053,11 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: a StorageNode name is at most 63 characters, because it is written
+            into the storage.simplyblock.io/node label on every StorageDevice of this
+            node
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:
@@ -9242,6 +9284,12 @@ spec:
                   pool's own finalizer while classes are assigned or volumes are bound.
 
                   Immutable from creation: which cluster a pool is in is its identity.
+
+                  The maximum is what a StorageCluster name may be rather than what a
+                  reference may be: a longer value names nothing that can exist, and the
+                  reference is immutable, so admitting one creates a pool whose only
+                  remedy is deletion (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -9495,6 +9543,11 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: a StoragePool name is at most 63 characters, because it is written
+            into the storage.simplyblock.io/pool label that assigns StorageClasses
+            to this pool
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:
