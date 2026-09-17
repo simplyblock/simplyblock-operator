@@ -197,3 +197,22 @@ func TestBlockHandleIsNotABackingVolume(t *testing.T) {
 		t.Error("a block handle was read as a pNFS one")
 	}
 }
+
+// A pNFS volume never stashes a volume context, because staging it needs
+// nothing beyond the handle and the context kubelet already passes. So the
+// generic repair path -- which reads that stash -- cannot repair one, and has
+// to be told to leave it alone.
+//
+// Getting this wrong strands a pod: publish heals a dead mount before
+// bind-mounting it, the heal fails on a stash that was never written, and
+// NodePublishVolume returns an error kubelet retries forever.
+func TestPNFSVolumesAreRepairedByTheirOwnPath(t *testing.T) {
+	const pnfsHandle = "nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f"
+
+	if !isPNFSVolume(pnfsHandle) {
+		t.Error("a pNFS handle was not recognized, so repair would read a stash that does not exist")
+	}
+	if isPNFSVolume("f0bb9077:pool-a:bfc56677") {
+		t.Error("a block handle was routed to the pNFS repair path")
+	}
+}

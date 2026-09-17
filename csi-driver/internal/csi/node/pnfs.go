@@ -345,3 +345,33 @@ func (ns *Server) unstagePNFSVolume(
 	}
 	return ns.detachBacking(ctx, spec)
 }
+
+// isPNFSVolume is the cheap question every path that branches on volume kind
+// asks. It reads the handle rather than the volume context, because the handle
+// is the one thing every node RPC is given.
+func isPNFSVolume(volumeHandle string) bool {
+	return lvol.VolumeHandle(volumeHandle).IsNFS()
+}
+
+// restagePNFSVolume repairs a dead pNFS staging mount.
+//
+// It takes the volume context from the request rather than from a stash on
+// disk, because a pNFS stage writes none: everything it needs is the handle and
+// the context kubelet passes on every call, so there was nothing to stash. The
+// generic repair path reads that stash and so cannot repair one of these, which
+// is why this exists rather than the two sharing.
+func (ns *Server) restagePNFSVolume(
+	ctx context.Context,
+	req *csi.NodePublishVolumeRequest,
+	stagingTargetPath string,
+) error {
+	klog.Warningf("restaging pNFS volume %s: staging mount %s is dead",
+		req.GetVolumeId(), stagingTargetPath)
+	if err := ns.mounter.Remove(stagingTargetPath); err != nil {
+		return fmt.Errorf("pnfs: clearing the dead mount at %s: %w", stagingTargetPath, err)
+	}
+	return ns.stagePNFSVolume(ctx, &csi.NodeStageVolumeRequest{
+		VolumeId:      req.GetVolumeId(),
+		VolumeContext: req.GetVolumeContext(),
+	}, stagingTargetPath)
+}
