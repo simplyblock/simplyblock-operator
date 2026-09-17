@@ -541,3 +541,69 @@ func TestAdoptionRefusesALinkDisagreement(t *testing.T) {
 		})
 	}
 }
+
+// A refusal that compares a mutable field against the running deployment must
+// not survive the handover, or it becomes a deadlock: the operator refuses to
+// apply the very change that would make the two agree, and the only way out is
+// to edit the running DaemonSet by hand, which is what this kind exists to stop
+// anyone having to do.
+//
+// The driver name is the exception and is asserted separately below: it is
+// immutable, so the comparison can never be what a legal edit changes.
+func TestAdoptedDeploymentAcceptsAMutableChange(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*simplyblockv1alpha2.SimplyblockDriver)
+	}{
+		{"turning the link on", func(d *simplyblockv1alpha2.SimplyblockDriver) {
+			d.Spec.Link.EnableLink = ptr.To(true)
+		}},
+		{"turning TLS on", func(d *simplyblockv1alpha2.SimplyblockDriver) {
+			d.Spec.TLS.EnableTLS = ptr.To(true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := reconcilerScheme(t)
+			d := testDriver("simplyblock")
+			// The handover already happened: these objects are the operator's.
+			d.Status.Origin = simplyblockv1alpha2.SimplyblockDriverOriginAdopted
+			tc.mutate(d)
+
+			node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(d, node).WithStatusSubresource(d).Build()
+			r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+			message, refused, err := r.adoptionRefusal(context.Background(), d)
+			if err != nil {
+				t.Fatalf("adoptionRefusal: %v", err)
+			}
+			if refused {
+				t.Errorf("an adopted deployment refused a spec change it should apply: %s", message)
+			}
+		})
+	}
+}
+
+// The driver name still refuses after the handover, because it is the one fact
+// adoption cannot change: it is immutable on the spec, every PersistentVolume
+// records it, and a disagreement is not repairable by an edit.
+func TestAdoptedDeploymentStillRefusesADriverNameDisagreement(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	d.Status.Origin = simplyblockv1alpha2.SimplyblockDriverOriginAdopted
+	d.Spec.DriverName = "csi.something-else.io"
+
+	node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(d, node).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+	_, refused, err := r.adoptionRefusal(context.Background(), d)
+	if err != nil {
+		t.Fatalf("adoptionRefusal: %v", err)
+	}
+	if !refused {
+		t.Error("an adopted deployment accepted a driver name that disagrees with the running plugin")
+	}
+}

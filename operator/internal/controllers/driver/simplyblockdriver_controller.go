@@ -364,9 +364,21 @@ func (r *SimplyblockDriverReconciler) inspectExisting(
 // adoptionRefusal reports the first thing about a running deployment that
 // this spec does not yet describe: a configuration no field can express, a TLS
 // mode spec.tls does not match, a csi-link spec.link does not match, or a
-// driver name that disagrees with the immutable spec.driverName. All are
-// refused rather than reconciled over, because each is a live property that an
-// apply built from the spec as it stands would silently change.
+// driver name that disagrees with the immutable spec.driverName. Each is a live
+// property that an apply built from the spec as it stands would silently
+// change, so each is refused rather than reconciled over.
+//
+// All but the last stop once status.origin is set. Before the handover the
+// running deployment is somebody else's and a disagreement means the spec does
+// not describe it yet; after the handover the objects are this operator's, and
+// the same disagreement means an administrator has asked for a change. Refusing
+// then would be a deadlock, because the apply being refused is the one that
+// would make the two agree, and the only way out would be editing the running
+// DaemonSet by hand -- which is what this kind exists so that nobody has to do.
+//
+// The driver name is exempt because it cannot be that edit: spec.driverName is
+// immutable, so admission rejects the change that would resolve it, and every
+// PersistentVolume records the old value in spec.csi.driver.
 func (r *SimplyblockDriverReconciler) adoptionRefusal(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (message string, refused bool, err error) {
@@ -379,20 +391,22 @@ func (r *SimplyblockDriverReconciler) adoptionRefusal(
 		return "", false, err
 	}
 
-	if what, unsupported := unsupportedConfiguration(&node); unsupported {
-		return fmt.Sprintf(
-			"the running node plugin is configured with %s, which this kind has no field for; "+
-				"adopting it would reconcile that configuration away, so the handover stops here "+
-				"rather than turning it off",
-			what), true, nil
-	}
+	if d.Status.Origin == "" {
+		if what, unsupported := unsupportedConfiguration(&node); unsupported {
+			return fmt.Sprintf(
+				"the running node plugin is configured with %s, which this kind has no field for; "+
+					"adopting it would reconcile that configuration away, so the handover stops here "+
+					"rather than turning it off",
+				what), true, nil
+		}
 
-	if message, mismatched := tlsAdoptionMismatch(d, &node); mismatched {
-		return message, true, nil
-	}
+		if message, mismatched := tlsAdoptionMismatch(d, &node); mismatched {
+			return message, true, nil
+		}
 
-	if message, mismatched := linkAdoptionMismatch(d, &node); mismatched {
-		return message, true, nil
+		if message, mismatched := linkAdoptionMismatch(d, &node); mismatched {
+			return message, true, nil
+		}
 	}
 
 	running, found := runningDriverName(&node)
