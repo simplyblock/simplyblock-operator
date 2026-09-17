@@ -1338,6 +1338,7 @@ behavior, and without an event it is indistinguishable from a stalled controller
 | `simplyblock_storagecluster_operation_active_state`                 | `cluster`                     | Gauge, 1 while `status.activeOpsRef` is set, so a lock held by a finished operation is visible |
 | `simplyblock_storagecluster_rolling_restart_peer_hold_seconds`      | `cluster`                     | Histogram of time the rolling restart held for a peer node to come back online                 |
 | `simplyblock_storagecluster_rolling_restart_node_index_count`       | `cluster`                     | Gauge of `nodeIndex`, against the `nodes` length, so walk progress is graphable                |
+| `simplyblock_storagecluster_rolling_restart_node_count`             | `cluster`                     | Gauge of how many nodes the running walk covers, which is the length the index is read against |
 | `simplyblock_storagecluster_phase_state`                            | `cluster`, `phase`            | Gauge, 1 for the cluster's current phase (§4.2), so a cluster stuck in `Creating` is alertable |
 
 Every metric carries `cluster`, matching the rebalancer's existing convention, so

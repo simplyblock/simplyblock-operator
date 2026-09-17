@@ -452,7 +452,7 @@ func (r *StorageClusterOpsReconciler) observeOperation(
 			Observe(time.Since(started.Time).Seconds())
 	}
 	rollingRestartNodeIndex.DeleteLabelValues(cluster)
-	rollingRestartNodeTotal.DeleteLabelValues(cluster)
+	rollingRestartNodeCount.DeleteLabelValues(cluster)
 }
 
 // observeStep records how long one step took. The start is the step's entry,

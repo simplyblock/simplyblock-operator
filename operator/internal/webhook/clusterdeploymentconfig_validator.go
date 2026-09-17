@@ -90,26 +90,26 @@ func (v *ClusterDeploymentConfigValidator) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	namespace := config.Namespace
+	if namespace == "" {
+		// A namespaced object created through a namespaced endpoint may arrive
+		// with the field unset, because the path carries it instead.
+		namespace = req.Namespace
+	}
+
 	if req.Operation == admissionv1.Update {
 		old := &simplyblockv1alpha2.ClusterDeploymentConfig{}
 		if err := v.Decoder.DecodeRaw(req.OldObject, old); err != nil {
 			return admission.Errored(http.StatusBadRequest, err)
 		}
 		if old.Spec.Approved {
-			return afterApproval(old, config)
+			return afterApproval(namespace, old, config)
 		}
 	}
 
 	if !config.Spec.Approved {
 		// A draft. The schema and the CEL rules of §3.2 are the whole check.
 		return admission.Allowed("")
-	}
-
-	namespace := config.Namespace
-	if namespace == "" {
-		// A namespaced object created through a namespaced endpoint may arrive
-		// with the field unset, because the path carries it instead.
-		namespace = req.Namespace
 	}
 
 	problems, err := v.checkApproval(ctx, namespace, config)
@@ -119,20 +119,42 @@ func (v *ClusterDeploymentConfigValidator) Handle(
 	if len(problems) == 0 {
 		return admission.Allowed("")
 	}
+
+	messages := make([]string, 0, len(problems))
+	for _, problem := range problems {
+		deployment.CountApprovalRejection(namespace, problem.reason)
+		messages = append(messages, problem.message)
+	}
 	return admission.Denied(fmt.Sprintf(
 		"this document cannot be approved, and approving it is what makes it "+
-			"immutable: %s", strings.Join(problems, "; ")))
+			"immutable: %s", strings.Join(messages, "; ")))
+}
+
+// problem is one thing wrong with an approval, carrying the reason it is counted
+// under as well as the sentence the reviewer reads.
+//
+// The reason is the vocabulary the controller's own validation events use, for
+// the four checks both perform, so the two counters of §9.2 can be read against
+// each other: a rejection under a reason the draft never reported is a gap in
+// the draft's validation rather than a reviewer's slip.
+type problem struct {
+	reason  string
+	message string
 }
 
 // afterApproval restates §3.2 for a document that is already approved.
-func afterApproval(old, config *simplyblockv1alpha2.ClusterDeploymentConfig) admission.Response {
+func afterApproval(
+	namespace string, old, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) admission.Response {
 	if !config.Spec.Approved {
+		deployment.CountApprovalRejection(namespace, deployment.ApprovalWithdrawn)
 		return admission.Denied(
 			"spec.approved cannot be withdrawn: un-approving a document does not " +
 				"un-expand it, and the cluster and nodes it produced are removed by " +
 				"deleting them rather than by editing the record that describes them")
 	}
 	if !equality.Semantic.DeepEqual(old.Spec, config.Spec) {
+		deployment.CountApprovalRejection(namespace, deployment.SpecImmutable)
 		return admission.Denied(
 			"spec is immutable once spec.approved is true, because the document is " +
 				"then the record of what was deployed. To add nodes to the cluster " +
@@ -151,27 +173,30 @@ func afterApproval(old, config *simplyblockv1alpha2.ClusterDeploymentConfig) adm
 // say so once rather than over two applies, each of which costs another approval.
 func (v *ClusterDeploymentConfigValidator) checkApproval(
 	ctx context.Context, namespace string, config *simplyblockv1alpha2.ClusterDeploymentConfig,
-) ([]string, error) {
-	var problems []string
+) ([]problem, error) {
+	var problems []problem
 
 	missing, err := v.missingWorkers(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	if len(missing) > 0 {
-		problems = append(problems, fmt.Sprintf(
-			"a group names %s, which %s not %s of this Kubernetes cluster",
-			strings.Join(missing, ", "),
-			plural(len(missing), "is", "are"), plural(len(missing), "a node", "nodes")))
+		problems = append(problems, problem{
+			reason: deployment.WorkerNotFound,
+			message: fmt.Sprintf(
+				"a group names %s, which %s not %s of this Kubernetes cluster",
+				strings.Join(missing, ", "),
+				plural(len(missing), "is", "are"), plural(len(missing), "a node", "nodes")),
+		})
 	}
 
-	cluster, problem, err := v.resolveCluster(ctx, namespace, config)
+	cluster, refused, err := v.resolveCluster(ctx, namespace, config)
 	if err != nil {
 		return nil, err
 	}
 	switch {
-	case problem != "":
-		problems = append(problems, problem)
+	case refused.reason != "":
+		problems = append(problems, refused)
 
 	case cluster != nil:
 		// A growth document. The class the groups name has to be the one the
@@ -179,7 +204,9 @@ func (v *ClusterDeploymentConfigValidator) checkApproval(
 		// time by StorageNodeValidator, which is a slower way to learn it and
 		// leaves a half-expanded deployment behind.
 		if mismatch := classMismatch(config, cluster); mismatch != "" {
-			problems = append(problems, mismatch)
+			problems = append(problems, problem{
+				reason: deployment.DeviceClassMismatch, message: mismatch,
+			})
 		}
 
 	default:
@@ -190,11 +217,14 @@ func (v *ClusterDeploymentConfigValidator) checkApproval(
 			return nil, err
 		}
 		if owner != "" {
-			problems = append(problems, fmt.Sprintf(
-				"ClusterDeploymentConfig %s is approved and creates StorageCluster %s "+
-					"as well; both would race to create it and the loser is an immutable "+
-					"Failed document, so add to it with spec.clusterRef instead",
-				owner, deployment.TargetClusterName(config)))
+			problems = append(problems, problem{
+				reason: deployment.ClusterExists,
+				message: fmt.Sprintf(
+					"ClusterDeploymentConfig %s is approved and creates StorageCluster %s "+
+						"as well; both would race to create it and the loser is an immutable "+
+						"Failed document, so add to it with spec.clusterRef instead",
+					owner, deployment.TargetClusterName(config)),
+			})
 		}
 	}
 
@@ -206,35 +236,44 @@ func (v *ClusterDeploymentConfigValidator) checkApproval(
 // own, and a problem for the two combinations the expansion refuses.
 func (v *ClusterDeploymentConfigValidator) resolveCluster(
 	ctx context.Context, namespace string, config *simplyblockv1alpha2.ClusterDeploymentConfig,
-) (*simplyblockv1alpha2.StorageCluster, string, error) {
+) (*simplyblockv1alpha2.StorageCluster, problem, error) {
 	name := deployment.TargetClusterName(config)
 	if name == "" {
-		return nil, "the document names neither a cluster to create in spec.cluster " +
-			"nor one to add nodes to in spec.clusterRef, so it describes no deployment", nil
+		return nil, problem{
+			reason: deployment.NoClusterNamed,
+			message: "the document names neither a cluster to create in spec.cluster " +
+				"nor one to add nodes to in spec.clusterRef, so it describes no deployment",
+		}, nil
 	}
 
 	var cluster simplyblockv1alpha2.StorageCluster
 	err := v.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &cluster)
 	found := err == nil
 	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, "", fmt.Errorf("reading StorageCluster %s: %w", name, err)
+		return nil, problem{}, fmt.Errorf("reading StorageCluster %s: %w", name, err)
 	}
 
 	switch {
 	case config.Spec.ClusterRef != "" && !found:
-		return nil, fmt.Sprintf(
-			"spec.clusterRef names StorageCluster %s, and there is none by that name "+
-				"in namespace %s", name, namespace), nil
+		return nil, problem{
+			reason: deployment.ClusterNotFound,
+			message: fmt.Sprintf(
+				"spec.clusterRef names StorageCluster %s, and there is none by that name "+
+					"in namespace %s", name, namespace),
+		}, nil
 
 	case config.Spec.ClusterRef == "" && found:
-		return nil, fmt.Sprintf(
-			"spec.cluster.name is %s and a StorageCluster by that name already exists; "+
-				"set spec.clusterRef to add nodes to it instead", name), nil
+		return nil, problem{
+			reason: deployment.ClusterExists,
+			message: fmt.Sprintf(
+				"spec.cluster.name is %s and a StorageCluster by that name already exists; "+
+					"set spec.clusterRef to add nodes to it instead", name),
+		}, nil
 
 	case found:
-		return &cluster, "", nil
+		return &cluster, problem{}, nil
 	}
-	return nil, "", nil
+	return nil, problem{}, nil
 }
 
 // classMismatch reports a growth document whose groups name devices of a class

@@ -610,25 +610,29 @@ func (r *SimplyblockDriverReconciler) setStatus(
 	})
 }
 
-// TODO(simplyblockdriver): publish design §6.2's four gauges,
-// simplyblock_simplyblockdriver_{version_info,nodes_ready_count,
-// nodes_expected_count,controller_ready_state}. The three that are not the
-// version are computable from the health below and need only a collector; the
-// version one waits on §5.
-
 // setHealth writes the phase together with the counts it is explained by, since
 // a phase a reader cannot check against the numbers behind it sends them to
 // kubectl describe to learn which worker is short.
+//
+// It is also where §6.2's gauges are published, because this is the pass that
+// measured them. The paths that write a phase without one — a refusal, a
+// failure — leave the last reading standing rather than replacing it with
+// zeros they did not observe.
 func (r *SimplyblockDriverReconciler) setHealth(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, h health,
 ) error {
-	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+	err := r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
 		status.Phase = h.phase
 		status.Message = h.message
 		status.NodesReady = h.nodesReady
 		status.NodesTotal = h.nodesTotal
 		status.ControllerReady = h.controllerReady
 	})
+	if err != nil {
+		return err
+	}
+	observeHealth(d.Namespace, d.Status.Version, h)
+	return nil
 }
 
 func (r *SimplyblockDriverReconciler) writeStatus(

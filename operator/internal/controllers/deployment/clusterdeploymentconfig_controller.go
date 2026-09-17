@@ -113,8 +113,10 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 	}
 
 	// A deleted document needs nothing done to it. There is no finalizer, because
-	// it owns nothing and nothing reads it (§4.3).
+	// it owns nothing and nothing reads it (§4.3). Its gauges go, because a phase
+	// series keyed on a name outlives the object the name belonged to.
 	if !config.DeletionTimestamp.IsZero() {
+		forgetConfig(&config)
 		return ctrl.Result{}, nil
 	}
 
@@ -139,6 +141,8 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 	// no longer be edited away, and holding forever would say less than failing.
 	if len(findings) > 0 {
 		r.emitFindings(&config, findings)
+		// Counted unconditionally: this path is terminal, so it happens once.
+		countValidationFailures(config.Namespace, findings)
 		return r.fail(ctx, &config, findings[0].message)
 	}
 
@@ -178,7 +182,7 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	if config.Status.Step.State == "" {
 		deadline := metav1.NewTime(time.Now().Add(validatingDeadline))
 		return ctrl.Result{RequeueAfter: configAdvance},
-			r.recordStep(ctx, config, machine.CurrentState(), &deadline)
+			r.beginExpansion(ctx, config, machine.CurrentState(), &deadline)
 	}
 
 	current := machine.CurrentState()
@@ -262,9 +266,17 @@ func (r *ClusterDeploymentConfigReconciler) holdAsDraft(
 	findings []finding,
 ) (ctrl.Result, error) {
 	if len(findings) > 0 {
+		summary := summarize(findings)
 		r.emitFindings(config, findings)
+		// A draft nobody has fixed is validated again every pass, and the counter
+		// is about the outcomes a reviewer hits rather than about how long one has
+		// stood. The message is what last went out, so a summary that has not
+		// changed is the same finding reported again.
+		if config.Status.Message != summary {
+			countValidationFailures(config.Namespace, findings)
+		}
 		return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
-			simplyblockv1alpha2.ClusterDeploymentConfigPhaseDraft, summarize(findings))
+			simplyblockv1alpha2.ClusterDeploymentConfigPhaseDraft, summary)
 	}
 
 	// AwaitingApproval is emitted on the transition to a validated draft rather
@@ -342,6 +354,7 @@ func (r *ClusterDeploymentConfigReconciler) succeed(
 	message := fmt.Sprintf("expanded into cluster %s and %d node(s)",
 		config.Status.ClusterRef, len(config.Status.NodeRefs))
 	r.emit(config, corev1.EventTypeNormal, NodesCreated, message)
+	observeExpansion(config)
 	return r.note(ctx, config,
 		simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded, message)
 }
@@ -365,6 +378,32 @@ func (r *ClusterDeploymentConfigReconciler) note(
 		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
 			status.Phase = phase
 			status.Message = message
+		})
+}
+
+// beginExpansion records the machine's first step together with the instant the
+// expansion started, which is this pass: the machine is born on the first
+// reconcile after somebody approved the document.
+//
+// The instant is persisted rather than kept in memory because the expansion
+// outlives a single reconcile and can outlive the process, and a duration
+// measured from a start the operator forgot is not a measurement.
+func (r *ClusterDeploymentConfigReconciler) beginExpansion(
+	ctx context.Context,
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	initial configStep,
+	deadline *metav1.Time,
+) error {
+	started := metav1.Now()
+	return r.writeStatus(ctx, config,
+		func(status *simplyblockv1alpha2.ClusterDeploymentConfigStatus) {
+			status.Phase = simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding
+			status.Step = statemachine.KubeSnapshot{
+				State: string(initial), Deadline: deadline,
+			}
+			if status.ExpansionStartedAt == nil {
+				status.ExpansionStartedAt = &started
+			}
 		})
 }
 
@@ -392,7 +431,7 @@ func (r *ClusterDeploymentConfigReconciler) writeStatus(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 	mutate func(*simplyblockv1alpha2.ClusterDeploymentConfigStatus),
 ) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh simplyblockv1alpha2.ClusterDeploymentConfig
 		if err := r.Get(ctx, client.ObjectKeyFromObject(config), &fresh); err != nil {
 			return err
@@ -418,6 +457,14 @@ func (r *ClusterDeploymentConfigReconciler) writeStatus(
 		config.ResourceVersion = fresh.ResourceVersion
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Published here rather than at each caller, because every phase this
+	// document reaches is written through this one function and a gauge that
+	// missed one would report the phase before it indefinitely.
+	observeConfigPhase(config)
+	return nil
 }
 
 // emit raises an event on the document, which is what a reviewer has open.
@@ -468,6 +515,12 @@ func equalConfigStatus(a, b simplyblockv1alpha2.ClusterDeploymentConfigStatus) b
 		return false
 	}
 	if a.Step.Deadline != nil && !a.Step.Deadline.Equal(b.Step.Deadline) {
+		return false
+	}
+	if (a.ExpansionStartedAt == nil) != (b.ExpansionStartedAt == nil) {
+		return false
+	}
+	if a.ExpansionStartedAt != nil && !a.ExpansionStartedAt.Equal(b.ExpansionStartedAt) {
 		return false
 	}
 	for i := range a.NodeRefs {
