@@ -188,6 +188,25 @@ var abortableSteps = map[step]bool{
 // step can be honored.
 func abortable(current step) bool { return abortableSteps[current] }
 
+// UnabortableSteps are the declared steps an abort cannot be honored from,
+// sorted.
+//
+// It is exported for the DELETE guard on this kind, which asks the same question
+// this package's unwind asks: a deletion may not express something spec.abort
+// could not, so both channels read one graph
+// (design-crd-model.md §3.1). Reading it rather than restating it is what keeps
+// the guard from refusing a step this package has since made abortable, or
+// admitting one it has not.
+func UnabortableSteps() []step {
+	var refused []step
+	for _, declared := range statemachine.DeclaredMultiStates(graphs()) {
+		if s := step(declared); !abortable(s) {
+			refused = append(refused, s)
+		}
+	}
+	return refused
+}
+
 // action converts the API's action enum into the MultiConfig's key. The
 // conversion exists because statemachine.Action is a concrete string type
 // rather than a second type parameter (see its doc comment), and doing it in
