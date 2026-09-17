@@ -2255,6 +2255,20 @@ spec:
                           type: string
                       type: object
                     type: array
+                  continuedAt:
+                    description: |-
+                      ContinuedAt is when this operation asked the control plane to start the
+                      copy, written before the call rather than after it.
+
+                      The order is what makes the request at-most-once, and that is the point.
+                      A repeated continue is the shape that has lost writes here: a read
+                      timeout on a call that had in fact committed made the operator retry a
+                      transfer, and the retry copied nothing while the source was unfrozen. So
+                      a recorded continue is never issued again, and an operation that crashed
+                      between this write and the call waits out its step's deadline instead —
+                      a rare stall, against a silent data loss.
+                    format: date-time
+                    type: string
                   memberCount:
                     description: |-
                       MemberCount is how many volumes the migrated NVMe-oF subsystem holds, as
@@ -9939,6 +9953,7 @@ rules:
   - create
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -10140,6 +10155,7 @@ rules:
   - controlplaneops
   - controlplanes
   - operatorops
+  - persistentvolumeops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -10174,6 +10190,7 @@ rules:
   - controlplaneops/finalizers
   - controlplanes/finalizers
   - operatorops/finalizers
+  - persistentvolumeops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -10201,6 +10218,7 @@ rules:
   - controlplaneops/status
   - controlplanes/status
   - operatorops/status
+  - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status

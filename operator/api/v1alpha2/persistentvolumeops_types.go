@@ -319,6 +319,19 @@ type MigrationStatus struct {
 	// +optional
 	TargetNodeUUID string `json:"targetNodeUUID,omitempty"`
 
+	// ContinuedAt is when this operation asked the control plane to start the
+	// copy, written before the call rather than after it.
+	//
+	// The order is what makes the request at-most-once, and that is the point.
+	// A repeated continue is the shape that has lost writes here: a read
+	// timeout on a call that had in fact committed made the operator retry a
+	// transfer, and the retry copied nothing while the source was unfrozen. So
+	// a recorded continue is never issued again, and an operation that crashed
+	// between this write and the call waits out its step's deadline instead —
+	// a rare stall, against a silent data loss.
+	// +optional
+	ContinuedAt *metav1.Time `json:"continuedAt,omitempty"`
+
 	// MemberCount is how many volumes the migrated NVMe-oF subsystem holds, as
 	// the control plane reports it. More than one member means the sibling
 	// volumes move along with the named one, so the count is both the
