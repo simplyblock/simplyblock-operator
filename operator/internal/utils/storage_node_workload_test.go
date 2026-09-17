@@ -33,6 +33,37 @@ func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T
 	}
 }
 
+// TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys guards the mounts
+// node_configure.py's lblk eligibility check needs.
+//
+// It arrived with the lblk work against the v1alpha1 builder and is written
+// against the v1alpha2 one here, because that is the builder this operator
+// runs: the StorageCluster is the DaemonSet's parent now, and the check is
+// about the container rather than about which kind describes it.
+func TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	var hasDev, hasSys bool
+	for _, m := range init.VolumeMounts {
+		if m.Name == "dev-vol" && m.MountPath == "/dev" {
+			hasDev = true
+		}
+		if m.Name == "host-sys" && m.MountPath == "/sys" {
+			hasSys = true
+		}
+	}
+	if !hasDev {
+		t.Errorf("s-node-api-config-generator must mount /dev for lblk eligibility checks")
+	}
+	if !hasSys {
+		t.Errorf("s-node-api-config-generator must mount /sys for block-device inspection")
+	}
+}
+
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 	sn := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},

@@ -59,9 +59,9 @@ func BuildStorageNodeDaemonSet(
 	}
 
 	// Build the fleet-level (non-overridable) args that are always appended.
-	// Per-node args (pci-*, device-*, size-range) and the cluster-scoped sizing
-	// args (max-subsys-count, max-size, vcpu-count) are read at runtime from the per-node
-	// ConfigMap via the init script.
+	// Per-node args (pci-*, device-*, size-range, lblk/blk-*) and the cluster-scoped
+	// sizing args (max-subsys-count, max-size, vcpu-count) are read at runtime from
+	// the per-node ConfigMap via the init script.
 	fleetArgs := ""
 	if len(wl.SocketsToUse) > 0 {
 		fleetArgs += " --sockets-to-use=" + JoinList(wl.SocketsToUse)
@@ -80,6 +80,12 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT:-0}"
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
 [ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=\"${DEVICE_MODEL}\""
 [ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=\"${SIZE_RANGE}\""
+[ "${LBLK}" = "true" ] && ARGS="${ARGS} --lblk"
+[ -n "${BLK_NAMES}" ] && ARGS="${ARGS} --blk-names=\"${BLK_NAMES}\""
+[ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""
+[ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
+[ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
+[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force-format"
 ARGS="${ARGS}` + fleetArgs + `"
 eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 `
@@ -212,6 +218,10 @@ fi`
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 		{Name: "host-mnt", MountPath: "/mnt"},
+		// node_configure.py's lblk eligibility check inspects /dev and
+		// /sys/block directly at config-generation time.
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "host-sys", MountPath: "/sys"},
 		nodeEnvMount,
 	}
 

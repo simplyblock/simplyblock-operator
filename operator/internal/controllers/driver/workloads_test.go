@@ -8,6 +8,7 @@
 package driver
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -271,5 +272,21 @@ func TestPullPolicyDefaultsAndOverrides(t *testing.T) {
 		if c.ImagePullPolicy != corev1.PullIfNotPresent {
 			t.Errorf("%s pull policy = %q, want the spec's IfNotPresent", c.Name, c.ImagePullPolicy)
 		}
+	}
+}
+
+// The csi-snapshotter sidecar drives the GroupController for a
+// VolumeGroupSnapshot only when the CSIVolumeGroupSnapshot feature gate is on
+// (design-consistency-groups.md §9, P0-4). The chart carried the flag before
+// the deployment moved into the operator, so the sidecar must carry it here.
+func TestSnapshotterSidecarEnablesGroupSnapshots(t *testing.T) {
+	d := testDriver("simplyblock")
+	snapshotter := containerNamed(
+		controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-snapshotter")
+	if snapshotter == nil {
+		t.Fatal("no csi-snapshotter sidecar")
+	}
+	if !slices.Contains(snapshotter.Args, "--feature-gates=CSIVolumeGroupSnapshot=true") {
+		t.Errorf("snapshotter args carry no CSIVolumeGroupSnapshot gate: %v", snapshotter.Args)
 	}
 }

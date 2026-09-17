@@ -954,7 +954,19 @@ func (r *StorageClusterReconciler) creationParams(
 		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomic4kWrites),
+		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
 	}, nil
+}
+
+// deviceMode is spec.deviceClass in sbcli's cluster-create spelling. The CRD
+// default is applied by the API server's OpenAPI defaulting, which a value
+// read here has already gone through in production; the empty case below only
+// covers a caller (a test, an old cached object) that bypassed it.
+func deviceMode(class simplyblockv1alpha2.StorageClusterDeviceClass) string {
+	if class == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+		return "lblk"
+	}
+	return "nvme"
 }
 
 // backupConfig resolves the credentials the backup store is reached with.

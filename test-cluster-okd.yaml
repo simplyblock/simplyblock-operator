@@ -1,0 +1,93 @@
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: StorageCluster
+metadata:
+  name: simplyblock-cluster
+  namespace: default
+spec:
+  isSingleNode: false
+  enableNodeAffinity: false
+  strictNodeAntiAffinity: false
+  volumeMigrationSettings:
+    # enabled turns on volume migration for this cluster (defaults to true).
+    enabled: true
+    # rebalancerImage is used for the migration path-validation Job (must include nvme-cli).
+    #rebalancerImage: docker.io/simplyblock/simplyblock-rebalancer:volume-autorebalancing
+    #autoRebalancing:
+    #enabled: true
+    #latencyBenchmarkEnabled: true
+    #migrationEnabled: true
+    #prometheusURL: http://simplyblock-prometheus.simplyblock:9090
+  warningThreshold:
+    capacity: 80
+    provisionedCapacity: 100
+  criticalThreshold:
+    capacity: 90
+    provisionedCapacity: 100
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: StorageNodeSet
+metadata:
+  name: simplyblock-node
+  namespace: default
+spec:
+  pcieAllowList:
+    - 0000:02:00.0
+    - 0000:03:00.0
+  maxParallelNodeAdds: 1
+  #spdkProxyImage: "public.ecr.aws/simply-block/simplyblock:main-2774-bd790547"
+  clusterName: simplyblock-cluster
+  maxLogicalVolumeCount: 10
+  partitions: 1
+  corePercentage: 50
+  skipKubeletConfiguration: false
+  enableCpuTopology: true
+  openShiftCluster: true
+  forceFormat4K: true
+  nodesPerSocket: 1
+  socketsToUse:
+    - "0"
+  mgmtIfname: br-ex
+  dataIfname:
+    - ens16np0
+  workerNodes:
+    - worker-1
+    - worker-2
+    - worker-3
+    - worker-4
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: Pool
+metadata:
+  name: pool1
+  namespace: default
+spec:
+  clusterName: simplyblock-cluster
+---
+# The CSI driver. The chart used to render the node DaemonSet, the controller
+# StatefulSet, their RBAC, the node ConfigMaps, and the CSIDriver registration
+# directly. It renders none of them now, and this object is what the operator
+# turns into all eighteen.
+#
+# It lives in the operator's namespace rather than beside the StorageCluster
+# above. The plugins mount simplyblock-csi-secret-v2, which the StorageCluster
+# reconciler writes into the operator's namespace, so a driver deployed anywhere
+# else comes up with no credentials to reach the control plane with.
+#
+# The name is "simplyblock" because the operator derives every object it applies
+# as <name>-csi-<component>. That reproduces the names the chart wrote literally,
+# which is what lets an already-running deployment be taken over in place rather
+# than deleted and rebuilt.
+#
+# It names no image on purpose. Unset takes the operator's own registry and tag
+# with the CSI driver's repository, so the driver follows the operator
+# reconciling it and an operator upgrade carries it forward without a second
+# edit here. That needs the chart to have set SB_OPERATOR_IMAGE on the
+# operator's deployment; an operator deployed before that was added reports
+# NoImage and wants spec.image stated.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec: {}

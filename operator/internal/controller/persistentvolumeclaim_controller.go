@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/simplyblock/atlas/kube"
+	atlaslvol "github.com/simplyblock/atlas/lvol"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -113,7 +113,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		}
 		return ctrl.Result{}, fmt.Errorf("get PV %q: %w", pvc.Spec.VolumeName, err)
 	}
-	clusterUUID, poolUUID, volumeUUID, ok := splitCSIVolumeHandle(pv)
+	clusterUUID, poolUUID, volumeUUID, ok := csiVolumeHandleParts(pv)
 	if !ok {
 		r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "NotSimplyblockVolume", "NotSimplyblockVolume",
 			"PV %q is not a simplyblock CSI volume; pinned-volume annotation ignored", pv.Name)
@@ -304,18 +304,20 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 	return ctrl.Result{}, nil
 }
 
-// splitCSIVolumeHandle parses a simplyblock CSI volume handle
-// ("<clusterUUID>:<poolUUID>:<volumeUUID>") from a PV. ok is false when the PV is
-// not a simplyblock CSI volume or the handle is malformed.
-func splitCSIVolumeHandle(pv *corev1.PersistentVolume) (clusterUUID, poolUUID, volumeUUID string, ok bool) {
-	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeHandle == "" {
+// csiVolumeHandleParts returns the parts of a PV's simplyblock CSI volume
+// handle through the atlas helpers, so the handle grammar lives in one place.
+// ok is false when the PV is not a simplyblock CSI volume or the handle is
+// malformed.
+func csiVolumeHandleParts(pv *corev1.PersistentVolume) (clusterUUID, poolRef, volumeUUID string, ok bool) {
+	raw, err := kube.VolumeHandleFromPV(pv)
+	if err != nil {
 		return "", "", "", false
 	}
-	parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+	h, parsed := atlaslvol.ParseHandle(raw)
+	if !parsed {
 		return "", "", "", false
 	}
-	return parts[0], parts[1], parts[2], true
+	return h.ClusterID, h.PoolRef, h.VolumeID, true
 }
 
 func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {

@@ -1,0 +1,47 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  creationTimestamp: "2026-09-15T15:23:38Z"
+  generation: 2
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: initial-discovery
+    storage.simplyblock.io/ready-to-deploy: "true"
+  name: discovered-initial-discovery
+  namespace: simplyblock
+  resourceVersion: "14960753"
+  uid: 69cdac9f-af1e-4ded-907a-fdc36b8485ae
+spec:
+  approved: true
+  cluster:
+    maxSubsystemCount: 30
+    name: discovered-initial-discovery-cluster
+    vcpuCount: 4
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - "0000:00:02.0"
+        - "0000:00:03.0"
+        - "0000:00:04.0"
+        - "0000:00:05.0"
+      mgmtInterface: eth0
+      name: group-1-nvme-4x54.12G
+      workers:
+      - vm02.simplyblock4.localdomain
+      - vm03.simplyblock4.localdomain
+      - vm04.simplyblock4.localdomain
+    name: discovered
+status:
+  clusterRef: discovered-initial-discovery-cluster
+  message: expanded into cluster discovered-initial-discovery-cluster and 3 node(s)
+  nodeRefs:
+  - discovered-initial-discovery-cluster-vm02.simplyblock4.localdomain-0
+  - discovered-initial-discovery-cluster-vm03.simplyblock4.localdomain-0
+  - discovered-initial-discovery-cluster-vm04.simplyblock4.localdomain-0
+  observedGeneration: 2
+  phase: Expanded
+  step:
+    deadline: "2026-09-15T15:37:47Z"
+    state: CreatingNodes

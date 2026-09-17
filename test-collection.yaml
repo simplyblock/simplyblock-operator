@@ -1,0 +1,614 @@
+apiVersion: v1
+data:
+  report.json: |-
+    {
+      "version": 3,
+      "node": "vm03.simplyblock4.localdomain",
+      "probedAt": "2026-09-16T15:25:42Z",
+      "cpu": {
+        "onlineCPUs": 12,
+        "physicalCores": 12,
+        "sockets": 1,
+        "threadsPerCore": 1,
+        "hyperThreading": false,
+        "numaNodes": [
+          {
+            "node": 0,
+            "onlineCPUs": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11
+            ],
+            "physicalCores": 12
+          }
+        ]
+      },
+      "memory": {
+        "totalBytes": 20700946432,
+        "freeBytes": 3447087104,
+        "availableBytes": 11525099520,
+        "hugePagesBytes": 7516192768,
+        "swapTotalBytes": 3221221376,
+        "swapFreeBytes": 2874433536,
+        "numaNodes": [
+          {
+            "node": 0,
+            "totalBytes": 20700946432,
+            "freeBytes": 3447087104
+          }
+        ]
+      },
+      "hugePages": [
+        {
+          "sizeBytes": 2097152,
+          "total": 3584,
+          "free": 3584,
+          "numaNodes": [
+            {
+              "node": 0,
+              "total": 3584,
+              "free": 3584
+            }
+          ]
+        },
+        {
+          "sizeBytes": 1073741824,
+          "total": 0,
+          "free": 0,
+          "numaNodes": [
+            {
+              "node": 0,
+              "total": 0,
+              "free": 0
+            }
+          ]
+        }
+      ],
+      "interfaces": [
+        {
+          "name": "cni0",
+          "macAddress": "22:75:52:54:80:bf",
+          "speedMbps": 10000,
+          "mtu": 1450,
+          "state": "up",
+          "numaNode": -1,
+          "virtual": true,
+          "bridge": true,
+          "addresses": [
+            "10.42.2.1"
+          ]
+        },
+        {
+          "name": "eth0",
+          "macAddress": "bc:24:11:15:e6:15",
+          "mtu": 1500,
+          "state": "up",
+          "driver": "virtio_net",
+          "pciAddress": "0000:06:12.0",
+          "numaNode": -1,
+          "addresses": [
+            "192.168.10.113"
+          ]
+        },
+        {
+          "name": "eth1",
+          "macAddress": "c2:39:fd:5f:2e:46",
+          "speedMbps": 40000,
+          "mtu": 9000,
+          "state": "up",
+          "driver": "mlx4_core",
+          "pciAddress": "0000:06:10.0",
+          "numaNode": -1,
+          "addresses": [
+            "10.10.10.113"
+          ]
+        },
+        {
+          "name": "flannel.1",
+          "macAddress": "e6:62:2e:90:75:b3",
+          "mtu": 1450,
+          "state": "unknown",
+          "numaNode": -1,
+          "virtual": true,
+          "addresses": [
+            "10.42.2.0"
+          ]
+        },
+        {
+          "name": "lo",
+          "macAddress": "00:00:00:00:00:00",
+          "mtu": 65536,
+          "state": "unknown",
+          "numaNode": -1,
+          "virtual": true,
+          "loopback": true,
+          "addresses": [
+            "127.0.0.1"
+          ]
+        },
+        {
+          "name": "veth0aadfdd7",
+          "macAddress": "e6:47:4e:18:29:3e",
+          "speedMbps": 10000,
+          "mtu": 1450,
+          "state": "up",
+          "numaNode": -1,
+          "virtual": true
+        },
+        {
+          "name": "veth9c4bb771",
+          "macAddress": "6e:0d:66:c9:1c:e9",
+          "speedMbps": 10000,
+          "mtu": 1450,
+          "state": "up",
+          "numaNode": -1,
+          "virtual": true
+        }
+      ],
+      "devices": [
+        {
+          "name": "dm-0",
+          "path": "/dev/dm-0",
+          "sizeBytes": 27913093120,
+          "kind": "DeviceMapper",
+          "rotational": true,
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a DeviceMapper"
+            },
+            {
+              "reason": "Mounted",
+              "detail": "mounted at [/]"
+            },
+            {
+              "reason": "Busy",
+              "detail": "the kernel refused an exclusive open, and gives no reason"
+            }
+          ]
+        },
+        {
+          "name": "dm-1",
+          "path": "/dev/dm-1",
+          "sizeBytes": 3221225472,
+          "kind": "DeviceMapper",
+          "rotational": true,
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a DeviceMapper"
+            },
+            {
+              "reason": "SwapArea",
+              "detail": "the device is an active swap area"
+            },
+            {
+              "reason": "Busy",
+              "detail": "the kernel refused an exclusive open, and gives no reason"
+            }
+          ]
+        },
+        {
+          "name": "nbd0",
+          "path": "/dev/nbd0",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd1",
+          "path": "/dev/nbd1",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd10",
+          "path": "/dev/nbd10",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd11",
+          "path": "/dev/nbd11",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd12",
+          "path": "/dev/nbd12",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd13",
+          "path": "/dev/nbd13",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd14",
+          "path": "/dev/nbd14",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd15",
+          "path": "/dev/nbd15",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd2",
+          "path": "/dev/nbd2",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd3",
+          "path": "/dev/nbd3",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd4",
+          "path": "/dev/nbd4",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd5",
+          "path": "/dev/nbd5",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd6",
+          "path": "/dev/nbd6",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd7",
+          "path": "/dev/nbd7",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd8",
+          "path": "/dev/nbd8",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "nbd9",
+          "path": "/dev/nbd9",
+          "sizeBytes": 0,
+          "kind": "Network",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Network"
+            },
+            {
+              "reason": "NoCapacity",
+              "detail": "the device reports a size of zero"
+            }
+          ]
+        },
+        {
+          "name": "sda",
+          "path": "/dev/sda",
+          "pciAddress": "0000:09:01.0",
+          "sizeBytes": 32212254720,
+          "kind": "Disk",
+          "transport": "Virtio",
+          "vendor": "QEMU",
+          "model": "QEMU HARDDISK",
+          "rotational": true,
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "Mounted",
+              "detail": "mounted at [/boot]"
+            },
+            {
+              "reason": "Busy",
+              "detail": "the kernel refused an exclusive open, and gives no reason"
+            },
+            {
+              "reason": "Partitioned",
+              "detail": "the device carries the partitions [sda1 sda2]"
+            }
+          ]
+        },
+        {
+          "name": "sda1",
+          "path": "/dev/sda1",
+          "pciAddress": "0000:09:01.0",
+          "sizeBytes": 1073741824,
+          "kind": "Partition",
+          "transport": "Virtio",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Partition"
+            },
+            {
+              "reason": "Mounted",
+              "detail": "mounted at [/boot]"
+            },
+            {
+              "reason": "Busy",
+              "detail": "the kernel refused an exclusive open, and gives no reason"
+            }
+          ]
+        },
+        {
+          "name": "sda2",
+          "path": "/dev/sda2",
+          "pciAddress": "0000:09:01.0",
+          "sizeBytes": 31137464320,
+          "kind": "Partition",
+          "transport": "Virtio",
+          "numaNode": -1,
+          "available": false,
+          "rejections": [
+            {
+              "reason": "NotAWholeDisk",
+              "detail": "the device is a Partition"
+            },
+            {
+              "reason": "Stacked",
+              "detail": "held by [dm-0 dm-1]"
+            },
+            {
+              "reason": "Busy",
+              "detail": "the kernel refused an exclusive open, and gives no reason"
+            }
+          ]
+        }
+      ],
+      "nvmeControllers": [
+        {
+          "address": "0000:00:02.0",
+          "driver": "uio_pci_generic",
+          "vendor": "0x1b36",
+          "product": "0x0010",
+          "numaNode": -1
+        },
+        {
+          "address": "0000:00:03.0",
+          "driver": "uio_pci_generic",
+          "vendor": "0x1b36",
+          "product": "0x0010",
+          "numaNode": -1
+        },
+        {
+          "address": "0000:00:04.0",
+          "driver": "uio_pci_generic",
+          "vendor": "0x1b36",
+          "product": "0x0010",
+          "numaNode": -1
+        },
+        {
+          "address": "0000:00:05.0",
+          "driver": "uio_pci_generic",
+          "vendor": "0x1b36",
+          "product": "0x0010",
+          "numaNode": -1
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2026-09-16T15:25:42Z"
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-node: vm03.simplyblock4.localdomain
+    storage.simplyblock.io/nodeprobe-run: initial-discovery
+  name: sb-nodeprobe-initial-discovery-vm03.simplyblock4.local-74c6caeb
+  namespace: simplyblock
+  ownerReferences:
+  - apiVersion: storage.simplyblock.io/v1alpha2
+    kind: OperatorOps
+    name: initial-discovery
+    uid: 47f9af07-a7f5-4f34-8c0c-fb94a77afefa
+  resourceVersion: "15100415"
+  uid: b81f1d34-81a6-4bae-8a7c-e3243530528d

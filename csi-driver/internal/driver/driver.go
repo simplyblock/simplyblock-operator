@@ -77,6 +77,9 @@ func Run(conf *config.Config) {
 	if conf.IsControllerServer {
 		cd.AddControllerServiceCapabilities(controllerCaps)
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
+		// The controller serves the GroupController service (VolumeGroupSnapshot,
+		// design §9); advertise it so the csi-snapshotter routes group snapshots here.
+		cd.EnableGroupController()
 	}
 
 	ids = identity.New(cd)
@@ -108,6 +111,13 @@ func Run(conf *config.Config) {
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		// The membership label is live for the volume's whole life (design
+		// §4.5): a PVC watcher joins a volume when the label is added and
+		// detaches it when the label is removed. Degrades to a logged no-op
+		// without a Kubernetes client, like the other kube-backed features.
+		watcherCtx, watcherCancel := context.WithCancel(context.Background())
+		defer watcherCancel()
+		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, conf.DriverName)
 	}
 
 	// The link to the operator, when enabled. It is independent of the CSI

@@ -130,6 +130,45 @@ func TestACreatedClusterReachesSteadyState(t *testing.T) {
 	}
 }
 
+// spec.deviceClass is the CRD's spelling of what sbcli's cluster-create wire
+// format calls `device_mode`, so the two must map onto each other rather than
+// the field simply passing through unmapped.
+func TestCreationParamsMapDeviceClassToTheWireDeviceMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		class   simplyblockv1alpha2.StorageClusterDeviceClass
+		wantAPI string
+	}{
+		{"defaulted NVMe", "", "nvme"},
+		{"explicit NVMe", simplyblockv1alpha2.StorageClusterDeviceClassNVMe, "nvme"},
+		{"LogicalBlock", simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock, "lblk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotParams utils.ClusterAddParams
+			api := &fakeControlPlane{
+				create: func(params utils.ClusterAddParams) (webapi.ClusterResponse, error) {
+					gotParams = params
+					reading := activeCluster()
+					reading.Secret = testClusterSecret
+					return reading, nil
+				},
+				cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
+			}
+			cluster := newUncreatedCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.DeviceClass = tt.class
+			})
+			r := newClusterReconciler(t, api, &recorder{}, cluster)
+
+			reconcileCluster(t, r, 6)
+
+			if gotParams.DeviceMode != tt.wantAPI {
+				t.Errorf("device_mode = %q, want %q", gotParams.DeviceMode, tt.wantAPI)
+			}
+		})
+	}
+}
+
 // The claim is the mutex. It is an optimistic-lock patch, so a second
 // reconciler holding a stale copy of the object is refused and backs off
 // rather than posting a second cluster.

@@ -1,0 +1,15 @@
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: pool1
+  namespace: default
+spec:
+  clusterRef: simplyblock-cluster
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec: {}

@@ -1,0 +1,27 @@
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  labels:
+    simplyblock.io/auto-restart-on-pathloss: "true"
+  name: simplyblock-default-simplyblock-cluster-pool1-xfs
+parameters:
+  cluster_id: d5dcb59d-dec8-4fb8-a9e2-e61ade9b7275
+  compression: "False"
+  csi.storage.k8s.io/fstype: xfs
+  distr_ndcs: "1"
+  distr_npcs: "1"
+  encryption: "False"
+  fabric: tcp
+  lvol_priority_class: "0"
+  max_namespace_per_subsys: "1"
+  pool_name: pool1
+  qos_r_mbytes: "0"
+  qos_rw_iops: "0"
+  qos_rw_mbytes: "0"
+  qos_w_mbytes: "0"
+  replicate: "False"
+  tune2fs_reserved_blocks: "0"
+provisioner: csi.simplyblock.io
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
