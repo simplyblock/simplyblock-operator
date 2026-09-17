@@ -13,7 +13,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -76,6 +75,11 @@ type VolumeRebalancerReconciler struct {
 	// "p99") used for the rebalancing deviation signal, set from the --latency-percentile
 	// flag. Empty falls back to the config default (p50).
 	LatencyPercentile string
+
+	// Mover raises a volume's move as whichever kind this deployment runs. The
+	// rebalancer decides which volume moves where and has no business knowing
+	// which kind carries it.
+	Mover volumemigration.Mover
 
 	migrationState *volumemigration.MigrationState
 	rebalancer     *autoplacement.Rebalancer
@@ -252,12 +256,6 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 	cycleDeadline time.Time,
 ) int {
 	log := logf.FromContext(ctx)
-	ownerRefs := []metav1.OwnerReference{{
-		APIVersion: simplyblockv1alpha1.GroupVersion.String(),
-		Kind:       "StorageCluster",
-		Name:       clusterCR.Name,
-		UID:        clusterCR.UID,
-	}}
 	migratedCount := 0
 	for _, mc := range toMigrate {
 		if time.Now().After(cycleDeadline) {
@@ -273,23 +271,29 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 			rebalancerClusterLabel: clusterCR.Name,
 		}
 
-		err := volumemigration.StartMigration(ctx, r.Client, mc.Volume.UUID, mc.TargetNodeUUID,
-			name, clusterCR.Namespace, ownerRefs, labels)
-		switch {
-		case apierrors.IsAlreadyExists(err):
-			// A VolumeMigration for this volume already exists (in flight, or a
-			// leftover not yet reaped). Track it and move on rather than duplicating.
-			log.Info("VolumeMigration CR already exists; tracking existing", "name", name, "volume", mc.Volume.UUID)
-		case err != nil:
-			log.Error(err, "Failed to create VolumeMigration CR", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
+		pvName, err := volumemigration.VolumeFronting(ctx, r.Client, mc.Volume.UUID)
+		if err == nil {
+			err = r.Mover.Start(ctx, volumemigration.MoveRequest{
+				Name:           name,
+				Namespace:      clusterCR.Namespace,
+				PVName:         pvName,
+				TargetNodeUUID: mc.TargetNodeUUID,
+				Labels:         labels,
+				Owner:          clusterCR,
+				OwnerKind:      "StorageCluster",
+				Scheme:         r.Scheme,
+			})
+		}
+		if err != nil {
+			log.Error(err, "Failed to start a volume move", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
 			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "VolumeRebalancingFailed", "VolumeRebalancingFailed",
-				"Creating VolumeMigration for volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
+				"Moving volume %s to node %s could not be started: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
 
 		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, name, clusterCR.Namespace, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingStarted", "VolumeRebalancingStarted",
-			"Created VolumeMigration %s for volume %s from node %s to %s",
+			"Started move %s of volume %s from node %s to %s",
 			name, mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID)
 		rebalancerMigrationsTotal.WithLabelValues(clusterCR.Name, mc.SourceNodeUUID, mc.TargetNodeUUID).Inc()
 		migratedCount++
@@ -318,24 +322,21 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 		}
 		volumeUUID := pm.VolumeUUID
 
-		vm := &simplyblockv1alpha1.VolumeMigration{}
-		err := r.Get(ctx, types.NamespacedName{Name: pm.CRName, Namespace: pm.CRNamespace}, vm)
+		move, err := r.Mover.Get(ctx, pm.CRName, pm.CRNamespace)
 		if apierrors.IsNotFound(err) {
-			// CR was deleted out from under us (manual cleanup / GC). Stop tracking.
-			log.Info("VolumeMigration CR gone; clearing pending", "name", pm.CRName, "volume", volumeUUID)
+			// The object was deleted out from under us, by hand or by a
+			// cascade. Stop tracking it.
+			log.Info("The volume move is gone; clearing pending", "name", pm.CRName, "volume", volumeUUID)
 			r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
 			continue
 		}
 		if err != nil {
-			log.Error(err, "Cannot get VolumeMigration CR", "name", pm.CRName, "volume", volumeUUID)
+			log.Error(err, "Cannot read the volume move", "name", pm.CRName, "volume", volumeUUID)
 			continue
 		}
 
-		phase := vm.Status.Phase
-		terminal := phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted ||
-			phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
-			phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted
-		if !terminal {
+		phase := move.Phase
+		if !phase.Terminal() {
 			if time.Since(pm.MigrationStart) > volumemigration.MigrationStuckWarningTimeout && !pm.StuckWarned {
 				log.Error(nil, "Volume migration has not completed within 30 minutes",
 					"volume", volumeUUID, "migration", pm.CRName, "phase", phase)
@@ -347,21 +348,21 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 			continue
 		}
 
-		// Terminal: record outcome, reap the CR, stop tracking.
+		// Terminal: record outcome, reap the object, stop tracking.
 		r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
-		if phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
-			log.Info("Volume migration complete", "volume", volumeUUID, "migration", pm.CRName)
+		if phase == volumemigration.MoveSucceeded {
+			log.Info("Volume move complete", "volume", volumeUUID, "migration", pm.CRName)
 			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingComplete", "VolumeRebalancingComplete",
-				"Migration %s of volume %s completed successfully", pm.CRName, volumeUUID)
+				"Move %s of volume %s completed successfully", pm.CRName, volumeUUID)
 		} else {
-			log.Error(nil, "Volume migration ended without success",
-				"volume", volumeUUID, "migration", pm.CRName, "phase", phase, "error", vm.Status.ErrorMessage)
+			log.Error(nil, "Volume move ended without success",
+				"volume", volumeUUID, "migration", pm.CRName, "phase", phase, "error", move.Message)
 			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "VolumeRebalancingFailed", "VolumeRebalancingFailed",
-				"Migration %s of volume %s ended in phase %s: %s",
-				pm.CRName, volumeUUID, phase, vm.Status.ErrorMessage)
+				"Move %s of volume %s ended in phase %s: %s",
+				pm.CRName, volumeUUID, phase, move.Message)
 		}
-		if err := r.Delete(ctx, vm); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "Failed to delete completed VolumeMigration CR", "name", pm.CRName)
+		if err := r.Mover.Delete(ctx, move); err != nil {
+			log.Error(err, "Failed to delete the completed volume move", "name", pm.CRName)
 		}
 	}
 }
@@ -611,6 +612,12 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
+
+	if r.Mover == nil {
+		// The kind a deployment says nothing about is the one this API group
+		// documents, which is what makes the registered kind opt-in.
+		r.Mover = volumemigration.NewMover(r.Client, r.Scheme, false)
+	}
 
 	// A client-go clientset backs the kube.LiveResolver used to read the
 	// StorageClass of each candidate volume (see BuildNamespacedSet). StorageClass

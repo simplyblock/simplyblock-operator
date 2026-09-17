@@ -67,6 +67,7 @@ import (
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -159,6 +160,14 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var legacyVolumeMigration bool
+	flag.BoolVar(&legacyVolumeMigration, "legacy-volume-migration", false,
+		"Move volumes as the registered VolumeMigration kind rather than as "+
+			"PersistentVolumeOps. Off by default: the redesigned kind is what this API group "+
+			"documents, and the registered one is kept for one release so that an upgrade can "+
+			"turn it back on while migrations raised against it drain. A rename and a scope "+
+			"change make a new CRD rather than a new version, so an in-flight migration cannot "+
+			"be carried across.")
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
@@ -632,6 +641,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
+	// The kind a volume move is raised as, decided once and handed to all three
+	// controllers that raise one. None of them has any business knowing which.
+	volumeMover := volumemigration.NewMover(
+		mgr.GetClient(), mgr.GetScheme(), legacyVolumeMigration)
+
 	// The volume band. It shares the backup band's control-plane client because
 	// there is one control plane and one endpoint; what differs is which of its
 	// endpoints each band calls.
@@ -644,18 +658,27 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
 	}
-	if err := (&controller.VolumeMigrationReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("volumemigration-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
-		os.Exit(1)
+	// The registered kind's reconciler runs only where the registered kind is
+	// what raises moves. Registering it regardless would cost nothing while
+	// nothing creates one, and would quietly become the thing that reconciles a
+	// VolumeMigration somebody applied by hand against an operator that is
+	// otherwise driving the redesigned kind.
+	if legacyVolumeMigration {
+		if err := (&controller.VolumeMigrationReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("volumemigration-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
+			os.Exit(1)
+		}
+		setupLog.Info("volume moves are raised as the registered VolumeMigration kind")
 	}
 	if err := (&controller.PersistentVolumeClaimReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("pinnedvolume-controller"),
+		Mover:    volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
@@ -684,6 +707,7 @@ func main() {
 		Nodes:    nodeSubscription,
 		Clusters: clusterSubscription,
 		Workload: storageNodeWorkload,
+		Mover:    volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
@@ -756,6 +780,7 @@ func main() {
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),
 		LatencyPercentile: latencyPercentile,
+		Mover:             volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)

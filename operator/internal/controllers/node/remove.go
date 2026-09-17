@@ -36,15 +36,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/kube"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
 // drainNodeLabel is what a migration this drain created carries, so that a List
@@ -257,7 +254,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 
 	completed, running := 0, 0
 	for i := range migrations {
-		if migrations[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
+		if migrations[i].Phase == vmigration.MoveSucceeded {
 			completed++
 		} else {
 			running++
@@ -275,7 +272,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	}
 	drainVolumesMigratedTotal.WithLabelValues(r.clusterLabel(ctx, ops)).Add(float64(completed))
 	for i := range migrations {
-		if err := r.Delete(ctx, &migrations[i]); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.mover().Delete(ctx, migrations[i]); err != nil {
 			log.Error(err, "a completed migration could not be deleted",
 				"migration", migrations[i].Name)
 		}
@@ -356,19 +353,22 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 // migrationsOf lists the fan-out of this drain.
 func (r *StorageNodeOpsReconciler) migrationsOf(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, nodeID string,
-) ([]simplyblockv1alpha1.VolumeMigration, error) {
-	var migrations simplyblockv1alpha1.VolumeMigrationList
-	err := r.List(ctx, &migrations,
-		client.InNamespace(ops.Namespace),
-		client.MatchingLabels{drainNodeLabel: nodeID})
+) ([]vmigration.Move, error) {
+	moves, err := r.mover().List(ctx, ops.Namespace, map[string]string{drainNodeLabel: nodeID})
 	if err != nil {
 		return nil, fmt.Errorf("list this drain's volume migrations: %w", err)
 	}
-	return migrations.Items, nil
+	return moves, nil
 }
 
-// createMigration raises one volume's move, owned by the operation that asked for
-// it so that deleting the drain cascades to its fan-out.
+// createMigration raises one volume's move, recording the operation that asked
+// for it so that deleting the drain cascades to its fan-out.
+//
+// Which kind carries the move is the deployment's, and how the creator is
+// recorded follows from it: a namespaced move takes a controller reference, and
+// a cluster-scoped one cannot have one at all, so it names its creator in the
+// spec and the cascade becomes this controller's own (design-storagenode.md
+// §8.4, design-persistentvolumeops.md §11.1).
 func (r *StorageNodeOpsReconciler) createMigration(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
@@ -376,24 +376,25 @@ func (r *StorageNodeOpsReconciler) createMigration(
 	volume managedVolume,
 	target string,
 ) error {
-	migration := &simplyblockv1alpha1.VolumeMigration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      migrationName(nodeID, volume.PVName),
-			Namespace: ops.Namespace,
-			Labels:    map[string]string{drainNodeLabel: nodeID},
-		},
-		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         volume.PVName,
-			TargetNodeUUID: target,
-		},
+	return r.mover().Start(ctx, vmigration.MoveRequest{
+		Name:           migrationName(nodeID, volume.PVName),
+		Namespace:      ops.Namespace,
+		PVName:         volume.PVName,
+		TargetNodeUUID: target,
+		Labels:         map[string]string{drainNodeLabel: nodeID},
+		Owner:          ops,
+		OwnerKind:      "StorageNodeOps",
+		Scheme:         r.Scheme,
+	})
+}
+
+// mover is the fan-out's channel, defaulted so a reconciler built without one
+// raises the kind this API group documents.
+func (r *StorageNodeOpsReconciler) mover() vmigration.Mover {
+	if r.Mover != nil {
+		return r.Mover
 	}
-	if err := controllerutil.SetControllerReference(ops, migration, r.Scheme); err != nil {
-		return fmt.Errorf("own the migration of %s: %w", volume.PVName, err)
-	}
-	if err := r.Create(ctx, migration); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create the migration of %s: %w", volume.PVName, err)
-	}
-	return nil
+	return vmigration.NewMover(r.Client, r.Scheme, false)
 }
 
 // retryFailedMigrations deletes every migration that failed and reports how many,
@@ -404,20 +405,20 @@ func (r *StorageNodeOpsReconciler) createMigration(
 func (r *StorageNodeOpsReconciler) retryFailedMigrations(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
-	migrations []simplyblockv1alpha1.VolumeMigration,
+	migrations []vmigration.Move,
 ) (int, error) {
 	retried := 0
 	for i := range migrations {
-		migration := &migrations[i]
-		if migration.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		migration := migrations[i]
+		if migration.Phase != vmigration.MoveFailed {
 			continue
 		}
 		r.emit(ctx, ops, corev1.EventTypeWarning, MigrationRetried, fmt.Sprintf(
 			"The migration of %s failed and is being retried against another peer: %s",
-			migration.Spec.PVName, migration.Status.ErrorMessage))
-		if err := r.Delete(ctx, migration); err != nil && !apierrors.IsNotFound(err) {
+			migration.PVName, migration.Message))
+		if err := r.mover().Delete(ctx, migration); err != nil {
 			return retried, fmt.Errorf("delete the failed migration of %s: %w",
-				migration.Spec.PVName, err)
+				migration.PVName, err)
 		}
 		retried++
 	}
@@ -445,13 +446,13 @@ func (r *StorageNodeOpsReconciler) cascadeMigrations(
 	}
 	pending := false
 	for i := range migrations {
-		migration := &migrations[i]
-		if !terminalMigration(migration.Status.Phase) {
+		migration := migrations[i]
+		if !migration.Phase.Terminal() {
 			pending = true
 			continue
 		}
-		if err := r.Delete(ctx, migration); err != nil && !apierrors.IsNotFound(err) {
-			return true, fmt.Errorf("delete the migration of %s: %w", migration.Spec.PVName, err)
+		if err := r.mover().Delete(ctx, migration); err != nil {
+			return true, fmt.Errorf("delete the migration of %s: %w", migration.PVName, err)
 		}
 	}
 	return pending, nil
@@ -468,18 +469,6 @@ func (r *StorageNodeOpsReconciler) abortMigrations(
 	if _, err := r.cascadeMigrations(ctx, ops); err != nil {
 		logf.FromContext(ctx).Error(err, "the drain's migrations could not all be stopped",
 			"operation", ops.Name)
-	}
-}
-
-// terminalMigration reports a phase a volume migration can never leave.
-func terminalMigration(phase simplyblockv1alpha1.VolumeMigrationPhase) bool {
-	switch phase {
-	case simplyblockv1alpha1.VolumeMigrationPhaseCompleted,
-		simplyblockv1alpha1.VolumeMigrationPhaseFailed,
-		simplyblockv1alpha1.VolumeMigrationPhaseAborted:
-		return true
-	default:
-		return false
 	}
 }
 

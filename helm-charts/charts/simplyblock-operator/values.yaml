@@ -380,6 +380,19 @@ controlplane:
 operator:
   openShiftCluster: true
 
+# How a volume's move is raised. The operator raises one when the rebalancer
+# moves a volume off a hot node, when a node is drained, and when a claim is
+# pinned to a node it is not on.
+#
+# The redesigned PersistentVolumeOps is the default and the registered
+# VolumeMigration is opt-in. Turn the registered kind back on for an upgrade,
+# and only for as long as the migrations already raised against it take to
+# drain: a rename and a scope change make a new CRD rather than a new version,
+# so an in-flight migration cannot be carried across and is left to finish on
+# the kind it started on.
+volumeMigration:
+  legacy: false
+
 # The CSI link: the CSI node and controller pods dial the operator and hold the
 # connection open, so the operator can query a node's storage state without
 # anything listening on the node. Always on: the operator serves the endpoint

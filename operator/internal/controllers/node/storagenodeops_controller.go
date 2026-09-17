@@ -52,6 +52,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
 const (
@@ -99,6 +100,11 @@ type StorageNodeOpsReconciler struct {
 	// the same question get the same answer.
 	Nodes    NodeCache
 	Clusters ClusterCache
+
+	// Mover raises a drain's fan-out as whichever kind this deployment runs. A
+	// drain decides which volumes move where and has no business knowing which
+	// kind carries them; unset means the kind this API group documents.
+	Mover vmigration.Mover
 
 	// Workload is the storage-plane side of a node: the worker labels, the
 	// storage-node pod, its published DNS name, and the eviction budget a
