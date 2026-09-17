@@ -18,12 +18,12 @@
 // reconciler rather than here because a failure of any kind owes it, not only a
 // failure of a step in this file.
 //
-// One thing here is not what the design specifies. §8.4 fans the migration out as
-// one PersistentVolumeOps per volume, and that kind has not been written yet — the
-// StoragePool rework recorded the same gap. The fan-out is the VolumeMigration
-// that exists and works, tracked by the same label and cleaned up by the same
-// cascade, and it becomes a PersistentVolumeOps when that kind lands. §15.4
-// records it.
+// The migration is fanned out as one move per volume through the mover of
+// internal/volumemigration, which raises whichever kind the deployment runs: the
+// cluster-scoped PersistentVolumeOps of §8.4, naming this operation in
+// spec.creatorRef and carrying the managed-by label, or the registered
+// VolumeMigration with a controller reference where that kind is still the one
+// in use. Nothing in this file knows which, which is what the mover exists for.
 //
 // design-storagenode.md §8 is the specification.
 

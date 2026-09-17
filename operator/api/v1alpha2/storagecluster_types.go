@@ -833,10 +833,12 @@ type StorageClusterStatus struct {
 	// +optional
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
-	// Tasks are the control plane's running and pending jobs, newest first and
-	// capped at twenty. Completed and canceled tasks are not here: they leave
-	// the list and become events, so the length tracks concurrency rather than
-	// history.
+	// Tasks are the control plane's running and pending jobs, capped at twenty
+	// and in the order the control plane reports them: its TaskDTO carries no
+	// creation date, so newest-first is not orderable from what is on the wire
+	// (design-storagecluster.md §12.1). Completed and canceled tasks are not
+	// here: they leave the list and become events, so the length tracks
+	// concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`

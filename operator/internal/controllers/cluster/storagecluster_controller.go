@@ -1,13 +1,11 @@
 // The StorageCluster reconciler: four paths, which are creation, adoption,
 // steady-state synchronization, and deletion.
 //
-// The object is fetched with a direct read rather than from the informer
-// cache. A cached read can still return an empty status.uuid immediately after
-// a status patch has persisted one, and acting on that stale value is a second
-// POST and a second backend cluster.
-//
-// Creating a backend cluster is not idempotent, so the claim is made in
-// Kubernetes before the control plane is touched. The mutex is the
+// Creating a backend cluster is not idempotent, and the object is read through
+// the manager's cache, so a reconcile can see an empty status.uuid immediately
+// after a status patch has persisted one. What makes that safe is the claim
+// rather than the read: the claim is made in Kubernetes before the control
+// plane is touched, and a stale pass re-enters adoption, which is idempotent. The mutex is the
 // optimistic-lock patch rather than the value it writes: the patch succeeds for
 // exactly one reconciler at a given resourceVersion and returns 409 to the
 // rest, so persisting the transition into Claiming is what makes creation
@@ -367,11 +365,15 @@ func (r *StorageClusterReconciler) claim(
 		logf.FromContext(ctx).Info(
 			"another reconciler holds the creation claim; backing off",
 			"cluster", cluster.Name)
-		return ctrl.Result{RequeueAfter: 5 * time.Second}
+		return ctrl.Result{RequeueAfter: claimBackoff}
 	}
 	r.observePhase(cluster)
 	return ctrl.Result{RequeueAfter: time.Second}
 }
+
+// claimBackoff is how long a reconciler whose creation claim was refused waits
+// before looking again.
+const claimBackoff = 5 * time.Second
 
 // enterCreationStep records the next step with its deadline and moves the
 // machine into it. The record precedes the step's own work on the next pass,

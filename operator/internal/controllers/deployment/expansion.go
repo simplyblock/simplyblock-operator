@@ -617,10 +617,16 @@ func targetClusterName(
 		"the document neither names an existing cluster nor describes one to create")
 }
 
-// nodeNameFormula names one node. A StorageNode is named for its cluster and the
-// slot it fills, never for the worker, because the name has to stay stable when a
-// migration re-points the node onto another host (design-storagenode.md §3.1) —
-// the worker is in the name's digest rather than in its text.
+// nodeNameFormula names one node, from the cluster, the worker, and the slot
+// (design-storagenode.md §3.1). All three are in the name's text while it fits and
+// in its digest once the limit below forces a truncation, so two nodes differing
+// only by worker never collide either way.
+//
+// The name is stable across a migration because Kubernetes never renames an
+// object, not because the worker is kept out of it: a migration re-points
+// spec.workerNode on the node that exists. So a node built on one worker and
+// migrated to another keeps a name describing where it was built, and
+// spec.workerNode rather than the name is where the current host is read.
 //
 // The limit is a label's 63 bytes and not the 253 an object name may be, because
 // the name travels: the StorageDevice mirror writes it into
@@ -631,9 +637,10 @@ func targetClusterName(
 // produce rather than what a long one does.
 //
 // Shortening the limit does not strand the nodes of a cluster that already has
-// some. A name that fitted the wider limit is returned unchanged whenever it
-// also fits this one, and createNodes finds what exists by the worker and slot
-// its spec records rather than by re-deriving the name.
+// some. A name that fitted the wider limit is returned unchanged whenever it also
+// fits this one, and createNodes finds what exists by the worker and slot its spec
+// records rather than by re-deriving the name — which is also why idempotent
+// re-expansion rests on the spec rather than on this formula.
 var nodeNameFormula = kube.Formula{Limit: kube.MaxLabelValueLength}
 
 func nodeName(cluster, worker string, slot int32) string {
