@@ -11,4 +11,5 @@ resources:
 - storage_v1alpha2_storagebackupops.yaml
 - storage_v1alpha1_backuprestore.yaml
 - storage_v1alpha2_operatorops.yaml
+- storage_v1alpha2_persistentvolumeops.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
