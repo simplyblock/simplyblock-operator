@@ -108,6 +108,21 @@ is enforceable rather than aspirational.
 through it, on stock kube-proxy. The eBPF kube-proxy-replacement case in §13.3
 remains untested.
 
+**MDS selection looked in the wrong namespace, and the unit tests could not see
+it.** §7.2 does not say where the reconciler should look for eligible hosts, and
+the implementation listed `StorageNode` in the export's own namespace. An
+`NFSExport` is created beside the claim it backs, in the workload's namespace,
+and a `StorageNode` belongs to the `StorageNodeSet` in the operator's, so the two
+never coincide: the first RWX claim on the .81 cluster reported "waiting for an
+eligible MDS host" beside three online ones.
+
+The tests passed throughout, because their fixtures put the export and the node
+in one namespace -- an arrangement that does not occur. Worth recording as a
+finding rather than a fix, because the same shape applies to anything else this
+design has one controller reading across the two: **the host is a cluster
+resource and the export is a namespaced one.** Which hosts may serve is P0-6's
+node labeling, not a namespace boundary.
+
 **Turning pNFS on deadlocked an adopted driver, and the fix was not in this
 design.** `SimplyblockDriver`'s `adoptionRefusal` runs on every reconcile rather
 than only the first, so `spec.link.enableLink` set on a deployment whose node
