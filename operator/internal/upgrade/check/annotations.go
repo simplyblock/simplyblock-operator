@@ -7,10 +7,11 @@
 // deprecation window. Two spellings that disagree are two answers to one
 // question, and picking either would silently discard a value somebody set.
 //
-// Some keys have already half moved. The chart writes
-// simplyblock.io/replication-policy while the operator reads
-// storage.simplyblock.io/replication-policy, so a claim can carry both today,
-// which is why this runs before the rewrite rather than as part of it.
+// Some keys have already moved, and the move itself is what produces the state
+// this looks for: atlas-lib reads every spelling and writes the group's own, so
+// an object the operator has touched since carries the new key while one it has
+// not still carries the old. Two of those on one object is what this runs before
+// the rewrite to find, rather than as part of it.
 
 package check
 
