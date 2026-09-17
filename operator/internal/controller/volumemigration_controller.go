@@ -424,7 +424,7 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
-	image, err := resolveRebalancerImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
+	image, err := vmigration.JobImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot resolve simplyblock-rebalancer image; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -620,7 +620,7 @@ func (r *VolumeMigrationReconciler) releaseMigrationPaths(
 		return
 	}
 
-	image, err := resolveRebalancerImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
+	image, err := vmigration.JobImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot resolve simplyblock-rebalancer image; migration target paths are left connected",
 			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
@@ -870,7 +870,7 @@ func migrationPathJob(
 	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
 	ttl := int32(3600)
 	deadline := int64(validationJobDeadline.Seconds())
-	return buildRebalancerJob(rebalancerJobParams{
+	return vmigration.BuildJob(vmigration.JobParams{
 		// One Job per node: name carries both migration ID and node.
 		Name:          js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
 		Namespace:     vm.Namespace,
@@ -1125,11 +1125,6 @@ func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context,
 		log.Info("Validation job pod output", "pod", pod.Name, "logs", buf.String())
 	}
 }
-
-// defaultRebalancerImage is used when a StorageCluster enables volume migration
-// (explicitly, or by default via an omitted settings block) without pinning a
-// specific rebalancer image. The image must include nvme-cli.
-const defaultRebalancerImage = "docker.io/simplyblock/simplyblock-rebalancer:main"
 
 // reconcileRunning polls the migration API and updates progress in status.
 func (r *VolumeMigrationReconciler) reconcileRunning(
