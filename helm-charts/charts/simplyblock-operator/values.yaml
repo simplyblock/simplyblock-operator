@@ -7,6 +7,14 @@ image:
     repository: quay.io/simplyblock-io/snapshot-controller
     tag: v8.2.0
     pullPolicy: Always
+  csiAddonsController:
+    # Upstream registry until the image is mirrored to quay.io/simplyblock-io,
+    # which is the convention every other component follows. Keep the tag in
+    # lockstep with the vendored CRDs and RBAC (templates/*csi-addons*,
+    # templates/csiaddons.openshift.io_*, templates/replication.storage.*).
+    repository: quay.io/csiaddons/k8s-controller
+    tag: v0.15.0
+    pullPolicy: Always
   simplyblock:
     repository: quay.io/simplyblock-io/simplyblock
     tag: "26.2.6-PRE"
@@ -39,6 +47,13 @@ rbac:
 
 snapshotcontroller:
   create: true
+
+csiaddons:
+  # Deploy the kubernetes-csi-addons machinery: the CRDs (VolumeReplication
+  # and friends) and the stock controller-manager. Off until the driver's
+  # csi-addons Replication service ships (design-csi-addons-replication.md
+  # Phase 1). The vendored manifests are the design's prerequisite P0-5.
+  create: false
 
 externallyManagedSecret:
   # Specifies whether a externallyManagedSecret should be created
