@@ -228,6 +228,12 @@ func (r *StorageNodeReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
+	// A pod the scheduler has refused holds a provisioning node in CheckingHost
+	// and takes a running one offline, and neither path can name the cause from
+	// what the control plane reports. It is announced before the branch because
+	// it is the same answer on both sides of it.
+	r.reportPodScheduling(ctx, &node)
+
 	if node.Status.UUID == "" {
 		return r.provision(ctx, &node, cluster)
 	}
