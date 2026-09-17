@@ -29,10 +29,12 @@ func TestFormatUsesTheHostsMkfs(t *testing.T) {
 	if !strings.HasSuffix(joined, "/dev/nvme0n1") {
 		t.Errorf("args = %v, want the device last", args)
 	}
-	// -f, because a device this export is re-assembling on may carry a
-	// filesystem the host cannot mount, which is the case this exists for.
-	if !strings.Contains(joined, " -f ") {
-		t.Errorf("args = %v, want mkfs to overwrite an unmountable filesystem", args)
+	// No -f. Format is only reached for a device the blank check called empty,
+	// so mkfs finding a filesystem is two answers disagreeing about whether
+	// this device holds data, and the safe reading does not write. This
+	// repository has already lost data to the other reading.
+	if strings.Contains(joined, " -f") {
+		t.Errorf("args = %v, want mkfs to refuse rather than overwrite", args)
 	}
 }
 

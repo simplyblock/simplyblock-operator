@@ -25,14 +25,17 @@ import (
 
 // formatCommand builds the mkfs for a device.
 //
-// -f overwrites what is already there. That reads dangerous and is the safe
-// choice here, because Create only calls Format for a device its blank check
-// said carries nothing -- and the one case that reaches this with something on
-// it is a filesystem an older attempt made that this kernel cannot mount, which
-// is exactly what has to be replaced.
+// Deliberately without -f. Format is only reached for a device the blank check
+// said carries nothing, so mkfs refusing because it found a filesystem is not
+// an obstacle to override -- it is two independent answers disagreeing about
+// whether this device holds data, and the safe reading of that disagreement is
+// the one that does not write.
+//
+// This repository has already lost data to the other reading: an unreadable
+// device made blkid exit non-zero, that was taken as "blank", and mkfs ran on a
+// live filesystem. The second opinion is worth keeping.
 func formatCommand(device, fsType string, options []string) (string, []string) {
-	args := append([]string{"-f"}, options...)
-	return hostCommand("mkfs."+fsType, append(args, device)...)
+	return hostCommand("mkfs."+fsType, append(append([]string{}, options...), device)...)
 }
 
 func mountCommand(source, target, fsType string, options []string) (string, []string) {
