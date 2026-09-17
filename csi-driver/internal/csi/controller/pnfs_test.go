@@ -186,9 +186,9 @@ func TestVolumeContextCarriesWhatTheNodeNeeds(t *testing.T) {
 
 // fakeRegistry records what provisioning and deletion asked of the record.
 type fakeRegistry struct {
-	record   ExportRecord
-	ensured  []string
-	deleted  []string
+	record    ExportRecord
+	ensured   []string
+	deleted   []string
 	stillGone bool
 }
 
