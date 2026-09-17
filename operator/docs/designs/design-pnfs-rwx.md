@@ -53,6 +53,22 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | Reservation handover on migration                            | §13.4       | Not started — **new, see findings**          |
 | Chart, RBAC, `SimplyblockDriver` wiring                      | §14         | Not started                                  |
 
+### Where the implementation departs from this document
+
+Recorded here rather than left for a reader to find by diffing, because a
+departure nobody wrote down becomes a defect a release later.
+
+| Departure                                                   | Why                                                                                                                                                                                       |
+|-------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `NFSExport` is v1alpha2, not the v1alpha1 in §14.2          | The kind is new, so there is no v1alpha1 spelling to convert from. The document predates the group's move                                                                                 |
+| `FSID` is the export UUID, not an allocated value           | `exports(5)` accepts a UUID, so the value is unique cluster-wide and stable by construction. Q1's allocator does not need to exist                                                        |
+| MDS selection hashes the export name; §7.2 says round-robin | A hash is stable across reconciles, so an export picks the same host on every pass. Round-robin needs counter state and can re-pick differently after a restart, which a binding must not |
+| Eligibility checks only `online` and no active op           | §7.2 also wants kernel version, `nfs-utils`, and a node label. `StorageNode` carries none of them, which is P0-6. A node that cannot serve fails visibly in `Assembling` instead          |
+| `status.phaseDeadline` is new                               | The phase machine's bound has to outlive the process the same way the phase does, or a restart grants a fresh deadline every pass and never times out                                     |
+| `ClientPolicy.Mode` is a typed enum                         | §7.1 shows `mode: NodeScoped` without defining the set. A closed set gets a type and an `Enum` marker, so an unknown value is refused at admission                                        |
+| `Degraded` is terminal for the controller                   | It is reached by declining to act. Re-deciding it on a timer would bury the event that explains it                                                                                        |
+| The host side is an `ExportAssembler` interface             | An implementation seam rather than a design change: it makes the controller testable without a node, and is where the csi-link export service plugs in                                    |
+
 ---
 
 ## Bring-up Findings (2026-09-17)
