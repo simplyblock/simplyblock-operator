@@ -168,12 +168,22 @@ func (r *StorageNodeOpsReconciler) workersInMaintenance(
 // The budget is created before the shutdown is issued, and that ordering is the
 // whole mechanism: a drain that reaches the pod before the budget exists evicts it
 // under a running SPDK process.
+//
+// The manager's own budget comes before even that, and for the same reason one
+// step further back. On a converged worker the manager runs on the host being
+// drained, the drain evicts in no particular order, and an eviction that
+// arrives here first takes out the only thing that would ever have created the
+// storage node's budget (selfbudget.go).
 func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
 	node *simplyblockv1alpha2.StorageNode,
 	clusterID, nodeID string,
 ) (bool, error) {
+	if err := r.Workload.ProtectSelf(ctx, node.Namespace, node.Spec.WorkerNode); err != nil {
+		return false, err
+	}
+
 	err := r.Workload.BlockEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 	if err != nil {
 		return false, fmt.Errorf("hold the eviction of worker %s: %w", node.Spec.WorkerNode, err)
@@ -200,9 +210,21 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 
 // maintenanceRelease relaxes the budget so the eviction the drain is waiting on
 // can proceed, and completes when the pod has actually gone.
+//
+// The manager stops holding itself here too, and it has to be here rather than
+// at the end: on a converged worker the manager is on the node being drained,
+// so a budget held past this point would block the drain on the manager instead
+// of on the storage pod, which is the same deadlock one object over. What the
+// window still needs from the manager after this — waiting for the host and
+// restarting the node — survives the manager being rescheduled elsewhere,
+// because the step is persisted.
 func (r *StorageNodeOpsReconciler) maintenanceRelease(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
+	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
+		return false, err
+	}
+
 	err := r.Workload.AllowEviction(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode)
 	if err != nil {
 		return false, fmt.Errorf("release the eviction of worker %s: %w", node.Spec.WorkerNode, err)
@@ -255,6 +277,14 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 func (r *StorageNodeOpsReconciler) maintenanceCleanup(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, error) {
+	// The manager's own budget is released in Releasing and cleared again here,
+	// which is not a repetition: a window that failed before reaching Releasing
+	// comes through this step on its way to a terminal phase, and that is the
+	// path on which the budget would otherwise be left holding a worker nothing
+	// is draining any more.
+	if err := r.Workload.ReleaseSelf(ctx, node.Namespace); err != nil {
+		return false, err
+	}
 	err := r.Workload.ClearEvictionBudget(ctx, node.Namespace,
 		node.Spec.ClusterRef, node.Spec.WorkerNode)
 	return err == nil, err

@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -367,6 +368,23 @@ func main() {
 		Uncached:         mgr.GetAPIReader(),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
+		// Which node the manager itself runs on, which the chart sets from
+		// spec.nodeName. It decides one question: whether a maintenance window
+		// is draining the manager's own host, in which case the manager holds
+		// its own eviction while it arranges the window. Empty where nothing
+		// set it, and then it holds nothing.
+		ManagerNode: os.Getenv("NODE_NAME"),
+	}
+
+	// A self-budget outlives a manager that crashed holding one, and would then
+	// make its worker undrainable by an object whose owner no longer exists.
+	// Clearing it is leader-only, because only the leader ever creates one: a
+	// replica clearing it on the way up would be clearing the leader's.
+	if err := mgr.Add(leaderOnly(func(ctx context.Context) error {
+		return storageNodeWorkload.ClearStaleSelfBudget(ctx, operatorNamespace)
+	})); err != nil {
+		setupLog.Error(err, "unable to schedule the stale self-budget cleanup")
+		os.Exit(1)
 	}
 
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
@@ -965,3 +983,15 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// leaderOnly wraps a one-shot task the manager runs after it wins the leader
+// election, and not before.
+//
+// The distinction matters for anything that cleans up after a previous
+// instance: a replica that ran it on the way up would be undoing what the
+// current leader is in the middle of.
+type leaderOnly func(context.Context) error
+
+func (f leaderOnly) Start(ctx context.Context) error { return f(ctx) }
+
+func (leaderOnly) NeedLeaderElection() bool { return true }
