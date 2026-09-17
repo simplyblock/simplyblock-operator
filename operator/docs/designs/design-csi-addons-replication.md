@@ -115,43 +115,54 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 ## 3. Architecture Overview
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                          Kubernetes (each cluster)                         │
-│                                                                            │
-│  VolumeReplicationClass        VolumeReplication (one per protected PVC)   │
-│  (names a ReplicationPolicy)   spec.replicationState: primary|secondary    │
-│            │                                 │                             │
-│            ▼                                 ▼                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │   kubernetes-csi-addons controller-manager (chart-deployed)         │  │
-│  │   reconciles VolumeReplication → Replication gRPC on the driver     │  │
-│  └───────────────────────────────┬─────────────────────────────────────┘  │
-│                                  │ via CSIAddonsNode registration          │
-│  ┌───────────────────────────────▼─────────────────────────────────────┐  │
-│  │  CSI controller StatefulSet (SimplyblockDriver reconciler)          │  │
-│  │  … csi-provisioner │ csi-snapshotter │ … │ csi-addons sidecar │      │  │
-│  │                    controller plugin socket                          │  │
-│  │  plugin serves: CSI Identity/Controller/GroupController              │  │
-│  │              + csi-addons Identity + Replication (this design)       │  │
-│  └───────────────────────────────┬─────────────────────────────────────┘  │
-└──────────────────────────────────┼─────────────────────────────────────────┘
-                                   │ HTTP, resolved per volume handle
-┌──────────────────────────────────▼─────────────────────────────────────────┐
-│                        simplyblock control plane                            │
-│  PUT    .../volumes/{v}                  {replication_policy_id}  (attach/  │
-│                                          detach)                            │
-│  GET    .../volumes/{v}/replication/status          (P0-1, steady state)    │
-│  POST   .../volumes/{v}/replication/failover        (promote, planned or    │
-│                                                      forced)                │
-│  POST   .../volumes/{v}/replication/demote          (P0-3)                  │
-│  POST   .../volumes/{v}/replication/failback        (resync)                │
-│  GET    .../replication/relationships/{lvol}        (cutover records)       │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          Kubernetes (each cluster)                           │
+│                                                                              │
+│  VolumeReplicationClass          VolumeReplication (one per protected PVC)   │
+│  (names a ReplicationPolicy)     spec.replicationState: primary|secondary    │
+│            │                                  │                              │
+│            ▼                                  ▼                              │
+│  ┌──────────────────────────────────────────────────────────────────┐        │
+│  │  kubernetes-csi-addons controller-manager (chart-deployed):      │        │
+│  │  reconciles VolumeReplication → Replication gRPC on the driver   │        │
+│  └──────────────────────────────┬───────────────────────────────────┘        │
+│                                 │ via CSIAddonsNode registration             │
+│  ┌──────────────────────────────▼───────────────────────────────────┐        │
+│  │  CSI controller StatefulSet (SimplyblockDriver reconciler):      │        │
+│  │  … csi-provisioner, csi-snapshotter, …, csi-addons sidecar,      │        │
+│  │  and the controller plugin, all on one socket. The plugin        │        │
+│  │  serves CSI Identity/Controller/GroupController, plus            │        │
+│  │  csi-addons Identity and Replication (this design)               │        │
+│  └──────────────────────────────┬───────────────────────────────────┘        │
+│                                                                              │
+│  operator: peerClasses preflight, events on the ReplicationPair (§7.2);      │
+│            PVCAnnotationWatcher skips csi-addons-managed volumes (§8);       │
+│            ReplicationPair/Policy author the backend target and policy       │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │ HTTP, resolved per volume handle
+┌─────────────────────────────────▼────────────────────────────────────────────┐
+│                        simplyblock control plane                             │
+│  PUT    .../volumes/{v}                 {replication_policy_id} (attach,     │
+│                                         detach)                              │
+│  GET    .../volumes/{v}/replication/status        (P0-1, steady state)       │
+│  POST   .../volumes/{v}/replication/failover      (promote: planned gate     │
+│                                                   or forced)                 │
+│  POST   .../volumes/{v}/replication/demote        (P0-3: converge,           │
+│                                                   quiesce, flush, fence)     │
+│  POST   .../volumes/{v}/replication/failback      (resync)                   │
+│  GET    .../replication/relationships/{lvol}      (cutover records)          │
+│  GET    .../relationships/{lvol}/latest-snapshot  (P0-6, test failover)      │
+│  exports simplyblock_replication_* metrics: lag, backlog, RPO (§11)          │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **One relationship, addressed from either cluster.** The `VolumeReplication.spec.dataSource` resolves to a PV whose handle is `{clusterID}:{poolID}:{volumeID}`. The driver resolves the backend from the handle through `clusters.Client`, exactly as every other RPC does, so the DR cluster's driver can drive the same backend relationship as the source cluster's without either side holding special state. This is the same stateless addressing the node plugin already uses to redirect a staged volume after failover.
 
 **The adapter holds no state.** csi-addons RPCs are stateless and idempotent by contract. Every answer the driver gives is derived on the spot from the backend status read and the relationship record. There is no driver-side cache, no persisted step, and no state machine. A verb whose backend work outlives the call (a demote converging a busy peer) reports `Completed=False` until the backend reflects the target state, and Ramen's re-drive is the retry loop.
+
+**The operator's part is small and off the data path.** The kinds that author the backend state (`ReplicationPair` for the target, `ReplicationPolicy` for cadence and retention) keep working unchanged, and the classes name what they author. On top of them the operator runs the peerClasses preflight (§7.2), surfacing convention drift as events on the pair, and teaches the `PVCAnnotationWatcher` the one-owner rule (§8) so the legacy annotation path and a `VolumeReplication` never fight over one volume. Everything imperative it used to own (`ReplicationOps`, the commit cutover, the cutover-proceed handshake) is off this contract and confined to the legacy path.
+
+**The drill rides the same surface.** Test failover (§14) adds no machinery to this picture: the bubble mode clones the latest replicated snapshot (the P0-6 read plus the ordinary CSI clone path), and the test-cluster mode composes clone, a `drtest-` policy toward the test cluster, and the real failover. The invariant audit that proves a drill disturbed nothing reads the same P0-1 status endpoint the conditions come from.
 
 ---
 
