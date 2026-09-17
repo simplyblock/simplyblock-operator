@@ -262,7 +262,7 @@ spec:
                           format: int32
                           type: integer
                         transport:
-                          description: Transport is the fabric, which is tcp.
+                          description: Transport is the fabric, which is TCP.
                           type: string
                       type: object
                     type: array
