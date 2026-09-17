@@ -207,7 +207,7 @@ const (
 
 // BaselineStrategy selects how the per-node latency baseline, the denominator
 // of the rebalancing deviation signal, is derived.
-// +kubebuilder:validation:Enum=benchmark;rollingWindow
+// +kubebuilder:validation:Enum=Benchmark;RollingWindow
 type BaselineStrategy string
 
 const (
@@ -215,31 +215,31 @@ const (
 	// fresh cluster and frozen on the node's status. It is simple and tends to
 	// read too low, because an idle cluster is far faster than a loaded one and
 	// every loaded node then shows a large deviation.
-	BaselineStrategyBenchmark BaselineStrategy = "benchmark"
+	BaselineStrategyBenchmark BaselineStrategy = "Benchmark"
 
 	// BaselineStrategyRollingWindow derives the baseline from a rolling window
 	// of the probe sidecar's latency series, using an outlier-rejecting
 	// estimator. It reflects each node's recent operating latency rather than
 	// an idle measurement, and is the default.
-	BaselineStrategyRollingWindow BaselineStrategy = "rollingWindow"
+	BaselineStrategyRollingWindow BaselineStrategy = "RollingWindow"
 )
 
 // BaselineColdStartPolicy selects what happens to a node with fewer than
 // BaselineMinSamples samples in the window: a freshly onboarded node, or one
 // whose probe sidecar has just started.
-// +kubebuilder:validation:Enum=defer;partialWindow
+// +kubebuilder:validation:Enum=Defer;PartialWindow
 type BaselineColdStartPolicy string
 
 const (
 	// BaselineColdStartDefer omits an under-sampled node from the cycle: it is
 	// neither a migration source nor a target until it has accumulated enough
 	// samples, which avoids acting on a noisy baseline.
-	BaselineColdStartDefer BaselineColdStartPolicy = "defer"
+	BaselineColdStartDefer BaselineColdStartPolicy = "Defer"
 
 	// BaselineColdStartPartialWindow computes the baseline from whatever
 	// samples exist, accepting a noisier baseline early on so that rebalancing
 	// engages sooner. It is the default.
-	BaselineColdStartPartialWindow BaselineColdStartPolicy = "partialWindow"
+	BaselineColdStartPartialWindow BaselineColdStartPolicy = "PartialWindow"
 )
 
 // DataRealignmentSettings tunes the post-migration control-plane data
@@ -358,17 +358,17 @@ type VolumeAutoPlacementSettings struct {
 	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
 
 	// BaselineStrategy selects how the per-node baseline is derived. Defaults
-	// to rollingWindow.
+	// to RollingWindow.
 	// +optional
 	BaselineStrategy *BaselineStrategy `json:"baselineStrategy,omitempty"`
 
-	// BaselineWindow is the look-back the rollingWindow strategy reduces.
+	// BaselineWindow is the look-back the RollingWindow strategy reduces.
 	// Defaults to 6h.
 	// +optional
 	BaselineWindow *metav1.Duration `json:"baselineWindow,omitempty"`
 
 	// BaselineColdStart selects what happens to an under-sampled node. Defaults
-	// to partialWindow.
+	// to PartialWindow.
 	// +optional
 	BaselineColdStart *BaselineColdStartPolicy `json:"baselineColdStart,omitempty"`
 

@@ -41,7 +41,7 @@ var (
 	rebalancerBaselineSamplesTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "simplyblock_rebalancer_baseline_samples_total",
-			Help: "Number of latency samples in the rolling window from which the per-node baseline was computed (rollingWindow strategy only).",
+			Help: "Number of latency samples in the rolling window from which the per-node baseline was computed (RollingWindow strategy only).",
 		},
 		[]string{"cluster", "node"},
 	)
@@ -49,7 +49,7 @@ var (
 	rebalancerBaselineSamplesRejected = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "simplyblock_rebalancer_baseline_samples_rejected",
-			Help: "Number of rolling-window latency samples rejected as outliers by the Hampel identifier when computing the per-node baseline (rollingWindow strategy only).",
+			Help: "Number of rolling-window latency samples rejected as outliers by the Hampel identifier when computing the per-node baseline (RollingWindow strategy only).",
 		},
 		[]string{"cluster", "node"},
 	)
