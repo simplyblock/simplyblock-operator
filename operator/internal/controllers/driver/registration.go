@@ -19,6 +19,9 @@
 package driver
 
 import (
+	"context"
+	"fmt"
+
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -62,26 +65,75 @@ func volumeSnapshotClass(d *simplyblockv1alpha2.SimplyblockDriver) *unstructured
 }
 
 // TODO(simplyblockdriver): supply the snapshot CRDs and a controller where the
-// cluster serves neither, which is design-simplyblockdriver.md §4.1. Today, the
-// chart still installs both, into kube-system and annotated
-// helm.sh/resource-policy: keep, so an adopted deployment finds the API served
-// and records Detected. What is missing here is the detection against the
-// discovery client, the apply of the CRDs and the controller where it comes
-// back empty, and status.snapshotSupport reading Installed in that case. They
-// are cluster-scoped and shared, so they carry no owner reference and outlive
-// this object, which is what design §9 Q2 leaves open.
+// cluster serves neither, which is the second half of design-simplyblockdriver.md
+// §4.1 and is why SnapshotSupportOriginInstalled is not yet reachable.
 //
-// status.snapshotSupport is unwritten in both cases today, and Detected is the
-// half that needs nothing new: every adopted cluster is already serving the API,
-// so the discovery check alone would settle it. Installed waits on the apply
-// above, and the Normal SnapshotsEnabled event design §6.1 owes waits with it.
+// The chart installs both today, and conditionally: its CRD templates are
+// guarded on .Capabilities.APIVersions.Has, so a cluster already serving the
+// kinds gets nothing, which is the same rule §4.1 states for the operator. What
+// a chart cannot cover is an installation that is not a chart — an OLM bundle,
+// or a release with snapshotcontroller.create false — and that is the case this
+// owes. It needs the upstream manifests carried in this binary and an image for
+// the controller, which no field on the spec names, so it is a change of its own
+// rather than a line here. §9 Q2 is what removes them afterward, and it is open.
 //
-// The apply is also not tolerant of a cluster that serves no snapshot API. The
-// VolumeSnapshotClass goes into the object set whenever the toggle is on, so on
-// such a cluster the whole reconcile fails on that one object rather than
-// skipping it. Detecting first fixes that too.
+// The test plan's U-38 to U-41 are the rows this owes. U-04 and U-05 are the
+// detection below.
+
+// SnapshotAPI answers whether the cluster serves the snapshot kinds, which is
+// §4.1's detection: a snapshot-controller exists to reconcile those kinds and
+// its Deployment is named differently by every distribution, so the API being
+// served is the question rather than any object being present.
 //
-// The test plan's U-04, U-05, and U-38 to U-41 are the rows this owes.
+// It is an interface because the answer comes from discovery rather than from
+// the object graph, and a reconciler that reached for a discovery client
+// directly could not be tested against a cluster that has no snapshot API —
+// which is the case this exists to handle.
+type SnapshotAPI interface {
+	// SnapshotAPIServed reports whether snapshot.storage.k8s.io/v1 is served.
+	SnapshotAPIServed(ctx context.Context) (bool, error)
+}
+
+// snapshotOrigin is what status.snapshotSupport should read, and the empty
+// string for a deployment that asked for no snapshots.
+//
+// Only Detected is reachable today. Installed is what the apply above would
+// record, and recording it before that apply exists would say this deployment
+// brought snapshot support to a cluster where nothing did.
+func (r *SimplyblockDriverReconciler) snapshotOrigin(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) (simplyblockv1alpha2.SnapshotSupportOrigin, error) {
+	if !snapshotsEnabled(d) {
+		return "", nil
+	}
+	served, err := r.snapshotAPIServed(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !served {
+		return "", nil
+	}
+	return simplyblockv1alpha2.SnapshotSupportOriginDetected, nil
+}
+
+// snapshotAPIServed asks the cluster, and refuses to guess.
+//
+// A reconcile with no way to ask is a reconcile that must fail rather than
+// assume. Assuming served applies a class the API server may have no kind for,
+// and assuming absent drops a class an adopted cluster already has, which
+// withdraws snapshot support from a working deployment on a transient error.
+func (r *SimplyblockDriverReconciler) snapshotAPIServed(ctx context.Context) (bool, error) {
+	if r.Snapshots == nil {
+		return false, fmt.Errorf(
+			"no snapshot-API detector is configured, so whether this cluster serves " +
+				"snapshot.storage.k8s.io/v1 cannot be established")
+	}
+	served, err := r.Snapshots.SnapshotAPIServed(ctx)
+	if err != nil {
+		return false, fmt.Errorf("ask whether the cluster serves the snapshot API: %w", err)
+	}
+	return served, nil
+}
 
 // snapshotsEnabled reports whether this deployment includes snapshot support.
 // The field defaults to true, so an object written before the default applied
