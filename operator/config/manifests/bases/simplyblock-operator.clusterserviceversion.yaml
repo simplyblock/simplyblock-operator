@@ -197,8 +197,8 @@ spec:
       kind: ClusterDeploymentConfig
       name: clusterdeploymentconfigs.storage.simplyblock.io
       version: v1alpha2
-    - description: NFSExport is one pNFS export: a filesystem on one volume, served
-        from one host and mounted by many.
+    - description: NFSExport is one pNFS export, a filesystem on one volume that is
+        served from one host and mounted by many.
       displayName: NFS Export
       kind: NFSExport
       name: nfsexports.storage.simplyblock.io
