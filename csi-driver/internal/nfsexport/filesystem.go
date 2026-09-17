@@ -32,7 +32,7 @@ import (
 // the one that does not write.
 //
 // This repository has already lost data to the other reading: an unreadable
-// device made blkid exit non-zero, that was taken as "blank", and mkfs ran on a
+// device made blkid exit non-zero, that was read as an empty device, and mkfs ran on a
 // live filesystem. The second opinion is worth keeping.
 func formatCommand(device, fsType string, options []string) (string, []string) {
 	return hostCommand("mkfs."+fsType, append(append([]string{}, options...), device)...)
