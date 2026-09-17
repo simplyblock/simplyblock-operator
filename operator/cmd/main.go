@@ -860,6 +860,13 @@ func main() {
 			}})
 		setupLog.Info("registered storagepool validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig",
+			&webhook.Admission{Handler: &internalwebhook.ClusterDeploymentConfigValidator{
+				Client:  mgr.GetClient(),
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			}})
+		setupLog.Info("registered clusterdeploymentconfig validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackup",
 			&webhook.Admission{Handler: &internalwebhook.StorageBackupValidator{
 				Client:            mgr.GetClient(),
