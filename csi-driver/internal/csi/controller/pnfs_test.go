@@ -247,3 +247,31 @@ func TestDeletedExportYieldsTheBackingBlockHandle(t *testing.T) {
 		t.Errorf("backing handle = %q, want %q", backing, want)
 	}
 }
+
+// Expanding a ReadWriteMany volume is not implemented, and says so.
+//
+// It is two steps on two hosts -- grow the logical volume, then xfs_growfs on
+// whichever host serves the export -- and the second has no caller yet. Left
+// alone the handle simply fails to parse somewhere further in, and the user
+// reads "invalid volume handle" about a volume the driver created, which sends
+// them looking for corruption rather than for a missing feature.
+func TestExpandingAnRWXVolumeIsRefusedInItsOwnWords(t *testing.T) {
+	err := refuseRWXExpansion(
+		"nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f")
+	if err == nil {
+		t.Fatal("expanding a ReadWriteMany volume was accepted")
+	}
+	if !strings.Contains(err.Error(), "ReadWriteMany") {
+		t.Errorf("the refusal %q does not say what kind of volume this is", err)
+	}
+	if strings.Contains(err.Error(), "invalid volume handle") {
+		t.Errorf("the refusal reads as a malformed handle: %q", err)
+	}
+}
+
+// A block volume still expands.
+func TestExpandingABlockVolumeIsNotRefusedHere(t *testing.T) {
+	if err := refuseRWXExpansion("f0bb9077:pool-a:bfc56677"); err != nil {
+		t.Errorf("a block volume was refused: %v", err)
+	}
+}

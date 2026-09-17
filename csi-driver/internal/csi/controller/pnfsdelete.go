@@ -66,3 +66,23 @@ func deleteExportFor(
 		VolumeID:  handle.ExportUUID,
 	}.String(), nil
 }
+
+// refuseRWXExpansion turns away an expand of a pNFS volume, in its own words.
+//
+// Growing one is two steps on two hosts: grow the logical volume, and then run
+// xfs_growfs on whichever host currently serves the export. The second has no
+// caller -- the operator drives the host over the link and nothing asks it to
+// resize -- so the feature is absent rather than broken.
+//
+// Saying so matters because the alternative is not an error about expansion at
+// all: the pNFS handle does not parse as a block one, and the user reads
+// "invalid volume handle" about a volume this driver created, which reads like
+// corruption and sends them looking in the wrong place.
+func refuseRWXExpansion(volumeHandle string) error {
+	if !lvol.VolumeHandle(volumeHandle).IsNFS() {
+		return nil
+	}
+	return status.Error(codes.Unimplemented,
+		"a ReadWriteMany volume cannot be expanded yet: growing one means growing the volume "+
+			"and then the filesystem on the host serving the export, and the second half is not built")
+}

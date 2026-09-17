@@ -25,6 +25,9 @@ func (cs *Server) ControllerExpandVolume(
 	if req.GetCapacityRange() == nil {
 		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
 	}
+	if err := refuseRWXExpansion(volumeID); err != nil {
+		return nil, err
+	}
 
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
