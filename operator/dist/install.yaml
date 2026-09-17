@@ -10468,6 +10468,26 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig
+  failurePolicy: Fail
+  name: vclusterdeploymentconfig.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - clusterdeploymentconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-controlplaneops
   failurePolicy: Fail
   name: vcontrolplaneops.simplyblock.io
@@ -10585,6 +10605,25 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-storageclusterops
+  failurePolicy: Fail
+  name: vstorageclusterops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storageclusterops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-storagedevice
   failurePolicy: Ignore
   name: vstoragedevice.simplyblock.io
@@ -10618,6 +10657,25 @@ webhooks:
     - UPDATE
     resources:
     - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagenodeops
+  failurePolicy: Fail
+  name: vstoragenodeops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storagenodeops
   sideEffects: None
 - admissionReviewVersions:
   - v1
