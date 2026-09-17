@@ -163,12 +163,12 @@ func (ns *Server) NodeUnstageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if compression, deduplication, wantsVDO := vdoParams(volumeContext); wantsVDO {
+	if _, _, wantsVDO := vdoParams(volumeContext); wantsVDO {
 		// Deactivate, never destroy: this fires on every routine unstage, pod
 		// restarts included, not only when the volume is being deleted.
 		lvolID := vdoLvolID(volumeID)
 		rawDevicePath := volumeContext["rawDevicePath"]
-		if err := ns.vdo.Down(ctx, lvolID, rawDevicePath, compression, deduplication); err != nil {
+		if err := ns.vdo.Down(ctx, lvolID, rawDevicePath); err != nil {
 			klog.Errorf("failed to release VDO stack, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}

@@ -307,7 +307,7 @@ func TestVDOStack_Down_Deactivates(t *testing.T) {
 	cmds.out["lvs:lv_attr"] = "-wi-ao----\n"
 
 	stack := newTestVDOStack(t, cmds, content, resolve)
-	if err := stack.Down(context.Background(), testLvolID, testRawDevPath, true, true); err != nil {
+	if err := stack.Down(context.Background(), testLvolID, testRawDevPath); err != nil {
 		t.Fatalf("Down: %v\n%s", err, cmds.issued())
 	}
 	if !cmds.ran("vgchange") {
@@ -334,7 +334,7 @@ func TestVDOStack_Down_FallsBackWhenRawDeviceIsGone(t *testing.T) {
 	cmds.err["vgchange"] = errors.New("Volume group " + wantVG + " not found")
 
 	stack := newTestVDOStack(t, cmds, fakeContentReader{}, resolve)
-	if err := stack.Down(context.Background(), testLvolID, testRawDevPath, true, true); err != nil {
+	if err := stack.Down(context.Background(), testLvolID, testRawDevPath); err != nil {
 		t.Fatalf("Down: %v, want the force path to succeed even with no raw device left:\n%s", err, cmds.issued())
 	}
 	if !cmds.ran("dmsetup") {
@@ -356,7 +356,7 @@ func TestVDOStack_Grow(t *testing.T) {
 	cmds.out["lvs:lv_size"] = "5368709120"
 
 	stack := newTestVDOStack(t, cmds, content, resolve)
-	if err := stack.Grow(context.Background(), testLvolID, testRawDevPath, true, true); err != nil {
+	if err := stack.Grow(context.Background(), testLvolID, testRawDevPath); err != nil {
 		t.Fatalf("Grow: %v\n%s", err, cmds.issued())
 	}
 	if !cmds.ran("pvresize") {

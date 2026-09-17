@@ -216,13 +216,22 @@ func (s *vdoStack) Up(
 // device-mapper nodes directly (design-issue-277 §7.3, §8). It never
 // destroys: NodeUnstageVolume is the only caller, and it fires whenever no
 // pod on this node needs the volume, including an ordinary pod restart.
-func (s *vdoStack) Down(ctx context.Context, lvolID, rawDevicePath string, compression, deduplication bool) error {
-	return s.runner.Down(ctx, lvolID, s.plan(rawDevicePath, lvolID, compression, deduplication))
+//
+// Takes no compression/deduplication: LVMLogicalVolume.Release, the method
+// this reaches, never reads its Definition (only create, reached from Ensure
+// when the volume does not exist yet, does), so a real value here would be
+// discarded, not merely unused.
+func (s *vdoStack) Down(ctx context.Context, lvolID, rawDevicePath string) error {
+	return s.runner.Down(ctx, lvolID, s.plan(rawDevicePath, lvolID, false, false))
 }
 
 // Grow extends lvolID's VDO pool and logical volume to the physical space
 // rawDevicePath now reports, ahead of the filesystem resize (design-issue-277
 // §9).
-func (s *vdoStack) Grow(ctx context.Context, lvolID, rawDevicePath string, compression, deduplication bool) error {
-	return s.runner.Grow(ctx, s.plan(rawDevicePath, lvolID, compression, deduplication))
+//
+// Takes no compression/deduplication for the same reason Down does not:
+// LVMLogicalVolume.Grow sizes the pool and the logical volume from the
+// volume group and pool names alone and never reads Definition.
+func (s *vdoStack) Grow(ctx context.Context, lvolID, rawDevicePath string) error {
+	return s.runner.Grow(ctx, s.plan(rawDevicePath, lvolID, false, false))
 }
