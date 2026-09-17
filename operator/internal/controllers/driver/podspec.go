@@ -55,3 +55,28 @@ func secretVolume(name, secret string) corev1.Volume {
 		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secret}},
 	}
 }
+
+// concatEnv and concatMounts join a container's fixed entries to the optional
+// groups each feature contributes. They exist because the alternative is
+// nested appends, which is what the third feature turned unreadable: a group
+// appended in the wrong place is a variable on the wrong plugin, and the nesting
+// is exactly what hides it.
+//
+// Order is preserved, and an empty group contributes nothing, so a feature that
+// is off leaves the container byte-identical to what it was before the feature
+// existed. That is what adoption depends on.
+func concatEnv(groups ...[]corev1.EnvVar) []corev1.EnvVar {
+	var out []corev1.EnvVar
+	for _, g := range groups {
+		out = append(out, g...)
+	}
+	return out
+}
+
+func concatMounts(groups ...[]corev1.VolumeMount) []corev1.VolumeMount {
+	var out []corev1.VolumeMount
+	for _, g := range groups {
+		out = append(out, g...)
+	}
+	return out
+}

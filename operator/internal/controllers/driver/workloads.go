@@ -3,10 +3,10 @@
 //
 // Both pod specs reproduce what the chart renders, because adoption reconciles
 // toward the state that is running and a field invented here is a rolling
-// restart of every node plugin in the cluster on the reconcile that adopts. The
-// csi-link volumes and arguments are deliberately absent: they are gated on a
-// chart value that is off, and a deployment that has them is one the translation
-// has to grow a field for rather than one this file guesses at.
+// restart of every node plugin in the cluster on the reconcile that adopts.
+// csi-link is the worked example: it was absent here until spec.link existed,
+// because a deployment carrying it was one the translation could not express
+// and adoption therefore had to refuse.
 //
 // Specified by operator/docs/designs/crd-redesign/design-simplyblockdriver.md
 // §4.1.
@@ -52,21 +52,6 @@ func nodePluginHostDir(driver string) string {
 	return kubeletPluginsDir + "/" + driver
 }
 
-// TODO(simplyblockdriver): give csi-link a spec surface. TLS now has one
-// (tls.go, spec.tls); this is the other half of the TODO that used to stand
-// here.
-//
-// The chart gated csi-link on csiLink.enabled and gave each plugin three
-// arguments, a service-account token projected for the operator's audience,
-// and a CA bundle from a ConfigMap. None of that is expressible on the CRD, so
-// a deployment that had it enabled loses it here, and the values that
-// configured it now configure only the Service the operator itself serves.
-//
-// It is off in every deployment measured, which is why the driver could move
-// without it. Turning it on again needs a spec surface first, and that decision
-// belongs with the csi-link design rather than being guessed at from the
-// template it used to be rendered from.
-
 func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *appsv1.DaemonSet {
 	n := names(d)
 	s := sidecars(d)
@@ -77,6 +62,8 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 	if v := tlsVolume(d, n.nodeClientSecret); v != nil {
 		volumes = append(volumes, *v)
 	}
+	volumes = append(volumes, linkVolumes(d)...)
+	volumes = append(volumes, pnfsVolumes(d)...)
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
@@ -142,16 +129,16 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			AllowPrivilegeEscalation: ptr.To(true),
 			Capabilities:             &corev1.Capabilities{Add: []corev1.Capability{"SYS_ADMIN", "SYS_MODULE"}},
 		},
-		Args: []string{
+		Args: append([]string{
 			verbosity,
 			"--endpoint=" + nodeSocketPath,
 			"--nodeid=$(NODE_ID)",
 			"--node",
-		},
-		Env: append(append([]corev1.EnvVar{
+		}, linkArgs(d)...),
+		Env: concatEnv([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			{Name: "GUARDIAN_MIN_BROKEN_FOR", Value: "30s"},
-		}, serviceAccountAuthEnv(d)...), tlsEnv(d)...),
+		}, linkEnv(d), serviceAccountAuthEnv(d), tlsEnv(d)),
 		Lifecycle: &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", nodePostStartScript}},
 		}},
@@ -168,7 +155,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
-		}, tlsVolumeMount(d)...),
+		}, concatMounts(tlsVolumeMount(d), linkVolumeMounts(d), pnfsVolumeMounts(d))...),
 	}
 }
 
@@ -269,6 +256,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 	if v := tlsVolume(d, n.controllerClientSecret); v != nil {
 		volumes = append(volumes, *v)
 	}
+	volumes = append(volumes, linkVolumes(d)...)
 
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.controllerStatefulSet, Namespace: d.Namespace},
@@ -311,21 +299,21 @@ func controllerPluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image s
 		Name:            "csi-controller",
 		Image:           image,
 		ImagePullPolicy: pullPolicy(d),
-		Args: []string{
+		Args: append([]string{
 			verbosity,
 			"--endpoint=" + controllerSocketPath,
 			"--nodeid=$(NODE_ID)",
 			"--controller",
-		},
-		Env: append(append([]corev1.EnvVar{
+		}, linkArgs(d)...),
+		Env: concatEnv([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
-		}, serviceAccountAuthEnv(d)...), tlsEnv(d)...),
+		}, linkEnv(d), serviceAccountAuthEnv(d), tlsEnv(d)),
 		Resources: d.Spec.ControllerResources,
 		VolumeMounts: append([]corev1.VolumeMount{
 			{Name: "socket-dir", MountPath: socketDir},
 			{Name: "csi-config", MountPath: "/etc/spdkcsi-config/", ReadOnly: true},
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
-		}, tlsVolumeMount(d)...),
+		}, concatMounts(tlsVolumeMount(d), linkVolumeMounts(d))...),
 	}
 }
 

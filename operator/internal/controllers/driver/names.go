@@ -15,16 +15,22 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// clusterRoleComponents are the five ClusterRole and ClusterRoleBinding pairs
-// the plugins need: one for the node plugin, and one per controller-plugin
+// clusterRoleComponents are the six ClusterRole and ClusterRoleBinding pairs the
+// plugins need: one for each plugin itself, and one per controller-plugin
 // sidecar that talks to the API server.
 var clusterRoleComponents = []string{
-	nodeComponent, "provisioner", "attacher", "resizer", "health-monitor",
+	nodeComponent, controllerComponent, "provisioner", "attacher", "resizer", "health-monitor",
 }
 
 // nodeComponent is the one component whose role binds the node plugin's account
 // rather than the controller plugin's.
 const nodeComponent = "node"
+
+// controllerComponent is the controller plugin's own role, as distinct from the
+// sidecars that share its account. It is separate so that what the driver needs
+// can be read apart from what upstream's sidecars need, and so a rule added for
+// one is not silently granted to the other.
+const controllerComponent = "controller"
 
 // objectNames is the whole naming surface of one deployment.
 type objectNames struct {

@@ -19,6 +19,7 @@ import (
 	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/export/exportrpc"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/storage/storagerpc"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -50,21 +51,36 @@ func (a *linkAssembler) HasSession(nodeName string) bool {
 	return err == nil
 }
 
-// CreateExport assembles the export on the bound node.
+// CreateExport assembles the export on the bound node and reports the NGUID
+// that node observed.
+//
+// The read back is the same connection and the same host, and it is the only
+// place the NGUID can come from: it is assigned by the target and read off the
+// device, so neither the CSI controller that wrote the record nor this operator
+// can know it. A host that cannot report it is not a failed assembly -- the
+// export is mounted and published either way -- so the read's error is dropped
+// rather than undoing the work, and the reconciler keeps whatever it had.
 func (a *linkAssembler) CreateExport(
 	ctx context.Context,
 	nodeName string,
 	nfsExport *simplyblockv1alpha2.NFSExport,
-) error {
-	client, err := a.remote(nodeName)
+) (string, error) {
+	conn, err := a.conn(nodeName)
 	if err != nil {
-		return err
+		return "", err
 	}
 	spec, err := specFor(nfsExport)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return client.Create(ctx, spec)
+	if err := exportrpc.Remote(conn).Create(ctx, spec); err != nil {
+		return "", err
+	}
+	device, err := storagerpc.Remote(conn).DeviceByUUID(ctx, spec.VolumeUUID)
+	if err != nil {
+		return "", nil
+	}
+	return device.Namespace.NGUID, nil
 }
 
 // DeleteExport tears the export down on the bound node.
@@ -73,7 +89,7 @@ func (a *linkAssembler) DeleteExport(
 	nodeName string,
 	nfsExport *simplyblockv1alpha2.NFSExport,
 ) error {
-	client, err := a.remote(nodeName)
+	conn, err := a.conn(nodeName)
 	if err != nil {
 		return err
 	}
@@ -81,10 +97,12 @@ func (a *linkAssembler) DeleteExport(
 	if err != nil {
 		return err
 	}
-	return client.Delete(ctx, spec)
+	return exportrpc.Remote(conn).Delete(ctx, spec)
 }
 
-func (a *linkAssembler) remote(nodeName string) (*exportrpc.Client, error) {
+// conn is the link connection to one node. Both services this file uses ride
+// the same one, which is why it returns the connection rather than a client.
+func (a *linkAssembler) conn(nodeName string) (grpc.ClientConnInterface, error) {
 	conn, err := a.registry.Conn(link.NodePeer(nodeName))
 	if err != nil {
 		if errors.Is(err, link.ErrNoSession) {
@@ -95,7 +113,7 @@ func (a *linkAssembler) remote(nodeName string) (*exportrpc.Client, error) {
 		}
 		return nil, fmt.Errorf("reaching node %s: %w", nodeName, err)
 	}
-	return exportrpc.Remote(conn), nil
+	return conn, nil
 }
 
 // specFor derives the host-side spec from the record.
@@ -105,11 +123,13 @@ func (a *linkAssembler) remote(nodeName string) (*exportrpc.Client, error) {
 // an identifier or reaches back to the control plane. That is what makes a
 // reconcile against a node cheap enough to run on every pass.
 func specFor(nfsExport *simplyblockv1alpha2.NFSExport) (export.Spec, error) {
-	if nfsExport.Status.NGUID == "" {
-		// The namespace identifier is written by provisioning. Without it the
-		// node cannot find the device, and guessing would be worse than waiting.
+	if nfsExport.Status.LVolID == "" {
+		// The backing volume's id is written by provisioning, and for a
+		// simplyblock volume it is also the namespace UUID the host resolves
+		// the device by. Without it the node cannot find the device, and
+		// guessing would be worse than waiting.
 		return export.Spec{}, fmt.Errorf(
-			"export %s: status.nguid is not set yet: %w",
+			"export %s: status.lvolID is not set yet: %w",
 			nfsExport.Name, export.ErrInvalidSpec)
 	}
 	clients := nfsExport.Status.AllowedClients
@@ -123,9 +143,9 @@ func specFor(nfsExport *simplyblockv1alpha2.NFSExport) (export.Spec, error) {
 			nfsExport.Name, export.ErrInvalidSpec)
 	}
 	return export.Spec{
-		NGUID:   nfsExport.Status.NGUID,
-		Path:    nfsExport.Spec.ExportPath,
-		FSID:    nfsExport.Spec.FSID,
-		Clients: clients,
+		VolumeUUID: nfsExport.Status.LVolID,
+		Path:       nfsExport.Spec.ExportPath,
+		FSID:       nfsExport.Spec.FSID,
+		Clients:    clients,
 	}, nil
 }

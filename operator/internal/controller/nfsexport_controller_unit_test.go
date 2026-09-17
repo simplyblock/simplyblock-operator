@@ -39,14 +39,17 @@ type fakeAssembler struct {
 	deleted    []string
 	createErr  error
 	noSessions bool
+	nguid      string
 }
 
-func (f *fakeAssembler) CreateExport(_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport) error {
+func (f *fakeAssembler) CreateExport(
+	_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport,
+) (string, error) {
 	if f.createErr != nil {
-		return f.createErr
+		return "", f.createErr
 	}
 	f.created = append(f.created, node)
-	return nil
+	return f.nguid, nil
 }
 
 func (f *fakeAssembler) DeleteExport(_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport) error {
@@ -407,4 +410,47 @@ func hasTrueCondition(e *simplyblockv1alpha2.NFSExport, condType string) bool {
 		}
 	}
 	return false
+}
+
+// The NGUID is the one identifier neither the CSI controller nor the operator
+// can know when the record is written: it is assigned by the target and read
+// back from the device, so only a host with the namespace attached has it. The
+// host that assembles the export has it, and recording what it observed is what
+// lets a client derive its device alias without a second source of truth.
+func TestAssemblingRecordsTheObservedNGUID(t *testing.T) {
+	const observed = "ef90a8b4c7d21e0356f8a91b2c3d4e5f"
+
+	asm := &fakeAssembler{nguid: observed}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
+		e.Status.StorageNodeRef = "sn-worker-1-0"
+	})
+	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+
+	reconcileExport(t, r)
+
+	if got := loadExport(t, cl).Status.NGUID; got != observed {
+		t.Errorf("status.nguid = %q, want the host's %q", got, observed)
+	}
+}
+
+// A host that reports no NGUID does not blank one already recorded. The value
+// is a property of the namespace rather than of this pass, and overwriting it
+// with an empty string would make a client that had a working alias lose it.
+func TestAssemblingKeepsAKnownNGUID(t *testing.T) {
+	const known = "0123456789abcdef0123456789abcdef"
+
+	asm := &fakeAssembler{}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
+		e.Status.StorageNodeRef = "sn-worker-1-0"
+		e.Status.NGUID = known
+	})
+	r, cl := newExportReconciler(t, asm, export, testNode("sn-worker-1-0", nil))
+
+	reconcileExport(t, r)
+
+	if got := loadExport(t, cl).Status.NGUID; got != known {
+		t.Errorf("status.nguid = %q, want the recorded %q", got, known)
+	}
 }

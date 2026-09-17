@@ -82,7 +82,13 @@ type ExportAssembler interface {
 	// namespace, make or find the filesystem, mount it, and publish it. It is
 	// idempotent, because a reconcile that died mid-assembly will call it
 	// again.
-	CreateExport(ctx context.Context, nodeName string, export *simplyblockv1alpha2.NFSExport) error
+	//
+	// It returns the NGUID the host observed on the namespace, which is the
+	// only place that value can come from: the target assigns it and a host
+	// reads it off the device, so neither provisioning nor this controller
+	// knows it. An empty string means the host could not report one, which is
+	// not an assembly failure.
+	CreateExport(ctx context.Context, nodeName string, export *simplyblockv1alpha2.NFSExport) (string, error)
 	// DeleteExport tears the export down on the named node in reverse order. It
 	// is idempotent and treats an already-absent export as success, because the
 	// finalizer path has to converge.
@@ -240,7 +246,8 @@ func (r *NFSExportReconciler) reconcileAssembling(
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 	}
 
-	if err := r.Assembler.CreateExport(ctx, node, export); err != nil {
+	nguid, err := r.Assembler.CreateExport(ctx, node, export)
+	if err != nil {
 		// Assembly is idempotent and will be retried with backoff.
 		return ctrl.Result{}, fmt.Errorf("assembling export on %s: %w", node, err)
 	}
@@ -253,6 +260,12 @@ func (r *NFSExportReconciler) reconcileAssembling(
 		s.Phase = phaseReady
 		s.Message = ""
 		s.PhaseDeadline = nil
+		if nguid != "" {
+			// Only ever set, never cleared: the NGUID is a property of the
+			// namespace rather than of this pass, and blanking it would take a
+			// working device alias away from a client that already has one.
+			s.NGUID = nguid
+		}
 		setCondition(s, simplyblockv1alpha2.NFSExportConditionAssembled, metav1.ConditionTrue,
 			"MountPresent", "the filesystem is mounted on the bound host")
 		setCondition(s, simplyblockv1alpha2.NFSExportConditionExported, metav1.ConditionTrue,

@@ -64,6 +64,11 @@ spec:
             description: |-
               SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
               controller plugin, their RBAC, and the CSIDriver registration they produce.
+
+              The rule is the one dependency between two of its fields that reconciling
+              cannot recover from: the operator assembles a pNFS export by calling the host
+              over csi-link, so pNFS without the link leaves every ReadWriteMany claim in
+              the cluster waiting on a call nothing will make.
             properties:
               controllerNodeSelector:
                 additionalProperties:
@@ -230,6 +235,55 @@ spec:
                 - Never
                 - IfNotPresent
                 type: string
+              link:
+                description: |-
+                  Link configures csi-link, the connection both plugins open to the
+                  operator. Unset is off, the shape every deployment ran before this field
+                  existed.
+                properties:
+                  audience:
+                    default: simplyblock-csi-link
+                    description: |-
+                      Audience is what each plugin's projected token is bound to, and what the
+                      operator requires of it. A token bound to no particular audience is one
+                      anything holding it can replay against the operator, which is the whole
+                      reason the link authenticates.
+                    type: string
+                  caConfigMap:
+                    default: simplyblock-csi-link-ca
+                    description: |-
+                      CAConfigMap holds the bundle that signs the operator's link certificate,
+                      and CAKey is the key in it. The ConfigMap is mounted optional: a publicly
+                      rooted certificate needs none, and the agent falls back to the system
+                      roots, so a missing one must not stop a plugin from starting.
+                    type: string
+                  caKey:
+                    default: ca.crt
+                    type: string
+                  enableLink:
+                    default: false
+                    description: |-
+                      EnableLink turns the link on for both plugins. It is required for pNFS,
+                      which is the first thing that needs the operator to call a node.
+                    type: boolean
+                  port:
+                    default: 9500
+                    description: |-
+                      Port is what that Service listens on, matching the operator's
+                      --csi-link-bind-address.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceName:
+                    default: simplyblock-csi-link
+                    description: |-
+                      ServiceName is the Service fronting the operator's link endpoint, in this
+                      object's own namespace. Both plugins dial it and verify it against the
+                      operator's serving certificate, so it has to be a name that certificate
+                      covers rather than an address.
+                    type: string
+                type: object
               nodeResources:
                 description: ResourceRequirements describes the compute resource requirements.
                 properties:
@@ -296,6 +350,20 @@ spec:
                   NodeSelector restricts which workers run the node plugin. Empty means
                   every schedulable worker, which is the usual case: a node that cannot
                   attach a volume cannot run a workload that needs one.
+                type: object
+              pnfs:
+                description: |-
+                  PNFS configures pNFS ReadWriteMany support on the node plugin. It
+                  requires Link, which the rule on this type enforces.
+                properties:
+                  enablePNFS:
+                    default: false
+                    description: |-
+                      EnablePNFS gives the node plugin what it needs to assemble exports: the
+                      host's exports directory, and an export root whose mounts the host can
+                      see. It requires EnableLink, because the operator drives assembly by
+                      calling the host over the link.
+                    type: boolean
                 type: object
               sidecarImages:
                 description: |-
@@ -414,6 +482,10 @@ spec:
             x-kubernetes-validations:
             - message: field driverName is immutable once set
               rule: '!has(oldSelf.driverName) || has(self.driverName)'
+            - message: 'spec.pnfs.enablePNFS requires spec.link.enableLink: the operator
+                assembles exports by calling the metadata-server host over csi-link'
+              rule: '!(has(self.pnfs) && has(self.pnfs.enablePNFS) && self.pnfs.enablePNFS)
+                || (has(self.link) && has(self.link.enableLink) && self.link.enableLink)'
           status:
             description: SimplyblockDriverStatus is the observed state of the CSI
               driver deployment.

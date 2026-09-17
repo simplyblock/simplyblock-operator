@@ -87,10 +87,27 @@ func TestNamesReproduceTheChart(t *testing.T) {
 		}
 	}
 	for what, name := range got {
-		if _, expected := chartNames[what]; !expected {
-			t.Errorf("derived an object the chart list does not cover: %s = %q", what, name)
+		if _, expected := chartNames[what]; expected {
+			continue
 		}
+		if _, new_ := objectsTheChartNeverApplied[what]; new_ {
+			continue
+		}
+		t.Errorf("derived an object the chart list does not cover: %s = %q", what, name)
 	}
+}
+
+// objectsTheChartNeverApplied are the objects this kind adds rather than
+// inherits, which adoption therefore creates instead of taking over.
+//
+// The controller plugin had no role of its own under the chart, because until
+// pNFS every API-server call on that pod was a sidecar's and the plugin itself
+// reached only the control plane. The record it now creates during provisioning
+// is the first thing that is the driver's own rather than an upstream sidecar's
+// (design-pnfs-rwx.md §9.3).
+var objectsTheChartNeverApplied = map[string]struct{}{
+	"controller role":    {},
+	"controller binding": {},
 }
 
 // U-60: a differently named driver derives a set that overlaps the first

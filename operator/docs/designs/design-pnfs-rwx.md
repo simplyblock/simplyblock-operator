@@ -33,42 +33,47 @@ Updated as work lands, so the document tracks the code rather than describing an
 intention. "Validated" means measured on a live cluster, with the evidence in
 §Bring-up Findings.
 
-| Item                                                   | Section     | Status                                            |
-|--------------------------------------------------------|-------------|---------------------------------------------------|
-| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5 | **Merged path** — operator PR #546 in review      |
-| pNFS volume handle (`nfs:` four-part form)             | §11         | **Merged path** — operator PR #547 in review      |
-| `ptpl_file` on the lvol namespace                      | §6.2, P0-1  | **Fix in review** — sbcli PR #1375                |
-| Direct block I/O end to end                            | §3, §4      | **Validated**                                     |
-| Many exports on one MDS host                           | §8.4        | **Validated**                                     |
-| Many clients on one export, coherent                   | §4, FR-7    | **Validated**                                     |
-| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1 | **Validated**                                     |
-| Service ClusterIP reached by a kernel mount            | §13.3, Q3   | **Validated** on stock kube-proxy                 |
-| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2        | **Validated**                                     |
-| `NFSExport` CRD and types                              | §7.1        | **Done** -- v1alpha2                              |
-| `NFSExportReconciler`                                  | §14.2       | **Done** -- phase graph, selection, finalizer     |
-| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3  | **Done** -- idempotent, unit-tested               |
-| Carrying that over csi-link                            | §6.4        | **Done** -- exportrpc, both ends wired            |
-| CSI controller RWX path                                | §9          | **Partly done** -- access modes, identity, gating |
-| CSI node client mount and `nvme-eui.` alias            | §10         | **Partly done** -- alias, mount, unstage          |
-| PR key release on unstage, and a reaper for dead nodes | §10.3, §13  | Not started — **new, see findings**               |
-| Reservation handover on migration                      | §13.4       | Not started — **new, see findings**               |
-| Chart, RBAC, `SimplyblockDriver` wiring                | §14         | Not started                                       |
+| Item                                                   | Section      | Status                                            |
+|--------------------------------------------------------|--------------|---------------------------------------------------|
+| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5  | **Merged path** — operator PR #546 in review      |
+| pNFS volume handle (`nfs:` four-part form)             | §11          | **Merged path** — operator PR #547 in review      |
+| `ptpl_file` on the lvol namespace                      | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                |
+| Direct block I/O end to end                            | §3, §4       | **Validated**                                     |
+| Many exports on one MDS host                           | §8.4         | **Validated**                                     |
+| Many clients on one export, coherent                   | §4, FR-7     | **Validated**                                     |
+| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1  | **Validated**                                     |
+| Service ClusterIP reached by a kernel mount            | §13.3, Q3    | **Validated** on stock kube-proxy                 |
+| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2         | **Validated**                                     |
+| `NFSExport` CRD and types                              | §7.1         | **Done** -- v1alpha2                              |
+| `NFSExportReconciler`                                  | §14.2        | **Done** -- phase graph, selection, finalizer     |
+| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3   | **Done** -- idempotent, unit-tested               |
+| Carrying that over csi-link                            | §6.4         | **Done** -- exportrpc, both ends wired            |
+| CSI controller RWX path                                | §9           | **Done** -- wired into `CreateVolume`             |
+| CSI node client mount and `nvme-eui.` alias            | §10          | **Done** -- wired into `NodeStageVolume`          |
+| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs`   | §14.1        | **Done** -- adoption compares rather than refuses |
+| RBAC over `nfsexports` for both plugins                | §9.3         | **Done** -- a role for the controller plugin      |
+| PR key release on unstage, and a reaper for dead nodes | §10.3, §13   | Not started — **new, see findings**               |
+| Reservation handover on migration                      | §13.4        | Not started — **new, see findings**               |
+| Host prerequisites: `nfs-utils`, `blkmapd`             | §14.1, P0-10 | Not started — node OS, not a pod                  |
 
 ### Where the implementation departs from this document
 
 Recorded here rather than left for a reader to find by diffing, because a
 departure nobody wrote down becomes a defect a release later.
 
-| Departure                                                   | Why                                                                                                                                                                                       |
-|-------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `NFSExport` is v1alpha2, not the v1alpha1 in §14.2          | The kind is new, so there is no v1alpha1 spelling to convert from. The document predates the group's move                                                                                 |
-| `FSID` is the export UUID, not an allocated value           | `exports(5)` accepts a UUID, so the value is unique cluster-wide and stable by construction. Q1's allocator does not need to exist                                                        |
-| MDS selection hashes the export name; §7.2 says round-robin | A hash is stable across reconciles, so an export picks the same host on every pass. Round-robin needs counter state and can re-pick differently after a restart, which a binding must not |
-| Eligibility checks only `online` and no active op           | §7.2 also wants kernel version, `nfs-utils`, and a node label. `StorageNode` carries none of them, which is P0-6. A node that cannot serve fails visibly in `Assembling` instead          |
-| `status.phaseDeadline` is new                               | The phase machine's bound has to outlive the process the same way the phase does, or a restart grants a fresh deadline every pass and never times out                                     |
-| `ClientPolicy.Mode` is a typed enum                         | §7.1 shows `mode: NodeScoped` without defining the set. A closed set gets a type and an `Enum` marker, so an unknown value is refused at admission                                        |
-| `Degraded` is terminal for the controller                   | It is reached by declining to act. Re-deciding it on a timer would bury the event that explains it                                                                                        |
-| The host side is an `ExportAssembler` interface             | An implementation seam rather than a design change: it makes the controller testable without a node, and is where the csi-link export service plugs in                                    |
+| Departure                                                   | Why                                                                                                                                                                                                                                                                |
+|-------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `NFSExport` is v1alpha2, not the v1alpha1 in §14.2          | The kind is new, so there is no v1alpha1 spelling to convert from. The document predates the group's move                                                                                                                                                          |
+| `FSID` is the export UUID, not an allocated value           | `exports(5)` accepts a UUID, so the value is unique cluster-wide and stable by construction. Q1's allocator does not need to exist                                                                                                                                 |
+| MDS selection hashes the export name; §7.2 says round-robin | A hash is stable across reconciles, so an export picks the same host on every pass. Round-robin needs counter state and can re-pick differently after a restart, which a binding must not                                                                          |
+| Eligibility checks only `online` and no active op           | §7.2 also wants kernel version, `nfs-utils`, and a node label. `StorageNode` carries none of them, which is P0-6. A node that cannot serve fails visibly in `Assembling` instead                                                                                   |
+| `status.phaseDeadline` is new                               | The phase machine's bound has to outlive the process the same way the phase does, or a restart grants a fresh deadline every pass and never times out                                                                                                              |
+| `ClientPolicy.Mode` is a typed enum                         | §7.1 shows `mode: NodeScoped` without defining the set. A closed set gets a type and an `Enum` marker, so an unknown value is refused at admission                                                                                                                 |
+| `Degraded` is terminal for the controller                   | It is reached by declining to act. Re-deciding it on a timer would bury the event that explains it                                                                                                                                                                 |
+| The export is resolved by volume UUID, not by NGUID         | §8.2 has the MDS find the device by NGUID. The NGUID is assigned by the target and read off the device, so provisioning cannot know it; the volume UUID is the namespace UUID and is known at create. The client still resolves its own alias by NGUID, from sysfs |
+| `status.nguid` is written by the operator, not provisioning | Same reason. The host that assembles the export is the first thing that can observe it, so `CreateExport` reports it back over the same link connection and the reconciler records it                                                                              |
+| pNFS is dropped from `csi-driver/charts/spdk-csi`           | §14 warns that a csi-node change must reach both chart trees or be dropped deliberately. This is dropped: that chart installs no operator, and without one nothing drives export assembly                                                                          |
+| The host side is an `ExportAssembler` interface             | An implementation seam rather than a design change: it makes the controller testable without a node, and is where the csi-link export service plugs in                                                                                                             |
 
 ---
 
@@ -1172,25 +1177,61 @@ chart.
 
 ### 14.1 Chart changes
 
-- **Client gating** (`helm-charts/charts/simplyblock-operator/templates/node.yaml`):
-  a `pnfs.enabled` value; `blkmapd` available and `nfs-blkmap` started on nodes that
-  may host RWX pods, either as an init step in the node DaemonSet or a small
-  privileged prerequisite DaemonSet. The operator labels nodes with kernel ≥ 6.11 as
-  RWX-capable and marks the rest, so scheduling avoids them.
-- **Server gating** (`templates/storage-node.yaml`): `nfs-utils` present on MDS
-  hosts, and the NFS-server daemons started at bring-up (§8.1). `blkmapd` is **not**
-  started on the server.
-- **csi-node on MDS hosts.** The node DaemonSet already takes `nodeSelector` and
-  `tolerations` from values, so running it on storage hosts is configuration rather
-  than new machinery. It needs `/mnt` and `/etc/exports.d/` host-mounted to manage
-  exports (§6.4(c)).
+**This section is written against a chart that installed the CSI driver. It no
+longer does.** Since operator PR #513 the node and controller plugins are
+rendered by the `SimplyblockDriver` reconciler
+(`operator/internal/controllers/driver`), so what this section calls a chart
+value is a field on that kind, and what it calls a template is a Go builder.
+The list below is what was implemented, in those terms.
+
+- **`spec.link`** on `SimplyblockDriver`, replacing the `csiLink.enabled` value
+  the chart used to gate the plugins on. The chart value survives, and now
+  configures only the operator's own end: the endpoint, the Service, and the
+  certificate it serves. `spec.link` configures the plugins that dial it. Both
+  halves have to be on, and they are separate objects, which is the one thing a
+  reader of the old section would get wrong.
+- **`spec.pnfs.enablePNFS`**, which gives the node plugin `/etc/exports.d` and an
+  `/mnt` mounted with bidirectional propagation. The propagation is the load-bearing
+  part: nfsd serves the host's mounts, so a mount made only in the container's
+  namespace leaves `exportfs` publishing an empty directory, and a client mounts
+  something that looks like an empty volume rather than failing.
+- **pNFS requires the link**, enforced by a CEL rule on `SimplyblockDriverSpec`
+  rather than by the reconciler. The operator assembles an export by calling the
+  MDS host over the link, so with no link every RWX claim in the cluster parks in
+  `Pending` waiting on a call nothing will make. That is not recoverable by
+  reconciling, and admission can say it when the mistake is made.
+- **Adoption compares rather than refuses.** csi-link was in `adoption.go`'s
+  `inexpressible` list, so a deployment running it could not be adopted at all.
+  With `spec.link` it becomes `linkAdoptionMismatch`, on `tlsAdoptionMismatch`'s
+  pattern: a running link with no `spec.link` is refused because the next apply
+  would drop it, and the reverse is refused because it would start every plugin
+  dialing an endpoint the cluster may not serve.
+- **RBAC.** Neither plugin could reach `storage.simplyblock.io` before this: their
+  roles covered PVs, PVCs, snapshots, nodes, and attachments. The controller
+  plugin now has a role of its own -- the first thing on that pod that is the
+  driver's rather than an upstream sidecar's -- carrying create, get, list, and
+  watch on `nfsexports` plus its status. The node plugin's role gains get, list,
+  and watch, and deliberately no write: the operator drives assembly, and a node
+  that could write its own record could bind an export to itself.
 - **`NFSExport` CRD** shipped in `helm-charts/charts/simplyblock-operator/crds/`
   as `storage.simplyblock.io_nfsexports.yaml`, generated by `make manifests`.
-- **RBAC** for the operator over `nfsexports`, plus `services` and
-  `endpointslices` write access for §13.3 if the manager does not already hold it.
-- **csi-link enabled.** This design requires the link that is optional today, so
-  `csiLink.*` moves from opt-in to required when `pnfs.enabled` is set.
-- **StorageClass example** (`templates/storageclass.yaml`) with `pnfs: "true"`.
+- **csi-node on MDS hosts** is `spec.nodeSelector` and `spec.tolerations`, which
+  the kind already carried: running the plugin on storage hosts is configuration
+  rather than new machinery.
+
+**What is deliberately not in the chart, because a pod cannot install it.** Every
+host that may serve an export needs `nfs-utils` with `nfsd` running, and every
+host that may run an RWX pod needs `blkmapd` and a kernel whose NVMe driver
+exports `nvme_get_unique_id` (P0-9, P0-10). These are node-OS prerequisites. A
+host missing them fails visibly in the export record's `Assembling` phase, which
+is the point of failing there rather than in a builder: the reason is on the
+object. The operator does not yet label nodes by capability, which is P0-6.
+
+**The second chart tree.** `csi-driver/charts/spdk-csi/latest/spdk-csi` still
+installs a node DaemonSet of its own, and this design does not extend it. That is
+a deliberate drop rather than an oversight: that chart installs no operator, and
+without one nothing selects an MDS host or drives assembly, so the host mounts
+alone would buy nothing.
 
 The `snapshot-controller`, `csi-snapshotter`, and `csi-provisioner` version floors
 that earlier drafts raised here belong to the striped design, because only the

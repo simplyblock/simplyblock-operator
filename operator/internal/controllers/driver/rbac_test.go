@@ -183,3 +183,55 @@ func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
 		}
 	}
 }
+
+// The pNFS record is a custom resource, and neither plugin could touch
+// storage.simplyblock.io before this design: their roles covered PVs, PVCs,
+// snapshots, nodes, and attachments. The controller plugin creates the record
+// during provisioning, and the node plugin reads its own back at stage time
+// (design-pnfs-rwx.md §9.3).
+func TestPluginRolesCarryTheExportRules(t *testing.T) {
+	wanted := map[string]map[string][]string{
+		controllerComponent: {
+			"nfsexports":        {"get", "list", "watch", "create"},
+			"nfsexports/status": {"get", "update", "patch"},
+		},
+		nodeComponent: {
+			"nfsexports": {"get", "list", "watch"},
+		},
+	}
+	for component, resources := range wanted {
+		for resource, verbs := range resources {
+			found := false
+			for _, r := range clusterRoleRules[component] {
+				if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+					!slices.Contains(r.Resources, resource) {
+					continue
+				}
+				found = true
+				if !slices.Equal(r.Verbs, verbs) {
+					t.Errorf("%s rule for %s has verbs %v, want %v", component, resource, r.Verbs, verbs)
+				}
+			}
+			if !found {
+				t.Errorf("the %s role carries no rule for %s", component, resource)
+			}
+		}
+	}
+}
+
+// The node plugin reads exports and never writes them. It is the operator that
+// drives assembly, over the link, and a node that could write its own record
+// could bind an export to itself.
+func TestNodeRoleCannotWriteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[nodeComponent] {
+		if !slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		for _, v := range r.Verbs {
+			switch v {
+			case "create", "update", "patch", "delete", "deletecollection":
+				t.Errorf("the node role grants %q on nfsexports", v)
+			}
+		}
+	}
+}

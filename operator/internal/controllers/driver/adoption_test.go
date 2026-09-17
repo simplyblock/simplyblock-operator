@@ -416,15 +416,18 @@ func TestDeletingADuplicateLeavesTheHoldersObjects(t *testing.T) {
 
 // A deployment carrying configuration the spec has no field for is refused
 // rather than reconciled into one that has lost it.
+//
+// The table is empty now that spec.link exists, and is kept rather than deleted
+// because it is the shape the next such field takes: csi-link was the last
+// entry, and its refusal became a comparison (TestAdoptionRefusesALinkDisagreement)
+// the moment the spec could describe it.
 func TestAdoptionRefusesConfigurationTheSpecCannotExpress(t *testing.T) {
 	tests := []struct {
 		name string
 		env  []corev1.EnvVar
 		args []string
 		want string
-	}{
-		{name: "csi-link", args: []string{"--link"}, want: "csi-link"},
-	}
+	}{}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -490,5 +493,51 @@ func TestFinalizerReachesADisabledSnapshotClass(t *testing.T) {
 	}
 	if !found {
 		t.Error("a snapshot class applied before the toggle went false would outlive the object")
+	}
+}
+
+// Once csi-link is expressible, a disagreement is refused for the same reason
+// TLS's is: adoption reconciles toward the spec, so adopting a linked
+// deployment under a spec that says nothing about the link would drop the link
+// on the next pass, and adopting an unlinked one under a spec that asks for it
+// would start every plugin dialing an operator that may not be serving.
+func TestAdoptionRefusesALinkDisagreement(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		running bool
+		wanted  bool
+		refused bool
+	}{
+		{name: "neither"},
+		{name: "both", running: true, wanted: true},
+		{name: "running but not in the spec", running: true, refused: true},
+		{name: "in the spec but not running", wanted: true, refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := reconcilerScheme(t)
+			d := testDriver("simplyblock")
+			d.Spec.Link.EnableLink = ptr.To(tc.wanted)
+
+			node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+			if tc.running {
+				node.Spec.Template.Spec.Containers[0].Args = append(
+					node.Spec.Template.Spec.Containers[0].Args, "--link")
+			}
+
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(d, node).WithStatusSubresource(d).Build()
+			r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+
+			message, refused, err := r.adoptionRefusal(context.Background(), d)
+			if err != nil {
+				t.Fatalf("adoptionRefusal: %v", err)
+			}
+			if refused != tc.refused {
+				t.Fatalf("refused = %v, want %v (message %q)", refused, tc.refused, message)
+			}
+			if tc.refused && !contains(message, "csi-link") {
+				t.Errorf("the refusal %q does not name csi-link", message)
+			}
+		})
 	}
 }

@@ -362,11 +362,11 @@ func (r *SimplyblockDriverReconciler) inspectExisting(
 // renaming, so the table is unowned in both documents.
 
 // adoptionRefusal reports the first thing about a running deployment that
-// this spec does not yet describe: an inexpressible configuration (csi-link),
-// a TLS mode spec.tls does not match, or a driver name that disagrees with
-// the immutable spec.driverName. All three are refused rather than
-// reconciled over, because each is a live property that an apply built from
-// the spec as it stands would silently change.
+// this spec does not yet describe: a configuration no field can express, a TLS
+// mode spec.tls does not match, a csi-link spec.link does not match, or a
+// driver name that disagrees with the immutable spec.driverName. All are
+// refused rather than reconciled over, because each is a live property that an
+// apply built from the spec as it stands would silently change.
 func (r *SimplyblockDriverReconciler) adoptionRefusal(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) (message string, refused bool, err error) {
@@ -388,6 +388,10 @@ func (r *SimplyblockDriverReconciler) adoptionRefusal(
 	}
 
 	if message, mismatched := tlsAdoptionMismatch(d, &node); mismatched {
+		return message, true, nil
+	}
+
+	if message, mismatched := linkAdoptionMismatch(d, &node); mismatched {
 		return message, true, nil
 	}
 
