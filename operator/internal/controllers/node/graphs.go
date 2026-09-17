@@ -336,6 +336,25 @@ var abortableSteps = map[step]bool{
 // step can be honored.
 func abortable(current step) bool { return abortableSteps[current] }
 
+// UnabortableSteps are the declared steps an abort cannot be honored from,
+// sorted.
+//
+// It is exported for the DELETE guard on this kind, which asks the same question
+// this package's unwind asks: a deletion may not express something spec.abort
+// could not, so both channels read one graph
+// (design-crd-model.md §3.1). Reading it rather than restating it is what keeps
+// the guard from refusing a step this package has since made abortable, or
+// admitting one it has not.
+func UnabortableSteps() []step {
+	var refused []step
+	for _, declared := range statemachine.DeclaredMultiStates(graphs()) {
+		if s := step(declared); !abortable(s) {
+			refused = append(refused, s)
+		}
+	}
+	return refused
+}
+
 // unwinds reports whether an abort or a failure from this step owes the node a
 // resume before the operation ends. Everything from Suspending onward in a drain
 // does: the node is not serving, and an operation that stopped there and left it
