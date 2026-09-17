@@ -27,6 +27,88 @@ Phases 2 and 4 are independent and can run in parallel. Phase 3 is the one that
 turns a working export into a survivable one, and it is the phase whose promises
 depend on spikes rather than on code (§13.3).
 
+## Implementation Status
+
+Updated as work lands, so the document tracks the code rather than describing an
+intention. "Validated" means measured on a live cluster, with the evidence in
+§Bring-up Findings.
+
+| Item                                                         | Section     | Status                                       |
+|--------------------------------------------------------------|-------------|----------------------------------------------|
+| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup          | §10.1, P0-5 | **Merged path** — operator PR #546 in review |
+| pNFS volume handle (`nfs:` four-part form)                   | §11         | **Merged path** — operator PR #547 in review |
+| `ptpl_file` on the lvol namespace                            | §6.2, P0-1  | **Fix in review** — sbcli PR #1375           |
+| Direct block I/O end to end                                  | §3, §4      | **Validated**                                |
+| Many exports on one MDS host                                 | §8.4        | **Validated**                                |
+| Many clients on one export, coherent                         | §4, FR-7    | **Validated**                                |
+| Fencing: preempt, and writes refused off-registry            | §13.2, FM-1 | **Validated**                                |
+| Service ClusterIP reached by a kernel mount                  | §13.3, Q3   | **Validated** on stock kube-proxy            |
+| `fsid=<uuid>`, XFS directly on the LUN                       | §8.2        | **Validated**                                |
+| `NFSExport` CRD and types                                    | §7.1        | In progress                                  |
+| `NFSExportReconciler`                                        | §14.2       | Not started                                  |
+| Export service over csi-link (`CreateExport`/`DeleteExport`) | §6.4, §8    | Not started                                  |
+| CSI controller RWX path                                      | §9          | Not started                                  |
+| CSI node client mount and `nvme-eui.` alias                  | §10         | Not started                                  |
+| PR key release on unstage, and a reaper for dead nodes       | §10.3, §13  | Not started — **new, see findings**          |
+| Reservation handover on migration                            | §13.4       | Not started — **new, see findings**          |
+| Chart, RBAC, `SimplyblockDriver` wiring                      | §14         | Not started                                  |
+
+---
+
+## Bring-up Findings (2026-09-17)
+
+The whole path was taken to working by hand before any of it was built, on a
+four-node K3s cluster running RHEL 9.5 with a 5.14.0-687.39.1.el9\_8 kernel. What
+follows is what was measured, because several of it contradicts what this document
+said, and two items are design surface that was missing entirely.
+
+**Direct block I/O works.** A 64 MiB read and a 32 MiB write from a client moved
+**zero bytes** through the MDS, with `LAYOUTRETURN` at 0 and md5 matching on both
+ends. Two conditions had to hold, neither of which this document previously stated:
+the namespace must be PTPL-capable (§6.2), and the client needs a
+`/dev/disk/by-id/nvme-eui.${NGUID}` alias (§10.1).
+
+**One `nfsd` serves many exports.** Two volumes, separate bdevs, subsystems, ports,
+`ptpl_file`s and `fsid`s, exported from one host and mounted by one client: both
+direct, both correct. §8.4's model holds.
+
+**Many clients share one export.** Two clients on the same export, concurrent 24 MiB
+writes, both direct, three-way coherent. The device carried three registrants, one
+per host, and the reservation stayed Write Exclusive, Registrants Only throughout —
+which is exactly why both clients could write.
+
+**Fencing is real, in both directions.** The MDS preempted a departed client's key
+(registrants 2 → 1), and a connected non-registrant's raw write was refused outright
+(`0 bytes copied`) while the same write succeeded once registered. §13.2's invariant
+is enforceable rather than aspirational.
+
+**A Service ClusterIP is reachable from a kernel mount**, and direct I/O works
+through it, on stock kube-proxy. The eBPF kube-proxy-replacement case in §13.3
+remains untested.
+
+**New: persistent-reservation keys are never released.** Three mount, unmount and
+disconnect cycles held steady at two registrants, so there is no per-mount leak. But
+a client that detaches entirely leaves its key registered forever, and PTPL makes
+that survive restarts. Registrants therefore accumulate per distinct node that has
+ever mounted the volume — bounded by cluster size, not by pod churn, but unbounded
+over a volume's life as nodes are rebuilt and take new UIDs. Two consequences:
+`NodeUnstageVolume` should release the key when the last reference on the node drops
+(§10.3), and the operator needs a reaper for keys belonging to nodes that no longer
+exist, since a dead node never runs its own unstage. Preemption is the mechanism for
+both, and it is proven.
+
+**New: migration needs a defined reservation handover, and §13.4 does not have one.**
+A hand-driven migration re-pointed the Service and the client resumed in under half a
+second with no remount, which is the availability half of §13.4 working. But the new
+MDS could not even mount the filesystem until it dealt with the reservation
+(`can't read superblock` — fencing correctly refusing a non-registrant), and a
+handover that left `nfsd`'s own key preempted produced an export that was available,
+correct, and silently had **no direct data path at all**: every read fell back through
+the MDS and a remount did not recover it. That is the worst failure this feature can
+have, because nothing looks wrong. §13.4 step 4 must specify the reservation handover
+explicitly, and §17 should carry a metric for layout state so a degraded export is
+visible.
+
 ---
 
 ## Overview
