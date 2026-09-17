@@ -38,7 +38,7 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
 | pNFS volume handle (`nfs:` four-part form)             | §11          | **Merged path** — operator PR #547 in review           |
 | `ptpl_file` on the lvol namespace                      | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                     |
-| Direct block I/O end to end                            | §3, §4       | **Validated**                                          |
+| Direct block I/O end to end                            | §3, §4       | **Unconfirmed** -- see the open finding                |
 | Many exports on one MDS host                           | §8.4         | **Validated**                                          |
 | Many clients on one export, coherent                   | §4, FR-7     | **Validated**                                          |
 | Fencing: preempt, and writes refused off-registry      | §13.2, FM-1  | **Validated**                                          |
@@ -55,6 +55,7 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | The address a client mounts                            | §13.3        | **Done** -- the host's own; a Service is failover      |
 | `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs`   | §14.1        | **Done** -- adoption compares rather than refuses      |
 | RBAC over `nfsexports` for both plugins                | §9.3         | **Done** -- a role for the controller plugin           |
+| ReadWriteMany end to end through Kubernetes            | §9, §10      | **Validated** -- two pods, two nodes, coherent         |
 | Expanding an RWX volume                                | §16          | Refused in its own words -- `xfs_growfs` has no caller |
 | PR key release on unstage, and a reaper for dead nodes | §10.3, §13   | Not started — **new, see findings**                    |
 | Reservation handover on migration                      | §13.4        | Not started — **new, see findings**                    |
@@ -126,6 +127,47 @@ finding rather than a fix, because the same shape applies to anything else this
 design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
+
+**Open: a ReadWriteMany volume works end to end, and the layout is not being
+used.** The Kubernetes path is complete and measured: an RWX claim binds, the
+export assembles on the selected host, two pods on two nodes share one coherent
+filesystem over NFSv4.1, and `LAYOUTGET` and `GETDEVICEINFO` both succeed. But
+the client returns the layout and routes every byte through the metadata server
+-- a 64 MiB write moved 67108864 bytes of NFS server traffic, which is FM-2
+exactly. The kernel says:
+
+```
+pNFS: no device found for volume 30634a596e4a6d70703051616c6e4e34
+```
+
+This contradicts the direct-I/O measurement recorded above from the manual
+bring-up, so one of the two is wrong and the later one is the one that
+reproduces. **Treat the "Direct block I/O works" finding as unconfirmed until
+this is resolved.**
+
+Ruled out by measurement, so that nobody repeats it:
+
+- *The alias name.* `/dev/disk/by-id/nvme-eui.<nguid>` exists, points at the
+  right namespace (its `uuid` matches the export and its `nguid` matches what
+  the kernel prints), and was present both before and after the mount in a
+  tightly sequenced manual run.
+- *The prefix.* The client module tries `dm-uuid-mpath-0x`, `wwn-0x`, and
+  `nvme-eui.`, confirmed by `strings` on `blocklayoutdriver.ko`. All three were
+  created; all three failed.
+- *A stale device cache.* Reproduced after `rmmod blocklayoutdriver` with every
+  NFS mount to that server gone.
+- *The reservation.* The metadata server holds `rtype 4`, Exclusive Access
+  Registrants Only, and an unregistered client cannot even read the device.
+  Registering the client by hand makes reads work, and the layout still goes
+  unused.
+- *The open.* The device opens from userspace read-write and with `O_EXCL`, and
+  no process holds it.
+- *PTPL.* `ptpls: 1` on the namespace, so the sbcli fix is in effect.
+
+What is left is the server side of `GETDEVICEINFO`: which designator type and
+length `nfsd` puts in the reply, against what `bl_validate_designator` and
+`bl_open_path` expect. That needs a capture of the `GETDEVICEINFO` reply or
+tracing in the client's `bl_parse_scsi`, and it is the next thing to do.
 
 **The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
 in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
