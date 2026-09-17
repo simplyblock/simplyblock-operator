@@ -19,10 +19,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -63,6 +66,7 @@ type fakeAssembler struct {
 	created    []string
 	deleted    []string
 	createErr  error
+	deleteErr  error
 	noSessions bool
 	nguid      string
 }
@@ -78,6 +82,9 @@ func (f *fakeAssembler) CreateExport(
 }
 
 func (f *fakeAssembler) DeleteExport(_ context.Context, node string, _ *simplyblockv1alpha2.NFSExport) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, node)
 	return nil
 }
@@ -606,5 +613,68 @@ func TestTeardownReachesTheKubernetesNode(t *testing.T) {
 	want := workerNodeFor(testMDSHost)
 	if len(asm.deleted) != 1 || asm.deleted[0] != want {
 		t.Fatalf("DeleteExport reached %v, want [%s]", asm.deleted, want)
+	}
+}
+
+// An export that never got far enough to describe itself must still delete.
+//
+// A record that was refused, or that failed before its client set or its
+// backing volume was recorded, cannot produce a spec for the host. There is
+// also nothing on the host to tear down, precisely because it never got that
+// far. Treating the refusal as a reason to retry leaves the object with a
+// finalizer nothing will ever remove, and the only remedy is editing finalizers
+// by hand -- on an object whose whole purpose was to avoid that.
+func TestDeletingAnExportThatNeverAssembledConverges(t *testing.T) {
+	asm := &fakeAssembler{deleteErr: export.ErrInvalidSpec}
+	now := metav1.Now()
+	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
+		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseDegraded
+		x.Status.StorageNodeRef = testMDSHost
+		// Never recorded: the record was degraded before provisioning
+		// finished, so there is nothing to build a spec from.
+		x.Status.LVolID = ""
+		x.DeletionTimestamp = &now
+	})
+	r, cl := newExportReconciler(t, asm, e, testNode(testMDSHost, nil))
+
+	reconcileExport(t, r)
+
+	var got simplyblockv1alpha2.NFSExport
+	err := cl.Get(context.Background(),
+		client.ObjectKey{Name: testExportName, Namespace: testExportNS}, &got)
+	if err == nil && controllerutil.ContainsFinalizer(&got, simplyblockv1alpha2.NFSExportFinalizer) {
+		t.Error("the finalizer survived, so the record can never be deleted")
+	}
+}
+
+// A teardown that reached the host and failed there is a different thing, and
+// is retried: the mount and the exports entry may well exist, and dropping the
+// finalizer would orphan them with nothing left naming them.
+func TestDeletingRetriesWhenTheHostRefuses(t *testing.T) {
+	asm := &fakeAssembler{deleteErr: errors.New("exportfs exited 1")}
+	now := metav1.Now()
+	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
+		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
+		x.Status.StorageNodeRef = testMDSHost
+		x.Status.LVolID = "bfc56677-d602-4017-804b-975f3b929e3f"
+		x.Status.AllowedClients = []string{"192.168.10.0/24"}
+		x.DeletionTimestamp = &now
+	})
+	r, cl := newExportReconciler(t, asm, e, testNode(testMDSHost, nil))
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
+	})
+	if err == nil {
+		t.Fatal("a failed teardown reported success")
+	}
+
+	var got simplyblockv1alpha2.NFSExport
+	if err := cl.Get(context.Background(),
+		client.ObjectKey{Name: testExportName, Namespace: testExportNS}, &got); err != nil {
+		t.Fatalf("the record was deleted despite a failed teardown: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, simplyblockv1alpha2.NFSExportFinalizer) {
+		t.Error("the finalizer was dropped while the host may still hold the export")
 	}
 }

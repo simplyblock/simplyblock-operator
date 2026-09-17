@@ -17,6 +17,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	exportpkg "github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -398,7 +400,20 @@ func (r *NFSExportReconciler) reconcileDelete(
 				fmt.Sprintf("waiting for %s to become reachable to tear the export down", node))
 			return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 		}
-		if err := r.Assembler.DeleteExport(ctx, node, export); err != nil {
+		switch err := r.Assembler.DeleteExport(ctx, node, export); {
+		case err == nil:
+		case errors.Is(err, exportpkg.ErrInvalidSpec):
+			// The record cannot describe an export, which means it never became
+			// one: a spec is unbuildable exactly when provisioning did not get
+			// far enough to record what the host would need. So there is
+			// nothing on the host to orphan, and retrying would leave a
+			// finalizer nothing can ever remove -- on the kind whose reason for
+			// existing is that nobody should have to edit finalizers by hand.
+			r.event(export, corev1.EventTypeNormal, "NothingToTearDown",
+				fmt.Sprintf("export was never assembled on %s: %v", node, err))
+		default:
+			// This one reached the host and failed there. The mount and the
+			// exports entry may well exist, so the finalizer stays.
 			return ctrl.Result{}, fmt.Errorf("tearing down export on %s: %w", node, err)
 		}
 	}
