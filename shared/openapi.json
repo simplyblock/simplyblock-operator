@@ -4902,6 +4902,22 @@
               "title": "Watch"
             },
             "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear."
+          },
+          {
+            "name": "consistency_group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Consistency Group"
+            }
           }
         ],
         "responses": {
@@ -6867,6 +6883,568 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:List",
+        "description": "List the cluster's consistency groups, or resolve one by name (\u00a710).\n\nReturns an empty list when ``name`` matches no group, so a caller can probe\nexistence without a 404.",
+        "operationId": "clusters_consistency_groups_list_api_v2_clusters__cluster_id__consistency_groups__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConsistencyGroupDTO"
+                  },
+                  "title": "Response Clusters Consistency Groups List Api V2 Clusters  Cluster Id  Consistency Groups  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Detail",
+        "operationId": "clusters_consistency_groups_detail_api_v2_clusters__cluster_id__consistency_groups__group_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Members",
+        "operationId": "clusters_consistency_groups_members_api_v2_clusters__cluster_id__consistency_groups__group_id__members_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConsistencyGroupMemberDTO"
+                  },
+                  "title": "Response Clusters Consistency Groups Members Api V2 Clusters  Cluster Id  Consistency Groups  Group Id  Members Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Members:Join",
+        "description": "Join an EXISTING volume to the group (design \u00a74.5, Phase 4 late join).\n\nValidates the pinned placement, the pool, the member cap, and the one-way\nrule; a refusal is a 409 naming the precondition. Idempotent: joining a\ncurrent member returns its membership row unchanged.",
+        "operationId": "clusters_consistency_groups_members_join_api_v2_clusters__cluster_id__consistency_groups__group_id__members_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsistencyGroupMemberJoinDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupMemberDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id}": {
+      "delete": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Members:Detach",
+        "description": "Detach a member: close its epoch one-way, preserving prior generations (\u00a78.2).",
+        "operationId": "clusters_consistency_groups_members_detach_api_v2_clusters__cluster_id__consistency_groups__group_id__members__lvol_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lvol_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lvol Id"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Snapshots:List",
+        "operationId": "clusters_consistency_groups_snapshots_list_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConsistencyGroupGenerationDTO"
+                  },
+                  "title": "Response Clusters Consistency Groups Snapshots List Api V2 Clusters  Cluster Id  Consistency Groups  Group Id  Snapshots Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Snapshots:Take",
+        "description": "Take one crash-consistent generation across every current member (\u00a75).",
+        "operationId": "clusters_consistency_groups_snapshots_take_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupGenerationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq}": {
+      "get": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Snapshots:Detail",
+        "operationId": "clusters_consistency_groups_snapshots_detail_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots__seq__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Seq"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsistencyGroupGenerationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "consistency-groups"
+        ],
+        "summary": "Clusters:Consistency-Groups:Snapshots:Delete",
+        "description": "Delete one generation and all its member snapshots; never the group (\u00a710).",
+        "operationId": "clusters_consistency_groups_snapshots_delete_api_v2_clusters__cluster_id__consistency_groups__group_id__snapshots__seq__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Seq"
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/management-nodes/": {
       "get": {
         "summary": "Management Nodes:List",
@@ -7901,6 +8479,177 @@
         },
         "type": "object",
         "title": "CommitParams"
+      },
+      "ConsistencyGroupDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "lvs_name": {
+            "type": "string",
+            "title": "Lvs Name",
+            "default": ""
+          },
+          "member_count": {
+            "type": "integer",
+            "title": "Member Count"
+          },
+          "last_group_seq": {
+            "type": "integer",
+            "title": "Last Group Seq"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "name",
+          "member_count",
+          "last_group_seq"
+        ],
+        "title": "ConsistencyGroupDTO",
+        "description": "A standalone consistency group summary (design \u00a710)."
+      },
+      "ConsistencyGroupGenerationDTO": {
+        "properties": {
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "expected": {
+            "type": "integer",
+            "title": "Expected"
+          },
+          "present": {
+            "type": "integer",
+            "title": "Present"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ConsistencyGroupGenerationMemberDTO"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_seq",
+          "created_at",
+          "expected",
+          "present",
+          "complete",
+          "members"
+        ],
+        "title": "ConsistencyGroupGenerationDTO",
+        "description": "One generation of a consistency group (design \u00a76.3)."
+      },
+      "ConsistencyGroupGenerationMemberDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "snapshot_id",
+          "ready"
+        ],
+        "title": "ConsistencyGroupGenerationMemberDTO"
+      },
+      "ConsistencyGroupMemberDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          },
+          "joined_seq": {
+            "type": "integer",
+            "title": "Joined Seq"
+          },
+          "removed_seq": {
+            "type": "integer",
+            "title": "Removed Seq"
+          },
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "lvs_name": {
+            "type": "string",
+            "title": "Lvs Name"
+          },
+          "online": {
+            "type": "boolean",
+            "title": "Online"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "joined_seq",
+          "removed_seq",
+          "node_id",
+          "lvs_name",
+          "online"
+        ],
+        "title": "ConsistencyGroupMemberDTO",
+        "description": "One current member of a consistency group (design \u00a710 /members)."
+      },
+      "ConsistencyGroupMemberJoinDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "title": "Lvol Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id"
+        ],
+        "title": "ConsistencyGroupMemberJoinDTO",
+        "description": "Request body for the late join of an existing volume (design \u00a74.5)."
       },
       "DeviceDTO": {
         "properties": {
@@ -8963,6 +9712,14 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id"
+          },
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq"
           }
         },
         "type": "object",
@@ -8975,7 +9732,9 @@
           "used_size",
           "migrating",
           "lvol",
-          "created_at"
+          "created_at",
+          "group_id",
+          "group_seq"
         ],
         "title": "SnapshotDTO"
       },
@@ -10113,6 +10872,16 @@
             "type": "boolean",
             "title": "From Source",
             "default": true
+          },
+          "group_id": {
+            "type": "string",
+            "title": "Group Id",
+            "default": ""
+          },
+          "group_seq": {
+            "type": "integer",
+            "title": "Group Seq",
+            "default": 0
           }
         },
         "type": "object",
@@ -10259,6 +11028,17 @@
             "type": "boolean",
             "title": "Delete Snap On Lvol Delete",
             "default": false
+          },
+          "consistency_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consistency Group"
           }
         },
         "type": "object",
@@ -10445,6 +11225,17 @@
               }
             ],
             "title": "Replication Policy"
+          },
+          "consistency_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consistency Group"
           },
           "encrypt": {
             "type": "boolean",
