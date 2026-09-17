@@ -74,15 +74,15 @@ func (hostFilesystem) Unmount(ctx context.Context, target string) error {
 // a mount that is missing or repeat one that is already there.
 func (hostFilesystem) IsMountPoint(ctx context.Context, path string) (bool, error) {
 	name, args := mountPointCommand(path)
-	out, code, err := exec(ctx, name, args...)
+	_, code, err := exec(ctx, name, args...)
 	if err != nil {
 		return false, fmt.Errorf("checking whether %s is a mount point: %w", path, err)
 	}
-	// mountpoint -q exits 0 when it is one and non-zero when it is not, and it
-	// says nothing either way. A non-zero exit is the answer, not a failure.
-	if code != 0 && len(strings.TrimSpace(string(out))) > 0 {
-		return false, nil
-	}
+	// mountpoint -q exits 0 when the path is a mount point and non-zero when it
+	// is not, including when it does not exist, and prints nothing either way.
+	// So a non-zero exit is the answer rather than a failure, and "not there"
+	// and "there but not mounted" are the same answer to the only question
+	// assembly asks: does something need mounting here.
 	return code == 0, nil
 }
 
