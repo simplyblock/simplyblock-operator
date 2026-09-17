@@ -225,6 +225,39 @@ func (r *NFSExportReconciler) reconcilePending(
 	return ctrl.Result{RequeueAfter: nfsExportFreshCopyRequeue}, nil
 }
 
+// workerNodeFor resolves status.storageNodeRef to the Kubernetes node the link
+// addresses.
+//
+// They are two names for two objects and neither is derivable from the other: a
+// StorageNode is named by the set that created it and a Kubernetes node by its
+// hostname. spec.workerNode is the mapping, and the csi-node plugin registers
+// its link peer under the Kubernetes name, so this is what every call to the
+// assembler has to be given.
+//
+// Passing the StorageNode name instead fails silently, which is why this is a
+// function rather than a field access: HasSession returns false for a name no
+// peer registered under, the reconciler reads that as a host that is merely
+// disconnected, and the export waits out its deadline and reports a timeout
+// that names the wrong problem.
+func (r *NFSExportReconciler) workerNodeFor(ctx context.Context, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	// Listed rather than fetched by key, for selectMDS's reason: the export and
+	// the StorageNode are in different namespaces, and the ref carries only a
+	// name. Both reads are served from the same cache.
+	var nodes simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return "", fmt.Errorf("listing storage nodes: %w", err)
+	}
+	for i := range nodes.Items {
+		if nodes.Items[i].Name == ref {
+			return nodes.Items[i].Spec.WorkerNode, nil
+		}
+	}
+	return "", nil
+}
+
 // reconcileAssembling asks the bound host to build the export.
 func (r *NFSExportReconciler) reconcileAssembling(
 	ctx context.Context,
@@ -232,11 +265,22 @@ func (r *NFSExportReconciler) reconcileAssembling(
 	machine *statemachine.Machine[phase],
 	logger interface{ Info(string, ...any) },
 ) (ctrl.Result, error) {
-	node := export.Status.StorageNodeRef
-	if node == "" {
+	ref := export.Status.StorageNodeRef
+	if ref == "" {
 		// Assembling with no binding is not recoverable by retrying: something
 		// wrote a phase without the field the phase depends on.
 		return ctrl.Result{}, r.toDegraded(ctx, export, machine, "assembling with no bound MDS host")
+	}
+	node, err := r.workerNodeFor(ctx, ref)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if node == "" {
+		// The bound StorageNode is gone, or carries no worker node. Either way
+		// there is nothing to reach, and the deadline below is what gives up.
+		r.event(export, corev1.EventTypeWarning, "MDSUnresolved",
+			fmt.Sprintf("storage node %s names no Kubernetes node to reach", ref))
+		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
 	}
 
 	if deadlineExpired(export) {
@@ -305,7 +349,10 @@ func (r *NFSExportReconciler) reconcileDelete(
 		return ctrl.Result{}, nil
 	}
 
-	node := export.Status.StorageNodeRef
+	node, err := r.workerNodeFor(ctx, export.Status.StorageNodeRef)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if node != "" && r.Assembler != nil {
 		if !r.Assembler.HasSession(node) {
 			// The host is the only place the mount and the export entry exist,

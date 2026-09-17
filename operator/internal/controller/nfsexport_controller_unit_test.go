@@ -27,6 +27,15 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// workerNodeFor is the Kubernetes node a StorageNode fixture runs on. The two
+// names are deliberately unalike: a StorageNode is named by its set and a
+// Kubernetes node by its hostname, and nothing makes one derivable from the
+// other, so a test that used the same string for both would pass whichever the
+// code reached for.
+func workerNodeFor(storageNode string) string {
+	return "kube-" + storageNode + ".example.internal"
+}
+
 const (
 	// testExportNS is the claim's namespace and testOperatorNS the deployment's.
 	// They are deliberately different, because on a cluster they always are: an
@@ -97,6 +106,7 @@ func testExport(mutate func(*simplyblockv1alpha2.NFSExport)) *simplyblockv1alpha
 func testNode(name string, mutate func(*simplyblockv1alpha1.StorageNode)) *simplyblockv1alpha1.StorageNode {
 	n := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testOperatorNS},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: workerNodeFor(name)},
 		Status:     simplyblockv1alpha1.StorageNodeStatus{Status: utils.NodeStatusOnline},
 	}
 	if mutate != nil {
@@ -210,8 +220,8 @@ func TestAssemblingReachesReady(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseReady {
 		t.Errorf("phase = %q, want Ready", got.Status.Phase)
 	}
-	if len(asm.created) != 1 || asm.created[0] != testMDSHost {
-		t.Errorf("CreateExport calls = %v, want one for sn-worker-1-0", asm.created)
+	if want := workerNodeFor(testMDSHost); len(asm.created) != 1 || asm.created[0] != want {
+		t.Errorf("CreateExport calls = %v, want one for %s", asm.created, want)
 	}
 	if got.Status.PhaseDeadline != nil {
 		t.Error("Ready still carries a phase deadline")
@@ -291,8 +301,8 @@ func TestPhaseSurvivesARestart(t *testing.T) {
 	if got.Status.StorageNodeRef != testOtherHost {
 		t.Errorf("binding moved to %q on restart; it must not", got.Status.StorageNodeRef)
 	}
-	if len(asm.created) != 1 || asm.created[0] != testOtherHost {
-		t.Errorf("assembled on %v, want the already-bound sn-worker-2-0", asm.created)
+	if want := workerNodeFor(testOtherHost); len(asm.created) != 1 || asm.created[0] != want {
+		t.Errorf("assembled on %v, want the already-bound %s", asm.created, want)
 	}
 }
 
@@ -334,8 +344,8 @@ func TestDeleteTearsDownThenReleases(t *testing.T) {
 
 	reconcileExport(t, r)
 
-	if len(asm.deleted) != 1 || asm.deleted[0] != testMDSHost {
-		t.Errorf("DeleteExport calls = %v, want one for sn-worker-1-0", asm.deleted)
+	if want := workerNodeFor(testMDSHost); len(asm.deleted) != 1 || asm.deleted[0] != want {
+		t.Errorf("DeleteExport calls = %v, want one for %s", asm.deleted, want)
 	}
 	var e simplyblockv1alpha2.NFSExport
 	err := cl.Get(context.Background(),
@@ -501,5 +511,55 @@ func TestMDSSelectionFindsHostsInAnotherNamespace(t *testing.T) {
 	}
 	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseAssembling {
 		t.Errorf("phase = %q, want Assembling", got.Status.Phase)
+	}
+}
+
+// The link addresses a Kubernetes node, and status.storageNodeRef names a
+// StorageNode. They are different names for different objects, and the mapping
+// between them is spec.workerNode.
+//
+// Getting this wrong is invisible until a cluster runs it: HasSession returns
+// false for a name no peer registered under, which the reconciler reads as a
+// host that is merely disconnected, so the export waits in Assembling until the
+// deadline and reports a timeout rather than a mismatch.
+func TestAssemblyReachesTheKubernetesNodeNotTheStorageNodeName(t *testing.T) {
+	asm := &fakeAssembler{}
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
+		e.Status.StorageNodeRef = testMDSHost
+	})
+	r, cl := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+
+	reconcileExport(t, r)
+
+	want := workerNodeFor(testMDSHost)
+	if len(asm.created) != 1 || asm.created[0] != want {
+		t.Fatalf("CreateExport reached %v, want [%s]", asm.created, want)
+	}
+	// The record still names the StorageNode, because that is the object a
+	// reader goes looking for.
+	if got := loadExport(t, cl).Status.StorageNodeRef; got != testMDSHost {
+		t.Errorf("storageNodeRef = %q, want the StorageNode %q", got, testMDSHost)
+	}
+}
+
+// Tearing down has to reach the same host, or the export is dropped from the
+// record while its filesystem stays mounted and published on a host nothing
+// points at any more.
+func TestTeardownReachesTheKubernetesNode(t *testing.T) {
+	asm := &fakeAssembler{}
+	now := metav1.Now()
+	export := testExport(func(e *simplyblockv1alpha2.NFSExport) {
+		e.Status.Phase = simplyblockv1alpha2.NFSExportPhaseReady
+		e.Status.StorageNodeRef = testMDSHost
+		e.DeletionTimestamp = &now
+	})
+	r, _ := newExportReconciler(t, asm, export, testNode(testMDSHost, nil))
+
+	reconcileExport(t, r)
+
+	want := workerNodeFor(testMDSHost)
+	if len(asm.deleted) != 1 || asm.deleted[0] != want {
+		t.Fatalf("DeleteExport reached %v, want [%s]", asm.deleted, want)
 	}
 }

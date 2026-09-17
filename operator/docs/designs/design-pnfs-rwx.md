@@ -123,6 +123,21 @@ design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
 
+**A StorageNode name is not a Kubernetes node name, and the link only knows the
+second.** §7.1's `status.storageNodeRef` names a `StorageNode`, which is named
+after the set that created it (`simplyblock-nodes-1kalgm`). The csi-node plugin
+registers its link peer under the Kubernetes node it runs on
+(`vm02.simplyblock3.localdomain`). Neither is derivable from the other;
+`spec.workerNode` is the mapping, and the reconciler has to apply it before every
+call to a host.
+
+The failure is silent and mislabeled, which is the part worth recording:
+`HasSession` returns false for a name no peer ever registered under, the
+reconciler reads that as a host that is merely disconnected, and the export waits
+out `nfsExportAssembleDeadline` and reports an assembly timeout. Nothing in that
+sequence mentions a name mismatch. The document should say, wherever it names a
+host, which of the two names it means.
+
 **Turning pNFS on deadlocked an adopted driver, and the fix was not in this
 design.** `SimplyblockDriver`'s `adoptionRefusal` runs on every reconcile rather
 than only the first, so `spec.link.enableLink` set on a deployment whose node
