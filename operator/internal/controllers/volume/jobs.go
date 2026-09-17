@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -49,8 +50,9 @@ const (
 	// validationJobDeadline caps a validation Job's whole life, scheduling and
 	// image pull included. Its purpose is to turn a Job that can never finish —
 	// an unschedulable pod, a node that is not ready — into a failure rather
-	// than a step parked forever. The check itself needs seconds.
-	validationJobDeadline = 180
+	// than a step parked forever. The check itself needs seconds: three
+	// connect-and-list attempts, two seconds apart.
+	validationJobDeadline = 180 * time.Second
 
 	// jobTTL is how long a finished Job is kept. Long enough to read, short
 	// enough that a drain's worth of them does not accumulate.
@@ -531,7 +533,7 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 		},
 		BackoffLimit: backoffLimit,
 		TTL:          jobTTL,
-		Deadline:     validationJobDeadline,
+		Deadline:     int64(validationJobDeadline.Seconds()),
 	})
 }
 

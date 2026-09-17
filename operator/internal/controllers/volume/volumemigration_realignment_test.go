@@ -1,4 +1,4 @@
-package controller
+package volume
 
 import (
 	"context"
@@ -12,6 +12,15 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+const (
+	// The cluster the realignment counter is written on. They were the
+	// rebalancer's test constants and travel with the tests that read them,
+	// since the rebalancer stayed behind.
+	realignNamespace   = "sb"
+	realignClusterName = "cluster-a"
+	realignClusterUUID = "cluster-uuid-a"
 )
 
 // newVMReconcilerForRealign builds a VolumeMigrationReconciler whose fake client has
@@ -35,7 +44,7 @@ func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha2.Stora
 }
 
 func TestMarkClusterVolumeMoved_IncrementsGeneration(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
+	cr := testCluster(realignClusterUUID)
 	r, cl := newVMReconcilerForRealign(t, cr)
 
 	r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
@@ -48,7 +57,7 @@ func TestMarkClusterVolumeMoved_IncrementsGeneration(t *testing.T) {
 // Each completed migration must count, or MinMoves batching can never be reached.
 // The superseded boolean was idempotent by design; the counter must not be.
 func TestMarkClusterVolumeMoved_EveryMoveCounts(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
+	cr := testCluster(realignClusterUUID)
 	r, cl := newVMReconcilerForRealign(t, cr)
 
 	for range 5 {
@@ -63,7 +72,7 @@ func TestMarkClusterVolumeMoved_EveryMoveCounts(t *testing.T) {
 // A move counted while a realignment already covers an earlier generation must push the
 // counter past realignedGeneration, which is what leaves the next realignment owed.
 func TestMarkClusterVolumeMoved_CountsPastAlreadyRealigned(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
+	cr := testCluster(realignClusterUUID)
 	cr.Status.VolumeMoveGeneration = ptr.To(int64(7))
 	cr.Status.RealignedGeneration = ptr.To(int64(7))
 	r, cl := newVMReconcilerForRealign(t, cr)
@@ -81,7 +90,7 @@ func TestMarkClusterVolumeMoved_CountsPastAlreadyRealigned(t *testing.T) {
 
 func TestMarkClusterVolumeMoved_NoMatchingClusterLeavesOthersAlone(t *testing.T) {
 	// A cluster with a *different* UUID must not be counted against.
-	cr := testCluster(realignNamespace, realignClusterName, "some-other-uuid")
+	cr := testCluster("some-other-uuid")
 	r, cl := newVMReconcilerForRealign(t, cr)
 
 	r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
@@ -92,7 +101,7 @@ func TestMarkClusterVolumeMoved_NoMatchingClusterLeavesOthersAlone(t *testing.T)
 }
 
 func TestMarkClusterVolumeMoved_EmptyUUIDIsNoOp(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
+	cr := testCluster(realignClusterUUID)
 	r, cl := newVMReconcilerForRealign(t, cr)
 
 	// Must not count against any cluster (and must not panic) when the volume carries

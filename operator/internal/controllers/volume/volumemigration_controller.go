@@ -1,21 +1,17 @@
-package controller
+package volume
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/simplyblock/atlas/ptr"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,7 +22,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -35,6 +30,27 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
+
+// requireStorageCluster returns an error when no StorageCluster in namespace
+// reports clusterUUID. It is what stops a migration starting work against a
+// cluster Kubernetes does not account for.
+//
+// It used to also refuse when volumeMigrationSettings.enabled was false. That
+// field is gone (design-storagecluster.md §12): migration cannot be turned off,
+// because a drain, a rebalance, and a device replacement are all performed by
+// moving volumes, so a cluster that refused to move one could do none of them.
+func requireStorageCluster(ctx context.Context, c client.Client, namespace, clusterUUID string) error {
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return fmt.Errorf("list StorageClusters: %w", err)
+	}
+	for _, cr := range clusters.Items {
+		if cr.Status.UUID == clusterUUID {
+			return nil
+		}
+	}
+	return fmt.Errorf("no StorageCluster found for cluster UUID %q", clusterUUID)
+}
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/status,verbs=get;update;patch
@@ -90,13 +106,6 @@ const (
 
 	// consumerWaitRetryDelay is how often to re-check while waiting.
 	consumerWaitRetryDelay = 5 * time.Second
-
-	// validationJobDeadline caps a validation Job's total lifetime, scheduling and
-	// image pull included (activeDeadlineSeconds). Its purpose is to turn a Job that
-	// can never finish — an unschedulable pod, a NotReady node — into a failure
-	// instead of a migration parked in Validating forever. The validation itself
-	// needs seconds: three connect+list attempts, two seconds apart.
-	validationJobDeadline = 180 * time.Second
 )
 
 // errConsumerNotReady indicates that a pod references the volume's PVC but is not
@@ -872,7 +881,7 @@ func migrationPathJob(
 	deadline := int64(validationJobDeadline.Seconds())
 	return vmigration.BuildJob(vmigration.JobParams{
 		// One Job per node: name carries both migration ID and node.
-		Name:          js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
+		Name:          js.namePrefix + vmigration.JobNameID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
 		Namespace:     vm.Namespace,
 		OwnerRef:      *metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
 		Hostname:      hostname,
@@ -892,25 +901,6 @@ func migrationPathJob(
 	})
 }
 
-// nodeSuffix produces a DNS-label-safe, collision-resistant suffix for a node name.
-// Node names can be long FQDNs and are not label-safe, so the short host part is kept
-// for readability and a hash of the full name for uniqueness.
-func nodeSuffix(nodeName string) string {
-	sum := sha256.Sum256([]byte(nodeName))
-	short := strings.ToLower(strings.SplitN(nodeName, ".", 2)[0])
-	short = nonLabelChars.ReplaceAllString(short, "")
-	if len(short) > 16 {
-		short = short[:16]
-	}
-	if short == "" {
-		return hex.EncodeToString(sum[:6])
-	}
-	return short + "-" + hex.EncodeToString(sum[:4])
-}
-
-// nonLabelChars matches everything not allowed inside a DNS-1123 label.
-var nonLabelChars = regexp.MustCompile(`[^a-z0-9-]`)
-
 // connectionsToValidation converts MigrationConnection status entries to the
 // vmigration.Connection type consumed by the simplyblock-rebalancer validate-migration mode.
 func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []vmigration.Connection {
@@ -929,15 +919,6 @@ func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []
 		}
 	}
 	return out
-}
-
-// safeNodeID produces a DNS-label-safe suffix from a node UUID.
-func safeNodeID(nodeUUID string) string {
-	s := strings.ReplaceAll(nodeUUID, "-", "")
-	if len(s) > 20 {
-		s = s[:20]
-	}
-	return s
 }
 
 // resolveConsumerNodeName finds the Kubernetes node name of the worker node
@@ -1204,50 +1185,18 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	return ctrl.Result{}, nil
 }
 
-// markClusterVolumeMoved increments status.volumeMoveGeneration on the StorageCluster
-// whose backend UUID matches clusterUUID, recording that one more volume has moved and
-// a control-plane data realignment is owed. The counter is read by the
-// VolumeRebalancerReconciler's periodic loop, which compares it against
-// status.realignedGeneration.
+// markClusterVolumeMoved records that one more volume has moved, so the
+// rebalancer's periodic loop learns a data realignment is owed.
 //
-// A counter rather than a flag because both quantities matter: how many moves are
-// outstanding (so DataRealignment.MinMoves can batch them) and whether a move landed
-// after a realignment was already requested (so it is not silently absorbed by a
-// realignment that cannot account for it).
-//
-// Best-effort: any failure is logged but does not fail the migration — the realignment
-// is late, not lost, because the next completed migration increments again. The write
-// takes the optimistic-locking path and retries on conflict, since two migrations
-// completing at once would otherwise read the same value and one increment would
-// vanish; with MinMoves batching, a lost increment delays a realignment indefinitely
-// rather than by one cycle.
+// Best effort: a failure is logged and does not fail the migration, because the
+// realignment is late rather than lost — the next completed move increments
+// again, and a realignment is idempotent.
 func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 	ctx context.Context,
 	namespace, clusterUUID string,
 ) {
 	log := logf.FromContext(ctx)
-	if clusterUUID == "" {
-		return
-	}
-
-	var name string
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var clusters simplyblockv1alpha2.StorageClusterList
-		if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-			return err
-		}
-		for i := range clusters.Items {
-			cr := &clusters.Items[i]
-			if cr.Status.UUID != clusterUUID {
-				continue
-			}
-			name = cr.Name
-			patch := client.MergeFromWithOptions(cr.DeepCopy(), client.MergeFromWithOptimisticLock{})
-			cr.Status.VolumeMoveGeneration = ptr.To(ptr.Int64FromOrZero(cr.Status.VolumeMoveGeneration) + 1)
-			return r.Status().Patch(ctx, cr, patch)
-		}
-		return nil
-	})
+	name, err := vmigration.RecordVolumeMoved(ctx, r.Client, namespace, clusterUUID)
 	switch {
 	case err != nil:
 		log.Error(err, "Cannot record volume move for realignment", "clusterUUID", clusterUUID, "cluster", name)

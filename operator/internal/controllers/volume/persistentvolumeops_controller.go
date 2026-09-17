@@ -52,6 +52,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
 
 const (
@@ -301,6 +302,7 @@ func (r *PersistentVolumeOpsReconciler) advance(
 	r.observeStep(ops, subject, current)
 
 	if machine.IsTerminal() {
+		r.countTowardRealignment(ctx, subject)
 		r.event(ops, corev1.EventTypeNormal, ReasonOperationSucceeded,
 			"Volume %s was moved to node %s", ops.Spec.PersistentVolumeName, subject.targetNodeName())
 		return r.finish(ctx, ops, simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded,
@@ -493,6 +495,33 @@ func (r *PersistentVolumeOpsReconciler) finish(
 	}
 	r.observeOperation(ops, phase)
 	return ctrl.Result{}, r.releaseLock(ctx, ops)
+}
+
+// countTowardRealignment records that one more volume has moved, which is what
+// the rebalancer's periodic loop reads to decide that a control-plane data
+// realignment is owed.
+//
+// It is counted here rather than on every terminal phase, because only a move
+// that landed leaves the cluster's data laid out against the placement it had
+// before. An aborted or failed operation left the volume where it was.
+//
+// Best effort: a realignment that is late is not a realignment that is lost,
+// since the next move to finish increments again and a realignment is
+// idempotent. Failing the operation over it would be reporting a move that
+// worked as one that did not.
+func (r *PersistentVolumeOpsReconciler) countTowardRealignment(
+	ctx context.Context, subject *subject,
+) {
+	name, err := vmigration.RecordVolumeMoved(
+		ctx, r.Client, subject.namespace(), subject.clusterUUID)
+	switch {
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "the volume move could not be counted for the realignment",
+			"cluster", subject.clusterUUID)
+	case name == "":
+		logf.FromContext(ctx).Info("no StorageCluster reports this volume's cluster, "+
+			"so the move was not counted for the realignment", "cluster", subject.clusterUUID)
+	}
 }
 
 // hold reports an operation that is admitted, holds nothing, and is waiting.

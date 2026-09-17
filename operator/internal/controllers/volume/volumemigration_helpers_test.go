@@ -1,4 +1,4 @@
-package controller
+package volume
 
 import (
 	"context"
@@ -48,7 +48,7 @@ func TestNodeSuffix(t *testing.T) {
 			if !label.MatchString(suffix) {
 				t.Errorf("nodeSuffix(%q) = %q, which is not a valid DNS-1123 label", node, suffix)
 			}
-			full := "vmig-validate-" + safeNodeID(testMigrationUUID) + "-" + suffix
+			full := "vmig-validate-" + vmigration.JobNameID(testMigrationUUID) + "-" + suffix
 			if len(full) > 63 {
 				t.Errorf("job name %q is %d chars, over the 63-char label limit", full, len(full))
 			}
@@ -121,8 +121,8 @@ func TestPVNamesForVolumes(t *testing.T) {
 	}
 	// Non-CSI and malformed handles are skipped rather than fatal — a cluster can hold
 	// PVs from any driver, and one bad handle must not stop the resolution.
-	if len(got) != 1 || got[0] != testPVName {
-		t.Errorf("PVs = %v, want just %s", got, testPVName)
+	if len(got) != 1 || got[0] != testVMPVName {
+		t.Errorf("PVs = %v, want just %s", got, testVMPVName)
 	}
 }
 

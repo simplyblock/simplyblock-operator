@@ -271,7 +271,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	conn benchmarkConnInfo,
 	image string,
 ) (*autoplacement.LatencyResult, bool, error) {
-	jobName := baselineJobNamePrefix + safeNodeID(node.Status.UUID)
+	jobName := baselineJobNamePrefix + volumemigration.JobNameID(node.Status.UUID)
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: snode.Namespace, Name: jobName}, job)
 
@@ -325,7 +325,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 
 	return r.Create(ctx, &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      baselineJobNamePrefix + safeNodeID(node.Status.UUID),
+			Name:      baselineJobNamePrefix + volumemigration.JobNameID(node.Status.UUID),
 			Namespace: snode.Namespace,
 			Labels: map[string]string{
 				baselineJobLabelKey:     "true",

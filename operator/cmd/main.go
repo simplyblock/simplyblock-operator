@@ -655,7 +655,7 @@ func main() {
 	// VolumeMigration somebody applied by hand against an operator that is
 	// otherwise driving the redesigned kind.
 	if legacyVolumeMigration {
-		if err := (&controller.VolumeMigrationReconciler{
+		if err := (&volumecontrollers.VolumeMigrationReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
 			Recorder: mgr.GetEventRecorder("volumemigration-controller"),
