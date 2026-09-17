@@ -275,3 +275,45 @@ func TestExpandingABlockVolumeIsNotRefusedHere(t *testing.T) {
 		t.Errorf("a block volume was refused: %v", err)
 	}
 }
+
+// A pNFS handle names a real volume, and asking about its capabilities must not
+// answer NotFound. The handle does not parse as a block one, so without a
+// branch the driver reports a volume it provisioned as missing -- which reads
+// as data loss to whoever asked.
+func TestValidatingAnRWXVolumeDoesNotReportItMissing(t *testing.T) {
+	const handle = "nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f"
+
+	// A ReadWriteMany filesystem request is what this volume is for.
+	confirmed, err := validateRWXCapabilities(handle, []*csi.VolumeCapability{{
+		AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("validating a ReadWriteMany volume: %v", err)
+	}
+	if !confirmed {
+		t.Error("a ReadWriteMany volume did not confirm a ReadWriteMany capability")
+	}
+}
+
+// Asking whether an RWX volume can be a raw block device is answered no, not
+// confirmed: pNFS exports a filesystem, and a caller told yes would go on to
+// use it as a device.
+func TestValidatingAnRWXVolumeRefusesBlock(t *testing.T) {
+	const handle = "nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f"
+
+	confirmed, err := validateRWXCapabilities(handle, []*csi.VolumeCapability{{
+		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("validating a block request: %v", err)
+	}
+	if confirmed {
+		t.Error("a pNFS volume confirmed a raw block capability")
+	}
+}

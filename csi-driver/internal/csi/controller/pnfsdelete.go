@@ -17,6 +17,7 @@ package controller
 import (
 	"context"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -85,4 +86,27 @@ func refuseRWXExpansion(volumeHandle string) error {
 	return status.Error(codes.Unimplemented,
 		"a ReadWriteMany volume cannot be expanded yet: growing one means growing the volume "+
 			"and then the filesystem on the host serving the export, and the second half is not built")
+}
+
+// validateRWXCapabilities answers ValidateVolumeCapabilities for a pNFS volume.
+//
+// It cannot go through the control plane the way a block volume does: the
+// handle names an export rather than a logical volume, so the lookup would come
+// back not-found and the driver would report a volume it provisioned as
+// missing, which reads as data loss to whoever asked.
+//
+// What can be answered locally is everything that matters. A pNFS volume is a
+// ReadWriteMany filesystem and nothing else, so the question is only whether
+// the caller is asking for that.
+func validateRWXCapabilities(volumeHandle string, caps []*csi.VolumeCapability) (bool, error) {
+	if _, ok := lvol.ParseNFSHandle(lvol.VolumeHandle(volumeHandle)); !ok {
+		return false, status.Errorf(codes.NotFound, "volume %q not found", volumeHandle)
+	}
+	rwx, err := isRWX(caps)
+	if err != nil {
+		// A refused mode is an answer rather than a failure here: the caller
+		// asked whether the volume supports it, and it does not.
+		return false, nil
+	}
+	return rwx, nil
 }
