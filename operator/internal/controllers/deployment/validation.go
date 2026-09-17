@@ -260,7 +260,7 @@ func (r *ClusterDeploymentConfigReconciler) deviceClassMismatch(
 		return "", fmt.Errorf("reading StorageCluster %s: %w", config.Spec.ClusterRef, err)
 	}
 
-	stated := deviceClassOf(config)
+	stated := DeviceClassOf(config)
 	if stated == "" {
 		return "", nil
 	}

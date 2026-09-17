@@ -258,7 +258,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			"the document neither names an existing cluster nor describes one to create")
 	}
 
-	class := deviceClassOf(config)
+	class := DeviceClassOf(config)
 
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
@@ -558,10 +558,14 @@ func devicesOf(group simplyblockv1alpha2.NodeGroup) []string {
 	return group.Devices.Block
 }
 
-// deviceClassOf reads the class off the document's groups, which is where it is
+// DeviceClassOf reads the class off the document's groups, which is where it is
 // stated: the device lists already say which class the deployment uses, so
 // spec.cluster does not restate it.
-func deviceClassOf(
+//
+// It is exported because admission asks the same question before the document
+// becomes immutable (design-clusterdeploymentconfig.md §5.1), and a second
+// reading of the groups would be free to disagree with this one.
+func DeviceClassOf(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) simplyblockv1alpha2.StorageClusterDeviceClass {
 	for _, set := range config.Spec.NodeSets {
@@ -584,16 +588,26 @@ func deviceClassOf(
 	return ""
 }
 
-// targetClusterName is the cluster the document acts on, whichever way it names
-// one.
+// TargetClusterName is the cluster the document acts on, whichever way it names
+// one, and empty for a document that names none. It is exported for the reason
+// DeviceClassOf is.
+func TargetClusterName(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	if config.Spec.ClusterRef != "" {
+		return config.Spec.ClusterRef
+	}
+	if config.Spec.Cluster != nil {
+		return config.Spec.Cluster.Name
+	}
+	return ""
+}
+
+// targetClusterName is TargetClusterName as the expansion needs it, where a
+// document naming no cluster is a refusal rather than an empty string.
 func targetClusterName(
 	config *simplyblockv1alpha2.ClusterDeploymentConfig,
 ) (string, error) {
-	if config.Spec.ClusterRef != "" {
-		return config.Spec.ClusterRef, nil
-	}
-	if config.Spec.Cluster != nil && config.Spec.Cluster.Name != "" {
-		return config.Spec.Cluster.Name, nil
+	if name := TargetClusterName(config); name != "" {
+		return name, nil
 	}
 	return "", refusef(ClusterNotFound,
 		"the document neither names an existing cluster nor describes one to create")
