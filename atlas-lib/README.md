@@ -140,6 +140,7 @@ atlas/
 ├── statemachine/           Deterministic state machine declared as data
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
+│   ├── abort.go            StateDef.Abortable read three ways: CanAbort + the two graph queries
 │   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types

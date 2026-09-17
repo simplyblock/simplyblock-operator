@@ -10,6 +10,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 )
 
 func cpOpsScheme(t *testing.T) *runtime.Scheme {
@@ -143,5 +145,22 @@ func TestEveryUndeletableStepStatesWhatItIsDoing(t *testing.T) {
 		if doing == "" {
 			t.Errorf("%s is undeletable and the refusal says nothing about why", step)
 		}
+	}
+}
+
+// The refusal table and the graph are two statements of one rule, and this holds
+// them equal in both directions. A deletion may not express something spec.abort
+// could not, so an extra entry refuses a delete the abort channel would have
+// honored, and a missing one admits the withdrawal of a record nothing else
+// accounts for.
+func TestTheControlPlaneRefusalTableAndTheGraphAgree(t *testing.T) {
+	refused := make([]simplyblockv1alpha2.ControlPlaneOpsStep, 0, len(undeletableControlPlaneSteps))
+	for step := range undeletableControlPlaneSteps {
+		refused = append(refused, step)
+	}
+	slices.Sort(refused)
+
+	if want := controlplane.UnabortableSteps(); !slices.Equal(refused, want) {
+		t.Errorf("the guard refuses %v, and the graph declares no abort edge from %v", refused, want)
 	}
 }

@@ -102,18 +102,6 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 	}
 }
 
-// An abortable step that no graph declares is a table that has drifted from the
-// graphs beside it, and the drift is silent: an abort would simply never be
-// honored from it.
-func TestEveryAbortableStepIsDeclared(t *testing.T) {
-	declared := statemachine.DeclaredMultiStates(graphs())
-	for s := range abortableSteps {
-		if !slices.Contains(declared, string(s)) {
-			t.Errorf("abortableSteps names %q, which no graph declares", s)
-		}
-	}
-}
-
 // Every step needs a budget in stepBudgets, or its duration is never measured
 // and a slow operation stays anecdotal.
 func TestEveryStepHasABudget(t *testing.T) {

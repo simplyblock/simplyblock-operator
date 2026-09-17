@@ -196,7 +196,7 @@ func (r *ControlPlaneOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, target, current)
+		return r.unwind(ctx, ops, target, machine, current)
 	}
 
 	if machine.TimeoutReached() {
@@ -712,9 +712,13 @@ func (r *ControlPlaneOpsReconciler) unwind(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.ControlPlaneOps,
 	target *simplyblockv1alpha2.ControlPlane,
+	machine *statemachine.Machine[opsStep],
 	current opsStep,
 ) (ctrl.Result, error) {
-	if !abortable(current) {
+	// The machine is asked rather than a table beside it, and it is asked rather
+	// than the graphs, because it was built for this operation's action: a step
+	// two actions share can be abortable in one of them.
+	if !machine.CanAbort() {
 		// Not a failure of the operation: it carries on. What the user asked for
 		// cannot be done, and saying so is the whole of the response.
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(

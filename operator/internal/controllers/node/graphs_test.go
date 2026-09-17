@@ -131,22 +131,11 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 	}
 }
 
-// An abortable step that no graph declares is a table that has drifted from the
-// graphs beside it, and the consequence is an abort that is silently never
-// honored.
-func TestEveryAbortableStepIsDeclared(t *testing.T) {
-	declared := statemachine.DeclaredMultiStates(graphs())
-	for state := range abortableSteps {
-		if !slices.Contains(declared, string(state)) {
-			t.Errorf("step %q is marked abortable and no graph declares it", state)
-		}
-	}
-}
-
-// The line the abort table draws is whether anything is currently down or
-// half-done. These four are the sharpest cases and each would leave the node in a
-// state nothing else drives it out of.
+// The line abortability draws is whether anything is currently down or
+// half-done. These seven are the sharpest cases and each would leave the node in
+// a state nothing else drives it out of.
 func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
+	unabortable := statemachine.UnabortableMultiStates(graphs())
 	for _, state := range []step{
 		// The promote has re-homed the logical volumes: there is nothing to
 		// unwind, and the operation is what finishes the relocation.
@@ -161,8 +150,36 @@ func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 		stepAwaitingHost,
 		stepRestarting,
 	} {
-		if abortable(state) {
+		if !slices.Contains(unabortable, state) {
 			t.Errorf("step %q is abortable and the node is not in a state an abort can leave it in", state)
+		}
+	}
+}
+
+// The other half of the same statement, written out rather than derived. The
+// graphs are now the only place abortability is declared, so a step that quietly
+// gains or loses it would otherwise change what an abort does with nothing
+// disagreeing.
+func TestTheStepsAnAbortStopsCleanly(t *testing.T) {
+	unabortable := statemachine.UnabortableMultiStates(graphs())
+	for _, state := range []step{
+		// Nothing has been issued yet.
+		stepRequesting,
+		// No side effect at all, which is why an abort here is an Aborted
+		// directly rather than an unwind (§8.3).
+		stepValidating,
+		// Past the suspend, and the unwind is the resume the graph already
+		// performs on every other terminal outcome from here on.
+		stepSuspending,
+		stepMigratingVolumes,
+		stepVerifying,
+		// A target host has been labeled and nothing more.
+		stepPreparing,
+		// The window before the node is taken down for maintenance.
+		stepHolding,
+	} {
+		if slices.Contains(unabortable, state) {
+			t.Errorf("step %q refuses an abort, and nothing it has done needs finishing", state)
 		}
 	}
 }
