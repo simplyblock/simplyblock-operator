@@ -32,6 +32,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"google.golang.org/grpc"
+
+	"github.com/simplyblock/atlas/export/exportrpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
@@ -45,6 +48,8 @@ import (
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	csimount "github.com/simplyblock/csi-driver/internal/mount"
+	"github.com/simplyblock/csi-driver/internal/nfsexport"
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
@@ -159,13 +164,29 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
 		// another, which nothing wants and which doubles every round trip.
-		srv, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+		local := storage.Local(nvme.SysfsConfig{})
+		srv, err := storagerpc.NewServer(local)
 		if err != nil {
 			return fmt.Errorf("node storage: %w", err)
 		}
+		// The export service is separate from the storage one because it
+		// mutates the node: it makes filesystems, mounts them, and publishes
+		// them, where storagerpc only reads. Keeping them apart is what lets a
+		// credential be granted the reading and not the writing.
+		assembler, err := nfsexport.NewAssembler(local.DeviceResolver, csimount.New())
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
+		exportSrv, err := exportrpc.NewServer(assembler)
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
 		cfg.ID = link.NodePeer(conf.NodeID)
-		cfg.Register = srv.Register
-		cfg.Capabilities = storagerpc.Capabilities()
+		cfg.Register = func(r grpc.ServiceRegistrar) {
+			srv.Register(r)
+			exportSrv.Register(r)
+		}
+		cfg.Capabilities = append(storagerpc.Capabilities(), exportrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {

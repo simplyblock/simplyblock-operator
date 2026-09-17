@@ -47,7 +47,7 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | `NFSExport` CRD and types                              | §7.1        | **Done** -- v1alpha2                          |
 | `NFSExportReconciler`                                  | §14.2       | **Done** -- phase graph, selection, finalizer |
 | Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3  | **Done** -- idempotent, unit-tested           |
-| Carrying that over csi-link                            | §6.4        | In progress                                   |
+| Carrying that over csi-link                            | §6.4        | **Done** -- exportrpc, both ends wired        |
 | CSI controller RWX path                                | §9          | Not started                                   |
 | CSI node client mount and `nvme-eui.` alias            | §10         | Not started                                   |
 | PR key release on unstage, and a reaper for dead nodes | §10.3, §13  | Not started — **new, see findings**           |
