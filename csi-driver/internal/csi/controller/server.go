@@ -4,6 +4,7 @@ package controller
 
 import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/csi-addons/spec/lib/go/replication"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -15,6 +16,11 @@ type Server struct {
 	// groupsnapshot.go; embedding the unimplemented server satisfies the
 	// interface's forward-compat guard for any method not overridden.
 	csi.UnimplementedGroupControllerServer
+	// The csi-addons Replication service (design §5) is implemented in
+	// replication.go, for the three Phase 1 verbs; the rest
+	// (PromoteVolume, DemoteVolume, ResyncVolume) fall through to this
+	// embedded default until Phase 2.
+	replication.UnimplementedControllerServer
 	volumeLocks *csicommon.VolumeLocks
 	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
 	// cleanup). Built once at construction and reused, and nil when no in-cluster

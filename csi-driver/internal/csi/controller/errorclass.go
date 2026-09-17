@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 )
 
@@ -99,6 +100,13 @@ func httpStatusOf(err error) int {
 	var httpErr *controlplane.HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.StatusCode
+	}
+	// The Replication service talks to the control plane through the
+	// generated atlas-lib client instead, whose error type reports its
+	// status through a method rather than a public field.
+	var statusErr *atlascp.StatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.HTTPStatus()
 	}
 	return 0
 }

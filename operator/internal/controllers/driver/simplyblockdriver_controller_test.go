@@ -59,6 +59,10 @@ func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 			counts["role"]++
 		case *rbacv1.ClusterRoleBinding:
 			counts["binding"]++
+		case *rbacv1.Role:
+			counts["namespacedRole"]++
+		case *rbacv1.RoleBinding:
+			counts["namespacedBinding"]++
 		case *appsv1.DaemonSet:
 			counts["ds"]++
 		case *appsv1.StatefulSet:
@@ -72,6 +76,7 @@ func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 
 	want := map[string]int{
 		"sa": 2, "cm": 2, "role": 5, "binding": 5,
+		"namespacedRole": 1, "namespacedBinding": 1,
 		"ds": 1, "sts": 1, "csidriver": 1,
 		// the VolumeSnapshotClass, which is unstructured
 		"other": 1,

@@ -28,6 +28,9 @@ import (
 	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
+	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -41,6 +44,7 @@ import (
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
+	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
@@ -131,8 +135,23 @@ func Run(conf *config.Config) {
 		}
 	}
 
+	// The csi-addons Identity and Replication services register alongside the
+	// CSI services on the same socket. Identity is always registered (it just
+	// answers capability probes); Replication only when this process serves
+	// the controller (cs is nil on a node-only process).
+	register := []func(*grpc.Server){
+		func(gs *grpc.Server) {
+			csiaddonsidentity.RegisterIdentityServer(gs, csiaddonsidentityserver.New(conf.DriverName, conf.DriverVersion))
+		},
+	}
+	if cs != nil {
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsreplication.RegisterControllerServer(gs, cs)
+		})
+	}
+
 	s := csicommon.NewNonBlockingGRPCServer()
-	s.Start(conf.Endpoint, ids, cs, ns)
+	s.Start(conf.Endpoint, ids, cs, ns, register...)
 	s.Wait()
 }
 

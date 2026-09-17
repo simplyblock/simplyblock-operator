@@ -257,7 +257,7 @@ func (r *SimplyblockDriverReconciler) event(
 func (r *SimplyblockDriverReconciler) desired(
 	d *simplyblockv1alpha2.SimplyblockDriver, image string,
 ) []client.Object {
-	objects := make([]client.Object, 0, 18)
+	objects := make([]client.Object, 0, 20)
 
 	for _, sa := range serviceAccounts(d) {
 		objects = append(objects, sa)
@@ -271,6 +271,7 @@ func (r *SimplyblockDriverReconciler) desired(
 	for _, crb := range clusterRoleBindings(d) {
 		objects = append(objects, crb)
 	}
+	objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d))
 	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
 	if snapshotsEnabled(d) {
 		objects = append(objects, volumeSnapshotClass(d))

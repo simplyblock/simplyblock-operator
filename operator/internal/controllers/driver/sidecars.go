@@ -1,4 +1,4 @@
-// The six CSI sidecar images, and which of them a deployment gets.
+// The seven CSI sidecar images, and which of them a deployment gets.
 //
 // The versions below are this operator release's, meaning the combination it was
 // tested against, and spec.sidecarImages overrides one at a time. The field
@@ -25,6 +25,12 @@ const (
 	defaultSnapshotterImage         = "quay.io/simplyblock-io/csi-snapshotter:v8.2.0"
 	defaultHealthMonitorImage       = "quay.io/simplyblock-io/csi-external-health-monitor-controller:v0.14.0"
 	defaultNodeDriverRegistrarImage = "quay.io/simplyblock-io/csi-node-driver-registrar:v2.12.0"
+	// defaultCSIAddonsImage is the kubernetes-csi-addons sidecar (upstream
+	// quay.io/csiaddons/k8s-sidecar), pinned at the same v0.15.0 the chart's
+	// controller-manager runs (design P0-5). Named for the eventual
+	// quay.io/simplyblock-io mirror this field's validation pattern requires,
+	// which does not exist yet; mirroring it is a release task.
+	defaultCSIAddonsImage = "quay.io/simplyblock-io/csi-addons-sidecar:v0.15.0"
 )
 
 // resolvedSidecars is the image each sidecar runs, after the overrides.
@@ -35,6 +41,7 @@ type resolvedSidecars struct {
 	snapshotter         string
 	healthMonitor       string
 	nodeDriverRegistrar string
+	csiAddons           string
 }
 
 func sidecars(d *simplyblockv1alpha2.SimplyblockDriver) resolvedSidecars {
@@ -46,6 +53,7 @@ func sidecars(d *simplyblockv1alpha2.SimplyblockDriver) resolvedSidecars {
 		snapshotter:         orDefault(o.Snapshotter, defaultSnapshotterImage),
 		healthMonitor:       orDefault(o.HealthMonitor, defaultHealthMonitorImage),
 		nodeDriverRegistrar: orDefault(o.NodeDriverRegistrar, defaultNodeDriverRegistrarImage),
+		csiAddons:           orDefault(o.CSIAddons, defaultCSIAddonsImage),
 	}
 }
 

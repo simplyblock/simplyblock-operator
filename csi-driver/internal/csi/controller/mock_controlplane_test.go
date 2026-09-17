@@ -27,6 +27,12 @@ type mockVolume struct {
 	Size    int64
 	Status  string // defaults to "online" when empty
 	GroupID string // consistency group id, "" for a non-member
+
+	// ReplicationPolicyID is the policy this volume currently follows, ""
+	// when none. Set by a PUT carrying replication_policy_id (a string
+	// attaches, an explicit JSON null detaches; the key's absence, as an
+	// ordinary resize PUT sends, leaves it untouched).
+	ReplicationPolicyID string
 }
 
 // status returns the volume's reported status, defaulting to `online`.
@@ -103,13 +109,27 @@ type mockSBCLI struct {
 	// It lets a test drive an RPC through every control-plane response and assert
 	// the resulting gRPC code.
 	injectStatus func(r *http.Request) int
+
+	// replicationStatus, keyed by volume id, is the raw JSON body GET
+	// .../replication/status serves for that volume. A test sets it directly
+	// rather than the mock deriving it, since the derivation itself
+	// (get_replication_info) is sbcli's, already covered there; this mock
+	// only has to prove the driver maps whatever shape the endpoint returns.
+	replicationStatus map[string]map[string]any
+
+	// replicationPUTStatus, when set, makes every PUT carrying
+	// replication_policy_id respond with this HTTP status instead of the
+	// normal idempotent update, modeling a backend refusal (e.g. a policy
+	// that is not active) or a transient failure.
+	replicationPUTStatus int
 }
 
 func newMockSBCLI() *mockSBCLI {
 	m := &mockSBCLI{
-		volumes:   make(map[string]*mockVolume),
-		snapshots: make(map[string]*mockSnapshot),
-		groups:    make(map[string]*mockGroup),
+		volumes:           make(map[string]*mockVolume),
+		snapshots:         make(map[string]*mockSnapshot),
+		groups:            make(map[string]*mockGroup),
+		replicationStatus: make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -127,6 +147,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"PUT /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/",
 		m.locked(m.handleResizeVolume),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/status",
+		m.locked(m.handleReplicationStatus),
 	)
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/connect",
@@ -262,14 +286,55 @@ func (m *mockSBCLI) handleResizeVolume(w http.ResponseWriter, r *http.Request) {
 	if volume == nil {
 		return
 	}
-	var body struct {
-		Size int64 `json:"size"`
+	if m.replicationPUTStatus != 0 {
+		writeJSON(w, m.replicationPUTStatus, map[string]string{"detail": "injected status"})
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Size > 0 {
-		volume.Size = body.Size
+	raw, _ := io.ReadAll(r.Body)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+
+	if sizeRaw, ok := fields["size"]; ok {
+		var size int64
+		if err := json.Unmarshal(sizeRaw, &size); err == nil && size > 0 {
+			volume.Size = size
+		}
+	}
+	// A key present with a JSON null attaches nothing (detach); a key present
+	// with a string attaches that policy; the key's absence (an ordinary
+	// resize PUT) leaves the volume's policy untouched -- omitted and null
+	// are different requests, which is exactly the distinction this mock
+	// exists to exercise.
+	if policyRaw, ok := fields["replication_policy_id"]; ok {
+		if string(policyRaw) == "null" {
+			volume.ReplicationPolicyID = ""
+		} else {
+			var policyID string
+			_ = json.Unmarshal(policyRaw, &policyID)
+			volume.ReplicationPolicyID = policyID
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleReplicationStatus serves the typed steady-state status a test
+// configured via replicationStatus, or a default "not_replicating" body for
+// a volume nothing has configured -- the same "never a 404" contract P0-1
+// promises for a volume that exists but never replicated.
+func (m *mockSBCLI) handleReplicationStatus(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	body, ok := m.replicationStatus[volumeID]
+	if !ok {
+		body = map[string]any{
+			"role": "none", "state": "not_replicating",
+			"outstanding_count": 0, "outstanding_bytes": 0,
+			"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (m *mockSBCLI) handleVolumeConnect(w http.ResponseWriter, r *http.Request) {

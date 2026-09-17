@@ -4,9 +4,9 @@ Related design: [`designs/design-csi-addons-replication.md`](../designs/design-c
 
 Scope is the CSI driver's Replication service, the operator's preflight and coexistence rules, and the deployment of the csi-addons machinery. The replication engine itself (snapshot shipping, failover cloning, the cutover task runner) is the control plane's to prove and is exercised here only through the adapter's boundary. The kubernetes-csi-addons controller-manager is stock upstream and is not re-tested; what is tested is this driver's conformance to the contract it drives.
 
-Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster: mock control plane, fake `client.Client`), `I-` is integration (the sidecar and controller-manager against the driver with a mock backend), `E-` is end-to-end (two live simplyblock clusters), and `M-` is manual. Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §6 with its reason.
+Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster: mock control plane, fake `client.Client`), `I-` is integration (the sidecar and controller-manager against the driver with a mock backend), `E-` is end-to-end (two live simplyblock clusters), and `M-` is manual. Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §7 with its reason.
 
-The plan is the target coverage for a Draft design: every row is `—` until the work lands.
+Phase 1 (the csi-addons machinery, §4, §5.1's three verbs, and §6's steady-state contract) has landed; its unit rows below are filled in. Phase 2 (promote, demote, resync, and the operator's preflight and coexistence controllers) has not started, and the integration and E2E tiers wait on a test bed neither phase has built yet.
 
 ---
 
@@ -18,17 +18,22 @@ The Replication service against a mock control plane, and the operator pieces ag
 
 File: `csi-driver/internal/csi/controller/replication_test.go` (planned)
 
-| #    | Scenario                                                                                                      | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------|----------|------|
-| U-01 | Enable on an unattached volume: the attach call carries the class's policy, and the RPC succeeds              | Positive | —    |
-| U-02 | Enable on a volume already attached to the same policy: success, no second attach call (idempotency)          | Boundary | —    |
-| U-03 | Enable on a volume attached to a different policy: `FAILED_PRECONDITION` naming both policies, no attach call | Negative | —    |
-| U-04 | Disable on an attached volume: the detach call is made, success                                               | Positive | —    |
-| U-05 | Disable on a non-attached volume: success without a backend call (idempotency)                                | Boundary | —    |
-| U-06 | Disable while a cutover is in flight (backend 409): `ABORTED`, retryable                                      | Negative | —    |
-| U-07 | Info returns `lastSyncTime`, `lastSyncDuration`, and `lastSyncBytes` from the status read                     | Positive | —    |
-| U-08 | A malformed volume handle: `INVALID_ARGUMENT` before any backend call                                         | Negative | —    |
-| U-09 | Backend unreachable: `UNAVAILABLE`, and no condition flap is implied by the error                             | Negative | —    |
+| #    | Scenario                                                                                                                                                                                                       | Type       | Test                                                 |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------|
+| U-01 | Enable on an unattached volume: the attach call carries the class's policy, and the RPC succeeds                                                                                                               | Positive   | `TestEnableVolumeReplication`                        |
+| U-02 | Enable on a volume already attached to the same policy: success, no second attach call (idempotency)                                                                                                           | Boundary   | `TestEnableVolumeReplicationRepeatedIsIdempotent`    |
+| U-03 | Enable on a volume attached to a different policy: `FAILED_PRECONDITION` naming both policies, no attach call                                                                                                  | Negative   | —                                                    |
+| U-04 | Disable on an attached volume: the detach call is made, success                                                                                                                                                | Positive   | `TestDisableVolumeReplication`                       |
+| U-05 | Disable on a non-attached volume: success without a backend call (idempotency)                                                                                                                                 | Boundary   | `TestDisableVolumeReplicationNotAttachedIsSuccess`   |
+| U-06 | Disable while a cutover is in flight (backend 409): `ABORTED`, retryable                                                                                                                                       | Negative   | `TestDisableVolumeReplicationDuringCutoverIsAborted` |
+| U-07 | Info returns `lastSyncTime` from the status read (`lastSyncDuration` and `lastSyncBytes` are not part of `GetVolumeReplicationInfoResponse` in csi-addons/spec v0.2.0, the version this driver builds against) | Positive   | `TestGetVolumeReplicationInfo`                       |
+| U-08 | A malformed volume handle: `INVALID_ARGUMENT` before any backend call                                                                                                                                          | Negative   | `TestEnableVolumeReplicationMalformedVolumeHandle`   |
+| U-09 | A cluster ID with no entry in this deployment's secret: `UNAVAILABLE`, distinct from a backend-side refusal                                                                                                    | Negative   | `TestEnableVolumeReplicationUnknownCluster`          |
+| U-28 | Enable without the `VolumeReplicationClass` policy parameter: `INVALID_ARGUMENT` before any backend call                                                                                                       | Negative   | `TestEnableVolumeReplicationMissingPolicyParam`      |
+| U-29 | Enable the backend refuses (412): `FAILED_PRECONDITION` carrying the backend's own reason                                                                                                                      | Negative   | `TestEnableVolumeReplicationBackendRefusal`          |
+| U-30 | Info on a volume that never replicated: a nil `lastSyncTime`, never a `NOT_FOUND`                                                                                                                              | Boundary   | `TestGetVolumeReplicationInfoNeverReplicated`        |
+| U-31 | Info on a volume id the backend does not recognize: `NOT_FOUND`                                                                                                                                                | Negative   | `TestGetVolumeReplicationInfoUnknownVolume`          |
+| U-32 | The remaining Replication verbs (`PromoteVolume`, `DemoteVolume`, `ResyncVolume`) fall through to `UNIMPLEMENTED` until Phase 2 lands                                                                          | Regression | `TestUnimplementedReplicationVerbsAreUnimplemented`  |
 
 ### Replication Verbs: Promote, Demote, Resync (design §5.2)
 
@@ -68,6 +73,27 @@ Files: `operator/internal/controller/peerclasses_preflight_test.go`, `operator/i
 | U-25 | Named policies exist but do not point at each other's clusters: `PeerClassesMismatch`                                                                       | Negative | —    |
 | U-26 | `PVCAnnotationWatcher` skips a PVC whose volume has a `VolumeReplication`: no slot is created, a skip is recorded                                           | Negative | —    |
 | U-27 | Annotation added and later a `VolumeReplication` appears: the existing slot is not deleted by the adapter, and the enable is refused per the one-owner rule | Boundary | —    |
+
+### csi-addons Identity Service (design §4)
+
+File: `csi-driver/internal/csi/csiaddons/identity/identity_test.go`
+
+| #    | Scenario                                                                       | Type     | Test                                             |
+|------|--------------------------------------------------------------------------------|----------|--------------------------------------------------|
+| U-33 | `GetIdentity` returns this driver's name and version                           | Positive | `TestGetIdentity`                                |
+| U-34 | `GetCapabilities` advertises `VOLUME_REPLICATION` and `CONTROLLER_SERVICE`     | Positive | `TestGetCapabilitiesAdvertisesVolumeReplication` |
+| U-35 | `Probe` reports ready (a nil `Ready` per the spec, not a stray `true`/`false`) | Positive | `TestProbeReportsReady`                          |
+
+### Operator: Sidecar Deployment and RBAC (design §4.1)
+
+File: `operator/internal/controllers/driver/workloads_test.go`, `operator/internal/controllers/driver/rbac_test.go`
+
+| #    | Scenario                                                                                                                                | Type     | Test                                                          |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
+| U-36 | The csi-addons sidecar is appended after the plugin container, never inserted, and is addressed at the plugin's own socket              | Positive | `TestCSIAddonsSidecarIsAppliedAfterThePlugin`                 |
+| U-37 | The sidecar advertises its own pod (IP, name, namespace, UID) through the downward API, since the StatefulSet runs on the host network  | Positive | `TestCSIAddonsSidecarAdvertisesItsOwnPod`                     |
+| U-38 | The sidecar's grant is a namespaced Role bound to the controller plugin's account, not a ClusterRole, since CSIAddonsNode is namespaced | Positive | `TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount` |
+| U-39 | The namespaced Role's rules are scoped to the sidecar's own job: its CSIAddonsNode and its own leader-election Lease                    | Positive | `TestCSIAddonsRoleRulesAreScopedToItsOwnJob`                  |
 
 ---
 
@@ -153,23 +179,26 @@ Two live simplyblock clusters with the chart-deployed csi-addons machinery. The 
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered |
-|-------------|-----------|---------|-------------|
-| Unit        | 27        | 0       | U-01 … U-27 |
-| Integration | 7         | 0       | I-01 … I-07 |
-| E2E         | 7         | 0       | E-01 … E-07 |
-| Manual      | 2         | 0       | M-01, M-02  |
+| Class       | Scenarios | Covered | Not covered       |
+|-------------|-----------|---------|-------------------|
+| Unit        | 39        | 20      | U-03, U-10 … U-27 |
+| Integration | 7         | 0       | I-01 … I-07       |
+| E2E         | 7         | 0       | E-01 … E-07       |
+| Manual      | 2         | 0       | M-01, M-02        |
 
-Every scenario is uncovered because the design is Draft. The counts are the target, and each `Test` column fills in as the work lands.
+Phase 1 landed the driver's Replication and Identity services, the error classifier, and the operator's sidecar and RBAC wiring, covering every Phase 1 unit scenario except U-03 (§7). Phase 2 (promote, demote, resync, and the operator's preflight and coexistence controllers) has not started, and neither has a sidecar-and-controller-manager integration suite or a live two-cluster E2E bed, so those tiers remain fully uncovered.
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-| #           | Gap                                                                                                               | Reason                                                                                                                                      |
-|-------------|-------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-27 | The verb adapter, condition derivation, preflight, and coexistence units                                          | The adapter does not exist; blocked on P0-1 and P0-2 for the Phase 1 verbs and P0-3 for demote                                              |
-| I-01 … I-07 | The sidecar and controller-manager loop                                                                           | CRDs and controller-manager vendored in the chart (P0-5, `csiaddons.create`); blocked on the Phase 1 sidecar and driver Replication service |
-| E-01 … E-07 | The live lifecycle and the Ramen gate                                                                             | Blocked on Phase 1 and 2 landing, plus a two-cluster test bed with Ramen dr-cluster installed for E-06 and E-07                             |
-| —           | Repeated resync, class drift after verification, annotated-volume migration onto the adapter, cascaded topologies | Beyond the first coverage pass, recorded so the gaps are explicit rather than assumed covered                                               |
-| M-01, M-02  | Demote under writes; concurrent ownership race                                                                    | Need failure injection and precise timing a live two-cluster run does not automate yet                                                      |
+| #           | Gap                                                                                                               | Reason                                                                                                                                                                                                                                                                                                                 |
+|-------------|-------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-03        | Different-policy enable refused with `FAILED_PRECONDITION`                                                        | Not implemented: sbcli's `attach_policy` silently re-attaches onto the new policy rather than refusing, and no endpoint exposes the policy id a volume is currently attached to, for the driver to compare against before attaching (design §5.1 assumed this refusal exists; it does not against the current backend) |
+| U-10 … U-17 | Promote, demote, and resync unit coverage                                                                         | Phase 2: the three verbs fall through to `UnimplementedControllerServer`; P0-3 (demote's backend support) is also still blocked                                                                                                                                                                                        |
+| U-18 … U-22 | Condition derivation (`Completed`/`Degraded`/`Resyncing`) from the status read                                    | Not implemented: `csi-addons/spec` v0.2.0's `GetVolumeReplicationInfoResponse` carries only `lastSyncTime`, with no per-condition field at all; deriving these needs either a newer spec version or belongs in the controller-manager's own reconcile, neither examined yet                                            |
+| U-23 … U-27 | Preflight (`peerClasses` verification) and coexistence (`PVCReplicationController`, the one-owner rule)           | Out of Phase 1's scope: the auto-adapter and preflight webhook are a separate, unbuilt subsystem                                                                                                                                                                                                                       |
+| I-01 … I-07 | The sidecar and controller-manager loop                                                                           | The driver's Replication and Identity services and the sidecar container now exist (Phase 1); no envtest/kind suite exercises them against the real kubernetes-csi-addons controller-manager yet                                                                                                                       |
+| E-01 … E-07 | The live lifecycle and the Ramen gate                                                                             | Blocked on Phase 2 landing, plus a two-cluster test bed with Ramen dr-cluster installed for E-06 and E-07                                                                                                                                                                                                              |
+| —           | Repeated resync, class drift after verification, annotated-volume migration onto the adapter, cascaded topologies | Beyond the first coverage pass, recorded so the gaps are explicit rather than assumed covered                                                                                                                                                                                                                          |
+| M-01, M-02  | Demote under writes; concurrent ownership race                                                                    | Need failure injection and precise timing a live two-cluster run does not automate yet                                                                                                                                                                                                                                 |

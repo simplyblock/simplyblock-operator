@@ -131,6 +131,7 @@ func TestSidecarsDefaultToTheOperatorsRelease(t *testing.T) {
 		snapshotter:         defaultSnapshotterImage,
 		healthMonitor:       defaultHealthMonitorImage,
 		nodeDriverRegistrar: defaultNodeDriverRegistrarImage,
+		csiAddons:           defaultCSIAddonsImage,
 	}
 	if got != want {
 		t.Errorf("sidecars = %+v, want %+v", got, want)

@@ -1,5 +1,7 @@
-// The RBAC the two plugins need: a ServiceAccount each, and the five ClusterRole
-// and ClusterRoleBinding pairs behind them.
+// The RBAC the two plugins need: a ServiceAccount each, the five ClusterRole and
+// ClusterRoleBinding pairs behind the sidecars that watch cluster-scoped kinds,
+// and one namespaced Role and RoleBinding pair for the csi-addons sidecar, whose
+// CSIAddonsNode is namespaced.
 //
 // The rules are the ones the chart applies, because adoption reconciles toward
 // the state that is running and a rule this file widens or narrows is a
@@ -8,7 +10,7 @@
 // runs a second set of its own and each set says which sidecar needs what.
 //
 // Specified by operator/docs/designs/crd-redesign/design-simplyblockdriver.md
-// §4.1 and §4.3.
+// §4.1 and §4.3, and operator/docs/designs/design-csi-addons-replication.md §4.1.
 
 package driver
 
@@ -30,6 +32,8 @@ var (
 	storage       = []string{"storage.k8s.io"}
 	snapshot      = []string{"snapshot.storage.k8s.io"}
 	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
+	csiaddons     = []string{"csiaddons.openshift.io"}
+	coordination  = []string{"coordination.k8s.io"}
 )
 
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
@@ -85,6 +89,49 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(core, []string{"pods"}, "get", "list", "watch"),
 		rule(core, []string{"events"}, "get", "list", "watch", "create", "patch"),
 	},
+}
+
+// csiAddonsRoleRules is the csi-addons sidecar's rule set, granted as a
+// namespaced Role rather than added to clusterRoleRules: the sidecar only ever
+// touches its own CSIAddonsNode and its own leader-election Lease, both in
+// this deployment's namespace, and neither kind justifies a cluster-wide grant.
+var csiAddonsRoleRules = []rbacv1.PolicyRule{
+	// rbac-justified: the sidecar publishes and maintains exactly one
+	// CSIAddonsNode, naming itself, so the kubernetes-csi-addons
+	// controller-manager (design-csi-addons-replication.md §4.1) can find its
+	// endpoint. It does not read any other driver's CSIAddonsNode.
+	rule(csiaddons, []string{"csiaddonsnodes"}, "get", "list", "watch", "create", "update", "delete"),
+	rule(csiaddons, []string{"csiaddonsnodes/status"}, "get", "update", "patch"),
+	// rbac-justified: only one replica of the controller StatefulSet serves
+	// CONTROLLER_SERVICE requests at a time; the Lease is how the sidecar
+	// replicas elect that one, in this namespace only.
+	rule(coordination, []string{"leases"}, "get", "list", "watch", "create", "update", "delete"),
+	rule(core, []string{"events"}, "create", "patch"),
+}
+
+func csiAddonsRole(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.Role {
+	n := names(d)
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: n.role(csiAddonsComponent), Namespace: d.Namespace},
+		Rules:      csiAddonsRoleRules,
+	}
+}
+
+func csiAddonsRoleBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.RoleBinding {
+	n := names(d)
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: n.roleBinding(csiAddonsComponent), Namespace: d.Namespace},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      n.controllerServiceAccount,
+			Namespace: d.Namespace,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "Role",
+			Name:     n.role(csiAddonsComponent),
+		},
+	}
 }
 
 // serviceAccountFor names the account each role is bound to. The node plugin has
