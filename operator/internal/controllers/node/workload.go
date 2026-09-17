@@ -79,6 +79,14 @@ type Workload struct {
 	// refused request is not the same answer as an unreachable host.
 	TLSEnabled       bool
 	TLSMutualEnabled bool
+
+	// ManagerNode is the Kubernetes node the operator itself runs on, which the
+	// chart sets from spec.nodeName. It decides one question and no other:
+	// whether the worker a maintenance window is draining is the manager's own,
+	// in which case the manager holds its own eviction while it arranges the
+	// window (selfbudget.go). Empty when nothing set it, and then it holds
+	// nothing.
+	ManagerNode string
 }
 
 // NodeAddress is the per-pod DNS name the control plane is given as node_address
