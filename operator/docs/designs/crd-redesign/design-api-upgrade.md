@@ -1481,9 +1481,15 @@ adopt rather than a new invention:
 - **The Helm chart** names every resource literally rather than building names
   from the release name.
 
-`nodeprobe.ObjectName` lands with the discovery work, so the shared helper is
-extracted from it rather than written twice, into `atlas-lib/kube/names.go`
-beside the formulas it bounds.
+`nodeprobe.ObjectName` landed with the discovery work, the shared helper was
+extracted from it rather than written twice, into `atlas-lib/kube/derived.go`
+beside the formulas it bounds, and the reference call site now derives its names
+through it. What the extraction had to carry over is that the digest is
+unconditional there: the run and the node join on a separator both of them may
+contain, so two runs of one deployment reach one stem without either being long
+enough to truncate. Where a formula's parts are unambiguous the digest stays
+conditional and the name stays readable, so `Formula.AlwaysDigest` is what the
+two cases differ in.
 
 ### 19.7 Where a Rule Is Enforced
 
