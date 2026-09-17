@@ -120,6 +120,9 @@ type NFSExportReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=nfsexports/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
+// The NodeScoped client policy resolves against the cluster's own nodes, which
+// is what decides who may mount the export.
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile drives one export toward Ready, or tears it down.
@@ -204,7 +207,22 @@ func (r *NFSExportReconciler) reconcilePending(
 		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
 	}
 
-	logger.Info("binding export to MDS host", "node", node)
+	// Resolved before the transition, because an export bound with no client
+	// set is one the host will refuse to assemble, and refusing here says which
+	// policy resolved to nothing instead of surfacing as an invalid spec from a
+	// node.
+	clients, err := r.allowedClients(ctx, export)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(clients) == 0 {
+		r.event(export, corev1.EventTypeWarning, "NoAllowedClients",
+			fmt.Sprintf("client policy %s resolved to no hosts, so the export would publish to nobody",
+				clientPolicyMode(export)))
+		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
+	}
+
+	logger.Info("binding export to MDS host", "node", node, "clients", len(clients))
 	if err := machine.TransitionTo(ctx, phaseAssembling); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Assembling: %w", err)
 	}
@@ -216,6 +234,7 @@ func (r *NFSExportReconciler) reconcilePending(
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
 		s.Phase = phaseAssembling
 		s.StorageNodeRef = node
+		s.AllowedClients = clients
 		s.Message = "assembling the export"
 		setDeadline(s, machine)
 	}); err != nil {

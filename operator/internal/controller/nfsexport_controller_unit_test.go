@@ -122,6 +122,11 @@ func newExportReconciler(
 ) (*NFSExportReconciler, client.Client) {
 	t.Helper()
 	scheme := newTestScheme(t, corev1.AddToScheme)
+	// A cluster has nodes, and the default NodeScoped client policy resolves
+	// against them. A fixture with none makes every binding test assert the
+	// no-clients path instead of the one it is named for, so one is supplied
+	// unless the test brought its own to assert on.
+	objects = withBaselineKubeNode(objects)
 	cl := newTestClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha2.NFSExport{}, &simplyblockv1alpha1.StorageNode{}},
 		objects...,
@@ -132,6 +137,21 @@ func newExportReconciler(
 		Recorder:  &fakeRecorder{},
 		Assembler: asm,
 	}, cl
+}
+
+// withBaselineKubeNode adds one Kubernetes node when the caller supplied none.
+func withBaselineKubeNode(objects []client.Object) []client.Object {
+	for _, o := range objects {
+		if _, ok := o.(*corev1.Node); ok {
+			return objects
+		}
+	}
+	return append(objects, &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "kube-baseline"},
+		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: "192.168.10.81"},
+		}},
+	})
 }
 
 func reconcileExport(t *testing.T, r *NFSExportReconciler) reconcile.Result {
