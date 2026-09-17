@@ -76,7 +76,11 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					NodeSelector:       d.Spec.NodeSelector,
 					Tolerations:        d.Spec.Tolerations,
 					HostNetwork:        true,
-					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
+					// exportfs must run in the host's mount namespace, which
+					// the plugin reaches through the host's init process
+					// (pnfs.go). Off unless pNFS is on.
+					HostPID:   pnfsEnabled(d),
+					DNSPolicy: corev1.DNSClusterFirstWithHostNet,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),

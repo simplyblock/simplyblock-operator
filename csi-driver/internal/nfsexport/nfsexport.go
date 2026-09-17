@@ -76,9 +76,35 @@ func NewAssembler(
 	})
 }
 
-// runner executes a command and reports its output and exit code, which is the
-// shape atlas/blockdev already defines for this.
+// hostMountNamespace is the host's, reached through its init process. The node
+// plugin sees it because the pod shares the host's PID namespace, which is what
+// spec.pnfs turns on (operator/internal/controllers/driver/pnfs.go).
+const hostMountNamespace = "/proc/1/ns/mnt"
+
+// hostCommand rewrites a command to run in the host's mount namespace.
+//
+// exportfs is the userspace half of the host's nfsd: it writes
+// /var/lib/nfs/etab and pokes /proc/fs/nfsd, and rpc.mountd reads the same
+// files. Run in this container's own namespace it would edit a copy nothing
+// serves from, so the export would be written, reported as published, and be
+// invisible to every client -- the worst of the failures available here,
+// because everything reports success.
+//
+// It also is not in this image, and deliberately so. nfs-utils on a host that
+// serves exports is a prerequisite this design already states (§14.1, P0-10),
+// and shipping a second copy in the container would mean a host running one
+// version of exportfs against an etab written by another.
+//
+// The separator is load bearing: without it nsenter reads the command's own
+// flags as its own.
+func hostCommand(name string, args ...string) (string, []string) {
+	return "nsenter", append([]string{"--mount=" + hostMountNamespace, "--", name}, args...)
+}
+
+// runner executes a command in the host's mount namespace and reports its
+// output and exit code, which is the shape atlas/blockdev already defines.
 func runner(ctx context.Context, name string, args ...string) ([]byte, int, error) {
+	name, args = hostCommand(name, args...)
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

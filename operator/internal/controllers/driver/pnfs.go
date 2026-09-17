@@ -10,6 +10,15 @@
 // empty directory -- which is the worse failure, because a client mounts it and
 // sees a volume that merely looks empty.
 //
+// The pod also shares the host's PID namespace, which is how the plugin reaches
+// the host's mount namespace: exportfs writes /var/lib/nfs/etab and pokes
+// /proc/fs/nfsd, and rpc.mountd reads the same files, so run in the container's
+// own namespace it would edit a table nothing serves from and the export would
+// report success while being invisible to every client. It is less of an
+// escalation than it reads as -- this pod is already privileged with SYS_ADMIN,
+// the host's network, and /dev and /sys -- but it is still gated, because a node
+// plugin not serving exports has no use for it.
+//
 // Nothing here is conditional on the host actually being able to serve. nfsd
 // and nfs-utils are the node OS's to provide (design-pnfs-rwx.md §14.1, P0-10),
 // and a host without them fails in the export record's Assembling phase, where

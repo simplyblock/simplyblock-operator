@@ -127,6 +127,19 @@ design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
 
+**`exportfs` has to run on the host, and §14.1 half said so.** The section asks
+for `nfs-utils` on MDS hosts, which is right, and then has csi-node run
+`exportfs` -- which is in the container, where `/var/lib/nfs/etab` and
+`/proc/fs/nfsd` are not the ones `rpc.mountd` reads. An export written there
+would be reported as published and be invisible to every client, which is the
+worst failure available: everything returns success.
+
+It is also simply not in the driver image, and should not be. Shipping a second
+copy would mean one version of `exportfs` writing an `etab` another version
+serves from. So the plugin enters the host's mount namespace through its init
+process, which is what `spec.pnfs` shares the host PID namespace for. The
+document should say, wherever it names a command, which namespace it runs in.
+
 **Nothing attached the backing namespace, on either side.** §6.4(a) says the MDS
 host connects the volume through "the existing csi-node service," and §10 says
 the client does too, and both readings were wrong in the same way: csi-node acts

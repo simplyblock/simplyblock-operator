@@ -100,3 +100,34 @@ func TestPNFSDoesNotReachTheControllerPlugin(t *testing.T) {
 		}
 	}
 }
+
+// exportfs has to run in the host's mount namespace, and the plugin reaches it
+// through the host's init process, so the pod shares the host's PID namespace.
+//
+// It is not an extra privilege so much as a way of using one this pod already
+// has: it is privileged, with SYS_ADMIN, the host's network, and /dev and /sys
+// mounted, so what this adds is visibility of host processes rather than any
+// new power over the machine. It is still gated, because a node plugin that is
+// not serving exports has no use for it.
+func TestPNFSSharesTheHostProcessNamespace(t *testing.T) {
+	pod := nodeDaemonSet(pnfsDriver(), testImage).Spec.Template.Spec
+	if !pod.HostPID {
+		t.Error("the node plugin does not share the host PID namespace, so it cannot reach " +
+			"the host's mount namespace and exportfs would edit a table nothing serves from")
+	}
+}
+
+func TestPNFSOffLeavesTheProcessNamespaceAlone(t *testing.T) {
+	pod := nodeDaemonSet(testDriver("simplyblock"), testImage).Spec.Template.Spec
+	if pod.HostPID {
+		t.Error("the node plugin shares the host PID namespace with pNFS off")
+	}
+}
+
+// The controller plugin never runs exportfs.
+func TestPNFSDoesNotGiveTheControllerTheHostProcessNamespace(t *testing.T) {
+	pod := controllerStatefulSet(pnfsDriver(), testImage).Spec.Template.Spec
+	if pod.HostPID {
+		t.Error("the controller plugin shares the host PID namespace")
+	}
+}
