@@ -973,6 +973,29 @@ are host paths keeps its data on one machine, so the install either refuses
 without a class, names the hostpath path as a development mode, or keeps applying
 it.
 
+**Q8: Where the event-log alert rules belong for a standalone install.** The
+chart provisioned seven Grafana rules that read the control plane's cluster event
+log through an Infinity data source, covering the transitions Thanos cannot see: a
+node leaving online, a device becoming unavailable or being removed, a cluster
+degrading, suspending, or reaching capacity, and the two journal-manager faults.
+They were removed from the chart because the chart cannot build them. A data
+source carries one cluster's credential, so the rules iterate the clusters, and
+the chart learns a cluster's UUID and secret only when somebody writes them back
+into the values after `cluster create`, which is the loop
+[`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md)
+replaced.
+
+The operator holds both. The `StorageCluster` reconciler knows every cluster's
+UUID and secret and already upserts them into `simplyblock-csi-secret-v2`
+([`design-simplyblockdriver.md`](design-simplyblockdriver.md) §4.3), so the
+provisioning belongs to whatever reconciles the observability stack rather than
+to a values file. Q2 leaves Grafana and Thanos with the chart while the base
+control plane moves to the operator, which is why this has no home yet.
+
+Until it has one, a standalone deployment alerts on what Thanos scrapes and on
+nothing the event log carries. The Thanos-derived rules are unaffected: they need
+no per-cluster credential, which is the property that separates the two halves.
+
 ---
 
 ## Appendix A: `controlplane_types.go`
