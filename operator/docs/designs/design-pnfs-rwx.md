@@ -145,6 +145,21 @@ own -- the control-plane client that says where a namespace lives, and the
 The image is deliberately newer than the hosts, so this skew is permanent and
 not a one-off to be fixed by aligning versions.
 
+The rule then caught two more on the client side, which is why it is worth
+stating as a rule rather than fixing case by case. `mount(8)` hands an NFS mount
+to `/sbin/mount.nfs`, from `nfs-utils`, which the driver image does not carry and
+should not -- §14.1 already requires it on any host that may run an RWX pod, and
+a second copy would be two things to keep in step. And publishing into the pod is
+a bind, which takes no filesystem type: the type on the volume capability comes
+from the StorageClass's `csi.storage.k8s.io/fstype`, which for an RWX volume
+describes the filesystem the *metadata server* makes, and passing it on sends
+`mount(8)` looking for a helper named after it -- `/sbin/mount.nfs` exists and
+does not bind.
+
+Worth recording for §16 as well: `csi.storage.k8s.io/fstype` has no effect on an
+RWX volume. A pNFS SCSI layout can only be served from XFS, so the export's
+filesystem is XFS whatever the class says.
+
 **`exportfs` has to run on the host, and §14.1 half said so.** The section asks
 for `nfs-utils` on MDS hosts, which is right, and then has csi-node run
 `exportfs` -- which is in the container, where `/var/lib/nfs/etab` and
