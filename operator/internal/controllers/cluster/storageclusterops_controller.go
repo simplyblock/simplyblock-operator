@@ -246,7 +246,7 @@ func (r *StorageClusterOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, current)
+		return r.unwind(ctx, ops, machine, current)
 	}
 
 	if machine.TimeoutReached() {
@@ -376,9 +376,15 @@ func (r *StorageClusterOpsReconciler) nextStep(
 // control plane for something it is part-way through, and stopping there would
 // leave nothing driving the cluster back to a state somebody can reason about.
 func (r *StorageClusterOpsReconciler) unwind(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, current step,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageClusterOps,
+	machine *statemachine.Machine[step],
+	current step,
 ) (ctrl.Result, error) {
-	if !abortable(current) {
+	// The machine is asked rather than a table beside it, and it is asked rather
+	// than the graphs, because it was built for this operation's action: a step
+	// two actions share can be abortable in one of them.
+	if !machine.CanAbort() {
 		// Not a failure of the operation: it carries on. What the user asked
 		// for cannot be done, and saying so is the whole of the response.
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(

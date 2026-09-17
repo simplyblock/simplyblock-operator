@@ -11,6 +11,7 @@ package cluster
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,14 +30,15 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// The two steps between a node's shutdown and its restart are not abortable.
+// The four steps between a node's shutdown and its restart are not abortable.
 // Stopping there leaves the node offline with nothing driving it back up,
-// which is the one outcome the abort table exists to prevent.
+// which is the one outcome abortability exists to prevent.
 func TestAnAbortIsRefusedWhileTheNodeIsDown(t *testing.T) {
+	unabortable := statemachine.UnabortableMultiStates(graphs())
 	for _, current := range []step{stepShuttingDownNode, stepRefreshingPod, stepAwaitingPod,
 		stepRestartingNode} {
 		t.Run(string(current), func(t *testing.T) {
-			if abortable(current) {
+			if !slices.Contains(unabortable, current) {
 				t.Errorf("step %s is abortable, but the node is offline there and the "+
 					"walk is what brings it back", current)
 			}
@@ -47,9 +49,10 @@ func TestAnAbortIsRefusedWhileTheNodeIsDown(t *testing.T) {
 // The abort is honored where the walk has not taken anything down: before the
 // shutdown, and after the node is back online and the cluster is settling.
 func TestAnAbortIsHonoredWhereNothingIsDown(t *testing.T) {
+	unabortable := statemachine.UnabortableMultiStates(graphs())
 	for _, current := range []step{stepCheckingPeers, stepRebalancing} {
 		t.Run(string(current), func(t *testing.T) {
-			if !abortable(current) {
+			if slices.Contains(unabortable, current) {
 				t.Errorf("step %s is not abortable, though it has taken nothing down", current)
 			}
 		})

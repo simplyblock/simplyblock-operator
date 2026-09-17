@@ -11,6 +11,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -73,34 +73,23 @@ func TestEveryActionsGraphIsALine(t *testing.T) {
 	}
 }
 
-// Every abortable step is one some graph declares. The table sits beside the
-// graphs rather than in them, so a step renamed in one and not the other would
-// make an abort silently unreachable.
-func TestEveryAbortableStepIsAStepSomeGraphDeclares(t *testing.T) {
-	declared := map[string]bool{}
-	for _, state := range statemachine.DeclaredMultiStates(opsGraphs()) {
-		declared[state] = true
-	}
-	for step := range abortableSteps {
-		if !declared[string(step)] {
-			t.Errorf("%s is abortable and no graph declares it", step)
-		}
-	}
-}
-
 // An abort is honored only before anything has been changed. A step that has
 // rolled a Deployment or written an image onto the entity carries on, because
 // stopping there would leave a rollout half-done with nothing driving it either
 // way.
+//
+// Both halves are written out rather than derived. The graphs are the only place
+// this is declared now, so a step quietly gaining or losing it would otherwise
+// change what an abort does with nothing disagreeing.
 func TestAnAbortIsRefusedOnceARolloutHasStarted(t *testing.T) {
-	refused := []opsStep{stepRestarting, stepApplying, stepAwaiting, stepVerifying}
-	for _, step := range refused {
-		if abortable(step) {
+	unabortable := UnabortableSteps()
+	for _, step := range []opsStep{stepRestarting, stepApplying, stepAwaiting, stepVerifying} {
+		if !slices.Contains(unabortable, step) {
 			t.Errorf("%s is abortable, and an abort there leaves a rollout half-done", step)
 		}
 	}
 	for _, step := range []opsStep{stepDraining, stepPreflight, stepRequesting} {
-		if !abortable(step) {
+		if slices.Contains(unabortable, step) {
 			t.Errorf("%s is not abortable, and nothing has been changed at that point", step)
 		}
 	}

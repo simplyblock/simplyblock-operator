@@ -239,6 +239,23 @@
 // persisting the phase without the deadline yields one that can never time out,
 // which is why [Machine.Snapshot] returns both together.
 //
+// # Stopping
+//
+// Aborting is an edge above, because a VolumeMigration's phase type already has
+// an Aborted value for the edge to point at. A resource whose states are the
+// steps of a workflow usually does not: its outcome is recorded in an outer
+// phase, and an Aborted step would be a value in the step enum that no step ever
+// means. [StateDef.Abortable] is the same rule declared as a property of the
+// state instead, so the graph still answers whether a stop can be honored
+// without the state type paying for it:
+//
+//	promoting: {Abortable: false, OnEnter: r.onPromoting(op)},
+//
+// A caller holding the machine asks [Machine.CanAbort]. A caller holding only a
+// persisted state — an admission webhook reading a status — asks
+// [UnabortableStates] or [UnabortableMultiStates], which is also what keeps a
+// table written beside the graph from drifting away from it.
+//
 // # One graph per action
 //
 // A VolumeMigration does one thing, so one graph describes it. An Ops resource
@@ -365,6 +382,20 @@ type StateDef[S comparable] struct {
 	// That is distinct from a state omitted from Config.States, which is an
 	// error.
 	To []S
+
+	// Abortable declares that the work this state represents can still be called
+	// off. It is the graph's answer to a caller asking to stop, and it defaults
+	// to false because a state that has started something is the common case and
+	// the safe default: the graph has to say a stop is safe, rather than say it
+	// is not.
+	//
+	// It is a property of the state rather than an edge to a terminal one,
+	// because the alternative costs a state. A resource whose state type is its
+	// own persisted enum would need an extra value in that enum for every
+	// workflow that can be aborted, and the outcome is usually already recorded
+	// somewhere else — in the outer phase, for the Ops kinds this was built for.
+	// See [Machine.CanAbort], which is what a caller asks.
+	Abortable bool
 
 	// OnEnter runs when the machine enters this state. It may be nil, in which
 	// case entering always succeeds and leaves the state without a deadline.

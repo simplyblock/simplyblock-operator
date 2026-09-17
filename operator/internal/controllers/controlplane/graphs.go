@@ -160,8 +160,9 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 			Initial: stepDraining,
 			States: map[opsStep]statemachine.StateDef[opsStep]{
 				stepDraining: {
-					To:      []opsStep{stepRestarting},
-					OnEnter: deadline[opsStep](drainingDeadline),
+					To:        []opsStep{stepRestarting},
+					Abortable: true,
+					OnEnter:   deadline[opsStep](drainingDeadline),
 				},
 				stepRestarting: {
 					To:      []opsStep{stepAwaiting},
@@ -175,12 +176,14 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 			Initial: stepPreflight,
 			States: map[opsStep]statemachine.StateDef[opsStep]{
 				stepPreflight: {
-					To:      []opsStep{stepDraining},
-					OnEnter: deadline[opsStep](preflightDeadline),
+					To:        []opsStep{stepDraining},
+					Abortable: true,
+					OnEnter:   deadline[opsStep](preflightDeadline),
 				},
 				stepDraining: {
-					To:      []opsStep{stepApplying},
-					OnEnter: deadline[opsStep](drainingDeadline),
+					To:        []opsStep{stepApplying},
+					Abortable: true,
+					OnEnter:   deadline[opsStep](drainingDeadline),
 				},
 				stepApplying: {
 					To:      []opsStep{stepAwaiting},
@@ -198,8 +201,9 @@ func opsGraphs() statemachine.MultiConfig[opsStep] {
 			Initial: stepRequesting,
 			States: map[opsStep]statemachine.StateDef[opsStep]{
 				stepRequesting: {
-					To:      []opsStep{stepAwaiting},
-					OnEnter: deadline[opsStep](requestingDeadline),
+					To:        []opsStep{stepAwaiting},
+					Abortable: true,
+					OnEnter:   deadline[opsStep](requestingDeadline),
 				},
 				stepAwaiting: {OnEnter: deadline[opsStep](awaitingOpsDeadline)},
 			},
@@ -218,25 +222,25 @@ var opsInitialDeadlines = map[statemachine.Action]time.Duration{
 	action(simplyblockv1alpha2.ControlPlaneOpsActionBackup):  requestingDeadline,
 }
 
-// abortableSteps are the steps from which an abort stops the operation cleanly.
-//
-// The line is whether anything has been changed yet. Draining and Preflight have
-// performed no side effect at all, and Requesting has not yet created the
+// Which steps an abort stops cleanly is declared on the states above, and the
+// line it draws is whether anything has been changed yet. Draining and Preflight
+// have performed no side effect at all, and Requesting has not yet created the
 // backup. Everything past those has rolled a Deployment or written an image onto
 // the entity, and the operation is what drives that rollout to completion.
 //
-// It is a table beside the graph rather than an edge in it: the phase already
-// carries what a terminal Aborted step would say. A test asserts every step here
-// is one some graph declares, so the two cannot drift.
-var abortableSteps = map[opsStep]bool{
-	stepDraining:   true,
-	stepPreflight:  true,
-	stepRequesting: true,
-}
+// It is a property of the state rather than an edge to a terminal one: the phase
+// already carries what a terminal Aborted step would say.
 
-// abortable reports whether an abort asked for while the operation sits on this
-// step can be honored.
-func abortable(current opsStep) bool { return abortableSteps[current] }
+// UnabortableSteps are the steps no action can be stopped from, sorted.
+//
+// It is exported for the DELETE guard on this kind, which asks the same question
+// this package's unwind asks: a deletion may not express something spec.abort
+// could not, so both channels read one graph (design-crd-model.md §3.1). The
+// guard has a step out of a status and no machine, which is the whole reason
+// this reads the graphs rather than the machine the reconciler holds.
+func UnabortableSteps() []opsStep {
+	return statemachine.UnabortableMultiStates(opsGraphs())
+}
 
 // action converts the API's action enum into the MultiConfig's key. The
 // conversion exists because statemachine.Action is a concrete string type rather

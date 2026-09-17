@@ -133,8 +133,12 @@ func graphs() statemachine.MultiConfig[step] {
 		return statemachine.Config[step]{
 			Initial: stepRequesting,
 			States: map[step]statemachine.StateDef[step]{
-				stepRequesting: {To: []step{stepAwaiting}, OnEnter: deadline[step](requestingDeadline)},
-				stepAwaiting:   {OnEnter: deadline[step](awaitingDeadline)},
+				stepRequesting: {
+					To:        []step{stepAwaiting},
+					Abortable: true,
+					OnEnter:   deadline[step](requestingDeadline),
+				},
+				stepAwaiting: {OnEnter: deadline[step](awaitingDeadline)},
 			},
 		}
 	}
@@ -152,21 +156,32 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageNodeOpsActionRemove): {
 			Initial: stepValidating,
 			States: map[step]statemachine.StateDef[step]{
+				// Validating performs no side effect at all, which is what makes
+				// an abort there an Aborted directly rather than an unwind. The
+				// three steps past the suspend are abortable because their
+				// unwind exists: the resume the graph already performs on every
+				// other terminal outcome from Suspending onward (§8.3).
+				// Removing is not, because the node is being taken out of the
+				// cluster and there is no resume that puts it back.
 				stepValidating: {
-					To:      []step{stepSuspending},
-					OnEnter: deadline[step](validatingDeadline),
+					To:        []step{stepSuspending},
+					Abortable: true,
+					OnEnter:   deadline[step](validatingDeadline),
 				},
 				stepSuspending: {
-					To:      []step{stepMigratingVolumes},
-					OnEnter: deadline[step](suspendingDeadline),
+					To:        []step{stepMigratingVolumes},
+					Abortable: true,
+					OnEnter:   deadline[step](suspendingDeadline),
 				},
 				stepMigratingVolumes: {
-					To:      []step{stepVerifying},
-					OnEnter: deadline[step](migratingDeadline),
+					To:        []step{stepVerifying},
+					Abortable: true,
+					OnEnter:   deadline[step](migratingDeadline),
 				},
 				stepVerifying: {
-					To:      []step{stepRemoving},
-					OnEnter: deadline[step](verifyingDeadline),
+					To:        []step{stepRemoving},
+					Abortable: true,
+					OnEnter:   deadline[step](verifyingDeadline),
 				},
 				stepRemoving: {OnEnter: deadline[step](removingDeadline)},
 			},
@@ -182,9 +197,15 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageNodeOpsActionMigrate): {
 			Initial: stepPreparing,
 			States: map[step]statemachine.StateDef[step]{
+				// Preparing has labeled a target host and nothing more.
+				// Everything after it is refused: the node is mid-restart with
+				// this operation the only thing watching it back, and the
+				// promote has re-homed the logical volumes, so there is nothing
+				// to unwind and the operation is what finishes the relocation.
 				stepPreparing: {
-					To:      []step{stepRelocating},
-					OnEnter: deadline[step](preparingDeadline),
+					To:        []step{stepRelocating},
+					Abortable: true,
+					OnEnter:   deadline[step](preparingDeadline),
 				},
 				stepRelocating: {
 					To:      []step{stepAwaitingNode},
@@ -201,9 +222,14 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance): {
 			Initial: stepHolding,
 			States: map[step]statemachine.StateDef[step]{
+				// Holding is the window before the node is taken down, and the
+				// last point at which calling the maintenance off costs
+				// nothing. From ShuttingDown onward the node is being taken
+				// down for a reboot nothing else will bring it back from.
 				stepHolding: {
-					To:      []step{stepShuttingDown},
-					OnEnter: deadline[step](holdingDeadline),
+					To:        []step{stepShuttingDown},
+					Abortable: true,
+					OnEnter:   deadline[step](holdingDeadline),
 				},
 				stepShuttingDown: {
 					To:      []step{stepReleasing},
@@ -299,60 +325,27 @@ var stepBudgets = map[step]time.Duration{
 	stepCleanup:          cleanupDeadline,
 }
 
-// abortableSteps are the steps from which an abort stops the operation cleanly.
+// Which steps an abort stops cleanly is declared on the states above, because
+// the line it draws is a property of the step rather than of this kind: whether
+// anything is currently down or half-done. Promoting is the clearest refusal.
+// The promote has activated the target host's devices, failed and migrated the
+// origin's, started a rebalance, and re-homed the logical volumes, so there is
+// nothing to unwind and the operation is what finishes the relocation (§9).
 //
-// The line is whether anything is currently down or half-done. Requesting has
-// issued nothing. Validating performs no side effect at all and is the step
-// before a drain touches the node, which is why an abort there is an Aborted
-// directly rather than an unwind (§8.3). Preparing has labeled a target host and
-// nothing more. The three drain steps past the suspend are abortable because
-// their unwind exists: the resume the graph already performs on every other
-// terminal outcome from Suspending onward.
-//
-// Promoting is the clearest refusal. The promote has activated the target host's
-// devices, failed and migrated the origin's, started a rebalance, and re-homed
-// the logical volumes, so there is nothing to unwind and the operation is what
-// finishes the relocation (§9). Relocating and AwaitingNode are the same rule:
-// the node is mid-restart and this operation is the only thing watching it back.
-// HostMaintenance past Holding is the third: the node is being taken down for a
-// reboot nothing else will bring it back from.
-//
-// It is a table beside the graph rather than an edge in it, because a terminal
-// Aborted step would be an eighteenth value in the API and the phase already
-// carries that meaning. A test asserts every step here is one some graph
-// declares, and another asserts that no step between a node's shutdown and its
-// restart appears, so the two cannot drift.
-var abortableSteps = map[step]bool{
-	stepRequesting:       true,
-	stepValidating:       true,
-	stepSuspending:       true,
-	stepMigratingVolumes: true,
-	stepVerifying:        true,
-	stepPreparing:        true,
-	stepHolding:          true,
-}
-
-// abortable reports whether an abort asked for while the operation sits on this
-// step can be honored.
-func abortable(current step) bool { return abortableSteps[current] }
+// It is a property of the state rather than an edge to a terminal one, because a
+// terminal Aborted step would be an eighteenth value in the API and the phase
+// already carries that meaning.
 
 // UnabortableSteps are the declared steps an abort cannot be honored from,
 // sorted.
 //
 // It is exported for the DELETE guard on this kind, which asks the same question
 // this package's unwind asks: a deletion may not express something spec.abort
-// could not, so both channels read one graph
-// (design-crd-model.md §3.1). Reading it rather than restating it is what keeps
-// the guard from refusing a step this package has since made abortable, or
-// admitting one it has not.
+// could not, so both channels read one graph (design-crd-model.md §3.1). The
+// guard has a step out of a status and no machine, which is the whole reason
+// this reads the graphs rather than the machine the reconciler holds.
 func UnabortableSteps() []step {
-	var refused []step
-	for _, declared := range statemachine.DeclaredMultiStates(graphs()) {
-		if s := step(declared); !abortable(s) {
-			refused = append(refused, s)
-		}
-	}
-	return refused
+	return statemachine.UnabortableMultiStates(graphs())
 }
 
 // unwinds reports whether an abort or a failure from this step owes the node a

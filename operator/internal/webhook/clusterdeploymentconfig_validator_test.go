@@ -39,14 +39,24 @@ func testWorker(name string) *corev1.Node {
 	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 }
 
+// testDeploymentStorageCluster is the cluster every test in this file names,
+// because the checks under test are about whether a cluster of that name exists
+// and what class it is, never about which name it carries.
 func testDeploymentStorageCluster(
-	name string, class simplyblockv1alpha2.StorageClusterDeviceClass,
+	class simplyblockv1alpha2.StorageClusterDeviceClass,
 ) *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testDeploymentNamespace},
-		Spec:       simplyblockv1alpha2.StorageClusterSpec{DeviceClass: class},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testDeploymentCluster,
+			Namespace: testDeploymentNamespace,
+		},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{DeviceClass: class},
 	}
 }
+
+// testSecondCluster is the cluster a second document names, for the checks about
+// two documents rather than about one document and the world.
+const testSecondCluster = "rack-two"
 
 // testConfig is a document that passes every check: one group, one worker that
 // exists, NVMe devices, and a cluster of its own to create.
@@ -225,7 +235,7 @@ func TestApprovingIsRefusedWhenClusterRefResolvesToNothing(t *testing.T) {
 func TestApprovingIsRefusedWhenTheClusterAlreadyExists(t *testing.T) {
 	existing := []client.Object{
 		testWorker("worker-1"),
-		testDeploymentStorageCluster(testDeploymentCluster, ""),
+		testDeploymentStorageCluster(""),
 	}
 
 	mustDeny(t, approve(t, existing, testConfig()),
@@ -251,7 +261,7 @@ func TestApprovingAGrowthDocumentOfTheWrongDeviceClassIsRefused(t *testing.T) {
 	existing := []client.Object{
 		testWorker("worker-1"),
 		testDeploymentStorageCluster(
-			testDeploymentCluster, simplyblockv1alpha2.StorageClusterDeviceClassNVMe),
+			simplyblockv1alpha2.StorageClusterDeviceClassNVMe),
 	}
 
 	mustDeny(t, approve(t, existing, withBlockDevices(grows(testConfig(), testDeploymentCluster))),
@@ -262,7 +272,7 @@ func TestApprovingAGrowthDocumentOfTheRightDeviceClassIsAdmitted(t *testing.T) {
 	existing := []client.Object{
 		testWorker("worker-1"),
 		testDeploymentStorageCluster(
-			testDeploymentCluster, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock),
+			simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock),
 	}
 
 	mustAllow(t, approve(t, existing,
@@ -274,7 +284,7 @@ func TestApprovingAGrowthDocumentOfTheRightDeviceClassIsAdmitted(t *testing.T) {
 func TestAGrowthDocumentReadsAnUnstatedClassAsNVMe(t *testing.T) {
 	existing := []client.Object{
 		testWorker("worker-1"),
-		testDeploymentStorageCluster(testDeploymentCluster, ""),
+		testDeploymentStorageCluster(""),
 	}
 
 	mustAllow(t, approve(t, existing, grows(testConfig(), testDeploymentCluster)))
@@ -287,17 +297,17 @@ func TestAGrowthDocumentReadsAnUnstatedClassAsNVMe(t *testing.T) {
 // document reporting a deployment that never happened.
 func TestApprovingASecondCreateOfTheSameClusterIsRefused(t *testing.T) {
 	other := approved(testConfig())
-	other.Name = "rack-two"
+	other.Name = testSecondCluster
 
 	mustDeny(t, approve(t, []client.Object{testWorker("worker-1"), other}, testConfig()),
-		"rack-two")
+		testSecondCluster)
 }
 
 // An unapproved document naming the same cluster is not an owner. It is a draft,
 // and whichever of the two is approved first becomes the owner.
 func TestADraftNamingTheSameClusterDoesNotBlockAnApproval(t *testing.T) {
 	other := testConfig()
-	other.Name = "rack-two"
+	other.Name = testSecondCluster
 
 	mustAllow(t, approve(t, []client.Object{testWorker("worker-1"), other}, testConfig()))
 }
@@ -306,11 +316,11 @@ func TestADraftNamingTheSameClusterDoesNotBlockAnApproval(t *testing.T) {
 // cluster is the design rather than a conflict (§6).
 func TestASecondGrowthDocumentIsAdmitted(t *testing.T) {
 	other := approved(grows(testConfig(), testDeploymentCluster))
-	other.Name = "rack-two"
+	other.Name = testSecondCluster
 
 	existing := []client.Object{
 		testWorker("worker-1"),
-		testDeploymentStorageCluster(testDeploymentCluster, ""),
+		testDeploymentStorageCluster(""),
 		other,
 	}
 

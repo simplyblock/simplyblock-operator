@@ -265,7 +265,7 @@ func (r *StorageNodeOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, current)
+		return r.unwind(ctx, ops, machine, current)
 	}
 
 	// The cluster gate is not the same as the lock. A node operation runs inside
@@ -395,9 +395,15 @@ func (r *StorageNodeOpsReconciler) nextStep(
 // so there is nothing to unwind and the operation is what finishes the relocation
 // (§9).
 func (r *StorageNodeOpsReconciler) unwind(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, current step,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	machine *statemachine.Machine[step],
+	current step,
 ) (ctrl.Result, error) {
-	if !abortable(current) {
+	// The machine is asked rather than a table beside it, and it is asked rather
+	// than the graphs, because it was built for this operation's action: a step
+	// two actions share can be abortable in one of them.
+	if !machine.CanAbort() {
 		// Not a failure of the operation: it carries on. What the user asked for
 		// cannot be done, and saying so is the whole of the response.
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
