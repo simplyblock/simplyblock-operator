@@ -10,22 +10,20 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/simplyblock/atlas/kube"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -66,6 +64,10 @@ type PersistentVolumeClaimReconciler struct {
 	Scheme    *runtime.Scheme
 	Recorder  events.EventRecorder
 	apiClient *webapi.Client
+
+	// Mover raises a pinned volume's move as whichever kind this deployment
+	// runs. Unset means the kind this API group documents.
+	Mover volumemigration.Mover
 }
 
 func (r *PersistentVolumeClaimReconciler) Reconcile(
@@ -176,54 +178,52 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	return r.setApplied(ctx, pvc, desired)
 }
 
-// createMigration creates a VolumeMigration for the PV/target in the owning
-// StorageCluster's namespace. The name is deterministic in (pv, target) so a
-// retried reconcile is idempotent (AlreadyExists is tolerated).
+// createMigration raises the move of a pinned volume onto its requested node,
+// as whichever kind this deployment runs.
+//
+// The name is deterministic in (volume, target) so a retried reconcile is
+// idempotent, and the move is raised in the owning StorageCluster's namespace:
+// a claim may live in another namespace than its cluster, and a cross-namespace
+// owner reference is invalid.
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
 	cluster *simplyblockv1alpha2.StorageCluster,
 	pvName, target string,
 ) error {
-	vm := &simplyblockv1alpha1.VolumeMigration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pinMigrationName(pvName, target),
-			Namespace: cluster.Namespace,
-			Labels:    map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)},
-		},
-		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         pvName,
-			TargetNodeUUID: target,
-		},
-	}
-	// Own by the StorageCluster (same namespace) so the migration is garbage-
-	// collected with the cluster. The PVC cannot be the owner: it may live in a
-	// different namespace, and a cross-namespace owner reference is invalid. A
-	// plain owner reference (not a controller reference) avoids setting
-	// blockOwnerDeletion, which would require storageclusters/finalizers access.
-	if err := controllerutil.SetOwnerReference(cluster, vm, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on VolumeMigration: %w", err)
-	}
-	if err := r.Create(ctx, vm); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create VolumeMigration %q: %w", vm.Name, err)
-	}
-	return nil
+	return r.mover().Start(ctx, volumemigration.MoveRequest{
+		Name:           pinMigrationName(pvName, target),
+		Namespace:      cluster.Namespace,
+		PVName:         pvName,
+		TargetNodeUUID: target,
+		Labels:         map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)},
+		Owner:          cluster,
+		OwnerKind:      "StorageCluster",
+		Scheme:         r.Scheme,
+	})
 }
 
-// hasActiveMigration reports whether a non-terminal pin-driven VolumeMigration
-// exists for the given PV.
+// mover is this controller's channel for raising a move, defaulted so a
+// reconciler built without one raises the kind this API group documents.
+func (r *PersistentVolumeClaimReconciler) mover() volumemigration.Mover {
+	if r.Mover != nil {
+		return r.Mover
+	}
+	return volumemigration.NewMover(r.Client, r.Scheme, false)
+}
+
+// hasActiveMigration reports whether a non-terminal pin-driven move exists for
+// the given volume.
 func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 	ctx context.Context,
 	namespace, pvName string,
 ) (bool, error) {
-	var list simplyblockv1alpha1.VolumeMigrationList
-	if err := r.List(ctx, &list,
-		client.InNamespace(namespace),
-		client.MatchingLabels{labelPinnedVolumePV: pinPVLabelValue(pvName)},
-	); err != nil {
-		return false, fmt.Errorf("list VolumeMigrations for PV %q: %w", pvName, err)
+	moves, err := r.mover().List(ctx, namespace,
+		map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)})
+	if err != nil {
+		return false, fmt.Errorf("list the moves of PV %q: %w", pvName, err)
 	}
-	for _, vm := range list.Items {
-		if !isTerminalMigrationPhase(vm.Status.Phase) {
+	for _, move := range moves {
+		if !move.Phase.Terminal() {
 			return true, nil
 		}
 	}
@@ -325,17 +325,6 @@ func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {
 		}
 	}
 	return false
-}
-
-func isTerminalMigrationPhase(phase simplyblockv1alpha1.VolumeMigrationPhase) bool {
-	switch phase {
-	case simplyblockv1alpha1.VolumeMigrationPhaseCompleted,
-		simplyblockv1alpha1.VolumeMigrationPhaseFailed,
-		simplyblockv1alpha1.VolumeMigrationPhaseAborted:
-		return true
-	default:
-		return false
-	}
 }
 
 // pinMigrationName is a deterministic, DNS-label-safe VolumeMigration name for a
