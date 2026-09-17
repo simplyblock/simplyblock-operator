@@ -111,7 +111,6 @@ storagenode:
   ubuntuHost: false
   enableCpuTopology: false
   enableDevicePlugin: true
-  skipKubeletConfiguration: false
   openShiftCluster: false
   reservedSystemCpu:
   multiCluster:
