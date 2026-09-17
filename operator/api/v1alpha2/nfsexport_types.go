@@ -187,6 +187,14 @@ type NFSExportStatus struct {
 	// +optional
 	SubPhase NFSExportSubPhase `json:"subPhase,omitempty"`
 
+	// PhaseDeadline is when the current phase must be given up on. The phase
+	// machine carries a per-state bound, and the bound has to outlive the
+	// process the way the phase itself does: an operator restarted mid-assembly
+	// would otherwise grant the phase a fresh deadline on every pass and never
+	// time out.
+	// +optional
+	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
+
 	// StorageNodeRef names the StorageNode currently acting as MDS. It is
 	// operator-owned and is the serialization point for the one-MDS-per-export
 	// invariant: no second host is a candidate until this field is rewritten.

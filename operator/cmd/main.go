@@ -391,6 +391,17 @@ func main() {
 	} else {
 		nodeCapacity = provider
 	}
+	// The export controller is wired without an Assembler: the csi-link export
+	// service that reaches a host is the next milestone, and until it exists an
+	// export binds a host and then waits, visibly, rather than failing.
+	if err := (&controller.NFSExportReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("nfsexport-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
+		os.Exit(1)
+	}
 	if err := (&controller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
