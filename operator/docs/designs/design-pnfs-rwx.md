@@ -33,25 +33,26 @@ Updated as work lands, so the document tracks the code rather than describing an
 intention. "Validated" means measured on a live cluster, with the evidence in
 §Bring-up Findings.
 
-| Item                                                         | Section     | Status                                       |
-|--------------------------------------------------------------|-------------|----------------------------------------------|
-| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup          | §10.1, P0-5 | **Merged path** — operator PR #546 in review |
-| pNFS volume handle (`nfs:` four-part form)                   | §11         | **Merged path** — operator PR #547 in review |
-| `ptpl_file` on the lvol namespace                            | §6.2, P0-1  | **Fix in review** — sbcli PR #1375           |
-| Direct block I/O end to end                                  | §3, §4      | **Validated**                                |
-| Many exports on one MDS host                                 | §8.4        | **Validated**                                |
-| Many clients on one export, coherent                         | §4, FR-7    | **Validated**                                |
-| Fencing: preempt, and writes refused off-registry            | §13.2, FM-1 | **Validated**                                |
-| Service ClusterIP reached by a kernel mount                  | §13.3, Q3   | **Validated** on stock kube-proxy            |
-| `fsid=<uuid>`, XFS directly on the LUN                       | §8.2        | **Validated**                                |
-| `NFSExport` CRD and types                                    | §7.1        | In progress                                  |
-| `NFSExportReconciler`                                        | §14.2       | Not started                                  |
-| Export service over csi-link (`CreateExport`/`DeleteExport`) | §6.4, §8    | Not started                                  |
-| CSI controller RWX path                                      | §9          | Not started                                  |
-| CSI node client mount and `nvme-eui.` alias                  | §10         | Not started                                  |
-| PR key release on unstage, and a reaper for dead nodes       | §10.3, §13  | Not started — **new, see findings**          |
-| Reservation handover on migration                            | §13.4       | Not started — **new, see findings**          |
-| Chart, RBAC, `SimplyblockDriver` wiring                      | §14         | Not started                                  |
+| Item                                                   | Section     | Status                                        |
+|--------------------------------------------------------|-------------|-----------------------------------------------|
+| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5 | **Merged path** — operator PR #546 in review  |
+| pNFS volume handle (`nfs:` four-part form)             | §11         | **Merged path** — operator PR #547 in review  |
+| `ptpl_file` on the lvol namespace                      | §6.2, P0-1  | **Fix in review** — sbcli PR #1375            |
+| Direct block I/O end to end                            | §3, §4      | **Validated**                                 |
+| Many exports on one MDS host                           | §8.4        | **Validated**                                 |
+| Many clients on one export, coherent                   | §4, FR-7    | **Validated**                                 |
+| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1 | **Validated**                                 |
+| Service ClusterIP reached by a kernel mount            | §13.3, Q3   | **Validated** on stock kube-proxy             |
+| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2        | **Validated**                                 |
+| `NFSExport` CRD and types                              | §7.1        | **Done** -- v1alpha2                          |
+| `NFSExportReconciler`                                  | §14.2       | **Done** -- phase graph, selection, finalizer |
+| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3  | **Done** -- idempotent, unit-tested           |
+| Carrying that over csi-link                            | §6.4        | In progress                                   |
+| CSI controller RWX path                                | §9          | Not started                                   |
+| CSI node client mount and `nvme-eui.` alias            | §10         | Not started                                   |
+| PR key release on unstage, and a reaper for dead nodes | §10.3, §13  | Not started — **new, see findings**           |
+| Reservation handover on migration                      | §13.4       | Not started — **new, see findings**           |
+| Chart, RBAC, `SimplyblockDriver` wiring                | §14         | Not started                                   |
 
 ### Where the implementation departs from this document
 
