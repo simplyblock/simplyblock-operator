@@ -29,7 +29,8 @@ import (
 func NormalizedHandle(
 	field lvol.VolumeHandle, annotations map[string]string,
 ) (lvol.Normalized, bool) {
-	return lvol.NormalizeHandle(field, lvol.VolumeHandle(annotations[AnnoVolumeHandle]))
+	annotated, _ := KeyVolumeHandle.Get(annotations)
+	return lvol.NormalizeHandle(field, lvol.VolumeHandle(annotated))
 }
 
 // NormalizedVolumeHandleFromPV reads a PersistentVolume's handle with the

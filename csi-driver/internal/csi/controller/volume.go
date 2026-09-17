@@ -140,7 +140,8 @@ func (cs *Server) CreateVolume(
 	params := req.GetParameters()
 	pvcName, pvcNamespace := params[csicommon.CSIStorageNameKey], params[csicommon.CSIStorageNamespaceKey]
 	if pvcName != "" && pvcNamespace != "" {
-		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
+		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace,
+			kube.Spellings(kube.KeyPlacementHint)...); rerr != nil {
 			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
 		}
 	}
@@ -235,10 +236,11 @@ func (cs *Server) prepareCreateVolumeReq(
 	}
 
 	// host_id priority: selected-storage-node (hard pin) → placement-hint (one-shot
-	// hint from the placement webhook) → host-id and its deprecated form (legacy
-	// fallback for pre-existing PVCs).
-	hostID := pvcAnnotation(pvcAnns,
-		kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
+	// hint from the placement webhook) → host-id (legacy fallback for pre-existing
+	// PVCs). Each is expanded into every prefix it has been written under, since a
+	// claim outlives the operator that annotated it (design-crd-model.md §9.4).
+	hostID := pvcAnnotation(pvcAnns, kube.Spellings(
+		kube.KeySelectedStorageNode, kube.KeyPlacementHint, kube.KeyHostID)...)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 

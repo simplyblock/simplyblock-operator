@@ -85,7 +85,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	// setApplied normalizes those legacy annotations into selected-storage-node
 	// when it records the applied target, so the annotation state converges.
 	desired := kube.PinnedNode(pvc.Annotations)
-	applied := pvc.Annotations[kube.AnnoSelectedStorageNodeApplied]
+	applied, _ := kube.KeySelectedStorageNodeApplied.Get(pvc.Annotations)
 
 	// Strict change-diff gate: nothing to do unless the pinned target changed.
 	if desired == applied {
@@ -257,7 +257,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	pvc *corev1.PersistentVolumeClaim,
 	target string,
 ) (ctrl.Result, error) {
-	if pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] == target {
+	if rejected, _ := kube.KeySelectedStorageNodeRejected.Get(pvc.Annotations); rejected == target {
 		return ctrl.Result{}, nil
 	}
 	r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "InvalidPinTarget", "InvalidPinTarget",
@@ -266,7 +266,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	if pvc.Annotations == nil {
 		pvc.Annotations = map[string]string{}
 	}
-	pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] = target
+	pvc.Annotations = kube.KeySelectedStorageNodeRejected.Set(pvc.Annotations, target)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record rejected pin target: %w", err)
 	}
@@ -285,18 +285,18 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 		pvc.Annotations = map[string]string{}
 	}
 	if value == "" {
-		delete(pvc.Annotations, kube.AnnoSelectedStorageNodeApplied)
+		kube.KeySelectedStorageNodeApplied.Delete(pvc.Annotations)
 	} else {
-		pvc.Annotations[kube.AnnoSelectedStorageNodeApplied] = value
+		pvc.Annotations = kube.KeySelectedStorageNodeApplied.Set(pvc.Annotations, value)
 		// Normalize legacy pin annotations into the canonical one so the state
 		// converges: a pre-existing host-id pin (which drove this reconcile via
 		// kube.PinnedNode) is rewritten to selected-storage-node and the legacy
 		// forms are dropped.
-		pvc.Annotations[kube.AnnoSelectedStorageNode] = value
-		delete(pvc.Annotations, kube.AnnoHostID)
+		pvc.Annotations = kube.KeySelectedStorageNode.Set(pvc.Annotations, value)
+		kube.KeyHostID.Delete(pvc.Annotations)
 		delete(pvc.Annotations, kube.DeprecatedAnnoHostID)
 	}
-	delete(pvc.Annotations, kube.AnnoSelectedStorageNodeRejected)
+	kube.KeySelectedStorageNodeRejected.Delete(pvc.Annotations)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record applied pin target: %w", err)
 	}
