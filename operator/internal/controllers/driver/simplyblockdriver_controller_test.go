@@ -46,10 +46,10 @@ func requestFor(d *simplyblockv1alpha2.SimplyblockDriver) ctrl.Request {
 // The object set is complete: every kind the design lists, and nothing else.
 func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 	d := testDriver("simplyblock")
-	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t)}
+	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t), Snapshots: servingCluster}
 
 	counts := map[string]int{}
-	for _, obj := range r.desired(d, testImage) {
+	for _, obj := range desiredSet(t, r, d) {
 		switch obj.(type) {
 		case *corev1.ServiceAccount:
 			counts["sa"]++
@@ -88,9 +88,9 @@ func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 // alternate its contents.
 func TestTheCredentialsSecretIsNotOwnedHere(t *testing.T) {
 	d := testDriver("simplyblock")
-	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t)}
+	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t), Snapshots: servingCluster}
 
-	for _, obj := range r.desired(d, testImage) {
+	for _, obj := range desiredSet(t, r, d) {
 		if _, isSecret := obj.(*corev1.Secret); isSecret {
 			t.Errorf("the deployment claims Secret %s, which another controller writes", obj.GetName())
 		}
@@ -100,17 +100,34 @@ func TestTheCredentialsSecretIsNotOwnedHere(t *testing.T) {
 // U-37: the snapshot class is in the set only when the deployment includes
 // snapshot support.
 func TestSnapshotClassFollowsTheToggle(t *testing.T) {
-	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t)}
+	r := &SimplyblockDriverReconciler{Scheme: reconcilerScheme(t), Snapshots: servingCluster}
 
 	enabled := testDriver("simplyblock")
 	disabled := testDriver("simplyblock")
 	off := false
 	disabled.Spec.EnableVolumeSnapshots = &off
 
-	if len(r.desired(enabled, testImage))-len(r.desired(disabled, testImage)) != 1 {
-		t.Errorf("the toggle changed the object set by %d, want exactly the snapshot class",
-			len(r.desired(enabled, testImage))-len(r.desired(disabled, testImage)))
+	if got := len(desiredSet(t, r, enabled)) - len(desiredSet(t, r, disabled)); got != 1 {
+		t.Errorf("the toggle changed the object set by %d, want exactly the snapshot class", got)
 	}
+}
+
+// servingCluster is a cluster that serves the snapshot API, which is what every
+// cluster this operator adopts is: the chart installs the kinds. The cases about
+// a cluster that does not are in registration_test.go.
+var servingCluster = fixedSnapshotAPI{served: true}
+
+// desiredSet is the object set, with the error a detection failure would carry.
+func desiredSet(
+	t *testing.T, r *SimplyblockDriverReconciler, d *simplyblockv1alpha2.SimplyblockDriver,
+) []client.Object {
+	t.Helper()
+
+	objects, err := r.desired(t.Context(), d, testImage)
+	if err != nil {
+		t.Fatalf("building the object set: %v", err)
+	}
+	return objects
 }
 
 // U-03 and U-62: every object comes out owned, by whichever mechanism its scope
@@ -118,9 +135,9 @@ func TestSnapshotClassFollowsTheToggle(t *testing.T) {
 func TestEveryAppliedObjectIsOwned(t *testing.T) {
 	d := testDriver("simplyblock")
 	scheme := reconcilerScheme(t)
-	r := &SimplyblockDriverReconciler{Scheme: scheme}
+	r := &SimplyblockDriverReconciler{Scheme: scheme, Snapshots: servingCluster}
 
-	for _, obj := range r.desired(d, testImage) {
+	for _, obj := range desiredSet(t, r, d) {
 		if err := setOwnership(d, obj, scheme); err != nil {
 			t.Fatalf("%T %s: %v", obj, obj.GetName(), err)
 		}
@@ -335,7 +352,7 @@ func TestAnEmptyHolderIsNotADuplicate(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
-	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme, Snapshots: servingCluster}
 
 	if _, err := r.Reconcile(context.Background(), requestFor(d)); err != nil {
 		t.Fatalf("reconcile: %v", err)

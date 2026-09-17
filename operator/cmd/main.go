@@ -774,10 +774,16 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
+	// Whether the cluster serves the snapshot API decides both whether a
+	// VolumeSnapshotClass is applied and what status.snapshotSupport records
+	// (design-simplyblockdriver.md §4.1). The discovery client is the same one
+	// the discovery run uses; a driver reconcile without it refuses rather than
+	// guessing, because guessing either way breaks a cluster in one direction.
 	if err := (&driver.SimplyblockDriverReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("simplyblockdriver-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
+		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)

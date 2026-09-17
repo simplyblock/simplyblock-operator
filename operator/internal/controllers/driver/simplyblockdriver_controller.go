@@ -58,6 +58,7 @@ const (
 	reasonDriverAdopted     = "DriverAdopted"
 	reasonAdoptionRefused   = "AdoptionRefused"
 	reasonNoImage           = "NoImage"
+	reasonSnapshotsEnabled  = "SnapshotsEnabled"
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch;create;update;patch;delete
@@ -74,6 +75,11 @@ type SimplyblockDriverReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+
+	// Snapshots answers whether the cluster serves the snapshot API, which
+	// decides both whether a VolumeSnapshotClass is applied and what
+	// status.snapshotSupport records (§4.1).
+	Snapshots SnapshotAPI
 }
 
 func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -178,6 +184,10 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	if err := r.recordSnapshotSupport(ctx, &d); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	h, err := r.observe(ctx, &d)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -255,8 +265,8 @@ func (r *SimplyblockDriverReconciler) event(
 // the accounts and configuration first, then the RBAC that names the accounts,
 // then the workloads that mount the configuration, and the registration last.
 func (r *SimplyblockDriverReconciler) desired(
-	d *simplyblockv1alpha2.SimplyblockDriver, image string,
-) []client.Object {
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver, image string,
+) ([]client.Object, error) {
 	objects := make([]client.Object, 0, 18)
 
 	for _, sa := range serviceAccounts(d) {
@@ -272,10 +282,21 @@ func (r *SimplyblockDriverReconciler) desired(
 		objects = append(objects, crb)
 	}
 	objects = append(objects, nodeDaemonSet(d, image), controllerStatefulSet(d, image), csiDriver(d))
+
+	// The class is this deployment's and is applied wherever the kinds exist,
+	// but only where they exist: a cluster serving no snapshot API has no kind
+	// for the object, so including it unconditionally fails the apply of the
+	// whole set on that one object rather than skipping it (§4.1).
 	if snapshotsEnabled(d) {
-		objects = append(objects, volumeSnapshotClass(d))
+		served, err := r.snapshotAPIServed(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if served {
+			objects = append(objects, volumeSnapshotClass(d))
+		}
 	}
-	return objects
+	return objects, nil
 }
 
 // TODO(simplyblockdriver): verify the handover before stripping the release's
@@ -297,7 +318,11 @@ func (r *SimplyblockDriverReconciler) apply(
 	if err != nil {
 		return false, err
 	}
-	for _, obj := range r.desired(d, image) {
+	objects, err := r.desired(ctx, d, image)
+	if err != nil {
+		return false, err
+	}
+	for _, obj := range objects {
 		fromHelm, existed, err := r.inspectExisting(ctx, obj)
 		if err != nil {
 			return false, err
@@ -423,6 +448,40 @@ func (r *SimplyblockDriverReconciler) recordOrigin(
 	})
 }
 
+// recordSnapshotSupport writes status.snapshotSupport, and emits §6.1's event
+// the first time it becomes known.
+//
+// It is written once and not maintained. The field records what happened when
+// this deployment came up, which is what an administrator reading it wants to
+// know, and a cluster that later loses the snapshot API has a problem this
+// field is not the place to report.
+func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) error {
+	origin, err := r.snapshotOrigin(ctx, d)
+	if err != nil {
+		return err
+	}
+	if origin == "" || origin == d.Status.SnapshotSupport {
+		return nil
+	}
+
+	r.event(d, corev1.EventTypeNormal, reasonSnapshotsEnabled,
+		fmt.Sprintf("volume snapshots are available through %s, on a cluster that %s",
+			names(d).snapshotClass, snapshotOriginPhrase(origin)))
+	return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+		status.SnapshotSupport = origin
+	})
+}
+
+// snapshotOriginPhrase is how an event says which of the two happened.
+func snapshotOriginPhrase(origin simplyblockv1alpha2.SnapshotSupportOrigin) string {
+	if origin == simplyblockv1alpha2.SnapshotSupportOriginInstalled {
+		return "had no snapshot support until this deployment installed it"
+	}
+	return "was already serving the snapshot API"
+}
+
 // applyConfiguration turns a built object into the shape a server-side apply
 // takes. The apiVersion and kind have to be on the wire for an apply, and a
 // typed object built in Go carries an empty TypeMeta, so the kind is resolved
@@ -498,22 +557,24 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 // cluster-scoped half of the object set, and the snapshot class whether or not
 // the toggle currently asks for it. A class applied while snapshots were
 // enabled is one nothing else would ever remove.
+//
+// It is built here rather than filtered out of desired, because the two answer
+// different questions. desired is what to apply now, and on a cluster serving no
+// snapshot API that excludes the class. This is what might exist, which includes
+// a class applied before the toggle was turned off or before the kinds were
+// removed from under it — and a deletion that consulted the live API would skip
+// exactly the object nothing else removes.
 func (r *SimplyblockDriverReconciler) ownedClusterScoped(
 	d *simplyblockv1alpha2.SimplyblockDriver,
 ) []client.Object {
-	// The image does not matter here: the cluster-scoped objects do not carry
-	// one, and a deployment whose image cannot be resolved still has to be
-	// deletable.
-	var out []client.Object
-	for _, obj := range r.desired(d, "") {
-		if obj.GetNamespace() == "" {
-			out = append(out, obj)
-		}
+	out := make([]client.Object, 0, 12)
+	for _, cr := range clusterRoles(d) {
+		out = append(out, cr)
 	}
-	if !snapshotsEnabled(d) {
-		out = append(out, volumeSnapshotClass(d))
+	for _, crb := range clusterRoleBindings(d) {
+		out = append(out, crb)
 	}
-	return out
+	return append(out, csiDriver(d), volumeSnapshotClass(d))
 }
 
 // deploymentHolder is the object that owns the deployment: the oldest in the

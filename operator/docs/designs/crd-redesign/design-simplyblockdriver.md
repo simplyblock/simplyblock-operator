@@ -365,9 +365,31 @@ the API is served the operator adds nothing. Where it is absent the operator
 applies the CRDs and a controller, which is what the chart does for the CRDs alone
 today (§8).
 
+The detection is a discovery question rather than a search for an object, and
+the answer is cached for a window shorter than the driver's resync, so a cluster
+that gains the snapshot API is noticed on a reconcile rather than on the one
+after it. An answer that is neither yes nor no fails the reconcile instead of
+being guessed at: guessing served applies a class the API server has no kind
+for, and guessing absent withdraws a class an adopted cluster is using.
+
+**The install half is not built.** The chart applies the CRDs and the controller
+today, and conditionally — its templates are guarded on
+`.Capabilities.APIVersions.Has`, which is the same rule stated here. What a
+chart cannot cover is an installation that is not a chart, or a release with
+`snapshotcontroller.create` false, and that is the case still open. It needs the
+upstream manifests carried in the operator's binary and an image for the
+controller that no field names, so `status.snapshotSupport` reaches `Detected`
+and not yet `Installed`.
+
 **The `VolumeSnapshotClass` for this driver is applied either way.** It names
 `spec.driverName` and belongs to this deployment, unlike the CRDs and the
 controller, which belong to the cluster.
+
+Either way means either origin, and not either cluster. A cluster serving no
+snapshot API has no kind for the object, so the class is built only where the
+kinds exist — an apply of a kind the API server does not serve fails the apply
+of the whole set on that one object, which takes the node plugin and the
+controller plugin down with a snapshot class nobody asked to be essential.
 
 **What the operator installs here it does not own.** The CRDs and the controller
 are cluster-scoped and shared, and a second CSI driver installed afterward
