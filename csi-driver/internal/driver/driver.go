@@ -70,8 +70,15 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
+		// MULTI_NODE_MULTI_WRITER is what a ReadWriteMany claim asks for, and
+		// it is served by a pNFS export rather than by sharing a block device.
+		// The other multi-node modes are deliberately absent: the controller
+		// refuses them rather than routing them here, so a read-only or
+		// single-writer multi-node claim does not silently get a filesystem
+		// several nodes can write.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 		}
 	)
 
