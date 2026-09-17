@@ -1,8 +1,8 @@
 # Design Document: API Upgrade and Resource-Model Migration
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-09-10  
+**Date:** 2026-09-10 (last updated 2026-09-17)  
 **Related designs:** [`design-crd-model.md`](design-crd-model.md) §9 is the migration inventory this document delivers  
 **Test Plan:** [`test-plan-api-upgrade.md`](../../tests/test-plan-api-upgrade.md), not yet written
 
@@ -333,10 +333,23 @@ annotation keyed `storage.simplyblock.io/conversion-<field>` on the way down and
 restores it on the way up, so a `v1alpha1` client that reads and writes an object
 back does not truncate it.
 
-`skipKubeletConfiguration` is the one field whose conversion is not a copy. It
-becomes `enableKubeletConfiguration`, which inverts the sense, so a mechanical
-rename produces the wrong behavior and the conversion negates the value in both
-directions (`design-crd-model.md` §9.6).
+`migrationEnabled` is the one field whose conversion is not a copy. It becomes
+`disableMigration`, which inverts the sense, so a mechanical rename produces the
+wrong behavior and the conversion negates a stated value in both directions while
+leaving an unstated one unstated, since both spellings mean the same thing when
+absent (`design-property-renames.md` §3.4).
+
+`enableDataRealignment` is the one field whose *default* changes direction, from
+on to off. An object that stated nothing is indistinguishable in the stored shape
+from one that deliberately turned the feature off, so the conversion writes the
+value into an annotation on every trip down and reads that annotation's absence on
+the way up as the mark of a client that only ever spoke `v1alpha1`.
+
+`skipKubeletConfiguration` is not a conversion at all. The toggle left the node
+kinds for `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is
+a different kind, so the registered field is a removal that stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.skipKubeletConfiguration` and
+restores from it (`design-storagenode.md` §15.1).
 
 ### 6.3 What Conversion Can and Cannot Carry
 
@@ -347,10 +360,10 @@ the upgrade needs two phases rather than a webhook.
 
 | Change                                                                             | Carried by         | Reason                                                                                                                                                                        |
 |------------------------------------------------------------------------------------|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Boolean toggle renames, eleven fields across five kinds                            | Conversion         | Same kind, both spellings expressible                                                                                                                                         |
+| Boolean toggle renames, eleven fields across five kinds                            | Conversion, partly | Same kind, both spellings expressible, except the kubelet toggle, which moves to another kind and is stashed rather than converted                                            |
 | Enum recasing, `StorageClusterOpsAction`, `StorageNodeOpsAction`, `MetricsBackend` | Conversion         | Same kind, value maps one to one                                                                                                                                              |
 | `status.subPhase` string becoming `status.step` object                             | Conversion         | The old string reads into `step.state`, leaving `step.deadline` absent, which restores as a step with no deadline, so an operation in flight across the upgrade keeps running |
-| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The field converts, but the value it should hold is only known once §20 has reparented the node                                                                               |
+| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The hub reads its parent off the controller owner reference, which §20 writes. A node converted before that carries an empty `spec.clusterRef` until the reparent has run     |
 | `BackupPolicy` becoming `StorageBackupPolicy`                                      | `migrate`          | A different kind is a different CRD, and no conversion webhook is invoked across kinds                                                                                        |
 | `VolumeMigration` absorbed into `PersistentVolumeOps`                              | `migrate`          | Different kind, and the target is cluster-scoped while the source is namespaced                                                                                               |
 | `BackupRestore` absorbed into `StorageBackupOps`                                   | `migrate`          | Different kind                                                                                                                                                                |
@@ -401,7 +414,7 @@ The Delta column cites the design that owns the change.
 |---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------|
 | `StorageCluster`    | `maxHugePagesSize` → `minHugePagesSize`, `hashicorpVaultSettings` → `kms.vault`, six toggles renamed, `backup.localEndpoint` → `endpoint`, and five spec removals. `design-storagecluster.md` §12 | `v1alpha1`, `v1alpha2` |
 | `StorageClusterOps` | `nodeRollingRestart` → `rollingRestart`, six action values recased, `status.triggered` removed. `design-storagecluster.md` §12                                                                    | `v1alpha1`, `v1alpha2` |
-| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, `skipKubeletConfiguration` inverted, four dead fields removed. `design-storagenode.md` §15.1    | `v1alpha1`, `v1alpha2` |
+| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, five dead fields stashed and removed. `design-storagenode.md` §15.1                             | `v1alpha1`, `v1alpha2` |
 | `StorageNodeOps`    | `storageNodeRef` → `nodeRef`, `drain` → `remove`, six action values recased, `status.triggered` removed. `design-storagenode.md` §15.2                                                            | `v1alpha1`, `v1alpha2` |
 | `StoragePool`       | `clusterName` → `clusterRef`, `dhchap` → `volumeDefaults.enableDHCHAP`, `encryption` and `replicate` renamed, `spec.action` and `spec.status` removed. `design-storagepool.md` §11                | `v1alpha1`, `v1alpha2` |
 | `ControlPlane`      | `spec.image` → `spec.source.managed.image`, and `status.phase` becomes a four-value typed phase. `design-controlplane.md` §11                                                                     | `v1alpha1`, `v1alpha2` |
@@ -436,6 +449,14 @@ registers `v1alpha2` as its only version: the ten additions of
 `StoragePoolOps`, `PersistentVolumeOps`, `StorageBackupOps`, and `NFSExport`,
 plus `StorageBackupPolicy`, which is `BackupPolicy` under its new name.
 
+Ten of the eleven are registered. `NFSExport` is specified on another branch
+([`design-pnfs-rwx.md`](../design-pnfs-rwx.md) §7.1) and is born with the work
+that owns it rather than with this migration, which changes nothing here: a kind
+with no CRD is a kind the installer does not apply. `VolumeGroupSnapshotOps`
+joined the group from [`design-consistency-groups.md`](../design-consistency-groups.md)
+after this document was written and is on the same footing as the ten: born at
+`v1alpha2`, with no conversion function and no place in the storage rewrite.
+
 None of them needs a conversion function, and none appears in the storage
 rewrite, because nothing was ever persisted at an older version of them.
 
@@ -445,10 +466,12 @@ installed before the controller that reconciles it exists, which is inert: a
 registered kind with no controller and no objects does nothing until the
 operator carrying its controller is running.
 
-### 7.4 The Staging
+### 7.4 What the Manifests Declare
 
-Each of the seven converting CRDs is installed with both versions served and
-`v1alpha1` retained as the storage version:
+There is one set of CRD manifests rather than a staged pair. Each of the seven
+converting CRDs serves both versions and stores `v1alpha2` from the moment it is
+applied, because `+kubebuilder:storageversion` sits on the `v1alpha2` type and
+controller-gen writes the flag from there:
 
 ```yaml
 # operator/config/crd/bases/storage.simplyblock.io_storageclusters.yaml
@@ -461,58 +484,76 @@ spec:
   versions:
     - name: v1alpha1
       served: true
-      storage: true
+      storage: false
     - name: v1alpha2
       served: true
-      storage: false
+      storage: true
   conversion:
     strategy: Webhook
     webhook:
       conversionReviewVersions: ["v1"]
       clientConfig:
         service:
-          namespace: simplyblock
+          namespace: simplyblock-operator-system
           name: simplyblock-operator-conversion-webhook-service
           path: /convert
           port: 443
 ```
 
-The `conversion` stanza is not written by hand. `operator/config/crd/kustomization.yaml`
-carries the `+kubebuilder:scaffold:crdkustomizewebhookpatch` marker and a
-commented `patches` block, and `operator/config/default/kustomization.yaml`
-carries `+kubebuilder:scaffold:crdkustomizecainjectionns` and
-`crdkustomizecainjectionname` with a comment stating that the markers exist so
-`kubebuilder create webhook --conversion` can wire up a future conversion
-webhook. That scaffold is the intended entry point, and the one deviation from
-what it generates is the CA bundle: the scaffold injects it with cert-manager's
-`cert-manager.io/inject-ca-from` annotation, and this repository provisions
-webhook certificates at runtime instead (§8).
+**One set of manifests is what a fresh install needs.** A cluster installed today
+has no `v1alpha1` object to convert, so it writes `v1alpha2` from the first write,
+converts nothing, and deploys no webhook. Holding storage at `v1alpha1` in the
+shipped manifests would make the ordinary install the exceptional case: every
+object would be stored in a version nothing reads, behind a webhook that exists
+only for upgrades.
 
-**The patch is applied per CRD and not to the whole `crd/bases` directory.** Ten
-of the seventeen keep `strategy: None`, and a `conversion` stanza pointing at a
-webhook on a CRD with one version is a dependency on a Deployment that has no
-reason to exist for that kind, which is what §27 eventually removes.
+**The `conversion` stanza is written into the base rather than patched over it.**
+`operator/hack/apply-conversion-webhook.sh` runs after controller-gen, which
+regenerates each base from the Go types and has no marker for `spec.conversion`,
+and writes the stanza into every CRD named by
+`operator/config/crd/converted-kinds.txt`. That file is the single list three
+consumers have to agree on (the script, the webhook registration in
+`internal/webhook/conversion.go`, and the CA injection in
+`internal/webhook/cert.go`), and `TestConvertedKindsMatchTheManifestList` asserts
+two of them against each other. A Kustomize patch would reach `make install` and
+the installer and miss the chart, which copies `config/crd/bases` verbatim into
+its own `crds/` directory and does not template it, and the chart is what
+installs these CRDs on a cluster.
 
-The staging exists so that five things can fail separately:
+**The ten single-version CRDs keep `strategy: None`.** A `conversion` stanza on a
+kind with one version is a dependency on a Deployment that has no reason to exist
+for it, which is what §28 eventually removes for the seven.
+
+**The stanza ships pointing at a Service the chart does not deploy, and the
+namespace in it is a default rather than a fact.** A CRD is cluster-scoped and
+lands in `crds/`, so the namespace cannot be templated, and the operator patches
+the service reference and the CA bundle together at runtime because it is the only
+party that knows which namespace it is running in. Leaving the strategy at `None`
+until the operator raises it is the worse trade: under `None` the API server
+answers a `v1alpha2` read of a stored `v1alpha1` object by relabeling the
+apiVersion and pruning every field the new schema does not know, which is silently
+wrong data rather than a failed read.
+
+Five things still fail separately, and what separates them is ordering rather than
+a held flag:
 
 1. Introducing the new API.
 2. Proving conversion works.
 3. Upgrading the operator.
 4. Migrating the application resource model.
-5. Changing the persisted storage representation.
+5. Changing the persisted representation of each object.
 
-Once the new operator is verified and the application-level migration has run,
-storage switches on those same seven:
+§9.1 is that order. The conversion webhook is deployed, awaited, and smoke-tested
+against a real object before `apply-crds` runs, so there is something to convert
+with at the moment storage moves. The operator upgrade follows the CRDs, and the
+resource-model migration follows the operator.
 
-```yaml
-versions:
-  - name: v1alpha1
-    served: true
-    storage: false
-  - name: v1alpha2
-    served: true
-    storage: true
-```
+**The apply moves storage, and it does not move the objects.** The flag decides
+what a write encodes, so an object untouched since the apply stays in the
+`v1alpha1` representation, is converted up on every read, and keeps
+`.status.storedVersions` listing `v1alpha1`. §24 is the rewrite that drains it,
+and until that has run an upgraded cluster is one where the storage version and
+the stored representations disagree.
 
 `v1alpha1` becomes `served: false` on the seven under §28's conditions. Its
 readers are the operator's own reconcilers and webhooks under
@@ -678,9 +719,9 @@ The smoke test verifies that:
 - The conversion webhook is reachable.
 - Conversion succeeds for each of the seven converting kinds that has at least
   one object (§7.2).
-- The fields whose conversion is not a copy are correct, which means at minimum
-  a recased action enum, a renamed boolean toggle, and the.
-  `skipKubeletConfiguration` inversion (§6.2).
+- The fields whose conversion is not a copy are correct, which means at minimum a
+  recased action enum, a renamed boolean toggle, the `migrationEnabled` inversion,
+  and a field the hub removed reading back from its stash (§6.2).
 - A `v1alpha2` read followed by a `v1alpha1` read returns the original
   representation.
 
@@ -913,10 +954,9 @@ has meant until now, so `upgrade` says so in its closing report.
 helm upgrade <release> helm-charts/charts/simplyblock-operator
 ```
 
-The chart carries the same field names the API does, so it moves with the API.
-`values.yaml` holds `skipKubeletConfiguration` under the storage-node settings,
-and `multiCluster.enable` is a spelling that exists only there. Two consequences
-follow.
+The chart carries the same field names the API does, so it moves with the API,
+and it carries spellings of its own that name no API field at all, of which
+`multiCluster.enable` is one. Two consequences follow.
 
 **A user's existing values file may not validate against the new chart.**
 `helm-charts/charts/simplyblock-operator/values.schema.json` sets
@@ -1836,19 +1876,24 @@ process has to stay alive for the migration to be recoverable.
 
 ## 24. Storage-Version Migration
 
-Changing the storage version is separate from application-level migration. For
-each CRD:
+Draining the old storage representation is separate from application-level
+migration, and by the time this stage runs the storage version has already moved:
+`apply-crds` installed manifests that declare `v1alpha2` as storage (§7.4).
+
+What the flag did not do is touch what is already in etcd. Objects that have not
+been written since the apply still exist in the old representation, and
+`.status.storedVersions` still lists `v1alpha1`:
 
 ```text
-v1alpha1 storage=true      v1alpha1 storage=false
-v1alpha2 storage=false  →  v1alpha2 storage=true
+CRD:      v1alpha1 storage=false, v1alpha2 storage=true
+etcd:     object A encoded v1alpha1   ← until something writes it
+          object B encoded v1alpha2   ← written since the apply
+storedVersions: ["v1alpha1", "v1alpha2"]
 ```
 
-After the switch, objects that have not been written since still exist in etcd
-in the old representation, and `.status.storedVersions` still lists
-`v1alpha1`. Until that list holds `v1alpha2` alone, `v1alpha1` cannot be
-removed from the CRD, because the API server refuses to drop a version it still
-has stored objects in.
+Until that list holds `v1alpha2` alone, `v1alpha1` cannot be removed from the
+CRD, because the API server refuses to drop a version it still has stored
+objects in.
 
 **The migration rewrites the objects itself.** The Kubernetes
 `StorageVersionMigration` API is not used: it is served at
@@ -1860,7 +1905,8 @@ alpha feature gate is not a migration path.
 
 The rewrite is:
 
-1. Switch the CRD to the new storage version.
+1. Confirm the CRD stores `v1alpha2`, which `verify-crd-versions` already
+   established and this stage re-reads rather than assumes.
 2. List every object of that kind, in every namespace.
 3. Write each object back unchanged.
 4. Verify the write.
@@ -2394,8 +2440,10 @@ is proven red before the fix.
 
 Every field mapping, renamed field, moved field, default value, removed field,
 enum change, type change, nested object, list, map, and nil or empty value.
-`skipKubeletConfiguration` gets its own test for the inversion, and each of the
-three recased action enums gets a test per value.
+`migrationEnabled` gets its own test for the inversion, `enableDataRealignment`
+one for the default that changes direction, each field the hub removed one for the
+stash it round-trips through, and each of the three recased action enums a test
+per value.
 
 ### 30.2 Round-Trip Tests
 

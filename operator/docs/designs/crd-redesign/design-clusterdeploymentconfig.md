@@ -1,8 +1,8 @@
 # Design Document: The Deployment Config and the Operator's Own Operations
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-08)  
+**Date:** 2026-08-29 (last updated 2026-09-17)  
 **Target Release:** simplyblock 26.4  
 **Test Plan:** [`tests/test-plan-clusterdeploymentconfig.md`](../../tests/test-plan-clusterdeploymentconfig.md)  
 **Example:** [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml)  
@@ -125,7 +125,7 @@ corrects it, approves it, and the operator expands it.
 
 ## 3. ClusterDeploymentConfig: API
 
-Declared in `operator/api/v1alpha1/clusterdeploymentconfig_types.go`, short name
+Declared in `operator/api/v1alpha2/clusterdeploymentconfig_types.go`, short name
 `cdc`. The type is Appendix A and a filled-in document is
 [`assets/example-cluster-config.yaml`](assets/example-cluster-config.yaml). What
 follows quotes the field an argument turns on and no more.
@@ -136,7 +136,7 @@ The document has three parts: what the deployment is, what cluster to make, and
 which nodes to make it out of.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
   name: production
@@ -275,15 +275,28 @@ document is a draft and a reviewer edits it freely. After approval it is the
 record of what was deployed, and editing it would describe a deployment that
 never happened.
 
-That is one CEL rule on the spec rather than a marker per field:
+That is one CEL rule on the spec rather than a marker per field, and a second
+rule stops the gate itself from being closed again:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 ```
 
 **`spec.approved` itself is immutable once true.** Un-approving something already
 expanded does not un-expand it, and a field that can be toggled back invites the
 belief that it does.
+
+**The field is defaulted and serialized rather than omitted when false, and the
+`has()` guard is why both rules work.** A bool omitted when false is a key the API
+server never stores, so a rule reading `oldSelf.approved` on a document that has
+never been approved fails to evaluate rather than reading `false`, and a rule that
+fails to evaluate denies the request. Spelled without the guard, the immutability
+rule refuses every approval there could ever be. `+kubebuilder:default=false` and
+the absent `omitempty` put the key in the stored object, and the guard carries the
+documents written before the default existed. It is also what a reviewer needs:
+the gate they are being asked to open has to be visible in the document rather
+than implied by its absence.
 
 Both rules are restated by the validating webhook of §5, which is what turns a
 rejection naming a CEL rule into one naming the field that was edited.
@@ -362,6 +375,10 @@ an immutable document, and no mechanism below the reviewer prevents that.
   CreatingNodes     ← one StorageNode per worker per slot
     │
     ▼
+  Activating        ← wait for this document's own nodes, then ask for the
+                      cluster to be activated
+    │
+    ▼
   phase: Expanded
 ```
 
@@ -373,9 +390,16 @@ existing cluster writes nothing: the cluster's class already holds, and a docume
 whose groups disagree with it was rejected at approval (§5.1).
 
 **`CreatingNodes` resolves the document's shorthands as it writes.** Each node
-gets the cluster's sizing, its group's devices as one `config.deviceNames` list
-(§3.1), and the four distribution flags `spec.environment` stands for. Nothing on
-the node refers back to the config, which is what §4.3 means by owning nothing.
+gets the cluster's sizing and its group's devices as one `config.deviceNames`
+list (§3.1). Nothing on the node refers back to the config, which is what §4.3
+means by the document owning no part of the deployment.
+
+**The distribution flags `spec.environment` stands for land on the cluster, not on
+each node.** They configure the storage-node workload, which is one DaemonSet for
+every node it schedules, so they are resolved once onto
+`StorageCluster.spec.storageNodes`
+([`design-storagenode.md`](design-storagenode.md) §5.1) rather than stamped node
+by node. §12 Q1 is the mapping.
 
 **`CreatingNodes` is the step that must be idempotent, and it is by construction.**
 A `StorageNode` is identified by `(clusterRef, workerNode, slot)`
@@ -383,22 +407,40 @@ A `StorageNode` is identified by `(clusterRef, workerNode, slot)`
 exists for the cluster and creates only the slots that do not. A crash part-way
 through creates the rest on the next pass and duplicates nothing.
 
-**The expansion does not wait for the nodes to come up.** It creates the objects
-and finishes. Provisioning them is the node controller's, it is bounded by
-`maxParallelNodeAdds`, and a document that stayed `Expanding` until a
-twenty-node fleet was online would be reporting the fleet's progress rather than
-its own.
+**`Activating` waits for this document's own nodes and then asks for the
+cluster.** A document knows how many nodes it made, so it knows when the
+deployment it describes is whole, and stopping at "the objects exist" would leave
+a cluster serving nothing behind a document reporting `Expanded`, with nothing
+saying that one more thing was required of anybody. The step holds while any node
+it created is still coming up, raises one `StorageClusterOps` activation when they
+are all Online, and completes when that operation does.
+
+**It waits for its own nodes and not for the fleet.** The set it watches is the
+one `CreatingNodes` wrote, so a document adding four nodes to a twenty-node
+cluster waits for four. Provisioning is still the node controller's and still
+bounded by `maxParallelNodeAdds`. What the document adds is the knowledge of which
+nodes are its own.
+
+**The activation is asked for once.** `Activating` is re-entered on every
+reconcile until the operation finishes, and the operation is named after the
+document rather than generated, so a second pass finds the one that exists rather
+than raising another.
 
 ### 4.3 Deletion
 
 **There is no finalizer, and that is deliberate.** Deleting a
-`ClusterDeploymentConfig` deletes a document. It owns nothing, nothing references
-it, and nothing reads it after expansion, so there is nothing to clean up and
-nothing to protect.
+`ClusterDeploymentConfig` deletes a document. Nothing references it and nothing
+reads it after expansion, so there is nothing to clean up.
 
-Specifically, it does **not** own the `StorageCluster` it created. An owner
-reference would make deleting the document delete the cluster and every volume in
-it, which is the opposite of ephemeral.
+Specifically, it does **not** own the `StorageCluster` it created, nor any
+`StorageNode`. An owner reference would make deleting the document delete the
+cluster and every volume in it, which is the opposite of ephemeral.
+
+**The one object it does own is the activation it raised.** The
+`StorageClusterOps` of §4.2 carries a controller reference to the document,
+because it is the document's own act rather than a lasting part of the deployment:
+an operation that has finished is a record of a request, and deleting the request
+with the document that made it leaves the cluster it activated untouched.
 
 ---
 
@@ -550,7 +592,7 @@ has data on those devices.
 
 ## 7. OperatorOps
 
-Declared in `operator/api/v1alpha1/operatorops_types.go`, short name `oops`, and
+Declared in `operator/api/v1alpha2/operatorops_types.go`, short name `oops`, and
 reconciled by `OperatorOpsReconciler` in
 `operator/internal/controllers/deployment/operatorops_controller.go`, beside the
 config its discovery action writes. The type is Appendix B.
@@ -890,14 +932,25 @@ piece left.
 
 ## 12. Open Questions
 
-**Q1: What each `KubernetesEnvironment` value resolves to.** §3.1 has
-`spec.environment` decide `enableKubeletConfiguration`, `enableCpuTopology`,
-`ubuntuHost`, and `openShiftCluster` on every node the expansion creates, and
-names `OpenShift` as the value a reader can already infer. `Vanilla`, `Rancher`,
-`K3s`, and `Talos` have no stated mapping. The table belongs in this document,
-because the expansion is what applies it, and writing it needs one answer per
-distribution about whether the kubelet is reconfigured and whether CPU topology
-is readable, which is a question for whoever has run simplyblock on each of them.
+**Q1 is settled and its number is retired rather than reused**, since it is cited
+from review history. §4.2 is where the answer went: the table below is what
+`spec.environment` resolves to, and the expansion writes it onto
+`StorageCluster.spec.storageNodes` rather than onto each node.
+
+| Environment                 | Kubelet configuration | CPU topology | OpenShift |
+|-----------------------------|-----------------------|--------------|-----------|
+| `OpenShift`                 | Applied               | Read         | Yes       |
+| `Vanilla`, `Rancher`, `K3s` | Applied               | Unset        | No        |
+| `Talos`                     | Not applied           | Unset        | No        |
+
+`Talos` is the row the shorthand exists for: it has no writable kubelet
+configuration and no package manager, so a node applies neither, and a deployment
+onto it that had to discover that field by field would discover it by failing.
+`OpenShift` states the kubelet flag rather than leaving it unset, because the
+renderer reads an unset flag as skipping the configuration and every OpenShift
+deployment this product has shipped configures it. `ubuntuHost` is not in the
+table: it describes the worker's host OS rather than the distribution running on
+it, so it stays a value a deployment states.
 
 ---
 
@@ -922,7 +975,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
 type ClusterDeploymentConfigStep string
 
 const (
@@ -930,6 +983,15 @@ const (
 	ClusterDeploymentConfigStepCreatingCluster ClusterDeploymentConfigStep = "CreatingCluster"
 	ClusterDeploymentConfigStepAwaitingCluster ClusterDeploymentConfigStep = "AwaitingCluster"
 	ClusterDeploymentConfigStepCreatingNodes   ClusterDeploymentConfigStep = "CreatingNodes"
+
+	// ClusterDeploymentConfigStepActivating waits for the nodes this document
+	// created and then asks for the cluster to be activated.
+	//
+	// The document knows how many nodes it made, so it knows when the deployment
+	// it describes is whole. Stopping at "the objects exist" would leave a
+	// cluster that serves nothing behind a document reporting Expanded, with
+	// nothing saying that one more thing is required of anybody.
+	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -1053,9 +1115,9 @@ type ClusterTemplate struct {
 	// this cluster. It is stated here and nowhere below, because the control
 	// plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
 	// into every StorageNode.spec.config.sizing it writes. Required, because the
-	// StorageCluster's own field is.
+	// StorageCluster's own field is, and with the same floor.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node of
@@ -1064,6 +1126,44 @@ type ClusterTemplate struct {
 	// writes. Omitted, each node uses the computed minimum.
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
+
+	// EnableDriveFormat formats every device the document names before a storage
+	// node takes it, which is how a drive carrying anything already is made
+	// usable.
+	//
+	// It says what is wanted rather than how, because the how differs by device
+	// class: an NVMe device is formatted to a 4K block size, and a logical block
+	// device has its signatures wiped. One field covers both, so a document does
+	// not have to know which class the expansion will resolve it to.
+	//
+	// It is on the document rather than defaulted further down because it is
+	// destructive and the document is what somebody approves. A reviewer reading
+	// a draft has to see that the drives it lists will be formatted, and be able
+	// to strike it before approving; the cluster's own field is immutable once
+	// the cluster exists, so a default nobody saw could not be undone either.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
+	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+	// each worker runs, so a group of two workers on a two-socket layout expands
+	// to four nodes.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on: the layout a fleet was built with is not one a later document
+	// can vary, and a reviewer should see it before the cluster exists.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket. See
+	// SocketsToUse, which it multiplies.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
 	// Stripe is the erasure-coding layout.
 	// +optional
@@ -1134,7 +1234,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -1333,11 +1433,40 @@ type DiscoverSpec struct {
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
+	// EnableControlPlaneNodes lets the run consider machines that run the API
+	// server and etcd.
+	//
+	// It is off by default because a storage node is a data path, and putting one
+	// on an etcd host is a placement almost nobody intends. The approval gate is a
+	// poor place to catch it: a fifty-worker draft is not a document anybody reads
+	// closely enough to spot three control-plane nodes in it. A combined three-node
+	// or single-node deployment is the case that wants it, and those are set up
+	// deliberately.
+	//
+	// There is no field beside it for infrastructure nodes, because those are used
+	// without asking: an OpenShift infra node is the tier a cluster's own
+	// infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+	// with disks in its infra nodes meant those disks to be the storage, so a draft
+	// proposes them ahead of the workers rather than leaving them out.
+	// +optional
+	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
+
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
 	// it boots from, which is what the approval gate then has to catch.
 	// +optional
 	DeviceFilter *DeviceFilter `json:"deviceFilter,omitempty"`
+
+	// ClusterRef names an existing StorageCluster the draft grows rather than
+	// creates. It is copied to the draft's own clusterRef, so that re-running
+	// discovery after an expansion produces a growth document naming the same
+	// cluster.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ClusterRef string `json:"clusterRef,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.
@@ -1377,6 +1506,19 @@ type OperatorOpsStatus struct {
 	// ConfigRef names the ClusterDeploymentConfig a Discover run wrote.
 	// +optional
 	ConfigRef string `json:"configRef,omitempty"`
+
+	// Workers are the workers this run is inspecting, decided once in
+	// Inspecting so that a node joining the cluster mid-run does not change
+	// what the run is about.
+	// +optional
+	// +listType=set
+	Workers []string `json:"workers,omitempty"`
+
+	// Environment is the Kubernetes distribution Inspecting concluded, which
+	// Writing copies into the draft. It is recorded here as well so that a run
+	// that failed later still says what it found.
+	// +optional
+	Environment KubernetesEnvironment `json:"environment,omitempty"`
 
 	// Message is the reason the phase is what it is: one sentence, replaced as
 	// the operation moves, and never a log.

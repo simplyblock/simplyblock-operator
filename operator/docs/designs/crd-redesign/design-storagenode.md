@@ -1,15 +1,16 @@
 # Design Document: The StorageNode and Its Operations
 
-**Status:** Draft  
+**Status:** Implemented  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageNodeOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-08)  
+**Date:** 2026-08-28 (last updated 2026-09-17)  
 **Supersedes:** `design-storagenodeset-storagenode.md` and `design-node-removal-draining.md`, both removed in the same change  
 **Test Plan:** [`tests/test-plan-storagenode.md`](../../tests/test-plan-storagenode.md)
 
-This document specifies the target model. Both kinds and all four controllers
-exist in a shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), and §15 is the single record of what
-the rework changes against them.
+This document specifies the model both kinds now carry. Both moved to
+`storage.simplyblock.io/v1alpha2` with a `v1alpha1` spoke and a conversion between
+them, and the controllers were rewritten against this specification in
+`operator/internal/controllers/node/`. §15 remains the record of what changed
+against the registered API.
 
 ---
 
@@ -156,7 +157,7 @@ was.
 
 ## 3. StorageNode: API
 
-Declared in `operator/api/v1alpha1/storagenode_types.go`, short name `sn`.
+Declared in `operator/api/v1alpha2/storagenode_types.go`, short name `sn`.
 **The type is Appendix A**, whole and as it is to be written. What follows quotes
 the field an argument turns on and no more, so that one copy of each type exists
 and it is the one an implementation is written against.
@@ -203,12 +204,39 @@ it would describe something that stops being true once `nodesPerSocket` exceeds
 one and two slots share a socket, and naming it for the RPC-port ordering would
 describe how a slot is matched to a backend node rather than what it identifies.
 
-**`spec.clusterRef` replaces `spec.storageNodeSetRef`, and the object name keeps
-no worker in it.** A `StorageNode` is named `<cluster>-<id>` with a random short
-identifier, because the socket and the worker are spec fields and the name has to
-stay stable when a node relocates (§9). A name that encoded the worker would have
-to be recreated by a migration, which would mean deleting a `StorageNode` whose
-backend node is still running.
+**`spec.clusterRef` replaces `spec.storageNodeSetRef`, and the object name is
+derived rather than generated.** A `StorageNode` is named from its cluster, its
+worker, and its slot through the shared formula
+([`design-api-upgrade.md`](design-api-upgrade.md) §19.6), so the three facts that
+identify a node at creation are the three the name is built from and a name is
+arrived at the same way twice by anything that has to predict one.
+
+**The formula is bounded at a label's 63 bytes and not at the 253 an object name
+may be**, because the name travels: the `StorageDevice` mirror writes it into
+`storage.simplyblock.io/node` on every device the node carries
+([`design-api-upgrade.md`](design-api-upgrade.md) §19.1). The arithmetic is not
+academic. A regional cluster name and a worker a cloud named after its fully
+qualified domain name are most of the budget between them, so a name that
+overflows is what ordinary inputs produce rather than what a contrived one does.
+Past that point the formula keeps what fits and spends the rest on a digest taken
+over all three parts, so the worker stays in the name's text while it fits and in
+its digest afterward, and two nodes differing only by worker never collide either
+way.
+
+**The name is stable across a migration because Kubernetes never renames an
+object**, not because the worker is absent from it. A migration re-points
+`spec.workerNode` on the node that exists (§9), so what changes is the field and
+not the object's identity. What that costs is stated rather than avoided: a node
+built on one worker and migrated to another keeps a name describing where it was
+built. `spec.workerNode` is where the current host is read, which is the field the
+webhook restricts to one writer (§3.2), and the name is an identifier rather than
+a report.
+
+**Re-expansion is idempotent without consulting the name.** The expansion lists
+the cluster's existing nodes and matches them on the worker and slot their specs
+record ([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md)
+§4.2), so a crash part-way through creates the rest and duplicates nothing even
+where a name was derived under a wider limit than the one in force now.
 
 **Placement, mutable by the operator alone.**
 
@@ -345,7 +373,7 @@ So the node carries its own copy of the two that describe the host it runs on:
 // equal across the fleet in steady state; a rolling hardware upgrade is what
 // makes two nodes differ, and only for as long as the roll takes.
 type StorageNodeSizing struct {
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
 	// ...
@@ -541,7 +569,7 @@ compares the node's sizing against the cluster it is joining and rejects a misma
 | Field                                                      | Rejected when                                                             |
 |------------------------------------------------------------|---------------------------------------------------------------------------|
 | `config.sizing.vcpuCount`                                  | It differs from the cluster's stamp value                                 |
-| `config.sizing.minHugePagesSize`                           | It is set and differs from the cluster's stamp value                      |
+| `config.sizing.minHugePagesSize`                           | It differs from the cluster's stamp value, an unset value included        |
 | `config.deviceNames`                                       | An entry is of a class other than the cluster's `spec.deviceClass`        |
 | `config.pcieAllowList`, `config.pcieDenyList`, `pcieModel` | Any of them is set and the cluster's `spec.deviceClass` is `LogicalBlock` |
 
@@ -557,10 +585,22 @@ ignoring them would leave somebody reading a filter that never ran.
 **The sizing rows are two and not others, because the control plane assumes them
 uniform.** §3.1 states why: a node whose core layout and huge pages disagree with its
 peers gets a layout the cluster cannot place erasure-coding chunks across evenly.
-`vcpuCount` is `Required`, so a hand-written node states it and cannot inherit it by
-omission, which is exactly the case where a typed value silently disagrees with the
-fleet. There is no row for `maxSubsystemCount`: the node has no copy of it to
-disagree with, which is the point of leaving it on the cluster (§3.1).
+There is no row for `maxSubsystemCount`: the node has no copy of it to disagree
+with, which is the point of leaving it on the cluster (§3.1).
+
+**An unset value is a divergence, because nothing inherits at render time.** The
+node's own `config.sizing` is what §5.3 writes into the per-node ConfigMap, and it
+writes `MAX_HUGE_PAGES_SIZE` from that field without consulting the cluster, so a
+node omitting it runs on the computed minimum rather than on the floor the cluster
+states. `minHugePagesSize` is optional on the type, which is what makes this worth
+saying: optional means a cluster need not state a floor at all, not that a node may
+decline the one its cluster states. Both rows therefore read the same way, and the
+webhook compares the node's value to the cluster's whenever the cluster has one.
+
+**A cluster that states no floor checks nothing.** The comparison is skipped when
+`StorageCluster.spec.minHugePagesSize` is empty, because there is no stamp value to
+diverge from and every node is then on the computed minimum together, which is
+uniform by construction.
 
 **The reference is the cluster's stamp value, not the siblings'.** During a rolling
 hardware upgrade the fleet is deliberately heterogeneous (§3.1), so sibling nodes
@@ -586,7 +626,7 @@ A node as the operator writes it when expanding a deployment config, before
 anything has been provisioned:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNode
 metadata:
   name: production-7f3a9c
@@ -1025,7 +1065,7 @@ name does not change when it rotates, so nothing else would notice.
 
 ## 6. StorageNodeOps: API
 
-Declared in `operator/api/v1alpha1/storagenodeops_types.go`, short name `snops`.
+Declared in `operator/api/v1alpha2/storagenodeops_types.go`, short name `snops`.
 The type is Appendix B.
 
 ### 6.1 Spec
@@ -1059,7 +1099,7 @@ which is the class [`design-crd-model.md`](design-crd-model.md) §7.5 leaves
 outside the `enableXyz` and `disableXyz` rule.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:
   name: move-node-off-worker-3
@@ -1110,7 +1150,7 @@ wire value.
 A drain part-way through moving a node's volumes:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:
   name: production-7f3a9c-remove
@@ -1296,7 +1336,16 @@ cluster, and one whose cluster is mid-rebalance or not active will either be
 rejected by the control plane or succeed into an inconsistent layout. The
 operation holds rather than fails, emits `ClusterNotReady`, and resumes when the
 cluster does. It applies to every action that changes the node's state, which is
-all of them except the four single-step reads of a status.
+all of them except the four single-step reads of a status and `Remove`.
+
+**`Remove` is exempt, because a removal is how an unready cluster becomes
+ready.** Holding it until the cluster is active closes a loop with no way out:
+the node cannot be removed until the cluster is active, and the cluster cannot
+become active while the node it is stuck on is still in it. That is what a node
+whose add never finished does to the cluster it was being added to. The
+exemption follows from the gate's own purpose rather than working against it,
+since the removal is what lets the control plane reach a state it will accept
+further work in.
 
 Watching only `StorageNodeOps` would leave a queued operation waiting up to its
 requeue interval after the lock frees. `nodeToOpsRequests` maps a `StorageNode`
@@ -1853,8 +1902,8 @@ delta, so that no other section has to carry it.
 | Everything under `spec.overrides` mutable               | Most of `spec.config` immutable (§3.2)                  | Tightening. A user editing a device filter on a running node is now rejected                                                                                                                                           |
 | `deviceNames`, NVMe namespace names                     | A PCI address or a device path (§3.1)                   | Widening. Every value the registered field took is still taken, and a logical block device becomes expressible                                                                                                         |
 | `failureDomain`, an integer index                       | A label such as `rack-b` (§3.1)                         | Spec type change on both the spec and the status field. A stored index is not a valid label, so every node that declares a domain is rewritten, and the value stops being a number whose meaning lived outside the API |
-| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                             | Spec removal. None of them reached a consumer, so nothing loses behavior                                                                                                                                               |
-| `skipKubeletConfiguration`                              | `enableKubeletConfiguration`, inverted (§5.1)           | Spec rename that also inverts, which is the one mechanical rename that is wrong                                                                                                                                        |
+| Four dead per-node fields in that struct                | Moved to the cluster (§5.1)                             | Spec removal. None of them reached a consumer, so nothing loses behavior. `skipKubeletConfiguration` is one of them, and the row below is what its successor is called                                                 |
+| `skipKubeletConfiguration`                              | Removed here, re-landed on the cluster (§5.1)           | Spec removal. The successor is `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is a different kind, so the registered field stashes on the way up rather than converting                          |
 | No `status.phase`                                       | `StorageNodePhase` (§4.2)                               | Additive                                                                                                                                                                                                               |
 | No step field, provisioning improvising one             | `status.step` (§4.2)                                    | Status only. The optimistic-lock claim moves to the `Posting` transition                                                                                                                                               |
 | `status.postedAt` as the duplicate-POST guard           | Removed (§3.3)                                          | Status removal. The persisted step is the record                                                                                                                                                                       |
@@ -1869,23 +1918,23 @@ delta, so that no other section has to carry it.
 
 ### 15.2 StorageNodeOps
 
-| Registered                                            | This design                                 | Cost                                                                                   |
-|-------------------------------------------------------|---------------------------------------------|----------------------------------------------------------------------------------------|
-| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                       | Spec rename                                                                            |
-| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)               | Type only, the wire values change with the row below                                   |
-| Six lowercase action values                           | PascalCase (§6.3)                           | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window     |
-| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                       | Spec regrouping                                                                        |
-| `spec.drain`                                          | `spec.remove` (§6.1)                        | Spec rename, matching the action it parameterizes                                      |
-| Six actions                                           | Seven, adding `HostMaintenance` (§10)       | Additive, and it retires a controller (§15.3)                                          |
-| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2) | Additive. Cancellation today means deleting the object                                 |
-| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)  | Status only. The old string reads into `step.state` with no deadline                   |
-| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)  | Status only, and it removes an enum value that is ambiguous by construction            |
-| `status.triggered`                                    | Removed (§7.2)                              | Status removal. The persisted step is the record, and it covers a case the flag cannot |
-| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                       | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step |
-| No `observedGeneration`                               | Present (§6.2)                              | Additive                                                                               |
-| No state machine behind any action                    | Seven declared graphs (§6.3)                | The largest piece of work here. Every side effect moves into a step                    |
-| No deadline on any step                               | `status.step.deadline` (§6.3)               | Additive, and what makes a stalled operation detectable                                |
-| A cluster gate only for `Remove`                      | For every state-changing action (§7.1)      | Behavioral. A relocation during a rebalance is currently accepted                      |
+| Registered                                            | This design                                         | Cost                                                                                                                                                   |
+|-------------------------------------------------------|-----------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                               | Spec rename                                                                                                                                            |
+| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)                       | Type only, the wire values change with the row below                                                                                                   |
+| Six lowercase action values                           | PascalCase (§6.3)                                   | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window                                                                     |
+| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                               | Spec regrouping                                                                                                                                        |
+| `spec.drain`                                          | `spec.remove` (§6.1)                                | Spec rename, matching the action it parameterizes                                                                                                      |
+| Six actions                                           | Seven, adding `HostMaintenance` (§10)               | Additive, and it retires a controller (§15.3)                                                                                                          |
+| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2)         | Additive. Cancellation today means deleting the object                                                                                                 |
+| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)          | Status only. The old string reads into `step.state` with no deadline                                                                                   |
+| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)          | Status only, and it removes an enum value that is ambiguous by construction                                                                            |
+| `status.triggered`                                    | Removed (§7.2)                                      | Status removal. The persisted step is the record, and it covers a case the flag cannot                                                                 |
+| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                               | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step                                                                 |
+| No `observedGeneration`                               | Present (§6.2)                                      | Additive                                                                                                                                               |
+| No state machine behind any action                    | Seven declared graphs (§6.3)                        | The largest piece of work here. Every side effect moves into a step                                                                                    |
+| No deadline on any step                               | `status.step.deadline` (§6.3)                       | Additive, and what makes a stalled operation detectable                                                                                                |
+| A cluster gate only for `Remove`                      | For every state-changing action but `Remove` (§7.1) | Behavioral. A relocation during a rebalance is currently accepted, and `Remove` keeps its exemption because it is how an unready cluster becomes ready |
 
 ### 15.3 Retiring StorageNodeSet
 
@@ -1914,10 +1963,12 @@ fields §5.1 names.
 
 Every spec row above is breaking, because a renamed spec field is silently ignored
 on an object that still sets the old name. Every status row is not, because the
-operator is the only writer. The `skipKubeletConfiguration` row is the one to read
-twice: it inverts as well as renames, so a deprecation window that reads the old
-field and writes the new one has to negate it, and a mechanical rename produces the
-opposite behavior.
+operator is the only writer. The four per-node fields that move to the cluster are
+the rows to read twice. Their successor is on a different kind, so no conversion
+reaches them, and each stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.<field>` on the way up so that a
+node converted back down carries what it carried
+([`design-property-renames.md`](design-property-renames.md) §3.3).
 
 The rows above are audited by
 `.claude/skills/api-design/scripts/check-crds.py --kind StorageNode` and
@@ -2083,8 +2134,11 @@ type JournalManagerSpec struct {
 // the node's configuration is generated (§3.1).
 type StorageNodeSizing struct {
 	// VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
-	// explicit core count rather than a percentage.
-	// +kubebuilder:validation:Minimum=6
+	// explicit core count rather than a percentage. The floor matches the
+	// cluster's: a node must carry one core beyond this budget for the system,
+	// and the control plane's core layout assigns no NVMe-oF poller core at all
+	// for a 2-vCPU budget.
+	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
 

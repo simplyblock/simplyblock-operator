@@ -1,8 +1,8 @@
 # Design Document: The Data-Protection Chain
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §14 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30  
+**Date:** 2026-08-30 (last updated 2026-09-17)  
 **Test Plan:** [`tests/test-plan-storagebackup.md`](../../tests/test-plan-storagebackup.md)
 
 This document specifies the target model for the whole data-protection layer.
@@ -171,10 +171,16 @@ ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
 ```
 
 **An absent selector selects nothing, and that is the whole argument for the
-default.** The alternative reading, that an empty selector matches everything, is
-what `metav1.LabelSelector` means in most Kubernetes APIs and is wrong here: the
-cost of backing up too much is silent and recurring, and the cost of backing up
-too little is an error somebody sees.
+default.** A policy that silently covered every claim in the namespace would back
+up more than its author intended, and the failure would be a bill rather than an
+error: the cost of backing up too much is silent and recurring, and the cost of
+backing up too little is an error somebody sees.
+
+**An explicitly empty selector still means every claim in the namespace.** That is
+what two empty braces mean in every other Kubernetes API and what somebody who
+wrote them asked for, and omitting a field and writing it empty are different
+statements. Only the first has a silent cost, so only the first is the one the
+default guards.
 
 **The policy attaches and detaches as claims come and go.** A claim that starts
 matching is attached, a claim that stops matching is detached, and
@@ -184,9 +190,25 @@ retention: a policy governs what is taken, not what is kept.
 
 ### 4.2 Schedule and retention
 
-`spec.schedule` is a cron expression, `spec.maxVersions` is how many backups to
-keep, and `spec.maxAge` is how long to keep them. All three are passed to the
-control plane, which does the scheduling and the pruning (§9).
+`spec.schedule` is an interval, `spec.maxVersions` is how many backups to keep,
+and `spec.maxAge` is how long to keep them. All three are passed to the control
+plane, which does the scheduling and the pruning (§9).
+
+**The schedule is the control plane's own format rather than cron**, because the
+control plane is what reads it. It is a space-separated list of
+`<interval>,<retention>` pairs, where the interval is a number and one of `m`,
+`h`, `d`, or `w`, and the schema carries that as a pattern so a value the control
+plane would refuse is refused at admission instead. Accepting cron here would mean
+the operator translating one scheduling language into another and being the place
+a mistranslation lives.
+
+**All three are immutable, and that is a property of the control plane rather than
+a choice.** §10 lists a `PUT` that applies a changed schedule, and the v2 API
+offers no such endpoint: it creates, deletes, attaches, and detaches a policy and
+nothing else. A mutable field the operator cannot reconcile would leave the
+declaration and the backups actually being taken permanently disagreeing, with the
+object still reporting `Active`, so all three are fixed at creation until the
+endpoint exists. Changing one means replacing the policy.
 
 **The operator does not run the schedule.** It reconciles the policy into the
 control plane and reports what the control plane did. That is deliberate: a
@@ -197,17 +219,17 @@ schedule nobody could rely on.
 
 ## 5. StorageBackup
 
-Declared in `operator/api/v1alpha1/storagebackup_types.go`, short name `sb`, and
+Declared in `operator/api/v1alpha2/storagebackup_types.go`, short name `sb`, and
 reconciled by `StorageBackupReconciler` in
 `operator/internal/controllers/backup/storagebackup_controller.go`. The type is
 Appendix B.
 
 ### 5.1 A backup object is discovered, not declared
 
-**Every `StorageBackup` is created by the operator from what the store holds.** The
-cluster names an S3 location and its credentials, the operator walks it, and one object
-appears per backup it finds. Nothing about a backup is a request, so the spec is
-identity and nothing else:
+**Every `StorageBackup` is created by the operator from what the control plane
+reports the store holds.** The operator mirrors the cluster's backup stream and one
+object appears per backup on it. Nothing about a backup is a request, so the spec
+is identity and nothing else:
 
 ```go
 // ClusterRef names the StorageCluster whose store this backup was found in. With
@@ -237,11 +259,29 @@ somebody's bucket, governed by that bucket's lifecycle policy and by the retenti
 control plane applies (§9). An object that could be deleted would invite the reading
 that deleting it frees the storage, and it does not.
 
-**What a policy schedules and what the operator discovers meet in the same objects.**
+**The control plane is the inventory, and the operator does not open the bucket.**
+It has S3 credentials in `StorageCluster.spec.backup` and never uses them to list:
+the control plane already reports every copy it wrote, so a second reader of the
+same bucket would be a second opinion about what exists, reachable only where the
+operator's own network can see the endpoint and disagreeing with the control plane
+whenever a write is in flight. An absence is therefore decided by whether the
+cluster's stream has synced, and by nothing about any other object, which is the
+same shape [`design-storagedevice.md`](design-storagedevice.md) gives the device
+mirror.
+
+**What a policy schedules and what the operator mirrors meet in the same objects.**
 `StorageBackupPolicy` tells the control plane which claims to back up and how often
-(§4), the control plane writes the copies into the store, and the walk finds them. The
-policy is the only thing that decides a backup is taken, so a policy and a discovery run
-are two halves of one loop rather than two ways of creating an object.
+(§4), the control plane writes the copies into the store and reports them, and the
+mirror turns each into an object. The policy is the only thing that decides a
+backup is taken, so a policy and the mirror are two halves of one loop rather than
+two ways of creating an object.
+
+**No `StorageBackup` carries an owner reference to the policy that caused it.** The
+control plane reports nothing about which policy took a copy, so the edge cannot be
+built from what is on the wire, and it would be the wrong lifetime in any case: the
+object goes when the store stops reporting the copy, not when a policy is deleted.
+What a policy governs is what is taken rather than what is kept, which is the same
+reading §9 gives retention.
 
 ### 5.2 Status, in three groups
 
@@ -407,12 +447,22 @@ there is no object for it to resolve to, the API server validates its syntax, an
 §4.1's reading that an absent selector selects nothing is reported by
 `SelectorEmpty` rather than refused.
 
-**`failurePolicy: Fail`**, for the reason
+**Two of the three are `failurePolicy: Fail`**, for the reason
 [`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5 gives:
 the webhook server runs inside the operator pod, so its availability tracks the
 operator's, and while the operator is down nothing reconciles a backup anyway. A
 window in which unresolvable immutable references are admitted is a window in which
 objects that can only be deleted are created.
+
+**`StorageBackupValidator` is `Ignore`, because it is the one that guards
+`DELETE`.** A webhook failing closed on a delete blocks the namespace controller
+as well as a user, so an operator that is down would leave every namespace holding
+a `StorageBackup` stuck in `Terminating` until somebody edited the webhook
+configuration by hand. That is a worse failure than the one failing open admits,
+which is a backup record deletable while the operator is down: the record is an
+observation, so the mirror writes it back on the next sync and the copy in the
+bucket was never at risk. The other two guard `CREATE` alone, where failing closed
+costs a rejected write and nothing more.
 
 The webhooks need `get` on `storageclusters`, `storagebackups`, `storagepools`, and
 `persistentvolumeclaims`, all of which the manager already reads to reconcile these
@@ -681,9 +731,9 @@ of a round trip catches it.
 | No exclusion between two restores of one backup                                     | `StorageBackup.status.activeOpsRef` (§6)                                    | New, and the same lock every other entity with an `Ops` companion carries. Two restores of one backup now queue rather than run together (§14, Q5) |
 | No `shortName` on `BackupPolicy` or `StorageBackup`                                 | `sbp` and `sb`                                                              | Additive. `br` and `bi` are retired with their kinds                                                                                               |
 | `spec.backup.snapshotBackups`, `withCompression`, `secondaryTarget`, `localTesting` | Removed (`design-storagecluster.md` Appendix A)                             | The store is a location, so how a copy is taken stays with the control plane                                                                       |
-| No owner reference from a policy to its backups                                     | Established (§5.1)                                                          | Deleting a policy deletes the backup objects it created, not the backups themselves                                                                |
+| No owner reference from a policy to its backups                                     | Still none (§5.1)                                                           | The control plane reports no policy attribution, so the edge cannot be built. The object's lifetime is the store's report rather than the policy's |
 | Restore's claim owned by the operation                                              | Unowned, and created only at `Binding` (§8)                                 | Deleting the audit record no longer deletes the recovered volume, and a failed restore leaves no claim                                             |
-| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | Depends on `design-sse-push-notifications.md`, on the `sse` branch, as every other design in the group does                                        |
+| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | The mirror of §5.1 reads it, so a walk of the bucket is never performed                                                                            |
 | No event, no metric                                                                 | Fourteen reasons and eight metrics (§11)                                    | New infrastructure                                                                                                                                 |
 
 **The two kind removals are the breaking ones and they are not symmetrical with
@@ -781,18 +831,35 @@ type StorageBackupPolicySpec struct {
 	// +optional
 	ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
 
-	// Schedule is a cron expression the control plane runs the policy on.
+	// Schedule is the interval the control plane runs the policy on, in its own
+	// format: a space-separated list of <interval>,<retention> pairs, where an
+	// interval is a number and one of m, h, d, or w.
+	//
+	// Immutable, and that is a property of the control plane rather than a
+	// choice. §10 lists a PUT that applies a changed schedule, and the v2 API
+	// offers no such endpoint: it creates, deletes, attaches, and detaches a
+	// policy and nothing else. A mutable field the operator cannot reconcile
+	// would leave the declaration and the backups actually being taken
+	// permanently disagreeing, with the object still reporting Active, so the
+	// schedule is fixed at creation until the endpoint exists. Changing one
+	// means replacing the policy.
+	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
+	// +k8s:immutable
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
 
 	// MaxVersions is how many backups of one claim to keep. Zero means no limit
-	// by count.
+	// by count. Immutable, for the reason Schedule is.
 	// +kubebuilder:validation:Minimum=0
+	// +k8s:immutable
 	// +optional
 	MaxVersions *int32 `json:"maxVersions,omitempty"`
 
-	// MaxAge is how long to keep a backup ("720h", "30d"). Empty means no limit
-	// by age. Retention is enforced by the control plane, not here.
+	// MaxAge is how long to keep a backup ("30d", "720h"). Empty means no limit
+	// by age. Retention is enforced by the control plane, not here. Immutable,
+	// for the reason Schedule is.
+	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
+	// +k8s:immutable
 	// +optional
 	MaxAge string `json:"maxAge,omitempty"`
 }
