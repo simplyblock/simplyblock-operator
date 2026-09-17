@@ -28,7 +28,14 @@ import (
 )
 
 const (
-	testExportNS   = "simplyblock"
+	// testExportNS is the claim's namespace and testOperatorNS the deployment's.
+	// They are deliberately different, because on a cluster they always are: an
+	// NFSExport is created by the CSI controller beside the PVC it backs, and a
+	// StorageNode belongs to the StorageNodeSet in the operator's namespace.
+	// Fixtures that shared one namespace made every selection test pass against
+	// an arrangement that does not occur.
+	testExportNS   = "team-a"
+	testOperatorNS = "simplyblock"
 	testExportName = "nfsexp-7b41c0e2a9"
 )
 
@@ -89,7 +96,7 @@ func testExport(mutate func(*simplyblockv1alpha2.NFSExport)) *simplyblockv1alpha
 
 func testNode(name string, mutate func(*simplyblockv1alpha1.StorageNode)) *simplyblockv1alpha1.StorageNode {
 	n := &simplyblockv1alpha1.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testExportNS},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testOperatorNS},
 		Status:     simplyblockv1alpha1.StorageNodeStatus{Status: utils.NodeStatusOnline},
 	}
 	if mutate != nil {
@@ -461,5 +468,38 @@ func TestAssemblingKeepsAKnownNGUID(t *testing.T) {
 
 	if got := loadExport(t, cl).Status.NGUID; got != known {
 		t.Errorf("status.nguid = %q, want the recorded %q", got, known)
+	}
+}
+
+// An export never shares a namespace with the hosts that can serve it, and the
+// fixtures above hid that by putting both in one.
+//
+// An NFSExport is namespaced to the claim it backs, because that is where the
+// CSI controller creates it and where a user looks for it. A StorageNode is
+// namespaced to the deployment that owns it, which is the operator's namespace.
+// On a real cluster the two are never the same, so selection that looks only in
+// the export's namespace finds nothing and every ReadWriteMany claim in the
+// cluster waits forever on a host that was there all along.
+func TestMDSSelectionFindsHostsInAnotherNamespace(t *testing.T) {
+	const operatorNS = "simplyblock"
+
+	asm := &fakeAssembler{}
+	export := testExport(nil)
+	node := testNode(testMDSHost, nil)
+	if node.Namespace != operatorNS || export.Namespace == node.Namespace {
+		t.Fatalf("the fixtures no longer model the arrangement: export in %s, node in %s",
+			export.Namespace, node.Namespace)
+	}
+	r, cl := newExportReconciler(t, asm, export, node)
+
+	reconcileExport(t, r)
+
+	got := loadExport(t, cl)
+	if got.Status.StorageNodeRef != testMDSHost {
+		t.Fatalf("bound to %q, want %q: selection did not look outside %s",
+			got.Status.StorageNodeRef, testMDSHost, export.Namespace)
+	}
+	if got.Status.Phase != simplyblockv1alpha2.NFSExportPhaseAssembling {
+		t.Errorf("phase = %q, want Assembling", got.Status.Phase)
 	}
 }

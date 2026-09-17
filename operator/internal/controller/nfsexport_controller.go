@@ -336,8 +336,18 @@ func (r *NFSExportReconciler) selectMDS(
 	ctx context.Context,
 	export *simplyblockv1alpha2.NFSExport,
 ) (string, error) {
+	// Cluster-wide, not the export's namespace. An NFSExport lives beside the
+	// claim it backs, in whatever namespace the workload is in, and a
+	// StorageNode lives in the operator's, so the two never coincide. Scoping
+	// the list to the export would find nothing on every real cluster and leave
+	// every ReadWriteMany claim waiting on hosts that were there all along.
+	//
+	// There is also nothing to scope: a host serving an export is a cluster
+	// resource, and an export in one namespace has no more claim on a host than
+	// an export in another. Which hosts may serve is P0-6's node labeling, not
+	// a namespace boundary.
 	var nodes simplyblockv1alpha1.StorageNodeList
-	if err := r.List(ctx, &nodes, client.InNamespace(export.Namespace)); err != nil {
+	if err := r.List(ctx, &nodes); err != nil {
 		return "", fmt.Errorf("listing storage nodes: %w", err)
 	}
 
