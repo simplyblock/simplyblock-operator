@@ -161,6 +161,74 @@ deployment:
   # what it collects in the object store a hosted control plane brings.
   profile: standalone
 
+# The CSI driver, as the SimplyblockDriver the chart renders for every profile
+# that runs one.
+#
+# The plugins themselves are the operator's: it applies the DaemonSet, the
+# StatefulSet, their RBAC, and the CSIDriver registration from this object, so
+# these values reach them through a spec rather than through a template. What
+# each one replaces is in design-simplyblockdriver.md §8.
+#
+# An empty field means whatever this operator release ships, which is the
+# pairing the release was tested as. Set one only to move away from it.
+driver:
+  # The CSI driver name a StorageClass provisions with.
+  #
+  # It is immutable once the object exists, and every PersistentVolume the
+  # driver created records it, so changing it later orphans every volume rather
+  # than renaming anything. An upgraded cluster registered under another name has
+  # to set it here before the operator adopts the running deployment.
+  driverName: csi.simplyblock.io
+
+  # The plugin image both plugins run. Empty takes the operator's own registry
+  # and tag with the CSI driver's repository.
+  image:
+    repository: ""
+    tag: ""
+    # Always, because the default image follows a moving tag: IfNotPresent
+    # against a tag that was rebuilt leaves some workers on the old plugin and
+    # some on the new one.
+    pullPolicy: Always
+
+  # Instances of the controller plugin, which is what provisions volumes.
+  controllerReplicas: 1
+
+  # Where the node plugin runs. Empty is every schedulable worker, which is the
+  # usual case: a worker that cannot attach a volume cannot run a workload that
+  # needs one.
+  nodeSelector: {}
+  tolerations: []
+
+  # Where the controller plugin runs. This is ordinary pod placement for one
+  # workload, unlike the pair above.
+  controllerNodeSelector: {}
+  controllerTolerations: []
+
+  # Whether snapshot support is part of this deployment: the VolumeSnapshotClass
+  # for driverName, and the CRDs and a controller where the cluster serves
+  # neither.
+  enableVolumeSnapshots: true
+
+  # Authenticate both plugins to the management API with their pod's
+  # service-account token instead of the static cluster secret.
+  #
+  # Set it together with controlplane.trustCSIServiceAccounts above. This is the
+  # plugins' half and that is the control plane's: one without the other is
+  # either a driver whose tokens are refused, or a control plane trusting
+  # accounts nothing presents.
+  enableServiceAccountAuth: false
+
+  # Overrides for the six CSI sidecars, as full `repository:tag` references.
+  # Empty takes the version this operator release ships, which is the
+  # combination it was tested against.
+  sidecarImages:
+    provisioner: ""
+    attacher: ""
+    resizer: ""
+    snapshotter: ""
+    healthMonitor: ""
+    nodeDriverRegistrar: ""
+
 controlplane:
   # Where the control plane is, for deployment.profile: managed.
   managed:

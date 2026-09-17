@@ -24,6 +24,27 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/*
+Whether this profile runs a CSI driver.
+
+The profiles are listed rather than a negation of the ones that do not, so a
+profile added later renders no driver until somebody decides it should. The
+negation would do the opposite and give every future profile a CSI deployment
+by default, which is the wrong way round: a driver registers a provisioner and
+takes over the node plugin's socket on every worker, and a profile that wanted
+neither would get both by saying nothing.
+
+Both of today's profiles are here because both run workloads that mount
+simplyblock volumes. What differs between them is where the control plane is,
+and the driver reaches it through the credentials Secret either way
+(design-simplyblockdriver.md §4.3).
+*/}}
+{{- define "simplyblock.rendersCSIDriver" -}}
+{{- if has .Values.deployment.profile (list "standalone" "managed") -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}

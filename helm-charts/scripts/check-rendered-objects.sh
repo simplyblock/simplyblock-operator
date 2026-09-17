@@ -17,6 +17,10 @@ COMMON=(
   "ValidatingWebhookConfiguration/simplyblock-operator-validating-webhook-configuration"
   "ServiceAccount/simplyblock-operator"
   "ControlPlane/simplyblock"
+  # Both profiles run workloads that mount simplyblock volumes, so both need a
+  # CSI driver, and nothing but this object produces one: the chart stopped
+  # rendering the plugins when the operator took them over.
+  "SimplyblockDriver/simplyblock"
 )
 
 # objects prints `Kind/name` for every document in a rendered manifest. The name
