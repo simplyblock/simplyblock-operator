@@ -6148,10 +6148,10 @@ spec:
                   baselineColdStart:
                     description: |-
                       BaselineColdStart selects what happens to an under-sampled node. Defaults
-                      to partialWindow.
+                      to PartialWindow.
                     enum:
-                    - defer
-                    - partialWindow
+                    - Defer
+                    - PartialWindow
                     type: string
                   baselineMinSamples:
                     description: |-
@@ -6168,14 +6168,14 @@ spec:
                   baselineStrategy:
                     description: |-
                       BaselineStrategy selects how the per-node baseline is derived. Defaults
-                      to rollingWindow.
+                      to RollingWindow.
                     enum:
-                    - benchmark
-                    - rollingWindow
+                    - Benchmark
+                    - RollingWindow
                     type: string
                   baselineWindow:
                     description: |-
-                      BaselineWindow is the look-back the rollingWindow strategy reduces.
+                      BaselineWindow is the look-back the RollingWindow strategy reduces.
                       Defaults to 6h.
                     type: string
                   defaultCoolDownSeconds:

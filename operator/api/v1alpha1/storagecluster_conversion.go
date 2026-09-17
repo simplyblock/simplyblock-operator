@@ -140,6 +140,31 @@ var metricsBackendToHub = map[string]string{
 // about a value.
 var metricsBackendFromHub = invertStringMap(metricsBackendToHub)
 
+// baselineStrategyToHub and baselineColdStartToHub recase the two rebalancing
+// enums, for the reason metricsBackendToHub recases its own: both are
+// user-authored and appear in deployment manifests, and v1alpha2 spells every
+// enum member in PascalCase.
+//
+// A cast would be the bug this exists to prevent. It would carry "rollingWindow"
+// into a version whose schema admits "RollingWindow," which the API server
+// refuses on the next write — and §24's storage rewrite is exactly such a write,
+// so an object nobody edited would be the one that failed.
+var baselineStrategyToHub = map[string]string{
+	"benchmark":     string(v1alpha2.BaselineStrategyBenchmark),
+	"rollingWindow": string(v1alpha2.BaselineStrategyRollingWindow),
+}
+
+// baselineStrategyFromHub is the inverse, derived so the two cannot disagree.
+var baselineStrategyFromHub = invertStringMap(baselineStrategyToHub)
+
+var baselineColdStartToHub = map[string]string{
+	"defer":         string(v1alpha2.BaselineColdStartDefer),
+	"partialWindow": string(v1alpha2.BaselineColdStartPartialWindow),
+}
+
+// baselineColdStartFromHub is the inverse, derived so the two cannot disagree.
+var baselineColdStartFromHub = invertStringMap(baselineColdStartToHub)
+
 // ConvertTo converts this StorageCluster to the v1alpha2 hub.
 func (src *StorageCluster) ConvertTo(dstRaw conversion.Hub) error {
 	dst := dstRaw.(*v1alpha2.StorageCluster)
@@ -708,10 +733,12 @@ func autoPlacementToHub(s *VolumeAutoPlacementSettings) *v1alpha2.VolumeAutoPlac
 			mapOrPassThrough(metricsBackendToHub, string(*b))))
 	}
 	if b := s.BaselineStrategy; b != nil {
-		out.BaselineStrategy = ptr.To(v1alpha2.BaselineStrategy(*b))
+		out.BaselineStrategy = ptr.To(v1alpha2.BaselineStrategy(
+			mapOrPassThrough(baselineStrategyToHub, string(*b))))
 	}
 	if c := s.BaselineColdStart; c != nil {
-		out.BaselineColdStart = ptr.To(v1alpha2.BaselineColdStartPolicy(*c))
+		out.BaselineColdStart = ptr.To(v1alpha2.BaselineColdStartPolicy(
+			mapOrPassThrough(baselineColdStartToHub, string(*c))))
 	}
 	return &out
 }
@@ -742,10 +769,12 @@ func autoPlacementFromHub(s *v1alpha2.VolumeAutoPlacementSettings) *VolumeAutoPl
 			mapOrPassThrough(metricsBackendFromHub, string(*b))))
 	}
 	if b := s.BaselineStrategy; b != nil {
-		out.BaselineStrategy = ptr.To(BaselineStrategy(*b))
+		out.BaselineStrategy = ptr.To(BaselineStrategy(
+			mapOrPassThrough(baselineStrategyFromHub, string(*b))))
 	}
 	if c := s.BaselineColdStart; c != nil {
-		out.BaselineColdStart = ptr.To(BaselineColdStartPolicy(*c))
+		out.BaselineColdStart = ptr.To(BaselineColdStartPolicy(
+			mapOrPassThrough(baselineColdStartFromHub, string(*c))))
 	}
 	return &out
 }
