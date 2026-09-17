@@ -18,6 +18,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -584,9 +585,12 @@ func TestReconcileDataRealignment_RecordsOnlyTheGenerationItCovered(t *testing.T
 		t.Fatalf("realignedGeneration = %d, want 3 (the value read before the call)", got)
 	}
 
-	// mig-67 finishes ten seconds later.
-	vmr := &VolumeMigrationReconciler{Client: f.cl, Scheme: f.r.Scheme, Recorder: events.NewFakeRecorder(8)}
-	vmr.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+	// mig-67 finishes ten seconds later. The counter is written by whichever
+	// kind carried the move, through the one function both of them call.
+	if _, err := volumemigration.RecordVolumeMoved(
+		context.Background(), f.cl, realignNamespace, realignClusterUUID); err != nil {
+		t.Fatalf("record the move: %v", err)
+	}
 
 	cr = f.getCluster(t)
 	gen := ptr.Int64FromOrZero(cr.Status.VolumeMoveGeneration)
@@ -666,8 +670,6 @@ func TestReconcileDataRealignment_ReplayOfStackedRealignment(t *testing.T) {
 	// mig-67 is moving; one earlier move is already owed.
 	f := newRealignFixtureWith(t, realignTestCluster(1, 0, nil, false, nil),
 		movingMigration("mig-67", simplyblockv1alpha1.VolumeMigrationPhaseRunning))
-	vmr := &VolumeMigrationReconciler{Client: f.cl, Scheme: f.r.Scheme, Recorder: events.NewFakeRecorder(8)}
-
 	// 02:13:31 — due, but a volume is moving: deferred instead of sent.
 	f.r.reconcileDataRealignment(ctx, f.getCluster(t), realignClusterUUID)
 	if n := atomic.LoadInt32(f.calls); n != 0 {
@@ -675,7 +677,10 @@ func TestReconcileDataRealignment_ReplayOfStackedRealignment(t *testing.T) {
 	}
 
 	// 02:13:41 — mig-67 completes: counter goes to 2, migration reaches a terminal phase.
-	vmr.markClusterVolumeMoved(ctx, realignNamespace, realignClusterUUID)
+	if _, err := volumemigration.RecordVolumeMoved(
+		ctx, f.cl, realignNamespace, realignClusterUUID); err != nil {
+		t.Fatalf("record the move: %v", err)
+	}
 	done := &simplyblockv1alpha1.VolumeMigration{}
 	if err := f.cl.Get(ctx, types.NamespacedName{Namespace: realignNamespace, Name: "mig-67"}, done); err != nil {
 		t.Fatalf("get mig-67: %v", err)

@@ -6,33 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-// requireStorageCluster returns an error when no StorageCluster in namespace
-// reports clusterUUID. It is what stops the migration controller starting work
-// against a cluster Kubernetes does not account for.
-//
-// It used to also refuse when volumeMigrationSettings.enabled was false. That
-// field is gone (design-storagecluster.md §12): migration cannot be turned off,
-// because a drain, a rebalance, and a device replacement are all performed by
-// moving volumes, so a cluster that refused to move one could do none of them.
-func requireStorageCluster(ctx context.Context, c client.Client, namespace, clusterUUID string) error {
-	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return fmt.Errorf("list StorageClusters: %w", err)
-	}
-	for _, cr := range clusters.Items {
-		if cr.Status.UUID == clusterUUID {
-			return nil
-		}
-	}
-	return fmt.Errorf("no StorageCluster found for cluster UUID %q", clusterUUID)
-}
 
 // findConsumerNode returns the Kubernetes hostname of the first Running pod
 // that mounts a PVC backed by volumeID (the CSI volume UUID encoded in the

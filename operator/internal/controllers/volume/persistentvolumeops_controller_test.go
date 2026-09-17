@@ -25,6 +25,7 @@ import (
 
 	"github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -586,5 +587,60 @@ func runningPodOn(node, namespace, claim string) *corev1.Pod {
 			}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// TestAMoveThatLandedIsCountedForTheRealignment. A volume that moved leaves the
+// cluster's data laid out against the placement it had before, and the
+// rebalancer's periodic loop asks the control plane to realign once enough
+// moves have accumulated. It counts them off status.volumeMoveGeneration, so a
+// move that did not increment it is a realignment that is never asked for — and
+// the counter is per cluster rather than per move, so nothing else notices the
+// omission.
+func TestAMoveThatLandedIsCountedForTheRealignment(t *testing.T) {
+	api := idleSubsystem()
+	r := testReconciler(t, api, testWorld()...)
+
+	api.read = controlplane.Migration{ID: testMigrationID, Phase: "done", Status: migrationStatusDone}
+	for range 8 {
+		runPass(t, r)
+	}
+	if got := operationFrom(t, r).Status.Phase; got != simplyblockv1alpha2.PersistentVolumeOpsPhaseSucceeded {
+		t.Fatalf("phase = %q, want Succeeded", got)
+	}
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Namespace: testNamespace, Name: testClusterCR}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	if got := ptr.Int64FromOrZero(cluster.Status.VolumeMoveGeneration); got != 1 {
+		t.Errorf("volumeMoveGeneration = %d, want 1: the move was not counted", got)
+	}
+}
+
+// TestAMoveThatDidNotLandIsNotCounted. The counter says how much realignment is
+// owed, and an aborted move owes none: the volume never left.
+func TestAMoveThatDidNotLandIsNotCounted(t *testing.T) {
+	api := idleSubsystem()
+	r := testReconciler(t, api, testWorld()...)
+
+	runPass(t, r)
+	runPass(t, r)
+
+	ops := operationFrom(t, r)
+	ops.Spec.Abort = true
+	if err := r.Update(context.Background(), ops); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, r)
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Namespace: testNamespace, Name: testClusterCR}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	if got := ptr.Int64FromOrZero(cluster.Status.VolumeMoveGeneration); got != 0 {
+		t.Errorf("volumeMoveGeneration = %d, want 0: nothing moved", got)
 	}
 }

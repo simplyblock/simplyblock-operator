@@ -1,10 +1,9 @@
-package controller
+package volume
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -28,7 +27,7 @@ import (
 const (
 	testVMNamespace   = "sb"
 	testVMName        = "mig-test"
-	testPVName        = "pv-1"
+	testVMPVName      = "pv-1"
 	testClusterUUID   = "cluster-uuid"
 	testPoolUUID      = "pool-uuid"
 	testVolumeUUID    = "vol-uuid"
@@ -43,10 +42,6 @@ const (
 	testConsumerNode   = "consumer-worker"
 	testSiblingNode    = "sibling-worker"
 )
-
-// unreachableAPI is a base URL that always fails to connect; use it for tests
-// that must never reach the storage API.
-const unreachableAPI = "http://127.0.0.1:1"
 
 // newVMReconciler builds a VolumeMigrationReconciler backed by a fake k8s client
 // (with VolumeMigration status subresource enabled) and a webapi client pointed
@@ -125,14 +120,6 @@ func serveSubsystemMembers(w http.ResponseWriter, r *http.Request, siblingVolume
 	return true
 }
 
-// newAPIServer starts an httptest server that is closed at test end.
-func newAPIServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 func vmRequest() ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: testVMNamespace, Name: testVMName}}
 }
@@ -150,17 +137,17 @@ func baseVM() *simplyblockv1alpha1.VolumeMigration {
 	return &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{Name: testVMName, Namespace: testVMNamespace},
 		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         testPVName,
+			PVName:         testVMPVName,
 			TargetNodeUUID: "target-node",
 		},
 	}
 }
 
-// csiPV returns a CSI-provisioned PV (named testPVName, matching baseVM's PVName)
+// csiPV returns a CSI-provisioned PV (named testVMPVName, matching baseVM's PVName)
 // with the given volume handle.
 func csiPV(handle string) *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: testPVName},
+		ObjectMeta: metav1.ObjectMeta{Name: testVMPVName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: handle},
