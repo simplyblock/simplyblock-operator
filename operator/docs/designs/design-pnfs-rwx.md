@@ -195,23 +195,32 @@ for that task however correct the alias on the host is. A CSI driver cannot put
 `/dev/disk/by-id` into arbitrary application pods, so the alias alone can never
 be enough.
 
-**The fix this suggests, untested:** have the node plugin issue the first I/O on
-the staging mount at the end of `NodeStageVolume`. The plugin's own container
-mounts the host's `/dev`, so resolution succeeds in *its* namespace, the device
-lands in the client's device cache, and pod I/O afterward finds it already
-resolved. That is a few lines in the stage path, and it should be tried before
-anything more elaborate.
+**The fix this suggests, and it works:** have the node plugin issue the first
+I/O on the staging mount at the end of `NodeStageVolume`. The plugin's own
+container mounts the host's `/dev`, so resolution succeeds in *its* namespace
+and the device lands in the client's device cache. Tested by hand on a freshly
+purged cache: a 4 MiB write from inside the csi-node container produced **no**
+`no device found`, and every pod write afterward was equally quiet, where before
+priming each one logged it. That is a few lines in the stage path.
 
-**Separately, the client returns the layout without using it**, 54 to 80
-microseconds after `LAYOUTGET` and before any I/O, with no
-`pnfs_mds_fallback_*` tracepoint firing -- so the rejection is in
-`bl_alloc_lseg`, not in the write path. A host-context run with a freshly purged
-device cache showed no `no device found`, and the namespace gained a third
-registrant, which only happens when `bl_parse_scsi` runs to completion. The
-layout was still returned. Whether that is the `INVALID_DATA` extent state, a
-device-cache entry poisoned by an earlier container-context failure, or
-something else is not yet established, and it wants a run where no pod has ever
-touched the volume.
+It is necessary and not sufficient: with the device resolving, the write still
+goes to the metadata server, for the reason below.
+
+**The client returns the layout without using it**, 54 to 80 microseconds after
+`LAYOUTGET` and before any I/O, with no `pnfs_mds_fallback_*` tracepoint firing.
+The rejection is therefore in `bl_alloc_lseg`, not in the write path: the client
+is refusing the layout it was given rather than trying and falling back. It does
+this with the device resolved and cached, so it is independent of the namespace
+problem above.
+
+The one thing in the layout that is not routine is `se_state =
+PNFS_SCSI_INVALID_DATA`, and whether the Linux SCSI-layout client accepts an
+`INVALID_DATA` extent for a RW layout is the question to answer next -- against
+the client source for 5.14.0-687, since that decides whether this is reachable
+on RHEL 9 at all or needs a newer client. A host-context run on a freshly purged
+cache also left the namespace with a third registrant, which only happens when
+`bl_parse_scsi` runs to completion, so the device half of the parse is
+demonstrably fine.
 
 **The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
 in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
