@@ -10,6 +10,7 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -180,5 +181,69 @@ func TestVolumeContextCarriesWhatTheNodeNeeds(t *testing.T) {
 	}
 	if ctx[ctxAccessProtocol] != AccessProtocolNFS {
 		t.Errorf("access_protocol = %q, want %q", ctx[ctxAccessProtocol], AccessProtocolNFS)
+	}
+}
+
+// fakeRegistry records what provisioning and deletion asked of the record.
+type fakeRegistry struct {
+	record   ExportRecord
+	ensured  []string
+	deleted  []string
+	stillGone bool
+}
+
+func (f *fakeRegistry) EnsureExport(_ context.Context, name string, _ ExportSpec) (ExportRecord, error) {
+	f.ensured = append(f.ensured, name)
+	return f.record, nil
+}
+
+func (f *fakeRegistry) DeleteExport(_ context.Context, name string) (bool, error) {
+	f.deleted = append(f.deleted, name)
+	return f.stillGone, nil
+}
+
+// Deleting an RWX claim has to take the export down with it. The record is the
+// only description of a mount, an exports entry, and an attached namespace on
+// the metadata-server host, so a DeleteVolume that skipped it would leave all
+// three running with nothing left naming them.
+func TestDeleteRWXVolumeDeletesTheExportRecord(t *testing.T) {
+	const (
+		cluster = "f0bb9077-78c4-4482-9ccf-a5693ce2df78"
+		pool    = "9d016dd4-34d7-42f0-b549-52a5af2f1399"
+		volume  = "bfc56677-d602-4017-804b-975f3b929e3f"
+	)
+	registry := &fakeRegistry{}
+	handle := "nfs:" + cluster + ":" + pool + ":" + volume
+
+	// The record is still there, so the call is not finished: the host teardown
+	// runs behind the record's finalizer.
+	_, err := deleteExportFor(context.Background(), registry, handle)
+	if err == nil {
+		t.Fatal("deletion reported success while the export was still being torn down")
+	}
+	want := exportRecordName(cluster, pool, volume)
+	if len(registry.deleted) != 1 || registry.deleted[0] != want {
+		t.Fatalf("deleted %v, want one delete of %s", registry.deleted, want)
+	}
+}
+
+// Once the record is gone the host side is torn down, and deletion continues to
+// the backing volume. The block handle is reconstructed from the same three
+// fields the pNFS handle carries, because it is the same volume.
+func TestDeletedExportYieldsTheBackingBlockHandle(t *testing.T) {
+	const (
+		cluster = "f0bb9077-78c4-4482-9ccf-a5693ce2df78"
+		pool    = "9d016dd4-34d7-42f0-b549-52a5af2f1399"
+		volume  = "bfc56677-d602-4017-804b-975f3b929e3f"
+	)
+	registry := &fakeRegistry{stillGone: true}
+
+	backing, err := deleteExportFor(context.Background(),
+		registry, "nfs:"+cluster+":"+pool+":"+volume)
+	if err != nil {
+		t.Fatalf("deleteExportFor: %v", err)
+	}
+	if want := cluster + ":" + pool + ":" + volume; backing != want {
+		t.Errorf("backing handle = %q, want %q", backing, want)
 	}
 }

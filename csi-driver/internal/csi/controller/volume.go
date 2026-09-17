@@ -12,6 +12,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -148,6 +149,24 @@ func (cs *Server) DeleteVolume(
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	// A pNFS volume is two things, and the export has to go first: the record
+	// is the only description of a live mount and an exports entry on the
+	// metadata-server host, and deleting the backing volume under them would
+	// pull the namespace out from beneath a mounted filesystem. Once the record
+	// is gone the host is torn down, and what is left is an ordinary volume,
+	// which the rest of this function deletes under its own handle.
+	//
+	// Without this branch the handle simply fails to parse below and deletion
+	// reports success, leaving the export, the mount, and the volume all
+	// running with nothing left naming them.
+	if lvol.VolumeHandle(volumeID).IsNFS() {
+		backing, err := deleteExportFor(ctx, cs.exports, volumeID)
+		if err != nil {
+			return nil, err
+		}
+		volumeID = backing
 	}
 
 	// Invalid format means the volume was never created by this driver - treat as already deleted.

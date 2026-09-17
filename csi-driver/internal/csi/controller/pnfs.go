@@ -144,6 +144,17 @@ type ExportRegistry interface {
 	// provisioner retries CreateVolume, and a retry must not leave a second
 	// export behind.
 	EnsureExport(ctx context.Context, name string, spec ExportSpec) (ExportRecord, error)
+
+	// DeleteExport removes the record and reports whether it is gone. It is
+	// not gone the moment it is deleted: the operator holds a finalizer while
+	// it unmounts, unpublishes, and detaches on the host, and the backing
+	// volume must not be deleted until that has finished.
+	//
+	// The record is addressed by name alone, without a namespace, because
+	// DeleteVolume is given a volume handle and nothing else -- not the claim
+	// it belonged to, and not the namespace it was in. The name is a digest of
+	// the volume's identity and so is unique across the cluster.
+	DeleteExport(ctx context.Context, name string) (gone bool, err error)
 }
 
 // ExportSpec is what the controller asks for when it creates a record. Every

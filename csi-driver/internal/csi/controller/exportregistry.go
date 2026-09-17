@@ -150,3 +150,36 @@ func recordFrom(object *unstructured.Unstructured) ExportRecord {
 		Message:        get("status", "message"),
 	}
 }
+
+// DeleteExport removes the record and reports whether it is gone.
+//
+// The record is found by listing every namespace rather than fetched by key,
+// because DeleteVolume is handed a volume handle and nothing else: not the
+// claim the volume belonged to, and not the namespace it was in. The name is a
+// digest of the volume's identity, so at most one object in the cluster carries
+// it and the list is unambiguous.
+//
+// Not-gone is the normal answer on the first call. The operator holds a
+// finalizer while it unmounts, unpublishes, and detaches on the host, so the
+// object outlives the delete by however long that takes, and the backing volume
+// must not be deleted until it has finished.
+func (r *dynamicExportRegistry) DeleteExport(ctx context.Context, name string) (bool, error) {
+	all := r.client.Resource(nfsExportGVR).Namespace(metav1.NamespaceAll)
+	listed, err := all.List(ctx, metav1.ListOptions{
+		FieldSelector: "metadata.name=" + name,
+	})
+	if err != nil {
+		return false, fmt.Errorf("finding export %s: %w", name, err)
+	}
+	if len(listed.Items) == 0 {
+		return true, nil
+	}
+
+	found := listed.Items[0]
+	api := r.client.Resource(nfsExportGVR).Namespace(found.GetNamespace())
+	if err := api.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("deleting export %s: %w", name, err)
+	}
+	// Deleted is not gone. Say so, and let the caller come back.
+	return false, nil
+}
