@@ -164,10 +164,54 @@ Ruled out by measurement, so that nobody repeats it:
   no process holds it.
 - *PTPL.* `ptpls: 1` on the namespace, so the sbcli fix is in effect.
 
-What is left is the server side of `GETDEVICEINFO`: which designator type and
-length `nfsd` puts in the reply, against what `bl_validate_designator` and
-`bl_open_path` expect. That needs a capture of the `GETDEVICEINFO` reply or
-tracing in the client's `bl_parse_scsi`, and it is the next thing to do.
+The `GETDEVICEINFO` reply is not the problem: it returns `status=0`, and a
+capture of the `LAYOUTGET` reply decodes cleanly to a valid RW SCSI layout whose
+one extent names the right device.
+
+```
+lo_iomode  0x00000002  LAYOUTIOMODE4_RW
+loc_type   0x00000005  LAYOUT4_SCSI
+extents    1
+  se_vol_id         04 00 00 ... (matches the deviceid the client resolves)
+  se_file_offset    0
+  se_length         0x400000      4 MiB
+  se_storage_offset 0x1f818000
+  se_state          0x00000002    PNFS_SCSI_INVALID_DATA
+```
+
+Two things were learned instead, and the first is the actionable one.
+
+**The device path is resolved in the calling process's mount namespace.** The
+`no device found` warning fires only when the writer is a process inside a pod,
+and never when the same write is issued from the host against the same mount
+with the same alias in place. A pod's `/dev` is the minimal one kubelet builds:
+
+```
+core fd full mqueue null ptmx pts random shm stderr stdin stdout tty urandom zero
+```
+
+There is no `disk/` in it, so `/dev/disk/by-id/nvme-eui.<nguid>` cannot resolve
+for that task however correct the alias on the host is. A CSI driver cannot put
+`/dev/disk/by-id` into arbitrary application pods, so the alias alone can never
+be enough.
+
+**The fix this suggests, untested:** have the node plugin issue the first I/O on
+the staging mount at the end of `NodeStageVolume`. The plugin's own container
+mounts the host's `/dev`, so resolution succeeds in *its* namespace, the device
+lands in the client's device cache, and pod I/O afterward finds it already
+resolved. That is a few lines in the stage path, and it should be tried before
+anything more elaborate.
+
+**Separately, the client returns the layout without using it**, 54 to 80
+microseconds after `LAYOUTGET` and before any I/O, with no
+`pnfs_mds_fallback_*` tracepoint firing -- so the rejection is in
+`bl_alloc_lseg`, not in the write path. A host-context run with a freshly purged
+device cache showed no `no device found`, and the namespace gained a third
+registrant, which only happens when `bl_parse_scsi` runs to completion. The
+layout was still returned. Whether that is the `INVALID_DATA` extent state, a
+device-cache entry poisoned by an earlier container-context failure, or
+something else is not yet established, and it wants a run where no pod has ever
+touched the volume.
 
 **The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
 in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
