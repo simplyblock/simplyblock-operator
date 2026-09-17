@@ -1,12 +1,13 @@
-// Round trips that start at the hub, which is the direction storage now takes.
+// Round trips that start at the hub, which is the direction a v1alpha1 client
+// forces.
 //
-// v1alpha1 is the storage version while v1alpha2 is served beside it
-// (design-property-renames.md §3.8), so a controller writing v1alpha2 has its
-// object converted down to v1alpha1 to be stored and back up to v1alpha2 on the
-// next read. That makes hub → spoke → hub the fidelity that matters in practice,
-// and it is not the same property as the spoke → hub → spoke trip the per-kind
-// tests already cover: a field only the hub can express survives one and not the
-// other.
+// v1alpha2 is the storage version and v1alpha1 is served beside it
+// (design-property-renames.md §3.8), so an object a controller wrote is converted
+// down to v1alpha1 for any client that asks for that version and back up to
+// v1alpha2 on the next read of it. That makes hub → spoke → hub the fidelity that
+// matters in practice, and it is not the same property as the spoke → hub → spoke
+// trip the per-kind tests already cover: a field only the hub can express survives
+// one and not the other.
 
 package v1alpha1
 

@@ -197,9 +197,10 @@ type StoragePoolSpec struct {
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
 
-	// AllowedNodes restricts which storage nodes may host this pool's volumes.
-	// Empty means every node in the cluster. Narrowing it stops new volumes
-	// landing on the removed nodes and leaves the existing ones where they are.
+	// AllowedNodes restricts which hosts may carry this pool's volumes, by
+	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+	// stops new volumes landing on the removed nodes and leaves the existing
+	// ones where they are.
 	//
 	// The list is left exactly as authored: a name that no longer resolves is
 	// dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -277,10 +278,11 @@ type StoragePoolStatus struct {
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
 
-	// AllowedNodes is Spec.AllowedNodes resolved against the StorageNodes that
-	// exist, which is what the control plane is sent. An empty list here is not
-	// the same as an absent Spec.AllowedNodes: absent means every node, and
-	// empty after resolution means the pool can place nothing.
+	// AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+	// exist, which is what the control plane's host list and the per-pool node
+	// labels are derived from. An empty list here is not the same as an absent
+	// Spec.AllowedNodes: absent means every node, and empty after resolution
+	// means the pool can place nothing.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`

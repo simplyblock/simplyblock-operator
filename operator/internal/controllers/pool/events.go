@@ -39,9 +39,9 @@ const (
 	QoSParameterConflict = "QoSParameterConflict"
 
 	// AllowedNodeMissing says an entry in spec.allowedNodes resolves to no
-	// StorageNode. It is raised once per name rather than every pass, because
-	// the authored list is deliberately left as written and repeating the event
-	// would say nothing new.
+	// Kubernetes Node. It is raised once per name rather than every pass,
+	// because the authored list is deliberately left as written and repeating
+	// the event would say nothing new.
 	AllowedNodeMissing = "AllowedNodeMissing"
 
 	// StorageClassStillAssigned and VolumesStillBound are the two that explain a
