@@ -22,7 +22,10 @@ import (
 
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
@@ -180,6 +183,237 @@ var _ = ginkgo.Describe("SPDKCSI-VDO", func() {
 			"deduplication should keep physical growth (%d blocks) far under logical growth (%d blocks) "+
 				"for nine exact duplicates", dataGrowth, logicalGrowth)
 	})
+
+	// -------------------------------------------------------------------------
+	// Snapshot restore
+	// -------------------------------------------------------------------------
+
+	ginkgo.It("a volume restored from a snapshot of a VDO volume is itself VDO-backed", func() {
+		ns := f.Namespace.Name
+		const (
+			scName = "spdkcsi-e2e-vdo-snapshot"
+			// Names fixed by templates/snapshot-only.yaml (deploySnapshotOnly).
+			srcPVCName   = "spdkcsi-pvc"
+			srcPodName   = "spdkcsi-test-vdo-snapshot-src"
+			snapshotName = "spdk-snapshot-deletion-test"
+			restorePVC   = "spdkcsi-pvc-vdo-restore"
+			restorePod   = "spdkcsi-test-vdo-restore"
+			dataMarker   = "vdo-e2e-snapshot-restore-marker"
+		)
+
+		ginkgo.By("create a StorageClass asking for client-side compression")
+		createStorageClass(f, scName, map[string]string{
+			"client_compression": trueStr,
+		}, nil)
+		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+
+		ginkgo.By("create source PVC and pod, write a data marker")
+		framework.ExpectNoError(createPVC(f.ClientSet, ns, srcPVCName, scName, vdoVolumeSize), "create source PVC")
+		ginkgo.DeferCleanup(func() {
+			framework.ExpectNoError(
+				f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+					Delete(context.Background(), srcPVCName, metav1.DeleteOptions{}),
+			)
+		})
+		framework.ExpectNoError(createPodForPVC(f.ClientSet, ns, srcPodName, srcPVCName), "create source pod")
+		ginkgo.DeferCleanup(func() { deletePodByName(f.ClientSet, ns, srcPodName) })
+		framework.ExpectNoError(
+			waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, srcPodName),
+			"wait for source pod",
+		)
+		srcPodLabel := metav1.ListOptions{LabelSelector: "app=" + srcPodName}
+		writeDataToPod(f, ns, &srcPodLabel, dataMarker, "/spdkvol/marker")
+		// writeDataToPod does not sync, and this spec's source pod stays mounted.
+		execCommandInPod(f, "sync", ns, &srcPodLabel)
+
+		ginkgo.By("snapshot the source volume")
+		deploySnapshotOnly(ns)
+		ginkgo.DeferCleanup(func() { deleteSnapshotOnly(ns) })
+		framework.ExpectNoError(
+			waitForSnapshotReady(ns, snapshotName, 3*time.Minute),
+			"wait for snapshot to be ready",
+		)
+
+		ginkgo.By("restore the snapshot into a new PVC on the same VDO StorageClass")
+		framework.ExpectNoError(
+			createPVCFromDataSource(f.ClientSet, ns, restorePVC, scName, resource.MustParse("20Gi"),
+				corev1.TypedLocalObjectReference{
+					APIGroup: strPtr("snapshot.storage.k8s.io"),
+					Kind:     "VolumeSnapshot",
+					Name:     snapshotName,
+				}),
+			"create restore PVC",
+		)
+		ginkgo.DeferCleanup(func() {
+			framework.ExpectNoError(
+				f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+					Delete(context.Background(), restorePVC, metav1.DeleteOptions{}),
+			)
+		})
+		framework.ExpectNoError(createPodForPVC(f.ClientSet, ns, restorePod, restorePVC), "create restore pod")
+		ginkgo.DeferCleanup(func() { deletePodByName(f.ClientSet, ns, restorePod) })
+		framework.ExpectNoError(
+			waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, restorePod),
+			"wait for restore pod",
+		)
+
+		ginkgo.By("verify the restored volume carries the source's data")
+		restorePodLabel := metav1.ListOptions{LabelSelector: "app=" + restorePod}
+		compareDataInPod(f, ns, &restorePodLabel, []string{dataMarker}, []string{"/spdkvol/marker"})
+
+		ginkgo.By("verify the restored volume has its own active VDO device")
+		workerNode := testPodNode(f.ClientSet, ns, restorePod)
+		pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
+		lvolID := lvolIDForPVC(f.ClientSet, ns, restorePVC)
+		device := vdoDeviceName(f, pluginPod, pluginContainer, lvolID)
+		readVDOStats(f, pluginPod, pluginContainer, device) // fails the spec if not a real, running VDO device
+	})
+
+	// -------------------------------------------------------------------------
+	// Clone
+	// -------------------------------------------------------------------------
+
+	ginkgo.It("a volume cloned from a VDO volume is itself VDO-backed", func() {
+		ns := f.Namespace.Name
+		const (
+			scName     = "spdkcsi-e2e-vdo-clone"
+			srcPVCName = "spdkcsi-pvc-vdo-clone-src"
+			srcPodName = "spdkcsi-test-vdo-clone-src"
+			clonePVC   = "spdkcsi-pvc-vdo-clone"
+			clonePod   = "spdkcsi-test-vdo-clone"
+			dataMarker = "vdo-e2e-clone-marker"
+		)
+
+		ginkgo.By("create a StorageClass asking for client-side deduplication")
+		createStorageClass(f, scName, map[string]string{
+			"client_deduplication": trueStr,
+		}, nil)
+		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+
+		ginkgo.By("create source PVC and pod, write a data marker")
+		framework.ExpectNoError(createPVC(f.ClientSet, ns, srcPVCName, scName, vdoVolumeSize), "create source PVC")
+		ginkgo.DeferCleanup(func() {
+			framework.ExpectNoError(
+				f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+					Delete(context.Background(), srcPVCName, metav1.DeleteOptions{}),
+			)
+		})
+		framework.ExpectNoError(createPodForPVC(f.ClientSet, ns, srcPodName, srcPVCName), "create source pod")
+		framework.ExpectNoError(
+			waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, srcPodName),
+			"wait for source pod",
+		)
+		srcPodLabel := metav1.ListOptions{LabelSelector: "app=" + srcPodName}
+		writeDataToPod(f, ns, &srcPodLabel, dataMarker, "/spdkvol/marker")
+
+		// Mirrors SPDKCSI-CLONE: some backends require the source unused to clone.
+		ginkgo.By("delete source pod before cloning")
+		deletePodByName(f.ClientSet, ns, srcPodName)
+		framework.ExpectNoError(
+			waitForTestPodGone(f.ClientSet, ns, srcPodName),
+			"wait for source pod to terminate",
+		)
+
+		ginkgo.By("clone the source PVC on the same VDO StorageClass")
+		framework.ExpectNoError(
+			createPVCFromDataSource(f.ClientSet, ns, clonePVC, scName, resource.MustParse("20Gi"),
+				corev1.TypedLocalObjectReference{
+					Kind: "PersistentVolumeClaim",
+					Name: srcPVCName,
+				}),
+			"create clone PVC",
+		)
+		ginkgo.DeferCleanup(func() {
+			framework.ExpectNoError(
+				f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+					Delete(context.Background(), clonePVC, metav1.DeleteOptions{}),
+			)
+		})
+		framework.ExpectNoError(createPodForPVC(f.ClientSet, ns, clonePod, clonePVC), "create clone pod")
+		ginkgo.DeferCleanup(func() { deletePodByName(f.ClientSet, ns, clonePod) })
+		framework.ExpectNoError(
+			waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, clonePod),
+			"wait for clone pod",
+		)
+
+		ginkgo.By("verify the clone carries the source's data")
+		clonePodLabel := metav1.ListOptions{LabelSelector: "app=" + clonePod}
+		compareDataInPod(f, ns, &clonePodLabel, []string{dataMarker}, []string{"/spdkvol/marker"})
+
+		ginkgo.By("verify the clone has its own active VDO device")
+		workerNode := testPodNode(f.ClientSet, ns, clonePod)
+		pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
+		lvolID := lvolIDForPVC(f.ClientSet, ns, clonePVC)
+		device := vdoDeviceName(f, pluginPod, pluginContainer, lvolID)
+		readVDOStats(f, pluginPod, pluginContainer, device)
+	})
+
+	// -------------------------------------------------------------------------
+	// Online expansion
+	// -------------------------------------------------------------------------
+
+	ginkgo.It("a VDO volume can be expanded online, growing both the VDO stack and the filesystem", func() {
+		ns := f.Namespace.Name
+		const (
+			scName     = "spdkcsi-e2e-vdo-expand"
+			pvcName    = "spdkcsi-pvc-vdo-expand"
+			podName    = "spdkcsi-test-vdo-expand"
+			dataMarker = "vdo-e2e-expand-marker"
+			startSize  = 6 << 30 // 6Gi: comfortably above the 5Gi floor
+		)
+		expandedSize := resource.MustParse("12Gi")
+
+		ginkgo.By("create a StorageClass asking for client-side compression")
+		createStorageClass(f, scName, map[string]string{
+			"client_compression": trueStr,
+		}, nil)
+		ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
+
+		ginkgo.By("create PVC and pod, write a data marker")
+		framework.ExpectNoError(createPVC(f.ClientSet, ns, pvcName, scName, startSize), "create PVC")
+		ginkgo.DeferCleanup(func() {
+			framework.ExpectNoError(
+				f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+					Delete(context.Background(), pvcName, metav1.DeleteOptions{}),
+			)
+		})
+		framework.ExpectNoError(createPodForPVC(f.ClientSet, ns, podName, pvcName), "create test pod")
+		ginkgo.DeferCleanup(func() { deletePodByName(f.ClientSet, ns, podName) })
+		framework.ExpectNoError(
+			waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, podName),
+			"wait for test pod",
+		)
+		podLabel := metav1.ListOptions{LabelSelector: "app=" + podName}
+		writeDataToPod(f, ns, &podLabel, dataMarker, "/spdkvol/marker")
+
+		workerNode := testPodNode(f.ClientSet, ns, podName)
+		pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
+		lvolID := lvolIDForPVC(f.ClientSet, ns, pvcName)
+		device := vdoDeviceName(f, pluginPod, pluginContainer, lvolID)
+		before := readVDOStats(f, pluginPod, pluginContainer, device)
+
+		ginkgo.By("resize the PVC")
+		framework.ExpectNoError(resizePVC(f.ClientSet, ns, pvcName, expandedSize), "resize PVC")
+
+		ginkgo.By("wait for PVC status capacity to reflect the new size")
+		framework.ExpectNoError(
+			waitForPVCStorageCapacity(f.ClientSet, ns, pvcName, expandedSize, 5*time.Minute),
+			"wait for PVC capacity",
+		)
+
+		ginkgo.By("wait for the filesystem inside the pod to reflect the new size")
+		framework.ExpectNoError(
+			waitForFilesystemSize(f, ns, &podLabel, "/spdkvol", expandedSize.Value()*9/10, 5*time.Minute),
+			"wait for filesystem resize",
+		)
+
+		ginkgo.By("verify the VDO pool device itself grew, and the data survived")
+		after := readVDOStats(f, pluginPod, pluginContainer, device)
+		gomega.Expect(after.physicalBlocks).To(gomega.BeNumerically(">", before.physicalBlocks),
+			"the VDO pool's own physical capacity (%d blocks) should have grown past its pre-resize size (%d blocks)",
+			after.physicalBlocks, before.physicalBlocks)
+		compareDataInPod(f, ns, &podLabel, []string{dataMarker}, []string{"/spdkvol/marker"})
+	})
 })
 
 // vdoDeviceName resolves the VDO pool device backing lvolID inside the
@@ -211,6 +445,7 @@ func vdoDeviceName(f *framework.Framework, podName, container, lvolID string) st
 type vdoStats struct {
 	dataBlocksUsed    int64
 	logicalBlocksUsed int64
+	physicalBlocks    int64
 }
 
 // readVDOStats runs vdostats --verbose against device inside the csi-node pod
@@ -227,6 +462,7 @@ func readVDOStats(f *framework.Framework, podName, container, device string) vdo
 	return vdoStats{
 		dataBlocksUsed:    vdoStatField(out, "data blocks used"),
 		logicalBlocksUsed: vdoStatField(out, "logical blocks used"),
+		physicalBlocks:    vdoStatField(out, "physical blocks"),
 	}
 }
 
@@ -251,3 +487,28 @@ func vdoStatField(out, field string) int64 {
 	ginkgo.Fail(fmt.Sprintf("vdostats output has no parsable %q field:\n%s", field, out))
 	return 0
 }
+
+// createPVCFromDataSource creates a PVC populated from source — a
+// PersistentVolumeClaim to clone or a VolumeSnapshot to restore — on scName,
+// requesting size. createPVC (utils.go) has no equivalent: a data source is
+// its own concern, not a variant of a plain PVC's.
+func createPVCFromDataSource(
+	c kubernetes.Interface, ns, pvcName, scName string, size resource.Quantity, source corev1.TypedLocalObjectReference,
+) error {
+	_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(context.Background(), &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: &scName,
+			DataSource:       &source,
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
+			},
+		},
+	}, metav1.CreateOptions{})
+	return err
+}
+
+// strPtr returns a pointer to s, for the one-off *string fields Kubernetes API
+// types carry (TypedLocalObjectReference.APIGroup here).
+func strPtr(s string) *string { return &s }
