@@ -8,6 +8,7 @@ package main
 import (
 	"fmt"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -25,10 +26,17 @@ import (
 // CustomResourceDefinition is in it because the upgrade applies CRDs, waits for
 // them to be established, and later switches their storage version, and none of
 // that is reachable through the typed clients for the group being upgraded.
+//
+// The snapshot API is in it because §16.4 normalizes the handles a
+// VolumeSnapshotContent carries as well as a PersistentVolume's. Registering a
+// kind the cluster may not serve costs nothing and is what makes the absence
+// legible: a kind that is registered and not served is reported and skipped,
+// where one the scheme does not know fails the whole discovery.
 func newScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
 	return scheme

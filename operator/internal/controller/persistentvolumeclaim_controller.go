@@ -20,7 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/simplyblock/atlas/kube"
-	atlaslvol "github.com/simplyblock/atlas/lvol"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -57,7 +56,7 @@ const (
 // pinned-volume value differs from the AnnotationPinnedVolumeApplied marker it
 // writes after acting, so its own annotation writes do not re-trigger a
 // migration. A validating admission webhook rejects an unknown storage node at
-// write time; the re-validation here is a defense-in-depth backstop (e.g. for
+// write time; the re-validation here is a defense-in-depth backstop (e.g., for
 // values that predate the webhook, or a node removed after the pin was set).
 type PersistentVolumeClaimReconciler struct {
 	client.Client
@@ -160,7 +159,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	}
 
 	// Serialize per PV: wait for any in-flight pin migration to finish before
-	// requesting another (e.g. when the target changed while one was running).
+	// requesting another (e.g., when the target changed while one was running).
 	active, err := r.hasActiveMigration(ctx, cluster.Namespace, pv.Name)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -308,15 +307,18 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 // handle through the atlas helpers, so the handle grammar lives in one place.
 // ok is false when the PV is not a simplyblock CSI volume or the handle is
 // malformed.
+//
+// The normalized reader rather than the field's own, because a volume
+// provisioned before the v2 API migration spells its pool as a name in a field
+// the API server refuses to change, and the pool this returns is handed to the
+// control plane (design-api-upgrade.md §16.4). A volume the migration has not
+// reached, or a cluster nobody has migrated, still reports the name.
 func csiVolumeHandleParts(pv *corev1.PersistentVolume) (clusterUUID, poolRef, volumeUUID string, ok bool) {
-	raw, err := kube.VolumeHandleFromPV(pv)
+	normalized, err := kube.NormalizedVolumeHandleFromPV(pv)
 	if err != nil {
 		return "", "", "", false
 	}
-	h, parsed := atlaslvol.ParseHandle(raw)
-	if !parsed {
-		return "", "", "", false
-	}
+	h := normalized.Handle
 	return h.ClusterID, h.PoolRef, h.VolumeID, true
 }
 
