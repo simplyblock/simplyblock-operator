@@ -9,8 +9,7 @@
 //
 // design-storagedevice.md §6 specifies five actions. One is served by the
 // control plane's v2 API and is built; the other four are blocked on verbs that
-// API does not offer, and [ExternalDependencies] is the list, so the ask is a
-// value in this repository rather than a sentence in a document.
+// API does not offer, and the TODO beside their constants is the ask.
 //
 // **The enum admits only what the operator can perform.** Declaring the other
 // four now would accept an object whose first reconcile can only fail, and an
@@ -40,83 +39,37 @@ const (
 	// recycling one device rather than its node.
 	StorageDeviceOpsActionRestart StorageDeviceOpsAction = "Restart"
 
-	// The four actions §6 specifies and the API cannot serve. They are declared
-	// so that the names exist where the reason does, and they are absent from
-	// the Enum marker above: an object naming one is refused at admission
-	// rather than accepted and failed.
+	// TODO(storagedeviceops): EXTERNAL DEPENDENCY — the four actions below wait
+	// on control-plane verbs the v2 API does not offer. It serves restart,
+	// remove, and reset where design-storagedevice.md §7 asks for seven, and
+	// remove buys no action on its own: it is a step of Replace and of Migrate,
+	// and both also need the adopt call that names the device arriving.
+	//
+	//	SelfTest  POST /api/v2/clusters/{c}/storage-nodes/{n}/devices/{d}/self-test
+	//	          runs the device's own self-test and reports the verdict, with
+	//	          the short or extended mode in the body.
+	//	Fail      POST .../devices/{d}/fail
+	//	          takes a device out of the data path and leaves it in the slot,
+	//	          so the cluster rebuilds its redundancy elsewhere and stops
+	//	          reading from a device somebody has judged untrustworthy.
+	//	Replace   POST .../devices/adopt
+	//	          names the device that arrived; the removal verb exists and the
+	//	          pairing is what makes the arrival identifiable.
+	//	Migrate   POST .../devices/{d}/detach, and the adopt above accepting a
+	//	          device WITH ITS CONTENTS. An adopt that can only take an empty
+	//	          device turns Migrate into two Replaces and a full rebuild,
+	//	          which is what §6.2 gives as the action's reason to exist. This
+	//	          is the row whose absence removes an action rather than
+	//	          degrading it.
+	//
+	// The constants are declared and absent from the Enum marker above, so the
+	// names exist where the reason does while an object naming one is refused at
+	// admission rather than accepted and failed.
 	StorageDeviceOpsActionSelfTest StorageDeviceOpsAction = "SelfTest"
 	StorageDeviceOpsActionFail     StorageDeviceOpsAction = "Fail"
 	StorageDeviceOpsActionReplace  StorageDeviceOpsAction = "Replace"
 	StorageDeviceOpsActionMigrate  StorageDeviceOpsAction = "Migrate"
 )
-
-// ExternalDependency is one action this kind specifies, the control-plane
-// capability it waits on, and what its absence costs.
-//
-// It is data rather than prose because the list is an ask of another team and a
-// checklist for this one: each row names the endpoint to build, and the action
-// ships when the row does. A design paragraph saying the same thing cannot be
-// enumerated, cannot be tested against the enum, and goes stale the day one
-// endpoint arrives.
-type ExternalDependency struct {
-	// Action is what this unblocks.
-	Action StorageDeviceOpsAction
-
-	// Endpoint is the v2 API call the action issues, in the shape
-	// design-storagedevice.md §7 asks for.
-	Endpoint string
-
-	// Because says what the action does with it, so the ask carries its own
-	// justification rather than a section number.
-	Because string
-}
-
-// ExternalDependencies are the four actions of §6 that the v2 API cannot serve
-// today, and the verb each one needs.
-//
-// The API offers three device verbs — restart, remove, and reset — where §7 asks
-// for seven. Restart is built on the first. Remove exists and is not enough on
-// its own: it is a step of Replace and of Migrate, and both of those also need
-// an adopt call to name the device that arrives, so the verb that exists buys
-// neither action.
-//
-// Migrate's row is the one whose absence removes an action rather than degrading
-// it. Attaching asks the control plane to accept a device as another node's with
-// its contents intact, so the chunks on it are re-homed rather than rebuilt. A
-// control plane that can only adopt a device as empty turns Migrate into two
-// Replaces and a full rebuild, which is the thing §6.2 gives as the reason the
-// action exists.
-func ExternalDependencies() []ExternalDependency {
-	const base = "POST /api/v2/clusters/{cluster}/storage-nodes/{node}/devices/"
-	return []ExternalDependency{
-		{
-			Action:   StorageDeviceOpsActionSelfTest,
-			Endpoint: base + "{device}/self-test",
-			Because: "the action runs the device's own self-test and reports the verdict, " +
-				"with the short or extended mode in the body",
-		},
-		{
-			Action:   StorageDeviceOpsActionFail,
-			Endpoint: base + "{device}/fail",
-			Because: "the action takes a device out of the data path and leaves it in the " +
-				"slot, so the cluster rebuilds its redundancy elsewhere and stops reading " +
-				"from a device somebody has judged untrustworthy",
-		},
-		{
-			Action:   StorageDeviceOpsActionReplace,
-			Endpoint: base + "adopt",
-			Because: "the action pairs a removal with an arrival, and the removal verb " +
-				"exists while the call naming the device that arrived does not",
-		},
-		{
-			Action:   StorageDeviceOpsActionMigrate,
-			Endpoint: base + "{device}/detach, and " + base + "adopt accepting a device with its contents",
-			Because: "the action moves the drive to another node with what is on it; an " +
-				"adopt that can only take an empty device makes this two replacements and " +
-				"a full rebuild, which is what the action exists to avoid",
-		},
-	}
-}
 
 // StorageDeviceOpsPhase is the operation's own progress.
 // +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Aborted
