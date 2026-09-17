@@ -37,10 +37,15 @@ const (
 // It mirrors export.Spec field for field.
 type ExportSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// nguid identifies the backing namespace. It is the identifier rather than a
-	// device path because a path is assigned in attach order and differs across
-	// hosts, while this is a property of the namespace.
-	Nguid string `protobuf:"bytes,1,opt,name=nguid,proto3" json:"nguid,omitempty"`
+	// volume_uuid identifies the backing namespace: for a simplyblock volume the
+	// namespace UUID is the logical volume's own id. It is the identifier rather
+	// than a device path because a path is assigned in attach order and differs
+	// across hosts, while this is a property of the namespace.
+	//
+	// It is the UUID rather than the NGUID because the UUID is what the control
+	// plane knows when it provisions; the NGUID is assigned by the target and
+	// read back from the device.
+	VolumeUuid string `protobuf:"bytes,1,opt,name=volume_uuid,json=volumeUuid,proto3" json:"volume_uuid,omitempty"`
 	// path is the mount point and the exported directory.
 	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	// fsid is what the export is published under. Holding it stable across hosts
@@ -84,9 +89,9 @@ func (*ExportSpec) Descriptor() ([]byte, []int) {
 	return file_export_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *ExportSpec) GetNguid() string {
+func (x *ExportSpec) GetVolumeUuid() string {
 	if x != nil {
-		return x.Nguid
+		return x.VolumeUuid
 	}
 	return ""
 }
@@ -276,10 +281,11 @@ var File_export_proto protoreflect.FileDescriptor
 
 const file_export_proto_rawDesc = "" +
 	"\n" +
-	"\fexport.proto\x12\x0fatlas.export.v1\"d\n" +
+	"\fexport.proto\x12\x0fatlas.export.v1\"o\n" +
 	"\n" +
-	"ExportSpec\x12\x14\n" +
-	"\x05nguid\x18\x01 \x01(\tR\x05nguid\x12\x12\n" +
+	"ExportSpec\x12\x1f\n" +
+	"\vvolume_uuid\x18\x01 \x01(\tR\n" +
+	"volumeUuid\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04fsid\x18\x03 \x01(\tR\x04fsid\x12\x18\n" +
 	"\aclients\x18\x04 \x03(\tR\aclients\"F\n" +

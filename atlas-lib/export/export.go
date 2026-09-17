@@ -51,11 +51,16 @@ var exportOptions = []string{"rw", "sync", "no_subtree_check", "no_root_squash",
 // Spec is one export to assemble: which device, where it goes, and who may
 // mount it.
 type Spec struct {
-	// NGUID identifies the backing namespace. It is the identifier rather than
-	// a device path because a path is assigned by the kernel in attach order
-	// and is not the same across hosts, while this is a property of the
-	// namespace itself.
-	NGUID string
+	// VolumeUUID identifies the backing namespace: for a simplyblock volume the
+	// namespace UUID is the logical volume's own id. It is the identifier
+	// rather than a device path because a path is assigned by the kernel in
+	// attach order and is not the same across hosts, while this is a property
+	// of the namespace itself.
+	//
+	// It is the UUID rather than the NGUID because the UUID is what the control
+	// plane knows when it provisions: the NGUID is assigned by the target and
+	// is read back from the device, which the provisioning side cannot do.
+	VolumeUUID string
 
 	// Path is the mount point and the exported directory. It carries namespace
 	// and volume information, because a PVC name is unique only within a
@@ -76,8 +81,8 @@ type Spec struct {
 // Validate reports whether the spec can be assembled at all.
 func (s Spec) Validate() error {
 	switch {
-	case s.NGUID == "":
-		return fmt.Errorf("export: no NGUID: %w", ErrInvalidSpec)
+	case s.VolumeUUID == "":
+		return fmt.Errorf("export: no volume UUID: %w", ErrInvalidSpec)
 	case s.Path == "":
 		return fmt.Errorf("export: no path: %w", ErrInvalidSpec)
 	case s.FSID == "":
@@ -170,14 +175,14 @@ func (a *Assembler) Create(ctx context.Context, spec Spec) error {
 		return err
 	}
 
-	device, err := a.cfg.Devices.ByNGUID(ctx, spec.NGUID)
+	device, err := a.cfg.Devices.ByUUID(ctx, spec.VolumeUUID)
 	if err != nil {
-		return fmt.Errorf("export %s: finding device nguid=%s: %w", spec.Path, spec.NGUID, err)
+		return fmt.Errorf("export %s: finding device uuid=%s: %w", spec.Path, spec.VolumeUUID, err)
 	}
 	devPath := device.Namespace.DevicePath
 	if devPath == "" {
-		return fmt.Errorf("export %s: device nguid=%s has no block node: %w",
-			spec.Path, spec.NGUID, errs.ErrNotFound)
+		return fmt.Errorf("export %s: device uuid=%s has no block node: %w",
+			spec.Path, spec.VolumeUUID, errs.ErrNotFound)
 	}
 
 	// Format only a device that carries nothing. A device that already holds a

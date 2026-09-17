@@ -134,10 +134,10 @@ func (c *Client) Delete(ctx context.Context, spec export.Spec) error {
 
 func specToProto(s export.Spec) *exportv1.ExportSpec {
 	return &exportv1.ExportSpec{
-		Nguid:   s.NGUID,
-		Path:    s.Path,
-		Fsid:    s.FSID,
-		Clients: s.Clients,
+		VolumeUuid: s.VolumeUUID,
+		Path:       s.Path,
+		Fsid:       s.FSID,
+		Clients:    s.Clients,
 	}
 }
 
@@ -146,9 +146,9 @@ func specFromProto(s *exportv1.ExportSpec) export.Spec {
 		return export.Spec{}
 	}
 	return export.Spec{
-		NGUID:   s.GetNguid(),
-		Path:    s.GetPath(),
-		FSID:    s.GetFsid(),
-		Clients: s.GetClients(),
+		VolumeUUID: s.GetVolumeUuid(),
+		Path:       s.GetPath(),
+		FSID:       s.GetFsid(),
+		Clients:    s.GetClients(),
 	}
 }

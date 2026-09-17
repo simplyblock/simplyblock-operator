@@ -28,6 +28,7 @@ import (
 	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -101,12 +102,22 @@ func Run(conf *config.Config) {
 	// its own in-cluster config + clientset. A missing in-cluster config is
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
+	var exports controller.ExportRegistry
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
+		// The NFSExport records a ReadWriteMany volume needs. A custom resource
+		// is out of reach of the typed client, and generating a typed one for a
+		// kind the driver only creates and reads would be a build dependency on
+		// the operator's module for very little.
+		if dyn, dynErr := dynamic.NewForConfig(k8sConfig); dynErr != nil {
+			klog.Warningf("no dynamic client, so ReadWriteMany volumes cannot be provisioned: %v", dynErr)
+		} else {
+			exports = controller.NewExportRegistry(dyn)
+		}
 	}
 
 	if conf.IsNodeServer {
@@ -119,7 +130,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = controller.New(cd, kubeClient)
+		cs, err = controller.New(cd, kubeClient, exports)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}

@@ -33,10 +33,15 @@ service ExportService {
 // ExportSpec is one export: which device, where it goes, and who may mount it.
 // It mirrors export.Spec field for field.
 message ExportSpec {
-  // nguid identifies the backing namespace. It is the identifier rather than a
-  // device path because a path is assigned in attach order and differs across
-  // hosts, while this is a property of the namespace.
-  string nguid = 1;
+  // volume_uuid identifies the backing namespace: for a simplyblock volume the
+  // namespace UUID is the logical volume's own id. It is the identifier rather
+  // than a device path because a path is assigned in attach order and differs
+  // across hosts, while this is a property of the namespace.
+  //
+  // It is the UUID rather than the NGUID because the UUID is what the control
+  // plane knows when it provisions; the NGUID is assigned by the target and
+  // read back from the device.
+  string volume_uuid = 1;
 
   // path is the mount point and the exported directory.
   string path = 2;

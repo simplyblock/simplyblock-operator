@@ -35,6 +35,17 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // use this directory to persistently store VolumeContext
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A pNFS volume is mounted from an export rather than from a local device,
+	// so it takes its own path: the namespace is still attached, because the
+	// client reads and writes it directly, but what gets mounted is the export.
+	if req.GetVolumeContext()[ctxAccessProtocol] == accessProtocolNFS {
+		if err := ns.stagePNFSVolume(ctx, req, stagingTargetPath); err != nil {
+			klog.Errorf("failed to stage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
 		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)

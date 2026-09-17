@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/simplyblock/atlas/lvol"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // AccessProtocolNFS is the VolumeContext key that tells the node plugin this is
@@ -265,4 +266,61 @@ func (cs *Server) ensureExportRecord(
 		return ExportRecord{}, fmt.Errorf("recording export %s: %w", identity.RecordName, err)
 	}
 	return record, nil
+}
+
+// createRWXVolume finishes provisioning an RWX volume once its backing volume
+// exists: it records the export and waits for the operator to serve it.
+//
+// The backing volume is created first and deliberately. An export with no volume
+// behind it is a record describing nothing, while a volume with no export yet is
+// exactly the state the record is about to describe, and the record's name is
+// derived rather than generated so a retry addresses the same object.
+func (cs *Server) createRWXVolume(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	csiVolume *csi.Volume,
+	clusterID string,
+) (*csi.CreateVolumeResponse, error) {
+	params := req.GetParameters()
+	namespace := params[csicommon.CSIStorageNamespaceKey]
+	pvcName := params[csicommon.CSIStorageNameKey]
+	if namespace == "" || pvcName == "" {
+		// Both arrive from the external provisioner's --extra-create-metadata.
+		// Without them two claims of the same name in different namespaces
+		// would collide on one MDS host, so this is refused rather than guessed.
+		return nil, status.Error(codes.InvalidArgument,
+			"ReadWriteMany needs the PVC name and namespace; enable --extra-create-metadata on the provisioner")
+	}
+
+	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolume.GetVolumeId()))
+	if !ok {
+		return nil, status.Errorf(codes.Internal,
+			"the backing volume handle %q is not well formed", csiVolume.GetVolumeId())
+	}
+
+	identity := deriveIdentity(clusterID, handle.PoolRef, handle.VolumeID, namespace, pvcName)
+
+	// The record carries the logical volume's id, which is what the MDS host
+	// resolves the local device by: for a simplyblock volume the namespace UUID
+	// is the volume's own id. The NGUID is deliberately not set here -- it is
+	// assigned by the target and read back from the device, so only a host with
+	// the namespace attached can know it, and the client reads it from sysfs
+	// when it builds the device alias.
+	record, err := cs.ensureExportRecord(ctx, cs.exports, identity, namespace, handle.VolumeID, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := checkExportReady(identity.RecordName, record); err != nil {
+		return nil, err
+	}
+
+	volume := &csi.Volume{
+		VolumeId:      identity.Handle,
+		CapacityBytes: csiVolume.GetCapacityBytes(),
+		VolumeContext: volumeContextFor(record),
+	}
+	if csiVolume.GetAccessibleTopology() != nil {
+		volume.AccessibleTopology = csiVolume.GetAccessibleTopology()
+	}
+	return &csi.CreateVolumeResponse{Volume: volume}, nil
 }

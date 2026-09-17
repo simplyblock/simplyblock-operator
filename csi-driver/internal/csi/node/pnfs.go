@@ -19,6 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+
+	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/storage"
 )
 
 // aliasDir is where the kernel looks for the device the layout names.
@@ -177,4 +183,74 @@ func unstagePNFS(_ context.Context, mounter NFSMounter, stagingPath, nguid strin
 		}
 	}
 	return removeDeviceAlias(nguid)
+}
+
+// VolumeContext keys the controller writes for a pNFS volume. They are read
+// only here, and nothing else produces them.
+const (
+	ctxAccessProtocol = "access_protocol"
+	ctxExportService  = "export_service"
+	ctxExportPath     = "export_path"
+	ctxNGUID          = "nguid"
+	ctxMountOptions   = "nfs_mount_options"
+
+	accessProtocolNFS = "nfs"
+)
+
+// stagePNFSVolume attaches the export at the staging path.
+//
+// The namespace is already connected by the time this runs: connecting it is
+// the ordinary block path, unchanged, because a pNFS client is an NVMe-oF
+// initiator for the same namespace the MDS made the filesystem on. What is
+// added here is the device alias and the NFS mount.
+func (ns *Server) stagePNFSVolume(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+	stagingTargetPath string,
+) error {
+	volumeContext := req.GetVolumeContext()
+	service := volumeContext[ctxExportService]
+	exportPath := volumeContext[ctxExportPath]
+	if service == "" || exportPath == "" {
+		return fmt.Errorf(
+			"pnfs: volume %s has no export address yet (service=%q path=%q)",
+			req.GetVolumeId(), service, exportPath)
+	}
+
+	// The NGUID is read from the attached device rather than taken from the
+	// volume context, because it is assigned by the target: only a host with
+	// the namespace attached can know it, and the controller never has one.
+	nguid, devicePath, err := ns.namespaceIdentity(ctx, req.GetVolumeId(), volumeContext[ctxNGUID])
+	if err != nil {
+		return err
+	}
+
+	return stagePNFS(ctx, ns.mounter, stagingTargetPath,
+		service, exportPath, nguid, devicePath, volumeContext[ctxMountOptions])
+}
+
+// namespaceIdentity finds the locally attached namespace for a pNFS volume and
+// reports the NGUID the kernel will name it by, along with its device node.
+func (ns *Server) namespaceIdentity(
+	ctx context.Context,
+	volumeHandle, hintedNGUID string,
+) (nguid, devicePath string, err error) {
+	handle, ok := lvol.ParseNFSHandle(lvol.VolumeHandle(volumeHandle))
+	if !ok {
+		return "", "", fmt.Errorf("pnfs: %q is not a pNFS volume handle", volumeHandle)
+	}
+	// The namespace UUID of a simplyblock volume is the logical volume's own
+	// id, which is what the handle carries.
+	device, err := storage.Local(nvme.SysfsConfig{}).DeviceByUUID(ctx, handle.ExportUUID)
+	if err != nil {
+		return "", "", fmt.Errorf("pnfs: finding the namespace for %s: %w", handle.ExportUUID, err)
+	}
+	nguid = device.Namespace.NGUID
+	if nguid == "" {
+		// A hint from the record is better than nothing, but a namespace that
+		// publishes no NGUID cannot be mapped at all and saying so is more
+		// useful than mounting something that will route through the MDS.
+		nguid = hintedNGUID
+	}
+	return nguid, device.Namespace.DevicePath, nil
 }

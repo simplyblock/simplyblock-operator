@@ -22,6 +22,7 @@ import (
 
 const (
 	testNGUID = "71714b79784f4b54756f65624e495374"
+	testUUID  = "cb2f293c-6d6f-4687-ad13-eb81fbec7314"
 	testFSID  = "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13"
 	testDev   = "/dev/nvme0n1"
 )
@@ -33,7 +34,7 @@ type fakeDevices struct {
 	err    error
 }
 
-func (f *fakeDevices) ByNGUID(context.Context, string) (nvme.Device, error) {
+func (f *fakeDevices) ByUUID(context.Context, string) (nvme.Device, error) {
 	return f.device, f.err
 }
 
@@ -84,10 +85,10 @@ func newHarness(t *testing.T, blank bool) *harness {
 		exportsD: filepath.Join(root, "exports.d"),
 	}
 	h.spec = Spec{
-		NGUID:   testNGUID,
-		Path:    filepath.Join(root, "mnt", "team-a-shared-3c81"),
-		FSID:    testFSID,
-		Clients: []string{"192.168.10.0/24"},
+		VolumeUUID: testUUID,
+		Path:       filepath.Join(root, "mnt", "team-a-shared-3c81"),
+		FSID:       testFSID,
+		Clients:    []string{"192.168.10.0/24"},
 	}
 	devices := &fakeDevices{device: nvme.Device{
 		Namespace: nvme.Namespace{DevicePath: testDev, NGUID: testNGUID},

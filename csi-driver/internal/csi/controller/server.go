@@ -21,14 +21,19 @@ type Server struct {
 	// config is available (e.g., unit tests), in which case the annotation helpers
 	// are no-ops.
 	kubeClient kubernetes.Interface
+	// exports records the NFSExport a ReadWriteMany volume needs. Nil outside a
+	// cluster and when the CRD is unavailable, in which case an RWX claim is
+	// refused with a clear message rather than the driver failing to start.
+	exports ExportRegistry
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
-func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*Server, error) {
+func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, exports ExportRegistry) (*Server, error) {
 	server := Server{
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             csicommon.NewVolumeLocks(),
 		kubeClient:              kubeClient,
+		exports:                 exports,
 	}
 	return &server, nil
 }

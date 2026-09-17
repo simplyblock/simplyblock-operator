@@ -73,10 +73,10 @@ func serve(t *testing.T, assembler Assembler) *Client {
 }
 
 var fullSpec = export.Spec{
-	NGUID:   "71714b79784f4b54756f65624e495374",
-	Path:    "/mnt/team-a-shared-3c81",
-	FSID:    "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13",
-	Clients: []string{"192.168.10.21", "192.168.10.0/24"},
+	VolumeUUID: "cb2f293c-6d6f-4687-ad13-eb81fbec7314",
+	Path:       "/mnt/team-a-shared-3c81",
+	FSID:       "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13",
+	Clients:    []string{"192.168.10.21", "192.168.10.0/24"},
 }
 
 // Every field crosses. A spec that loses its client set publishes to nobody, and

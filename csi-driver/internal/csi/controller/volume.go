@@ -37,6 +37,14 @@ func (cs *Server) CreateVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	// A ReadWriteMany claim is served by a pNFS export rather than by a block
+	// device several nodes attach, so it takes a different path entirely. The
+	// other multi-node modes are refused here rather than routed into it.
+	rwx, err := isRWX(req.GetVolumeCapabilities())
+	if err != nil {
+		return nil, err
+	}
+
 	selection, err := cs.resolveClusterSelection(req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
@@ -56,6 +64,13 @@ func (cs *Server) CreateVolume(
 			return nil, err
 		}
 		return nil, classifyCreateVolumeError(err)
+	}
+
+	if rwx {
+		// The backing volume exists; from here the export is the operator's.
+		// This returns Aborted while the export assembles, so the external
+		// provisioner retries rather than the call being held open.
+		return cs.createRWXVolume(ctx, req, csiVolume, selection.clusterID)
 	}
 
 	volumeInfo, err := cs.publishVolume(ctx, csiVolume.GetVolumeId(), sbClient)
