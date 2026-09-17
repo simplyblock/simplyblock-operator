@@ -555,10 +555,9 @@ Appendix B.
 **One of the five actions is implemented, and it is the one the kind exists
 for.** `Restart` is built: the kind, its graph, the reconciler, and the device
 lock §4.2 declared empty against this section arriving. The other four are
-blocked on control-plane verbs the v2 API does not offer, and the ask is
-`v1alpha2.ExternalDependencies` — a value in the repository rather than a
-paragraph here, so each row names the endpoint to build and the action ships when
-the row does.
+blocked on control-plane verbs the v2 API does not offer, and the ask is the
+`TODO(storagedeviceops)` beside their constants in `storagedeviceops_types.go`,
+which names the endpoint each one needs.
 
 **The enum admits only what the operator can perform.** Declaring all five now
 would accept an object whose first reconcile can only fail, and an API that takes

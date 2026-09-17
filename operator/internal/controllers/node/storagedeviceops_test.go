@@ -79,37 +79,6 @@ func TestTheActionEnumAdmitsOnlyWhatAGraphDeclares(t *testing.T) {
 	}
 }
 
-// Every blocked action has a dependency row naming the endpoint it waits on, and
-// no row names an action that is already available. The list is the ask of
-// another team, so an action that shipped and left its row behind would be an
-// ask for something that exists.
-func TestEveryBlockedActionNamesTheEndpointItWaitsOn(t *testing.T) {
-	blocked := map[simplyblockv1alpha2.StorageDeviceOpsAction]bool{
-		simplyblockv1alpha2.StorageDeviceOpsActionSelfTest: true,
-		simplyblockv1alpha2.StorageDeviceOpsActionFail:     true,
-		simplyblockv1alpha2.StorageDeviceOpsActionReplace:  true,
-		simplyblockv1alpha2.StorageDeviceOpsActionMigrate:  true,
-	}
-
-	for _, dependency := range simplyblockv1alpha2.ExternalDependencies() {
-		if !blocked[dependency.Action] {
-			t.Errorf("%s has a dependency row and is not blocked", dependency.Action)
-		}
-		delete(blocked, dependency.Action)
-		if dependency.Endpoint == "" || dependency.Because == "" {
-			t.Errorf("%s's row names no endpoint or no reason, so it is not an ask "+
-				"anybody can act on", dependency.Action)
-		}
-		if _, declared := storageDeviceOpsGraphs()[statemachine.Action(dependency.Action)]; declared {
-			t.Errorf("%s is declared as blocked and has a graph", dependency.Action)
-		}
-	}
-	for action := range blocked {
-		t.Errorf("%s is specified by §6 and has neither a graph nor a dependency row, so "+
-			"nothing records why it is missing", action)
-	}
-}
-
 // Awaiting cannot be aborted, because the control plane has accepted the restart
 // and nothing recalls one. Requesting can, because the step is persisted before
 // the call.
@@ -380,28 +349,6 @@ func TestAnOperationNamingNoDeviceFails(t *testing.T) {
 	}
 	if got.Status.Phase != simplyblockv1alpha2.StorageDeviceOpsPhaseFailed {
 		t.Errorf("phase = %q, want Failed for a device that does not exist", got.Status.Phase)
-	}
-}
-
-// An action no graph declares is failed with the endpoint it waits on, so the
-// person who asked learns which capability is missing rather than that a value
-// was rejected.
-func TestAnUnavailableActionNamesWhatItWaitsOn(t *testing.T) {
-	for _, action := range []simplyblockv1alpha2.StorageDeviceOpsAction{
-		simplyblockv1alpha2.StorageDeviceOpsActionSelfTest,
-		simplyblockv1alpha2.StorageDeviceOpsActionFail,
-		simplyblockv1alpha2.StorageDeviceOpsActionReplace,
-		simplyblockv1alpha2.StorageDeviceOpsActionMigrate,
-	} {
-		t.Run(string(action), func(t *testing.T) {
-			got := unavailableAction(action)
-			if !strings.Contains(got, "/api/v2/") {
-				t.Errorf("the refusal names no endpoint: %q", got)
-			}
-			if !strings.Contains(got, string(action)) {
-				t.Errorf("the refusal does not name the action: %q", got)
-			}
-		})
 	}
 }
 

@@ -4,9 +4,9 @@
 // The v2 API offers three verbs on a device — restart, remove, and reset — where
 // design-storagedevice.md §7 asks for seven. What is here is what exists: the
 // reads the operations wait on, and the restart they are built around. The four
-// that are missing are recorded as an external dependency in
-// operator/api/v1alpha2/storagedeviceops_types.go, beside the actions each one
-// blocks, rather than as a client method that would return a 404.
+// that are missing are recorded as a TODO beside the actions they block, in the
+// operator's storagedeviceops_types.go, rather than as a client method here that
+// would return a 404.
 
 package controlplane
 

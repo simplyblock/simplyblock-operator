@@ -11,8 +11,8 @@
 // on is in the status, so a controller restart resumes rather than restarts.
 //
 // design-storagedevice.md §6 is the specification, and §6's other four actions
-// are blocked on control-plane verbs that do not exist
-// (v1alpha2.ExternalDependencies).
+// are blocked on control-plane verbs that do not exist — the TODO beside their
+// constants in storagedeviceops_types.go names each one.
 
 package node
 
@@ -143,10 +143,13 @@ func (r *StorageDeviceOpsReconciler) advance(
 	graph, declared := storageDeviceOpsGraphs()[statemachine.Action(ops.Spec.Action)]
 	if !declared {
 		// Admission's enum admits only the actions this operator performs, so
-		// reaching here means an older CRD served the object. The message names
-		// the dependency rather than the enum, because what a user needs to
-		// know is that the action is not available yet.
-		return ctrl.Result{}, r.fail(ctx, ops, unavailableAction(ops.Spec.Action))
+		// reaching here means an older CRD served the object. What a user needs
+		// to know is that the action is not available yet rather than that a
+		// value was rejected; which capability it waits on is the TODO beside
+		// the action's constant.
+		return ctrl.Result{}, r.fail(ctx, ops, fmt.Sprintf(
+			"action %q is not one this operator performs; it waits on a control-plane "+
+				"capability the v2 API does not offer", ops.Spec.Action))
 	}
 
 	machine, err := statemachine.NewFromSnapshot(ctx, graph,
@@ -321,19 +324,6 @@ func (r *StorageDeviceOpsReconciler) target(
 		return nil, err
 	}
 	return &device, nil
-}
-
-// unavailableAction is what an operation naming an action this operator cannot
-// perform is failed with. It names the endpoint rather than the enum, because
-// the useful fact is which capability is missing.
-func unavailableAction(action simplyblockv1alpha2.StorageDeviceOpsAction) string {
-	for _, dependency := range simplyblockv1alpha2.ExternalDependencies() {
-		if dependency.Action == action {
-			return fmt.Sprintf("action %s is not available: it needs %s, which the control "+
-				"plane does not offer", action, dependency.Endpoint)
-		}
-	}
-	return fmt.Sprintf("action %q is not one this operator performs", action)
 }
 
 // deviceTimeoutMessage says what a step outliving its deadline means, which
