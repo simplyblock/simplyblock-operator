@@ -91,6 +91,7 @@ atlas/
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── normalized.go       NormalizeHandle: the annotated handle over the field's, §16.4's rule
 │   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
@@ -98,6 +99,7 @@ atlas/
 │   ├── names.go            driver name, param/context/label/annotation/finalizer keys, pool label key
 │   ├── derived.go          Formula: bounded, deterministic derived names and labels
 │   ├── identity.go         VolumeHandle↔PV, VolumeContext, pin annotations
+│   ├── normalized.go       NormalizedHandle / NormalizedVolumeHandleFromPV: §16.4's rule on an object
 │   ├── binding.go          Binding: resolved PV+PVC+Node view of an lvol
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params

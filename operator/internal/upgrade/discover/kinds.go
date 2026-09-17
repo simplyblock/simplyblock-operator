@@ -8,6 +8,7 @@
 package discover
 
 import (
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -37,6 +38,12 @@ const (
 	IDStorageClasses    upgrade.ID = "discover-storage-classes"
 	IDNamespaces        upgrade.ID = "discover-namespaces"
 	IDPersistentVolumes upgrade.ID = "discover-persistent-volumes"
+
+	// The snapshots, whose id the CSI controller composes the same way a volume
+	// handle is composed, so one written before the v2 API migration carries a
+	// pool name in the same place. A cluster with no snapshot CRDs installed
+	// serves the kind not at all, which Discover reports and skips.
+	IDSnapshotContents upgrade.ID = "discover-volume-snapshot-contents"
 
 	// The workload a StorageNodeSet owns, which §20 reparents onto the cluster.
 	IDDaemonSets      upgrade.ID = "discover-daemon-sets"
@@ -228,6 +235,11 @@ func CoreKinds() []upgrade.Discoverer {
 			RuleID:  IDPersistentVolumes,
 			Summary: "reads the PersistentVolume objects whose volume handles §16.4 normalizes",
 			List:    &corev1.PersistentVolumeList{},
+		},
+		Kind{
+			RuleID:  IDSnapshotContents,
+			Summary: "reads the VolumeSnapshotContent objects whose snapshot handles §16.4 normalizes too",
+			List:    &snapshotv1.VolumeSnapshotContentList{},
 		},
 	}
 }

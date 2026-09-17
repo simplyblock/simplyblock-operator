@@ -1118,11 +1118,29 @@ the phase writes the rows below that line instead.
 
 **Resolve and report.** Every `PersistentVolume` and `VolumeSnapshotContent`
 whose pool segment is not a canonical UUID is listed with the name it carries and
-the UUID that name resolves to, through `lvol.Resolver` against the control
-plane. A pool name resolving to nothing is a finding: the handle names a pool
-that no longer exists, and the migration reports it and does not proceed. This
-part is a read, so it belongs to `preflight` (§19.10) and runs long before the
-migration does.
+the UUID that name resolves to. A pool name resolving to nothing is a finding:
+the handle names a pool that no longer exists, and the migration reports it and
+does not proceed. This part is a read, so it belongs to `preflight` (§19.10) and
+runs long before the migration does — it is the step's own `Validate`, which the
+framework runs in the preflight and again before applying.
+
+The lookup is `PoolResolver`, an interface on the run's `Scope`, and not
+`lvol.Resolver`: that interface answers where a volume is and how to reach it,
+and has no pool listing in it. The implementation lists a cluster's pools once
+and answers from that, through the credentials the cluster keeps beside its own
+object — an installation holds several clusters, each with its own secret, and a
+pool called `production` exists in two of them, so asking the wrong one returns a
+UUID that looks normalized and names a pool the volume is not in. The cluster a
+handle names is found by the UUID a `StorageCluster` reports rather than by what
+one is called.
+
+**The endpoint is given rather than discovered.** The model being upgraded
+records it nowhere a tool running outside the cluster can read: the operator
+takes it from its own environment, and a `v1alpha1` `ControlPlane` carries no
+endpoint at all. So it is `--control-plane`, and without it the step refuses and
+names the flag. That refusal is the right outcome rather than a gap — a cluster
+whose volumes were all provisioned after the boundary has no pool name to
+resolve and never reaches it.
 
 **Rewrite the records the migration owns.** Anywhere the operator has written a
 handle into a field it controls, a custom resource's status or a `ConfigMap`, the
@@ -1151,8 +1169,27 @@ otherwise.** Consistency is exact: the annotation's cluster and volume segments
 MUST equal the field's, and only the pool segment may differ. A reader finding
 any other difference ignores the annotation and reports it, so a hand-edited
 annotation cannot redirect a volume to another cluster. That rule is one
-function in `atlas-lib`, beside `ParseHandle`, and no call site implements it
-twice.
+function in `atlas-lib`, `lvol.NormalizeHandle`, beside `ParseHandle`, and no
+call site implements it twice.
+
+It compares two handles and knows nothing about Kubernetes, which is what lets
+both kinds share it. Where the two strings come from is the other half, and it
+is `kube.NormalizedHandle`, which takes a handle and an object's annotations:
+`VolumeSnapshotContent` belongs to the external snapshotter's module, and
+`atlas-lib` does not take a dependency on it for a map lookup.
+`kube.NormalizedVolumeHandleFromPV` is the same thing for the kind that is in
+the core API.
+
+**`kube.VolumeHandleFromPV` stays, and stays the field's own answer.** The two
+questions differ the way `ParseHandle` and `Split` differ: which pool a volume
+is in is what a caller reaching for the control plane wants, and what an
+object's spec literally says is what the migration wants, since that is how it
+finds the volumes whose spelling is legacy at all.
+
+A `VolumeSnapshotContent` names one of two things and both are the same three
+segments, so whichever it carries is normalized: a pre-existing snapshot names
+itself in `spec.source.snapshotHandle`, and a dynamically taken one names the
+volume it came from in `spec.source.volumeHandle`.
 
 **This is what makes the normalized pool reachable without the control plane.**
 The CSI driver already indexes `PersistentVolume` objects by the lvol id in
@@ -2484,16 +2521,17 @@ prose, its check is here and not repeated in both places.
 
 **Volume handles (§16.4)**
 
-- [ ] Every legacy handle is reported with the UUID its pool name resolves to,
+- [x] Every legacy handle is reported with the UUID its pool name resolves to,
       and an unresolvable one fails the preflight.
-- [ ] A `PersistentVolume` is replaced only under `Retain`, one at a time, and
-      never while a pod has the claim mounted.
-- [ ] The normalized handle is written to
+- [x] No `PersistentVolume` is replaced at all. The field keeps the spelling it
+      was provisioned with and the annotation carries the identity, so the
+      replacement this row guarded against does not arise.
+- [x] The normalized handle is written to
       `storage.simplyblock.io/volume-handle` on every `PersistentVolume` and
       `VolumeSnapshotContent` whose field carries a pool name.
-- [ ] One `atlas-lib` function decides between the annotation and the field, and
+- [x] One `atlas-lib` function decides between the annotation and the field, and
       it rejects an annotation whose cluster or volume segment differs.
-- [ ] `lvol.ParseHandle` stays tolerant for objects with no annotation.
+- [x] `lvol.ParseHandle` stays tolerant for objects with no annotation.
 
 **Names (§19)**
 

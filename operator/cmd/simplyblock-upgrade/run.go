@@ -15,6 +15,7 @@ import (
 
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/catalog"
+	"github.com/simplyblock/simplyblock-operator/internal/upgrade/pools"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade/tui"
 )
 
@@ -50,6 +51,13 @@ func newSession(global *globalOptions, stage upgrade.Stage, dryRun bool) (*sessi
 
 	reporter := newReporter(global)
 	scope := upgrade.NewScope(c, global.Namespace, stage, global.options(dryRun), newLogger(global), reporter)
+
+	// The resolver is attached only where there is somewhere to resolve
+	// against. Left off, the handle steps refuse and name the flag, which is a
+	// better answer than a client pointed at nothing and timing out per volume.
+	if global.ControlPlane != "" {
+		scope.Pools = &pools.Resolver{Client: c, Endpoint: global.ControlPlane}
+	}
 
 	return &session{
 		Runner:   upgrade.NewRunner(catalog.Default(), scope),

@@ -352,3 +352,39 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 		t.Fatalf("applied must not be set while waiting for an in-flight migration")
 	}
 }
+
+// TestCSIVolumeHandlePartsPrefersTheNormalizedAnnotation is the read half of
+// §16.4. A volume provisioned before the v2 API migration spells its pool as a
+// name in a field nothing can rewrite, so the upgrade resolves it once into an
+// annotation and every reader takes that instead.
+func TestCSIVolumeHandlePartsPrefersTheNormalizedAnnotation(t *testing.T) {
+	const (
+		cluster  = "2f4f0300-9993-4289-be95-59414fc8a54d"
+		poolUUID = "1c2c0300-9993-4289-be95-59414fc8a54d"
+		volume   = "8b1f0300-9993-4289-be95-59414fc8a54d"
+	)
+
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pvc-legacy",
+			Annotations: map[string]string{
+				kube.AnnoVolumeHandle: cluster + ":" + poolUUID + ":" + volume,
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
+			CSI: &corev1.CSIPersistentVolumeSource{
+				Driver:       kube.DriverName,
+				VolumeHandle: cluster + ":production:" + volume,
+			}}},
+	}
+
+	_, poolRef, _, ok := csiVolumeHandleParts(pv)
+	if !ok {
+		t.Fatal("the handle was not read at all")
+	}
+	if poolRef != poolUUID {
+		t.Errorf("pool = %q, want the normalized %q: the reader took the field's name, so "+
+			"every control-plane call made with it names a pool by a spelling the v2 API "+
+			"does not accept", poolRef, poolUUID)
+	}
+}

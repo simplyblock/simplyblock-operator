@@ -30,6 +30,17 @@ type globalOptions struct {
 	// Namespace is the installation being operated on.
 	Namespace string
 
+	// ControlPlane is the management API's base URL, which §16.4's handle
+	// normalization needs and nothing else does.
+	//
+	// It is a flag rather than something read from the cluster, because the
+	// model being upgraded records it nowhere this tool can reach it: the
+	// operator takes it from its own environment, and a v1alpha1 ControlPlane
+	// carries no endpoint. Left empty, the steps that need it refuse and say so,
+	// which is the right outcome for a cluster whose volumes were all
+	// provisioned after the v2 API migration and have no pool name to resolve.
+	ControlPlane string
+
 	// Skip names rules that are not to run. Every skipped rule is reported, so
 	// the decision stays visible in the run's own output.
 	Skip []string
@@ -88,6 +99,8 @@ func newRootCommand() *cobra.Command {
 		"path to a kubeconfig file, defaulting to the in-cluster configuration")
 	flags.StringVar(&global.Context, "context", "", "the kubeconfig context to use")
 	flags.StringVarP(&global.Namespace, "namespace", "n", defaultNamespace(), "the namespace the installation lives in")
+	flags.StringVar(&global.ControlPlane, "control-plane", "",
+		"base URL of the control-plane management API, needed to resolve the pool names in legacy volume handles")
 	flags.StringSliceVar(&global.Skip, "skip", nil, "rule identities not to run; every skipped rule is reported")
 	flags.BoolVar(&global.AcknowledgeOffline, "acknowledge-offline", false,
 		"proceed even though a StorageNode is not online")
