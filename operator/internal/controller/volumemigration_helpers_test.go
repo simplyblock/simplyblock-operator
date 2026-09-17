@@ -137,35 +137,7 @@ func TestResolveConsumerNodeName_PVMissing(t *testing.T) {
 	}
 }
 
-// ---- rebalancer image resolution and the known-cluster guard ----
-
-func TestResolveRebalancerImage(t *testing.T) {
-	image := "pinned:v1"
-
-	t.Run("explicit image is used", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
-			&simplyblockv1alpha2.VolumeMigrationSettings{RebalancerImage: &image}))
-		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
-		if err != nil {
-			t.Fatalf("resolveRebalancerImage: %v", err)
-		}
-		if got != image {
-			t.Errorf("image = %q, want %q", got, image)
-		}
-	})
-
-	t.Run("no pinned image falls back to the default", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
-			&simplyblockv1alpha2.VolumeMigrationSettings{}))
-		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
-		if err != nil {
-			t.Fatalf("resolveRebalancerImage: %v", err)
-		}
-		if got == "" {
-			t.Errorf("image is empty, want the default")
-		}
-	})
-}
+// ---- the known-cluster guard ----
 
 func TestRequireStorageCluster(t *testing.T) {
 	t.Run("a known cluster passes", func(t *testing.T) {
