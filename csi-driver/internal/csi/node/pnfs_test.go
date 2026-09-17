@@ -218,3 +218,27 @@ func TestPNFSVolumesAreRepairedByTheirOwnPath(t *testing.T) {
 		t.Error("a block handle was routed to the pNFS repair path")
 	}
 }
+
+// Publishing a pNFS volume into a pod is a bind mount, and a bind mount takes
+// no filesystem type.
+//
+// The type on the volume capability comes from the StorageClass's
+// csi.storage.k8s.io/fstype, which for a ReadWriteMany volume describes the
+// filesystem the metadata server makes -- not what the client has mounted,
+// which is NFS. Passing it through means mount(8) looks for a helper named
+// after it, and /sbin/mount.nfs exists and does not bind.
+func TestPublishingAPNFSVolumeBindsWithNoFilesystemType(t *testing.T) {
+	if got := publishFSType("nfs:c:p:v", "xfs"); got != "" {
+		t.Errorf("fsType = %q, want empty: a bind takes no type", got)
+	}
+	if got := publishFSType("nfs:c:p:v", "nfs"); got != "" {
+		t.Errorf("fsType = %q, want empty", got)
+	}
+}
+
+// A block volume's own handling is untouched.
+func TestPublishingABlockVolumeKeepsItsFilesystemType(t *testing.T) {
+	if got := publishFSType("cluster:pool:volume", "xfs"); got != "xfs" {
+		t.Errorf("fsType = %q, want xfs", got)
+	}
+}

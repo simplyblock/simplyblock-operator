@@ -77,7 +77,7 @@ func (ns *Server) NodeUnpublishVolume(
 func (ns *Server) publishVolume(stagingPath string, req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
 
-	fsType := req.GetVolumeCapability().GetMount().GetFsType()
+	fsType := publishFSType(req.GetVolumeId(), req.GetVolumeCapability().GetMount().GetFsType())
 
 	if req.GetVolumeCapability().GetBlock() != nil {
 		stagingParentPath := req.GetStagingTargetPath()
