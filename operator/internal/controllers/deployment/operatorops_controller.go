@@ -311,6 +311,7 @@ func (r *OperatorOpsReconciler) succeed(
 	ops.Status.CompletedAt = &now
 	ops.Status.Step.Deadline = nil
 	r.event(ops, corev1.EventTypeNormal, OperationSucceeded, ops.Status.Message)
+	observeRun(ops, ops.Status.Phase)
 	return r.status(ctx, ops)
 }
 
@@ -393,6 +394,7 @@ func (r *OperatorOpsReconciler) inspect(
 
 	ops.Status.Workers = workers
 	ops.Status.Environment = simplyblockv1alpha2.KubernetesEnvironment(environment.Distribution)
+	observeWorkersFound(ops.Namespace, len(workers))
 	ops.Status.Message = fmt.Sprintf("probing %d worker(s) of a %s cluster",
 		len(workers), orUnknown(string(environment.Distribution)))
 
@@ -583,6 +585,7 @@ func (r *OperatorOpsReconciler) write(
 
 	ops.Status.ConfigRef = config.Name
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
+	observeDevicesFound(ops.Namespace, plan.DeviceCount())
 	return true, r.status(ctx, ops)
 }
 
@@ -714,6 +717,7 @@ func (r *OperatorOpsReconciler) abort(
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = "aborted; discovery changes nothing, so nothing was undone"
 	r.event(ops, corev1.EventTypeNormal, OperationAborted, ops.Status.Message)
+	observeRun(ops, ops.Status.Phase)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 
@@ -756,6 +760,7 @@ func (r *OperatorOpsReconciler) fail(
 	ops.Status.Step.Deadline = nil
 	ops.Status.Message = reason
 	r.event(ops, corev1.EventTypeWarning, OperationFailed, reason)
+	observeRun(ops, ops.Status.Phase)
 	return ctrl.Result{}, r.status(ctx, ops)
 }
 

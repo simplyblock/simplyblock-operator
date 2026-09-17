@@ -73,10 +73,7 @@ type Plan struct {
 
 // Summary is the sentence a run's status carries.
 func (p Plan) Summary() string {
-	devices := 0
-	for _, worker := range p.Workers {
-		devices += len(worker.Addresses())
-	}
+	devices := p.DeviceCount()
 
 	groups := 0
 	for _, set := range p.NodeSets {
@@ -86,6 +83,17 @@ func (p Plan) Summary() string {
 	return fmt.Sprintf(
 		"%d workers with %d %s devices, in %d group(s) across %d node set(s); %d refusal(s)",
 		len(p.Workers), devices, p.Class, groups, len(p.NodeSets), len(p.Refusals))
+}
+
+// DeviceCount is how many devices the draft names across every worker in it,
+// which is the number the plan is worth: a run that found ten machines and one
+// disk between them has produced nothing to deploy.
+func (p Plan) DeviceCount() int {
+	devices := 0
+	for _, worker := range p.Workers {
+		devices += len(worker.Addresses())
+	}
+	return devices
 }
 
 // Explain says why the plan holds nothing, one line per worker.

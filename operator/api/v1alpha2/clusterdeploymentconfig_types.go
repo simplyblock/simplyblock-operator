@@ -393,6 +393,18 @@ type ClusterDeploymentConfigStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ExpansionStartedAt is when the expansion machine was born, which is the
+	// first reconcile after the document was approved. A document may sit as a
+	// draft for as long as a review takes, so this is not creationTimestamp and
+	// the difference is the whole point: how long a deployment takes is measured
+	// from the moment somebody said yes.
+	//
+	// It is the start of §9.2's expansion_duration_seconds. A histogram needs an
+	// instant that survives the operator restarting mid-expansion, which nothing
+	// in memory and no step deadline supplies.
+	// +optional
+	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

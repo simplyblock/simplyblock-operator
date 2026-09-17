@@ -396,6 +396,10 @@ func (r *ClusterDeploymentConfigReconciler) createNodes(
 						return false, fmt.Errorf("creating StorageNode for worker %s slot %d: %w",
 							worker, slot, err)
 					}
+					// Counted here rather than from the length of the record
+					// below, which is rebuilt every pass and holds the nodes that
+					// were already there as well.
+					countNodesCreated(config.Namespace, 1)
 					created = append(created, node.Name)
 				}
 			}

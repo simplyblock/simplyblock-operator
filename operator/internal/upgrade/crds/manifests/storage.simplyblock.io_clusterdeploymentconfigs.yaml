@@ -399,6 +399,19 @@ spec:
                   is a record rather than a dependency: nothing resolves it after expansion,
                   which is what makes the document safe to delete.
                 type: string
+              expansionStartedAt:
+                description: |-
+                  ExpansionStartedAt is when the expansion machine was born, which is the
+                  first reconcile after the document was approved. A document may sit as a
+                  draft for as long as a review takes, so this is not creationTimestamp and
+                  the difference is the whole point: how long a deployment takes is measured
+                  from the moment somebody said yes.
+
+                  It is the start of §9.2's expansion_duration_seconds. A histogram needs an
+                  instant that survives the operator restarting mid-expansion, which nothing
+                  in memory and no step deadline supplies.
+                format: date-time
+                type: string
               message:
                 description: |-
                   Message is the reason the phase is what it is: one sentence, replaced as
