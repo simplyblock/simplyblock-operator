@@ -1587,6 +1587,9 @@ spec:
                   type: integer
               type: object
           type: object
+          x-kubernetes-validations:
+            - message: a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes
+              rule: size(self.metadata.name) <= 63
       served: true
       storage: true
       subresources:

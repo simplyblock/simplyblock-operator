@@ -617,7 +617,20 @@ func targetClusterName(
 // slot it fills, never for the worker, because the name has to stay stable when a
 // migration re-points the node onto another host (design-storagenode.md §3.1) —
 // the worker is in the name's digest rather than in its text.
-var nodeNameFormula = kube.Formula{}
+//
+// The limit is a label's 63 bytes and not the 253 an object name may be, because
+// the name travels: the StorageDevice mirror writes it into
+// storage.simplyblock.io/node on every device of the node. §19.1 of
+// design-api-upgrade.md is the rule, and the arithmetic is not academic — a
+// regional cluster name and a worker a cloud named after its fully qualified
+// domain name are 68 bytes between them, so the overflow is what ordinary inputs
+// produce rather than what a long one does.
+//
+// Shortening the limit does not strand the nodes of a cluster that already has
+// some. A name that fitted the wider limit is returned unchanged whenever it
+// also fits this one, and createNodes finds what exists by the worker and slot
+// its spec records rather than by re-deriving the name.
+var nodeNameFormula = kube.Formula{Limit: kube.MaxLabelValueLength}
 
 func nodeName(cluster, worker string, slot int32) string {
 	return nodeNameFormula.Derive(cluster, worker, fmt.Sprintf("%d", slot)).Value

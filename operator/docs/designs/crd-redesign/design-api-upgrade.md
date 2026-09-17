@@ -1288,9 +1288,9 @@ Seven labels are built from a name a user chose. Every row is live today.
 
 | What is built                                               | Breaks when                                                                    | Longest input that works    | Fix               |
 |-------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
-| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Truncate and hash |
-| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Use a UUID        |
-| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Use a UUID        |
+| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Use a UUID        |
+| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Bound the input   |
+| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Bound the input   |
 | `io.simplyblock.storagenodeset`                             | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
 | `storage.simplyblock.io/worker`                             | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
 | `simplyblock.io/drain-node`                                 | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
@@ -1333,21 +1333,29 @@ characters long.
 
 ### 19.4 Bounding the Cluster Reference
 
-`spec.clusterName` carries no maximum length and no pattern on either
-`StoragePoolSpec` (`storagepool_types.go:115`) or `StorageNodeSetSpec`
-(`storagenodeset_types.go:40`), and it feeds three of the seven labels and three
-of the object names above. **A `+kubebuilder:validation:MaxLength=63` on it is
-what turns an overlong cluster reference into a rejected create rather than a
-reconcile that retries forever.** The marker lands on `v1alpha2`'s
-`spec.clusterRef`, because §7.2 renames the field and retires `StorageNodeSet`,
-and never on `v1alpha1` (§19.9).
+**A `+kubebuilder:validation:MaxLength=63` on a cluster reference is what turns
+an overlong one into a rejected create rather than a reconcile that retries
+forever.** The markers land on `v1alpha2` and never on `v1alpha1` (§19.9).
 
-**63 is a label's limit and not a budget the marker can guarantee.** Two of the
-rows a cluster name feeds share their 63 bytes with a namespace and a pool name,
-so a cluster reference inside the limit still overflows the `simplyblock.io/pool`
-key when the other two are long. What the marker closes is the rows where the
-cluster name stands alone, which are the `StorageClass` label and the two
-`Secret` names.
+**The bound on a reference follows from the bound on the name, so it is the same
+number on every kind that carries one.** A reference longer than a
+`StorageCluster` name may be names nothing that can exist, which makes the
+question of what the referring kind does with it beside the point: eight fields
+across seven kinds carry a cluster's name, and a bound applied to the ones
+somebody remembered is not a bound. Two of the eight are not references at all
+but names — `ClusterDeploymentConfig.spec.cluster.name` becomes a
+`StorageCluster`'s `metadata.name`, so admitting more there is a document the API
+server accepts and a `CreatingCluster` step that can never succeed.
+
+A `status` carrying the same reference is deliberately left unbounded. It records
+what the operator resolved, copied from an input this rule already bounds, so a
+maximum there could catch no mistake and could only turn a status write into one
+the API server refuses.
+
+**63 is a label's limit and not a budget the marker can guarantee.** A row that
+shares its 63 bytes with a namespace and a pool name still overflows when the
+other two are long. What the marker closes is the rows where the cluster name
+stands alone.
 
 **The cluster's own name is bounded by a type-level rule, which no `MaxLength`
 can reach.** `metadata.name` is one of the two metadata fields a CRD validation
@@ -1355,8 +1363,33 @@ rule can see (§19.7), so the name itself is bounded by the rule and the
 reference by the marker:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into a StorageClass label"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes"
 ```
+
+**Three kinds carry that rule, not one.** The cluster's name is the one §19.2
+measured, but the target model writes two more names into label values, and both
+were found by asking the same question of the kinds around it rather than by
+re-deriving the table:
+
+| Kind             | Written into                                                          |
+|------------------|-----------------------------------------------------------------------|
+| `StorageCluster` | `storage.simplyblock.io/cluster`, and `io.simplyblock.storagenodeset` |
+| `StoragePool`    | `storage.simplyblock.io/pool`                                         |
+| `StorageNode`    | `storage.simplyblock.io/node`                                         |
+
+The pool's row is the one with a second failure behind it. That label is also the
+selector a pool lists its own classes with, so an overlong pool name is not only a
+write the API server refuses but a read: the pool would never find a class it had
+been given.
+
+The node's row is the one where the bound is the smaller half of the fix. A
+`StorageNode` is named by the operator rather than by a user, from the formula in
+`expansion.go`, and that formula was declared against an object name's 253 bytes
+while its output travels into a label — the mistake §19.1 exists to name. A
+regional cluster name and a worker a cloud named after its fully qualified domain
+name are 68 bytes between them, so the overflow was what ordinary inputs
+produced. The formula carries the label's limit now, and the rule on the type is
+what holds a node somebody authored to the same bound.
 
 ### 19.5 The Three Fixes
 
@@ -1364,8 +1397,20 @@ Every row above resolves one of three ways, and which one applies follows from
 who owns the name rather than from how long it is.
 
 **Use a UUID.** When a stable identifier is already at hand, nothing reads the
-current value, and the label exists to be selected on rather than read. The two
-`StorageClass` labels are this case.
+current value, and the label exists to be selected on rather than read.
+
+The row this turned out to fit is the per-pool key on a worker `Node`, which the
+target model writes as `storage.simplyblock.io/storage-pool.<poolUUID>`: it is
+the tightest row of §19.2, it is read by the CSI node plugin as a prefix match
+rather than by its parts, and a UUID retires the whole of its budget problem
+along with §19.8's ambiguous concatenation.
+
+The two `StorageClass` labels were assumed to be this case and are not.
+`storage.simplyblock.io/cluster` and `storage.simplyblock.io/pool` are the
+assignment itself — they are how a person assigns a class they wrote to a pool —
+so a value nobody can type is a contract nobody can enter. Those two rows resolve
+by bounding the input instead, which is what makes §19.4's rule on three kinds
+rather than one load-bearing.
 
 **Bound the input.** When the long name is this API's to refuse. A field
 somebody types has no business being 200 characters, so the answer is no at
@@ -1423,6 +1468,21 @@ admission webhook or nothing.
 The webhook races itself. Two creates admitted concurrently each see a free
 derived name, so the reconciler treats a collision as a terminal condition with
 an event rather than as something admission prevented.
+
+**In the target model that fallback is the whole of the answer, and no
+uniqueness webhook is built.** The row above is written for the current model,
+where four routes take two resources to one derived name (§19.8), and the target
+model closes three of them by construction: every kind but
+`PersistentVolumeOps` is namespaced, and the names they derive are unique within
+the namespace their inputs are unique in. What is left is the default
+`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`.
+The pool's reconcile already answers that one the way this row prescribes — it
+adopts the name only when the occupant is recognizably the class it would have
+written, and otherwise emits `StorageClassNameTaken` and leaves the pool without
+a default. A fail-closed webhook in front of that would refuse a legal cluster
+over a class that is not required for the cluster to work, which is worse than
+the condition it replaces. The remaining two routes of §19.8 are what an upgrade
+introduces rather than what a write can, and they stay the preflight's.
 
 The last row is the one this document turns on: every mechanism above it runs on
 a write, and the objects an upgrade has to survive were written before the rule
@@ -2438,12 +2498,15 @@ prose, its check is here and not repeated in both places.
 **Names (§19)**
 
 - [ ] Every name and label of §19.2 and §19.3 has a bounded derivation.
-- [ ] `metadata.name` on the `v1alpha2` `StorageCluster` is bounded at 63 by an
-      `XValidation` rule, and `StoragePoolSpec.clusterRef` by `MaxLength`.
+- [x] `metadata.name` is bounded at 63 by an `XValidation` rule on the `v1alpha2`
+      `StorageCluster`, `StoragePool`, and `StorageNode`, and every field
+      carrying a cluster's name by `MaxLength` (§19.4).
 - [ ] The truncate-and-hash helper is extracted from `nodeprobe.ObjectName` into
       `atlas-lib/kube`, and no call site rolls its own.
-- [ ] §19.8's uniqueness rules are enforced at admission, and a collision that
-      races admission is terminal with an event.
+- [x] §19.8's uniqueness rules are enforced where a write can still break one.
+      The target model leaves the default `StorageClass` as the only case, and
+      the pool's reconcile is where it is terminal with an event (§19.7); the
+      remaining routes are an upgrade's and stay the preflight's.
 
 **The tool**
 

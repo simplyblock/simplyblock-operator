@@ -171,6 +171,12 @@ type StoragePoolSpec struct {
 	// pool's own finalizer while classes are assigned or volumes are bound.
 	//
 	// Immutable from creation: which cluster a pool is in is its identity.
+	//
+	// The maximum is what a StorageCluster name may be rather than what a
+	// reference may be: a longer value names nothing that can exist, and the
+	// reference is immutable, so admitting one creates a pool whose only
+	// remedy is deletion (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
@@ -284,6 +290,13 @@ type StoragePoolStatus struct {
 // upgrade of an existing cluster applies the same CRD with storage held at
 // v1alpha1 and flips it with the storage rewrite once the conversion webhook is
 // serving.
+//
+// The name is bounded at a label's 63 bytes, because storage.simplyblock.io/pool
+// carries it on every StorageClass assigned to this pool. That label is also the
+// selector the pool lists its own classes with, so an overlong name is not only
+// a write the API server refuses but a read: the pool would never find a class
+// it had been given (design-api-upgrade.md §19.1, §19.4).
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StoragePool name is at most 63 characters, because it is written into the storage.simplyblock.io/pool label that assigns StorageClasses to this pool"
 // +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
