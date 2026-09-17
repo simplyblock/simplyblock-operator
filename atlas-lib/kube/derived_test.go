@@ -131,3 +131,56 @@ func TestFormula_SuffixAndSeparator(t *testing.T) {
 		t.Fatalf("Value = %q, want the parts joined on the formula's separator", got.Value)
 	}
 }
+
+// A formula whose parts join ambiguously needs the digest on every value it
+// produces, not only on the ones that had to be cut. The test above proves the
+// digest tells the two inputs apart; this one is about the name actually using
+// it, which is the whole of the difference between a collision resolved and a
+// collision merely detectable.
+func TestFormula_AlwaysDigestSeparatesShortAmbiguousInputs(t *testing.T) {
+	f := Formula{Kind: ObjectName, Prefix: "sb-", AlwaysDigest: true}
+
+	a, b := f.Derive("a-b", "c"), f.Derive("a", "b-c")
+	if a.Value == b.Value {
+		t.Fatalf("a-b/c and a/b-c both derived %q, and neither was truncated", a.Value)
+	}
+	if a.Truncated || b.Truncated {
+		t.Error("a name well inside the limit is reported as truncated")
+	}
+	if !a.Fits() {
+		t.Error("Fits() is false for a name the limit never bound")
+	}
+}
+
+// The digest is part of the formula's output, so the value it produces for an
+// input that fits is the value, rather than something the bounding rewrote.
+func TestFormula_AlwaysDigestIsPartOfTheNaturalName(t *testing.T) {
+	f := Formula{Kind: ObjectName, Prefix: "sb-", AlwaysDigest: true}
+
+	got := f.Derive("oops-1", "worker-3")
+	if got.Value != got.Natural {
+		t.Errorf("Value is %q and Natural is %q; nothing was cut, so they are one name",
+			got.Value, got.Natural)
+	}
+	if !strings.HasSuffix(got.Value, "-"+got.Digest) {
+		t.Errorf("%q does not carry the digest %q", got.Value, got.Digest)
+	}
+}
+
+// And it still fits. The digest is spent out of the budget whether or not the
+// stem needed cutting, which is what stops a formula from producing a legal name
+// for a short input and an over-long one for a middling input.
+func TestFormula_AlwaysDigestHoldsToTheLimit(t *testing.T) {
+	f := Formula{Kind: ObjectName, Prefix: "sb-nodeprobe-", Limit: 63, AlwaysDigest: true}
+
+	for _, length := range []int{1, 30, 40, 41, 42, 50, 200} {
+		got := f.Derive("run", strings.Repeat("n", length))
+		if len(got.Value) > 63 {
+			t.Errorf("an input of %d derived %q, which is %d bytes",
+				length, got.Value, len(got.Value))
+		}
+		if errs := validation.IsDNS1123Subdomain(got.Value); len(errs) != 0 {
+			t.Errorf("an input of %d derived %q: %v", length, got.Value, errs)
+		}
+	}
+}
