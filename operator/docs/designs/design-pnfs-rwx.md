@@ -33,28 +33,32 @@ Updated as work lands, so the document tracks the code rather than describing an
 intention. "Validated" means measured on a live cluster, with the evidence in
 §Bring-up Findings.
 
-| Item                                                   | Section      | Status                                            |
-|--------------------------------------------------------|--------------|---------------------------------------------------|
-| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5  | **Merged path** — operator PR #546 in review      |
-| pNFS volume handle (`nfs:` four-part form)             | §11          | **Merged path** — operator PR #547 in review      |
-| `ptpl_file` on the lvol namespace                      | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                |
-| Direct block I/O end to end                            | §3, §4       | **Validated**                                     |
-| Many exports on one MDS host                           | §8.4         | **Validated**                                     |
-| Many clients on one export, coherent                   | §4, FR-7     | **Validated**                                     |
-| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1  | **Validated**                                     |
-| Service ClusterIP reached by a kernel mount            | §13.3, Q3    | **Validated** on stock kube-proxy                 |
-| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2         | **Validated**                                     |
-| `NFSExport` CRD and types                              | §7.1         | **Done** -- v1alpha2                              |
-| `NFSExportReconciler`                                  | §14.2        | **Done** -- phase graph, selection, finalizer     |
-| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3   | **Done** -- idempotent, unit-tested               |
-| Carrying that over csi-link                            | §6.4         | **Done** -- exportrpc, both ends wired            |
-| CSI controller RWX path                                | §9           | **Done** -- wired into `CreateVolume`             |
-| CSI node client mount and `nvme-eui.` alias            | §10          | **Done** -- wired into `NodeStageVolume`          |
-| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs`   | §14.1        | **Done** -- adoption compares rather than refuses |
-| RBAC over `nfsexports` for both plugins                | §9.3         | **Done** -- a role for the controller plugin      |
-| PR key release on unstage, and a reaper for dead nodes | §10.3, §13   | Not started — **new, see findings**               |
-| Reservation handover on migration                      | §13.4        | Not started — **new, see findings**               |
-| Host prerequisites: `nfs-utils`, `blkmapd`             | §14.1, P0-10 | Not started — node OS, not a pod                  |
+| Item                                                   | Section      | Status                                                 |
+|--------------------------------------------------------|--------------|--------------------------------------------------------|
+| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
+| pNFS volume handle (`nfs:` four-part form)             | §11          | **Merged path** — operator PR #547 in review           |
+| `ptpl_file` on the lvol namespace                      | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                     |
+| Direct block I/O end to end                            | §3, §4       | **Validated**                                          |
+| Many exports on one MDS host                           | §8.4         | **Validated**                                          |
+| Many clients on one export, coherent                   | §4, FR-7     | **Validated**                                          |
+| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1  | **Validated**                                          |
+| Service ClusterIP reached by a kernel mount            | §13.3, Q3    | **Validated** on stock kube-proxy                      |
+| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2         | **Validated**                                          |
+| `NFSExport` CRD and types                              | §7.1         | **Done** -- v1alpha2                                   |
+| `NFSExportReconciler`                                  | §14.2        | **Done** -- phase graph, selection, finalizer          |
+| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3   | **Done** -- idempotent, unit-tested                    |
+| Carrying that over csi-link                            | §6.4         | **Done** -- exportrpc, both ends wired                 |
+| CSI controller RWX path                                | §9           | **Done** -- create, validate, and delete               |
+| CSI node client mount and `nvme-eui.` alias            | §10          | **Done** -- stage, unstage, and repair                 |
+| Attaching the namespace, on the host and the client    | §6.4(a), §10 | **Done** -- one path serves both                       |
+| Client policy resolved into the effective client set   | §7.1         | **Done** -- NodeScoped, Subnet, Open                   |
+| The address a client mounts                            | §13.3        | **Done** -- the host's own; a Service is failover      |
+| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs`   | §14.1        | **Done** -- adoption compares rather than refuses      |
+| RBAC over `nfsexports` for both plugins                | §9.3         | **Done** -- a role for the controller plugin           |
+| Expanding an RWX volume                                | §16          | Refused in its own words -- `xfs_growfs` has no caller |
+| PR key release on unstage, and a reaper for dead nodes | §10.3, §13   | Not started — **new, see findings**                    |
+| Reservation handover on migration                      | §13.4        | Not started — **new, see findings**                    |
+| Host prerequisites: `nfs-utils`, `blkmapd`             | §14.1, P0-10 | Not started — node OS, not a pod                       |
 
 ### Where the implementation departs from this document
 
