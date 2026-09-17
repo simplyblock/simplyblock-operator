@@ -139,13 +139,38 @@ func newExportReconciler(
 	}, cl
 }
 
-// withBaselineKubeNode adds one Kubernetes node when the caller supplied none.
+// withBaselineKubeNode supplies the Kubernetes nodes a StorageNode runs on,
+// when the caller supplied none of its own.
+//
+// A StorageNode always runs on a node that exists and publishes an address, and
+// two things the reconciler does depend on it: the NodeScoped client policy
+// resolves against the cluster's nodes, and the export's mountable address is
+// the bound host's. A fixture without them makes every binding test assert the
+// cannot-bind path instead of the one it is named for.
 func withBaselineKubeNode(objects []client.Object) []client.Object {
 	for _, o := range objects {
 		if _, ok := o.(*corev1.Node); ok {
 			return objects
 		}
 	}
+	added := false
+	for _, o := range objects {
+		sn, ok := o.(*simplyblockv1alpha1.StorageNode)
+		if !ok || sn.Spec.WorkerNode == "" {
+			continue
+		}
+		objects = append(objects, &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: sn.Spec.WorkerNode},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "192.168.10.81"},
+			}},
+		})
+		added = true
+	}
+	if added {
+		return objects
+	}
+	// No storage nodes either: one node, so the cluster is not empty.
 	return append(objects, &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "kube-baseline"},
 		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{

@@ -222,7 +222,24 @@ func (r *NFSExportReconciler) reconcilePending(
 		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
 	}
 
-	logger.Info("binding export to MDS host", "node", node, "clients", len(clients))
+	// The address is resolved before the transition for the same reason the
+	// client set is: an export bound to a host nothing can reach is one whose
+	// failure surfaces at a client's mount, several steps from the cause.
+	kubeNode, err := r.workerNodeFor(ctx, node)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	address, err := r.nodeAddress(ctx, kubeNode)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if address == "" {
+		r.event(export, corev1.EventTypeWarning, "MDSUnaddressable",
+			fmt.Sprintf("storage node %s publishes no address for clients to mount", node))
+		return ctrl.Result{RequeueAfter: nfsExportNoHostRequeue}, nil
+	}
+
+	logger.Info("binding export to MDS host", "node", node, "address", address, "clients", len(clients))
 	if err := machine.TransitionTo(ctx, phaseAssembling); err != nil {
 		return ctrl.Result{}, fmt.Errorf("transition to Assembling: %w", err)
 	}
@@ -234,6 +251,7 @@ func (r *NFSExportReconciler) reconcilePending(
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
 		s.Phase = phaseAssembling
 		s.StorageNodeRef = node
+		s.MDSNodeIP = address
 		s.AllowedClients = clients
 		s.Message = "assembling the export"
 		setDeadline(s, machine)

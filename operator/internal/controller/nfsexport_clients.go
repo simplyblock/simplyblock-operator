@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -81,4 +83,32 @@ func (r *NFSExportReconciler) clusterNodeAddresses(ctx context.Context) ([]strin
 		}
 	}
 	return clients, nil
+}
+
+// nodeAddress is the internal address of one Kubernetes node, or an empty
+// string when the node is gone or publishes none.
+//
+// This is the address a client mounts the export at. Design §13.3 puts a
+// Service in front of the metadata server so the address survives a move, and
+// that belongs with failover: until an export can move, a Service would add an
+// indirection whose only purpose is to absorb a change that cannot happen yet.
+// What matters now is that the field is filled at all, because an empty one
+// fails at the client with a message about the mount rather than about the host.
+func (r *NFSExportReconciler) nodeAddress(ctx context.Context, nodeName string) (string, error) {
+	if nodeName == "" {
+		return "", nil
+	}
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading node %s for the export address: %w", nodeName, err)
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
+			return addr.Address, nil
+		}
+	}
+	return "", nil
 }

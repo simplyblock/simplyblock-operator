@@ -110,12 +110,49 @@ func TestSubnetWithNoSubnetsResolvesToNothing(t *testing.T) {
 func TestBindingRecordsTheResolvedClientSet(t *testing.T) {
 	e := readyExport()
 	e.Status.AllowedClients = nil
+	// The node the export binds to has to exist as a Kubernetes node, because
+	// the export's address is that node's.
 	r, cl := newExportReconciler(t, &fakeAssembler{}, e,
-		testNode(testMDSHost, nil), kubeNode("vm01", "192.168.10.81"))
+		testNode(testMDSHost, nil), kubeNode(workerNodeFor(testMDSHost), "192.168.10.83"))
 
 	reconcileExport(t, r)
 
 	if got := loadExport(t, cl).Status.AllowedClients; len(got) == 0 {
 		t.Error("binding an export left its client set empty, so it publishes to nobody")
+	}
+}
+
+// The address a client mounts. Until failover exists there is no Service to
+// front the metadata server, so the record carries the bound host's own
+// address: the alternative is an empty field the CSI node path refuses with
+// "has no export address yet," which names the symptom and not the cause.
+func TestBindingRecordsTheMDSAddress(t *testing.T) {
+	e := readyExport()
+	e.Status.MDSNodeIP = ""
+	r, cl := newExportReconciler(t, &fakeAssembler{}, e,
+		testNode(testMDSHost, nil),
+		kubeNode(workerNodeFor(testMDSHost), "192.168.10.83"))
+
+	reconcileExport(t, r)
+
+	if got := loadExport(t, cl).Status.MDSNodeIP; got != "192.168.10.83" {
+		t.Errorf("mdsNodeIP = %q, want the bound host's address", got)
+	}
+}
+
+// A bound host with no address is not bound: mounting an empty address fails at
+// the client with a message about the mount rather than about the host, so the
+// binding waits instead.
+func TestBindingWaitsForAHostWithAnAddress(t *testing.T) {
+	e := readyExport()
+	r, cl := newExportReconciler(t, &fakeAssembler{}, e,
+		testNode(testMDSHost, nil),
+		kubeNode(workerNodeFor(testMDSHost), ""))
+
+	reconcileExport(t, r)
+
+	got := loadExport(t, cl)
+	if got.Status.Phase == simplyblockv1alpha2.NFSExportPhaseAssembling {
+		t.Error("an export bound to a host with no address, so no client can mount it")
 	}
 }
