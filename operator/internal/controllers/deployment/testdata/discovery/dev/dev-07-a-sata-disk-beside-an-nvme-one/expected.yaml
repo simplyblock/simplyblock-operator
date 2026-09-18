@@ -1,0 +1,29 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-dev-07
+  name: discovered-discover-dev-07
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-dev-07-cluster
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        block:
+        - /dev/sda
+      mgmtInterface: eth0
+      name: group-1-block-1x4T
+      workers:
+      - worker-01
+    name: discovered
+status:
+  step: {}

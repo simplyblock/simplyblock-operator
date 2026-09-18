@@ -1,0 +1,5 @@
+worker-01/nvme5n1: declined by most available NUMA node because NUMA node 0 carries 5 unclaimed devices (15T) against 5 (15T) on NUMA node 1, so it was chosen
+worker-01/nvme6n1: declined by most available NUMA node because NUMA node 0 carries 5 unclaimed devices (15T) against 5 (15T) on NUMA node 1, so it was chosen
+worker-01/nvme7n1: declined by most available NUMA node because NUMA node 0 carries 5 unclaimed devices (15T) against 5 (15T) on NUMA node 1, so it was chosen
+worker-01/nvme8n1: declined by most available NUMA node because NUMA node 0 carries 5 unclaimed devices (15T) against 5 (15T) on NUMA node 1, so it was chosen
+worker-01/nvme9n1: declined by most available NUMA node because NUMA node 0 carries 5 unclaimed devices (15T) against 5 (15T) on NUMA node 1, so it was chosen

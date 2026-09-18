@@ -1,0 +1,31 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-filt-13
+  name: discovered-discover-filt-13
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-filt-13-cluster
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        block:
+        - /dev/vdb
+        - /dev/vdc
+        - /dev/vdd
+      mgmtInterface: eth0
+      name: group-1-block-3x4T
+      workers:
+      - worker-01
+    name: discovered
+status:
+  step: {}

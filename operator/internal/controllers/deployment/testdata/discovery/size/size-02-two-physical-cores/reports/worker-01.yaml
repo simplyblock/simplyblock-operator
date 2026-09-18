@@ -1,0 +1,140 @@
+apiVersion: v1
+data:
+  report.json: |-
+    {
+      "version": 6,
+      "node": "worker-01",
+      "probedAt": "2026-09-18T09:00:00Z",
+      "cpu": {
+        "onlineCPUs": 2,
+        "physicalCores": 2,
+        "sockets": 1,
+        "threadsPerCore": 1,
+        "hyperThreading": false,
+        "numaNodes": [
+          {
+            "node": 0,
+            "onlineCPUs": [
+              0,
+              1
+            ],
+            "physicalCores": 2
+          }
+        ]
+      },
+      "memory": {
+        "totalBytes": 17179869184,
+        "freeBytes": 3758096384,
+        "availableBytes": 15032385536,
+        "numaNodes": [
+          {
+            "node": 0,
+            "totalBytes": 17179869184,
+            "freeBytes": 8589934592
+          }
+        ]
+      },
+      "hugePages": [
+        {
+          "sizeBytes": 1073741824,
+          "total": 32,
+          "free": 32,
+          "numaNodes": [
+            {
+              "node": 0,
+              "total": 16,
+              "free": 16
+            },
+            {
+              "node": 1,
+              "total": 16,
+              "free": 16
+            }
+          ]
+        }
+      ],
+      "interfaces": [
+        {
+          "name": "eth0",
+          "speedMbps": 25000,
+          "mtu": 1500,
+          "state": "up",
+          "driver": "mlx5_core",
+          "numaNode": 0,
+          "kind": "physical",
+          "addresses": [
+            "10.10.10.1"
+          ]
+        },
+        {
+          "name": "eth1",
+          "speedMbps": 25000,
+          "mtu": 1500,
+          "state": "up",
+          "driver": "mlx5_core",
+          "numaNode": 1,
+          "kind": "physical",
+          "addresses": [
+            "10.10.11.1"
+          ]
+        }
+      ],
+      "devices": [
+        {
+          "name": "nvme0n1",
+          "path": "/dev/nvme0n1",
+          "pciAddress": "0000:5e:00.0",
+          "sizeBytes": 3298534883328,
+          "kind": "Disk",
+          "transport": "NVMe",
+          "model": "SAMSUNG MZQL23T8HCLS-00A07",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
+        },
+        {
+          "name": "nvme1n1",
+          "path": "/dev/nvme1n1",
+          "pciAddress": "0000:5e:00.1",
+          "sizeBytes": 3298534883328,
+          "kind": "Disk",
+          "transport": "NVMe",
+          "model": "SAMSUNG MZQL23T8HCLS-00A07",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
+        },
+        {
+          "name": "nvme2n1",
+          "path": "/dev/nvme2n1",
+          "pciAddress": "0000:5e:00.2",
+          "sizeBytes": 3298534883328,
+          "kind": "Disk",
+          "transport": "NVMe",
+          "model": "SAMSUNG MZQL23T8HCLS-00A07",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
+        },
+        {
+          "name": "nvme3n1",
+          "path": "/dev/nvme3n1",
+          "pciAddress": "0000:5e:00.3",
+          "sizeBytes": 3298534883328,
+          "kind": "Disk",
+          "transport": "NVMe",
+          "model": "SAMSUNG MZQL23T8HCLS-00A07",
+          "numaNode": 0,
+          "available": true,
+          "content": "Blank"
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-node: worker-01
+    storage.simplyblock.io/nodeprobe-run: discover-size-02
+  name: sb-nodeprobe-discover-size-02-worker-01-f0b8ccb5
+  namespace: simplyblock

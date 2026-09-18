@@ -1,0 +1,278 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-pci-04
+  name: discovered-discover-pci-04
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-pci-04-cluster
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - "0000:11:00.0"
+        - "0000:11:00.1"
+      mgmtInterface: eth0
+      name: group-1-nvme-2x3T
+      workers:
+      - worker-01
+    - devices:
+        nvme:
+        - "0000:12:00.0"
+        - "0000:12:00.1"
+      mgmtInterface: eth0
+      name: group-2-nvme-2x3T
+      workers:
+      - worker-02
+    - devices:
+        nvme:
+        - "0000:13:00.0"
+        - "0000:13:00.1"
+      mgmtInterface: eth0
+      name: group-3-nvme-2x3T
+      workers:
+      - worker-03
+    - devices:
+        nvme:
+        - "0000:14:00.0"
+        - "0000:14:00.1"
+      mgmtInterface: eth0
+      name: group-4-nvme-2x3T
+      workers:
+      - worker-04
+    - devices:
+        nvme:
+        - "0000:15:00.0"
+        - "0000:15:00.1"
+      mgmtInterface: eth0
+      name: group-5-nvme-2x3T
+      workers:
+      - worker-05
+    - devices:
+        nvme:
+        - "0000:16:00.0"
+        - "0000:16:00.1"
+      mgmtInterface: eth0
+      name: group-6-nvme-2x3T
+      workers:
+      - worker-06
+    - devices:
+        nvme:
+        - "0000:17:00.0"
+        - "0000:17:00.1"
+      mgmtInterface: eth0
+      name: group-7-nvme-2x3T
+      workers:
+      - worker-07
+    - devices:
+        nvme:
+        - "0000:18:00.0"
+        - "0000:18:00.1"
+      mgmtInterface: eth0
+      name: group-8-nvme-2x3T
+      workers:
+      - worker-08
+    - devices:
+        nvme:
+        - "0000:19:00.0"
+        - "0000:19:00.1"
+      mgmtInterface: eth0
+      name: group-9-nvme-2x3T
+      workers:
+      - worker-09
+    - devices:
+        nvme:
+        - 0000:1a:00.0
+        - 0000:1a:00.1
+      mgmtInterface: eth0
+      name: group-10-nvme-2x3T
+      workers:
+      - worker-10
+    - devices:
+        nvme:
+        - 0000:1b:00.0
+        - 0000:1b:00.1
+      mgmtInterface: eth0
+      name: group-11-nvme-2x3T
+      workers:
+      - worker-11
+    - devices:
+        nvme:
+        - 0000:1c:00.0
+        - 0000:1c:00.1
+      mgmtInterface: eth0
+      name: group-12-nvme-2x3T
+      workers:
+      - worker-12
+    - devices:
+        nvme:
+        - 0000:1d:00.0
+        - 0000:1d:00.1
+      mgmtInterface: eth0
+      name: group-13-nvme-2x3T
+      workers:
+      - worker-13
+    - devices:
+        nvme:
+        - 0000:1e:00.0
+        - 0000:1e:00.1
+      mgmtInterface: eth0
+      name: group-14-nvme-2x3T
+      workers:
+      - worker-14
+    - devices:
+        nvme:
+        - 0000:1f:00.0
+        - 0000:1f:00.1
+      mgmtInterface: eth0
+      name: group-15-nvme-2x3T
+      workers:
+      - worker-15
+    - devices:
+        nvme:
+        - "0000:20:00.0"
+        - "0000:20:00.1"
+      mgmtInterface: eth0
+      name: group-16-nvme-2x3T
+      workers:
+      - worker-16
+    - devices:
+        nvme:
+        - "0000:21:00.0"
+        - "0000:21:00.1"
+      mgmtInterface: eth0
+      name: group-17-nvme-2x3T
+      workers:
+      - worker-17
+    - devices:
+        nvme:
+        - "0000:22:00.0"
+        - "0000:22:00.1"
+      mgmtInterface: eth0
+      name: group-18-nvme-2x3T
+      workers:
+      - worker-18
+    - devices:
+        nvme:
+        - "0000:23:00.0"
+        - "0000:23:00.1"
+      mgmtInterface: eth0
+      name: group-19-nvme-2x3T
+      workers:
+      - worker-19
+    - devices:
+        nvme:
+        - "0000:24:00.0"
+        - "0000:24:00.1"
+      mgmtInterface: eth0
+      name: group-20-nvme-2x3T
+      workers:
+      - worker-20
+    - devices:
+        nvme:
+        - "0000:25:00.0"
+        - "0000:25:00.1"
+      mgmtInterface: eth0
+      name: group-21-nvme-2x3T
+      workers:
+      - worker-21
+    - devices:
+        nvme:
+        - "0000:26:00.0"
+        - "0000:26:00.1"
+      mgmtInterface: eth0
+      name: group-22-nvme-2x3T
+      workers:
+      - worker-22
+    - devices:
+        nvme:
+        - "0000:27:00.0"
+        - "0000:27:00.1"
+      mgmtInterface: eth0
+      name: group-23-nvme-2x3T
+      workers:
+      - worker-23
+    - devices:
+        nvme:
+        - "0000:28:00.0"
+        - "0000:28:00.1"
+      mgmtInterface: eth0
+      name: group-24-nvme-2x3T
+      workers:
+      - worker-24
+    - devices:
+        nvme:
+        - "0000:29:00.0"
+        - "0000:29:00.1"
+      mgmtInterface: eth0
+      name: group-25-nvme-2x3T
+      workers:
+      - worker-25
+    - devices:
+        nvme:
+        - 0000:2a:00.0
+        - 0000:2a:00.1
+      mgmtInterface: eth0
+      name: group-26-nvme-2x3T
+      workers:
+      - worker-26
+    - devices:
+        nvme:
+        - 0000:2b:00.0
+        - 0000:2b:00.1
+      mgmtInterface: eth0
+      name: group-27-nvme-2x3T
+      workers:
+      - worker-27
+    - devices:
+        nvme:
+        - 0000:2c:00.0
+        - 0000:2c:00.1
+      mgmtInterface: eth0
+      name: group-28-nvme-2x3T
+      workers:
+      - worker-28
+    - devices:
+        nvme:
+        - 0000:2d:00.0
+        - 0000:2d:00.1
+      mgmtInterface: eth0
+      name: group-29-nvme-2x3T
+      workers:
+      - worker-29
+    - devices:
+        nvme:
+        - 0000:2e:00.0
+        - 0000:2e:00.1
+      mgmtInterface: eth0
+      name: group-30-nvme-2x3T
+      workers:
+      - worker-30
+    - devices:
+        nvme:
+        - 0000:2f:00.0
+        - 0000:2f:00.1
+      mgmtInterface: eth0
+      name: group-31-nvme-2x3T
+      workers:
+      - worker-31
+    - devices:
+        nvme:
+        - "0000:30:00.0"
+        - "0000:30:00.1"
+      mgmtInterface: eth0
+      name: group-32-nvme-2x3T
+      workers:
+      - worker-32
+    name: discovered
+status:
+  step: {}
