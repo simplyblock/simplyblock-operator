@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
@@ -640,7 +641,7 @@ func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1
 			NUMANode: -1,
 			// Held rather than idle, which is what makes the machine unusable:
 			// an idle binding is a disk the draft now claims.
-			InUse: true,
+			InUse: ptr.To(true),
 		})
 	}
 

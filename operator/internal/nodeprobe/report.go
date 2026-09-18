@@ -38,7 +38,7 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 3
+const ReportVersion = 6
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -214,9 +214,33 @@ type Interface struct {
 	// cluster's own CNI leaves on every worker. It is separate from Virtual
 	// because the two answer different questions: Virtual says the interface is
 	// backed by no hardware, and Bridge says it is carrying somebody else's
-	// traffic, which is what disqualifies it from being a management address
-	// even where it holds one.
+	// traffic.
 	Bridge bool `json:"bridge,omitempty"`
+
+	// Kind is what sort of device the interface is, in the spelling
+	// inventory.LinkKind uses: `physical`, `loopback`, `bridge`, `bond`, `team`,
+	// `vlan`, `vxlan`, `macvlan`, `ipvlan`, or `virtual` for a device the kernel
+	// does not identify.
+	//
+	// It is the field the management-interface rule turns on. Every software
+	// interface a worker has is virtual, so without the kind a bond and a tagged
+	// VLAN, which is where most fleets put their management address, read the
+	// same as a veth to a pod.
+	Kind string `json:"kind,omitempty"`
+
+	// Lower is what this interface is built on, ascending by name: the members
+	// of a bond or a bridge, or the single parent of a VLAN or a macvlan.
+	//
+	// It is how a draft reaches the hardware under an aggregate. A bond reports
+	// no slot, no driver, and no memory node of its own, so a reader that has
+	// to know where a bonded management network lands looks its members up in
+	// the same report.
+	Lower []string `json:"lower,omitempty"`
+
+	// Upper is what is built on this interface, ascending by name. It is the
+	// direction that answers for a NIC holding no address: on a host whose
+	// management network is tagged, the address is on a VLAN above it.
+	Upper []string `json:"upper,omitempty"`
 
 	// Addresses are the IP addresses the interface holds, without a prefix
 	// length. They are what makes a management interface identifiable: the one
@@ -249,6 +273,16 @@ type Device struct {
 
 	// NUMANode is the memory node the device hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
+
+	// SubsystemNQN is the NVMe Qualified Name of the subsystem the namespace
+	// belongs to, and is empty for a device on any other bus.
+	//
+	// It is what tells a volume this product exported from a disk the fleet
+	// owns. Both are namespaces, both are presented as disks, and the transport
+	// separates them only by inference: what an NQN says is which cluster and
+	// which logical volume the bytes belong to, which is the answer a draft
+	// needs before it proposes handing them to a cluster.
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
 
 	// Available reports whether the device may be handed over: a whole disk, on
 	// a bus the scan recognized, that nothing is using and that positively
@@ -291,7 +325,8 @@ type Controller struct {
 	// NUMANode is the memory node it hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
-	// InUse reports whether anything holds the controller open.
+	// InUse reports whether anything holds the controller open, and is absent
+	// for a controller the probe could not check.
 	//
 	// It is the question Driver cannot answer and the one that decides whether
 	// a controller can be reclaimed: a userspace binding nothing is driving is
@@ -299,12 +334,21 @@ type Controller struct {
 	// service, which may belong to a hypervisor guest or another product rather
 	// than to this one.
 	//
-	// False on a controller the probe could not check is the zero value and not
-	// an answer. A probe that failed to read the process table says so in
-	// Unreadable, so a reader deciding whether to reclaim has to find this
-	// report free of such an entry first.
-	InUse bool `json:"inUse,omitempty"`
+	// The third state is why this is a pointer. A controller nothing holds and
+	// a controller whose process table could not be read are different answers,
+	// and only the first is one a draft may act on: reading them as one value
+	// is how a disk something is driving gets proposed as free. Read it through
+	// Held and Free, which are the two questions a reader has and neither of
+	// which is the negation of the other.
+	InUse *bool `json:"inUse,omitempty"`
 }
+
+// Held reports whether something is known to hold the controller open.
+func (c Controller) Held() bool { return c.InUse != nil && *c.InUse }
+
+// Free reports whether the probe checked the controller and found nothing
+// holding it, which is the only state a draft may claim it in.
+func (c Controller) Free() bool { return c.InUse != nil && !*c.InUse }
 
 // BoundToUserspace reports whether a userspace-IO driver owns the controller.
 //

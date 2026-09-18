@@ -92,6 +92,28 @@ type Interface struct {
 	// socket reaches its NIC across the interconnect.
 	NUMANode int
 
+	// Kind is what sort of device the interface is, from the device type its
+	// driver registered. It is what separates a bond or a tagged VLAN, which a
+	// management address sits on in most fleets, from a veth or a CNI bridge,
+	// which are the cluster's own plumbing: all of them are virtual, and only
+	// the kind tells them apart.
+	Kind LinkKind
+
+	// Lower is what this interface is built on, ascending by name: the members
+	// of a bond or a bridge, or the single parent of a VLAN or a macvlan. It is
+	// empty for an interface built on nothing.
+	//
+	// It is the only route from an aggregate to the hardware under it. A bond
+	// carries no slot, no driver, and no memory node of its own, so a caller
+	// that has to know where a bonded management network physically lands reads
+	// the members and looks them up in the same reading.
+	Lower []string
+
+	// Upper is what is built on this interface, ascending by name. It is the
+	// direction that matters for a NIC holding no address of its own: on a host
+	// whose management network is tagged, the address is on a VLAN above it.
+	Upper []string
+
 	// Bridge reports whether the interface is a software bridge.
 	//
 	// It is separate from Virtual, which a bridge also is, because the two
@@ -207,20 +229,27 @@ func readInterface(dir, name string) Interface {
 		iface.OperState = LinkUnknown
 	}
 
+	// What the interface is stacked on is read before anything else, because it
+	// is the one reading that answers for a device the rest of this function
+	// returns early on: a bond has no slot and no driver, and its members are
+	// where both of those are.
+	iface.Lower, iface.Upper = stackAt(dir)
+
 	// The class entry is a symlink into the device tree, and where that tree
 	// says the interface sits is what decides whether it is backed by
 	// hardware. A device under devices/virtual has none.
 	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return iface
+	if err == nil {
+		iface.Virtual = sysfs.IsVirtual(resolved)
+		// A bridge exports a bridge/ directory whatever it is named, which is
+		// what makes this a reading rather than a guess at br0 and cni0 and
+		// docker0.
+		if entries, err := os.Stat(filepath.Join(dir, "bridge")); err == nil && entries.IsDir() {
+			iface.Bridge = true
+		}
 	}
-	iface.Virtual = sysfs.IsVirtual(resolved)
-	// A bridge exports a bridge/ directory whatever it is named, which is what
-	// makes this a reading rather than a guess at br0 and cni0 and docker0.
-	if entries, err := os.Stat(filepath.Join(dir, "bridge")); err == nil && entries.IsDir() {
-		iface.Bridge = true
-	}
-	if iface.Virtual {
+	iface.Kind = kindOf(dir, iface.Virtual, iface.Loopback, iface.Bridge)
+	if err != nil || iface.Virtual {
 		return iface
 	}
 

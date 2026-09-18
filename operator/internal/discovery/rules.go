@@ -158,12 +158,20 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 	return false, "the probe refused it: " + strings.Join(reasons, ", ")
 }
 
-// ClassRule admits a device that can be named in the class the run is scanning.
+// ClassRule admits a device that can be named in the class the run is scanning,
+// and refuses one of the other class.
 //
 // It is a rule rather than a precondition because the failure is worth
 // reporting: an NVMe run against a worker whose disks are virtio finds devices
 // it cannot name, and "no NVMe devices" is a more useful answer than an empty
 // draft.
+//
+// The check is symmetric, and it has to be. A cluster is built out of one class
+// of backend storage, so the two classes cannot both reach one draft — and
+// while an NVMe run recognizes its own class by the bus, a block run cannot
+// recognize its own by the address, because an NVMe device has a path like
+// every other block device. Naming devices by path is what the block class does
+// rather than what makes a device one, so the bus is what both sides read.
 type ClassRule struct {
 	Class DeviceClass
 }
@@ -179,10 +187,25 @@ func (r ClassRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, str
 		return false, fmt.Sprintf("this run scans NVMe devices and the device is on %s",
 			transportOrNone(device.Transport))
 	}
+	if r.Class == ClassBlock && onNVMe(device.Transport) {
+		return false, fmt.Sprintf("this run scans logical block devices and the device is on %s",
+			transportOrNone(device.Transport))
+	}
 	if address := r.Class.Address(device); address == "" {
 		return false, fmt.Sprintf("it has no %s to name it by", addressKind(r.Class))
 	}
 	return true, ""
+}
+
+// onNVMe reports whether a bus is one of the two the NVMe class covers.
+//
+// A fabric namespace is in, and it is the one worth naming: it is a volume
+// something else exported, so it is neither class's candidate, and refusing it
+// here rather than leaving it to the availability rule keeps a block run's
+// refusal about what the device is rather than about what is holding it.
+func onNVMe(transport string) bool {
+	return transport == string(blockdev.TransportNVMe) ||
+		transport == string(blockdev.TransportNVMeFabric)
 }
 
 // transportOrNone names a transport for a message, including the empty one.
@@ -234,12 +257,17 @@ type AllowDenyRule struct {
 
 func (AllowDenyRule) Name() string { return "allow and deny lists" }
 
+// The reason names the list and not the address. Which device was refused is
+// already on the refusal, and putting it in the sentence too made every such
+// refusal a different sentence, so a hundred disks declined by one list read as
+// a hundred separate findings rather than one list and a number.
+
 func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	address := r.Class.Address(device)
 
 	for _, denied := range r.Deny {
 		if strings.EqualFold(address, denied) {
-			return false, fmt.Sprintf("%s is in the deny list", address)
+			return false, "it is in the deny list"
 		}
 	}
 	if len(r.Allow) == 0 {
@@ -250,7 +278,7 @@ func (r AllowDenyRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 			return true, ""
 		}
 	}
-	return false, fmt.Sprintf("%s is not in the allow list", address)
+	return false, "it is not in the allow list"
 }
 
 // ModelRule admits a device whose model string contains the wanted text.
@@ -278,20 +306,38 @@ func (r ModelRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, str
 type SizeRule struct {
 	// Min and Max are inclusive bounds in bytes. A zero Max is no upper bound.
 	Min, Max uint64
+
+	// Spec is the range as the filter wrote it, which is what a refusal quotes.
+	//
+	// The bound is not re-rendered from the parsed number, because that is a
+	// different string: a filter naming 1920G would be quoted back as 1.875T,
+	// and a reviewer comparing the refusal against what they wrote would be
+	// comparing two spellings of one number. What they can act on is what they
+	// typed.
+	Spec string
 }
 
 func (SizeRule) Name() string { return "size range" }
 
 func (r SizeRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
 	if device.SizeBytes < r.Min {
-		return false, fmt.Sprintf("it is %s and the range starts at %s",
-			humanBytes(device.SizeBytes), humanBytes(r.Min))
+		return false, fmt.Sprintf("it is %s and the range %s starts above it",
+			humanBytes(device.SizeBytes), r.describeRange(r.Min))
 	}
 	if r.Max > 0 && device.SizeBytes > r.Max {
-		return false, fmt.Sprintf("it is %s and the range ends at %s",
-			humanBytes(device.SizeBytes), humanBytes(r.Max))
+		return false, fmt.Sprintf("it is %s and the range %s ends below it",
+			humanBytes(device.SizeBytes), r.describeRange(r.Max))
 	}
 	return true, ""
+}
+
+// describeRange is the range as the filter wrote it, and the bound rendered
+// when the rule was built by hand rather than from a filter.
+func (r SizeRule) describeRange(bound uint64) string {
+	if r.Spec != "" {
+		return r.Spec
+	}
+	return humanBytes(bound)
 }
 
 // WorkerHasDevices admits a worker that has at least one device left.
@@ -320,11 +366,20 @@ func (WorkerHasDevices) Admit(report nodeprobe.Report, admitted []nodeprobe.Devi
 		// Something holding them means the machine is serving whatever that is,
 		// which need not be this product: a userspace binding is also how a
 		// disk is passed through to a guest.
-		var busy []nodeprobe.Controller
+		var busy, unchecked []nodeprobe.Controller
 		for _, controller := range bound {
-			if controller.InUse {
+			switch {
+			case controller.Held():
 				busy = append(busy, controller)
+			case !controller.Free():
+				unchecked = append(unchecked, controller)
 			}
+		}
+		if len(busy) == 0 && len(unchecked) > 0 {
+			return false, fmt.Sprintf(
+				"it presents no usable block device, and whether anything is driving %d of its "+
+					"NVMe controllers (%s) could not be established, so they are not offered",
+				len(unchecked), describeControllers(unchecked))
 		}
 		if len(busy) > 0 {
 			return false, fmt.Sprintf(
@@ -368,17 +423,40 @@ func (WorkerWasReadable) Admit(report nodeprobe.Report, _ []nodeprobe.Device) (b
 		len(report.Unreadable), strings.Join(report.Unreadable, "; "))
 }
 
-// humanBytes renders a size the way an administrator writes one, so that a
-// refusal quotes the same units the filter was written in.
+// humanBytes renders a size the way an administrator writes one.
+//
+// Two properties, and the old rendering had neither. A whole number of units is
+// written as that whole number, so the sizes a fleet is actually built out of
+// read as 3T rather than as 3.001T and parse back to the byte they came from.
+// Anything else is truncated rather than rounded, because a size that reads as
+// more than the device holds is one that says the disk is bigger than it is:
+// the old rendering printed a byte under a tebibyte as 1024G, which is not a
+// approximation of the value, it is above it.
 func humanBytes(bytes uint64) string {
-	switch {
-	case bytes >= 1<<40:
-		return fmt.Sprintf("%.4gT", float64(bytes)/float64(uint64(1)<<40))
-	case bytes >= 1<<30:
-		return fmt.Sprintf("%.4gG", float64(bytes)/float64(uint64(1)<<30))
-	case bytes >= 1<<20:
-		return fmt.Sprintf("%.4gM", float64(bytes)/float64(uint64(1)<<20))
-	default:
-		return fmt.Sprintf("%dB", bytes)
+	for _, unit := range []struct {
+		size   uint64
+		suffix string
+	}{
+		{uint64(1) << 40, "T"},
+		{uint64(1) << 30, "G"},
+		{uint64(1) << 20, "M"},
+	} {
+		if bytes < unit.size {
+			continue
+		}
+		if bytes%unit.size == 0 {
+			return fmt.Sprintf("%d%s", bytes/unit.size, unit.suffix)
+		}
+		// Truncated to two decimals, which is the precision a disk is sold in
+		// and never more than the device holds. A trailing zero is dropped, so
+		// a size and a half reads as 1.5T rather than 1.50T.
+		hundredths := (bytes % unit.size) * 100 / unit.size
+		decimals := fmt.Sprintf("%02d", hundredths)
+		decimals = strings.TrimRight(decimals, "0")
+		if decimals == "" {
+			return fmt.Sprintf("%d%s", bytes/unit.size, unit.suffix)
+		}
+		return fmt.Sprintf("%d.%s%s", bytes/unit.size, decimals, unit.suffix)
 	}
+	return fmt.Sprintf("%dB", bytes)
 }

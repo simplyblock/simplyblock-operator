@@ -330,6 +330,11 @@ func (r *OperatorOpsReconciler) inspect(
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
+	// Refused before a single worker is probed. See refuseUnreadableFilter.
+	if err := refuseUnreadableFilter(spec); err != nil {
+		return false, err
+	}
+
 	var nodes corev1.NodeList
 	options := []client.ListOption{}
 	if len(spec.NodeSelector) > 0 {
@@ -511,6 +516,12 @@ func (r *OperatorOpsReconciler) write(
 		spec = &simplyblockv1alpha2.DiscoverSpec{}
 	}
 
+	// Asked again at the step that applies the filter, so that the guard sits
+	// where the value is used and not only where the run was settled.
+	if err := refuseUnreadableFilter(spec); err != nil {
+		return false, err
+	}
+
 	reports, err := r.reportsFor(ctx, ops)
 	if err != nil {
 		return false, err
@@ -536,10 +547,7 @@ func (r *OperatorOpsReconciler) write(
 	}
 
 	filter := spec.DeviceFilter
-	planner := discoverypkg.Planner{
-		Class:     discoverypkg.ClassOf(filter),
-		KubeNodes: kubeNodes,
-	}
+	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
 	plan := planner.Plan(collected, filter)
 
 	if len(plan.NodeSets) == 0 {
@@ -587,6 +595,35 @@ func (r *OperatorOpsReconciler) write(
 	ops.Status.Message = fmt.Sprintf("wrote %s awaiting approval: %s", config.Name, plan.Summary())
 	observeDevicesFound(ops.Namespace, plan.DeviceCount())
 	return true, r.status(ctx, ops)
+}
+
+// refuseUnreadableFilter refuses a run whose device filter names a size range
+// nothing can read.
+//
+// An unreadable range builds no size rule, which widens the filter to every
+// disk on every worker rather than narrowing it to none, and the refusal has no
+// device to attach itself to so it reaches neither the refusal list nor the
+// run's explanation. The draft that results is indistinguishable from one a run
+// meant to write.
+//
+// The admission webhook refuses such a run at the request, so reaching this
+// means the webhook is not installed or was bypassed. Both steps that read the
+// filter ask, because the one that settles the run should not probe a fleet for
+// a draft that cannot be right, and the one that applies it should not depend on
+// the other having asked.
+func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
+	filter := spec.DeviceFilter
+	if filter == nil || filter.DriveSizeRange == "" {
+		return nil
+	}
+	if _, _, err := discoverypkg.ParseSizeRange(filter.DriveSizeRange); err != nil {
+		return refusef(OperationFailed,
+			"spec.discover.deviceFilter.driveSizeRange is %q, which cannot be read: %v. "+
+				"A run whose range cannot be read applies no size filter at all, so the draft "+
+				"would name every disk on every worker rather than the ones asked for",
+			filter.DriveSizeRange, err)
+	}
+	return nil
 }
 
 // draftFor builds the document, and the notes explaining the numbers in it that

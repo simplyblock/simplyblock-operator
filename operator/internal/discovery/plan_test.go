@@ -237,7 +237,7 @@ func TestPlanScansTheBlockClassWhenAskedTo(t *testing.T) {
 	)}
 
 	filter := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
-	plan := Planner{Class: ClassOf(filter)}.Plan(fleet, filter)
+	plan := Planner{}.Plan(fleet, filter)
 
 	if plan.Class != ClassBlock {
 		t.Fatalf("the plan is for class %q, want %q", plan.Class, ClassBlock)
@@ -336,11 +336,11 @@ func TestPlanHonorsTheSeamsItWasGiven(t *testing.T) {
 func TestAnIdleUserspaceControllerIsPlannedOn(t *testing.T) {
 	worker := report("worker-1")
 	worker.NVMeControllers = []nodeprobe.Controller{
-		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0},
-		{Address: "0000:00:03.0", Driver: "uio_pci_generic", NUMANode: 0},
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0, InUse: ptr.To(false)},
+		{Address: "0000:00:03.0", Driver: "uio_pci_generic", NUMANode: 0, InUse: ptr.To(false)},
 	}
 
-	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+	plan := Planner{}.Plan([]nodeprobe.Report{worker}, nil)
 
 	if len(plan.Workers) != 1 {
 		t.Fatalf("planned %d workers, want the one: %s", len(plan.Workers), plan.Summary())
@@ -365,10 +365,10 @@ func TestAnIdleUserspaceControllerIsPlannedOn(t *testing.T) {
 func TestAHeldUserspaceControllerIsNotPlannedOn(t *testing.T) {
 	worker := report("worker-1")
 	worker.NVMeControllers = []nodeprobe.Controller{
-		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0, InUse: true},
+		{Address: "0000:00:02.0", Driver: "uio_pci_generic", NUMANode: 0, InUse: ptr.To(true)},
 	}
 
-	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+	plan := Planner{}.Plan([]nodeprobe.Report{worker}, nil)
 
 	if len(plan.Workers) != 0 {
 		t.Errorf("a worker whose only controller is in use was planned on: %s", plan.Summary())
@@ -384,7 +384,7 @@ func TestAKernelBoundControllerIsNotCountedTwice(t *testing.T) {
 		{Address: "0000:00:02.0", Driver: "nvme", NUMANode: 0},
 	}
 
-	plan := Planner{Class: ClassNVMe}.Plan([]nodeprobe.Report{worker}, nil)
+	plan := Planner{}.Plan([]nodeprobe.Report{worker}, nil)
 
 	var addresses []string
 	for _, set := range plan.NodeSets {
@@ -394,5 +394,93 @@ func TestAKernelBoundControllerIsNotCountedTwice(t *testing.T) {
 	}
 	if len(addresses) != 1 {
 		t.Errorf("the draft names %v, want the one disk once", addresses)
+	}
+}
+
+// The class a run scans is the filter's to state, and the planner has no second
+// opinion about it.
+//
+// Two statements of one fact can disagree, and this one disagreed silently: a
+// planner told nothing scanned NVMe, so a filter asking for logical block
+// devices had its allow and deny lists read on the branch that never runs and
+// dropped without a word. There is nothing for a caller to keep in step now,
+// because there is only one place the class is written down.
+func TestTheFilterDecidesTheClassWithoutBeingToldTwice(t *testing.T) {
+	fleet := []nodeprobe.Report{report("worker-1",
+		blockDisk("vdb", 0, 2*tb),
+		blockDisk("vdc", 0, 2*tb),
+	)}
+	filter := &simplyblockv1alpha2.DeviceFilter{
+		EnableLogicalBlockDevices: ptr.To(true),
+		BlockDenyList:             []string{"/dev/vdc"},
+	}
+
+	plan := Planner{}.Plan(fleet, filter)
+
+	if plan.Class != ClassBlock {
+		t.Fatalf("the plan is for class %q, want %q", plan.Class, ClassBlock)
+	}
+	if len(plan.NodeSets) != 1 || len(plan.NodeSets[0].Groups) != 1 {
+		t.Fatalf("built %+v", plan.NodeSets)
+	}
+	if got := plan.NodeSets[0].Groups[0].Devices.Block; !slices.Equal(got, []string{"/dev/vdb"}) {
+		t.Errorf("the group names %v, want the deny list to have been applied", got)
+	}
+}
+
+// The explanation groups refusals by the rule that made them, not by the words
+// they came out as.
+//
+// Every refusal carries the rule that produced it, so the count is a fact the
+// data already holds. Grouping on the rendered sentence instead meant a rule
+// whose sentence names the device never grouped at all: forty disks declined by
+// one allow list produced forty clauses, each a sentence long, where the reader
+// wanted one line and a number.
+func TestTheExplanationCountsByRuleRatherThanByWording(t *testing.T) {
+	filter := &simplyblockv1alpha2.DeviceFilter{PcieAllowList: []string{"0000:ff:00.0"}}
+	fleet := []nodeprobe.Report{report("worker-1",
+		disk("nvme0n1", "0000:5e:00.0", 0, tb),
+		disk("nvme1n1", "0000:5f:00.0", 0, tb),
+		disk("nvme2n1", "0000:af:00.0", 0, tb),
+		disk("nvme3n1", "0000:b0:00.0", 0, tb),
+	)}
+
+	plan := Planner{}.Plan(fleet, filter)
+
+	explained := plan.Explain()
+	if len(explained) != 1 {
+		t.Fatalf("explained %d workers, want 1: %v", len(explained), explained)
+	}
+	line := explained[0]
+
+	if !strings.Contains(line, "4 devices") {
+		t.Errorf("the line %q does not count the four disks together", line)
+	}
+	// One clause, not four: the addresses are what the refusals differ in, and
+	// they are not what the reader is counting.
+	if strings.Count(line, "allow list") > 1 {
+		t.Errorf("the line %q repeats the rule once per device", line)
+	}
+}
+
+// Two rules refusing a worker's disks are two clauses, because the reason a
+// disk was left out is the rule that left it out.
+func TestTheExplanationKeepsTheRulesApart(t *testing.T) {
+	filter := &simplyblockv1alpha2.DeviceFilter{
+		PcieDenyList:   []string{"0000:5e:00.0"},
+		DriveSizeRange: "2T-4T",
+	}
+	fleet := []nodeprobe.Report{report("worker-1",
+		disk("nvme0n1", "0000:5e:00.0", 0, 3*tb),
+		disk("nvme1n1", "0000:5f:00.0", 0, tb),
+	)}
+
+	plan := Planner{}.Plan(fleet, filter)
+
+	line := strings.Join(plan.Explain(), " ")
+	for _, rule := range []string{"allow and deny lists", "size range"} {
+		if !strings.Contains(line, rule) {
+			t.Errorf("the explanation %q does not name the %s rule", line, rule)
+		}
 	}
 }
