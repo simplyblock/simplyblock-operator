@@ -220,7 +220,7 @@ var errUnreachableControlPlane = errors.New("the control plane is unreachable")
 // that would have created either.
 func TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail(t *testing.T) {
 	node := &simplyblockv1alpha2.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "a-node", Namespace: budgetNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: opsNodeName, Namespace: budgetNamespace},
 		Spec: simplyblockv1alpha2.StorageNodeSpec{
 			ClusterRef: budgetCluster,
 			WorkerNode: managerWorker,
@@ -264,7 +264,7 @@ func TestTheWindowHoldsTheManagerBeforeAnythingThatCanFail(t *testing.T) {
 // same deadlock, one object over.
 func TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo(t *testing.T) {
 	node := &simplyblockv1alpha2.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "a-node", Namespace: budgetNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: opsNodeName, Namespace: budgetNamespace},
 		Spec: simplyblockv1alpha2.StorageNodeSpec{
 			ClusterRef: budgetCluster,
 			WorkerNode: managerWorker,

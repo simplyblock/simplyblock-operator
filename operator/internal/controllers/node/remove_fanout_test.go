@@ -47,7 +47,7 @@ func aFanOut(t *testing.T, mover func(client.Client, *runtime.Scheme) vmigration
 	scheme := testsupport.NewScheme(t)
 
 	node := &simplyblockv1alpha2.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "a-node", Namespace: "simplyblock"},
+		ObjectMeta: metav1.ObjectMeta{Name: opsNodeName, Namespace: "simplyblock"},
 		Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: "a-cluster"},
 	}
 	node.Status.UUID = aDrainedNodeID
