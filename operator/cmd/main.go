@@ -965,6 +965,10 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{}})
 		setupLog.Info("registered storageclusterops validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-operatorops",
+			&webhook.Admission{Handler: &internalwebhook.OperatorOpsValidator{}})
+		setupLog.Info("registered operatorops validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenodeops",
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
 		setupLog.Info("registered storagenodeops validating webhook")
