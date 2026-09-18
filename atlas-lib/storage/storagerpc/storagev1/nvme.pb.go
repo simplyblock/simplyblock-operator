@@ -729,6 +729,7 @@ type DeviceSelector struct {
 	Nsid          uint32                 `protobuf:"varint,2,opt,name=nsid,proto3" json:"nsid,omitempty"` // 0: any
 	Uuid          string                 `protobuf:"bytes,3,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	DevicePath    string                 `protobuf:"bytes,4,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"`
+	Nguid         string                 `protobuf:"bytes,5,opt,name=nguid,proto3" json:"nguid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -787,6 +788,13 @@ func (x *DeviceSelector) GetUuid() string {
 func (x *DeviceSelector) GetDevicePath() string {
 	if x != nil {
 		return x.DevicePath
+	}
+	return ""
+}
+
+func (x *DeviceSelector) GetNguid() string {
+	if x != nil {
+		return x.Nguid
 	}
 	return ""
 }
@@ -1215,6 +1223,94 @@ func (x *GetDeviceByUUIDResponse) GetDevice() *Device {
 	return nil
 }
 
+type GetDeviceByNGUIDRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nguid         string                 `protobuf:"bytes,1,opt,name=nguid,proto3" json:"nguid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDeviceByNGUIDRequest) Reset() {
+	*x = GetDeviceByNGUIDRequest{}
+	mi := &file_nvme_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDeviceByNGUIDRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDeviceByNGUIDRequest) ProtoMessage() {}
+
+func (x *GetDeviceByNGUIDRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nvme_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetDeviceByNGUIDRequest.ProtoReflect.Descriptor instead.
+func (*GetDeviceByNGUIDRequest) Descriptor() ([]byte, []int) {
+	return file_nvme_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetDeviceByNGUIDRequest) GetNguid() string {
+	if x != nil {
+		return x.Nguid
+	}
+	return ""
+}
+
+type GetDeviceByNGUIDResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Device        *Device                `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDeviceByNGUIDResponse) Reset() {
+	*x = GetDeviceByNGUIDResponse{}
+	mi := &file_nvme_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDeviceByNGUIDResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDeviceByNGUIDResponse) ProtoMessage() {}
+
+func (x *GetDeviceByNGUIDResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nvme_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetDeviceByNGUIDResponse.ProtoReflect.Descriptor instead.
+func (*GetDeviceByNGUIDResponse) Descriptor() ([]byte, []int) {
+	return file_nvme_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GetDeviceByNGUIDResponse) GetDevice() *Device {
+	if x != nil {
+		return x.Device
+	}
+	return nil
+}
+
 type GetDeviceByDevicePathRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DevicePath    string                 `protobuf:"bytes,1,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"`
@@ -1224,7 +1320,7 @@ type GetDeviceByDevicePathRequest struct {
 
 func (x *GetDeviceByDevicePathRequest) Reset() {
 	*x = GetDeviceByDevicePathRequest{}
-	mi := &file_nvme_proto_msgTypes[17]
+	mi := &file_nvme_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1236,7 +1332,7 @@ func (x *GetDeviceByDevicePathRequest) String() string {
 func (*GetDeviceByDevicePathRequest) ProtoMessage() {}
 
 func (x *GetDeviceByDevicePathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvme_proto_msgTypes[17]
+	mi := &file_nvme_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1249,7 +1345,7 @@ func (x *GetDeviceByDevicePathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByDevicePathRequest.ProtoReflect.Descriptor instead.
 func (*GetDeviceByDevicePathRequest) Descriptor() ([]byte, []int) {
-	return file_nvme_proto_rawDescGZIP(), []int{17}
+	return file_nvme_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetDeviceByDevicePathRequest) GetDevicePath() string {
@@ -1268,7 +1364,7 @@ type GetDeviceByDevicePathResponse struct {
 
 func (x *GetDeviceByDevicePathResponse) Reset() {
 	*x = GetDeviceByDevicePathResponse{}
-	mi := &file_nvme_proto_msgTypes[18]
+	mi := &file_nvme_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +1376,7 @@ func (x *GetDeviceByDevicePathResponse) String() string {
 func (*GetDeviceByDevicePathResponse) ProtoMessage() {}
 
 func (x *GetDeviceByDevicePathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvme_proto_msgTypes[18]
+	mi := &file_nvme_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +1389,7 @@ func (x *GetDeviceByDevicePathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByDevicePathResponse.ProtoReflect.Descriptor instead.
 func (*GetDeviceByDevicePathResponse) Descriptor() ([]byte, []int) {
-	return file_nvme_proto_rawDescGZIP(), []int{18}
+	return file_nvme_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetDeviceByDevicePathResponse) GetDevice() *Device {
@@ -1313,7 +1409,7 @@ type GetDeviceByNamespaceRequest struct {
 
 func (x *GetDeviceByNamespaceRequest) Reset() {
 	*x = GetDeviceByNamespaceRequest{}
-	mi := &file_nvme_proto_msgTypes[19]
+	mi := &file_nvme_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1421,7 @@ func (x *GetDeviceByNamespaceRequest) String() string {
 func (*GetDeviceByNamespaceRequest) ProtoMessage() {}
 
 func (x *GetDeviceByNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvme_proto_msgTypes[19]
+	mi := &file_nvme_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1434,7 @@ func (x *GetDeviceByNamespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByNamespaceRequest.ProtoReflect.Descriptor instead.
 func (*GetDeviceByNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_nvme_proto_rawDescGZIP(), []int{19}
+	return file_nvme_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetDeviceByNamespaceRequest) GetNqn() string {
@@ -1364,7 +1460,7 @@ type GetDeviceByNamespaceResponse struct {
 
 func (x *GetDeviceByNamespaceResponse) Reset() {
 	*x = GetDeviceByNamespaceResponse{}
-	mi := &file_nvme_proto_msgTypes[20]
+	mi := &file_nvme_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1376,7 +1472,7 @@ func (x *GetDeviceByNamespaceResponse) String() string {
 func (*GetDeviceByNamespaceResponse) ProtoMessage() {}
 
 func (x *GetDeviceByNamespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvme_proto_msgTypes[20]
+	mi := &file_nvme_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1389,7 +1485,7 @@ func (x *GetDeviceByNamespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByNamespaceResponse.ProtoReflect.Descriptor instead.
 func (*GetDeviceByNamespaceResponse) Descriptor() ([]byte, []int) {
-	return file_nvme_proto_rawDescGZIP(), []int{20}
+	return file_nvme_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetDeviceByNamespaceResponse) GetDevice() *Device {
@@ -1485,13 +1581,14 @@ const file_nvme_proto_rawDesc = "" +
 	"namespaces\"~\n" +
 	"\x06Device\x129\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x1b.atlas.storage.v1.NamespaceR\tnamespace\x129\n" +
-	"\tsubsystem\x18\x02 \x01(\v2\x1b.atlas.storage.v1.SubsystemR\tsubsystem\"k\n" +
+	"\tsubsystem\x18\x02 \x01(\v2\x1b.atlas.storage.v1.SubsystemR\tsubsystem\"\x81\x01\n" +
 	"\x0eDeviceSelector\x12\x10\n" +
 	"\x03nqn\x18\x01 \x01(\tR\x03nqn\x12\x12\n" +
 	"\x04nsid\x18\x02 \x01(\rR\x04nsid\x12\x12\n" +
 	"\x04uuid\x18\x03 \x01(\tR\x04uuid\x12\x1f\n" +
 	"\vdevice_path\x18\x04 \x01(\tR\n" +
-	"devicePath\"\x17\n" +
+	"devicePath\x12\x14\n" +
+	"\x05nguid\x18\x05 \x01(\tR\x05nguid\"\x17\n" +
 	"\x15ListSubsystemsRequest\"U\n" +
 	"\x16ListSubsystemsResponse\x12;\n" +
 	"\n" +
@@ -1511,6 +1608,10 @@ const file_nvme_proto_rawDesc = "" +
 	"\x16GetDeviceByUUIDRequest\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\"K\n" +
 	"\x17GetDeviceByUUIDResponse\x120\n" +
+	"\x06device\x18\x01 \x01(\v2\x18.atlas.storage.v1.DeviceR\x06device\"/\n" +
+	"\x17GetDeviceByNGUIDRequest\x12\x14\n" +
+	"\x05nguid\x18\x01 \x01(\tR\x05nguid\"L\n" +
+	"\x18GetDeviceByNGUIDResponse\x120\n" +
 	"\x06device\x18\x01 \x01(\v2\x18.atlas.storage.v1.DeviceR\x06device\"?\n" +
 	"\x1cGetDeviceByDevicePathRequest\x12\x1f\n" +
 	"\vdevice_path\x18\x01 \x01(\tR\n" +
@@ -1524,11 +1625,12 @@ const file_nvme_proto_rawDesc = "" +
 	"\x06device\x18\x01 \x01(\v2\x18.atlas.storage.v1.DeviceR\x06device2\xe5\x01\n" +
 	"\x10SubsystemService\x12c\n" +
 	"\x0eListSubsystems\x12'.atlas.storage.v1.ListSubsystemsRequest\x1a(.atlas.storage.v1.ListSubsystemsResponse\x12l\n" +
-	"\x11GetSubsystemByNQN\x12*.atlas.storage.v1.GetSubsystemByNQNRequest\x1a+.atlas.storage.v1.GetSubsystemByNQNResponse2\xbe\x04\n" +
+	"\x11GetSubsystemByNQN\x12*.atlas.storage.v1.GetSubsystemByNQNRequest\x1a+.atlas.storage.v1.GetSubsystemByNQNResponse2\xa9\x05\n" +
 	"\rDeviceService\x12Z\n" +
 	"\vListDevices\x12$.atlas.storage.v1.ListDevicesRequest\x1a%.atlas.storage.v1.ListDevicesResponse\x12x\n" +
 	"\x15ListDevicesBySelector\x12..atlas.storage.v1.ListDevicesBySelectorRequest\x1a/.atlas.storage.v1.ListDevicesBySelectorResponse\x12f\n" +
-	"\x0fGetDeviceByUUID\x12(.atlas.storage.v1.GetDeviceByUUIDRequest\x1a).atlas.storage.v1.GetDeviceByUUIDResponse\x12x\n" +
+	"\x0fGetDeviceByUUID\x12(.atlas.storage.v1.GetDeviceByUUIDRequest\x1a).atlas.storage.v1.GetDeviceByUUIDResponse\x12i\n" +
+	"\x10GetDeviceByNGUID\x12).atlas.storage.v1.GetDeviceByNGUIDRequest\x1a*.atlas.storage.v1.GetDeviceByNGUIDResponse\x12x\n" +
 	"\x15GetDeviceByDevicePath\x12..atlas.storage.v1.GetDeviceByDevicePathRequest\x1a/.atlas.storage.v1.GetDeviceByDevicePathResponse\x12u\n" +
 	"\x14GetDeviceByNamespace\x12-.atlas.storage.v1.GetDeviceByNamespaceRequest\x1a..atlas.storage.v1.GetDeviceByNamespaceResponseBEZCgithub.com/simplyblock/atlas/storage/storagerpc/storagev1;storagev1b\x06proto3"
 
@@ -1544,7 +1646,7 @@ func file_nvme_proto_rawDescGZIP() []byte {
 	return file_nvme_proto_rawDescData
 }
 
-var file_nvme_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_nvme_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_nvme_proto_goTypes = []any{
 	(*Address)(nil),                       // 0: atlas.storage.v1.Address
 	(*Controller)(nil),                    // 1: atlas.storage.v1.Controller
@@ -1563,10 +1665,12 @@ var file_nvme_proto_goTypes = []any{
 	(*ListDevicesBySelectorResponse)(nil), // 14: atlas.storage.v1.ListDevicesBySelectorResponse
 	(*GetDeviceByUUIDRequest)(nil),        // 15: atlas.storage.v1.GetDeviceByUUIDRequest
 	(*GetDeviceByUUIDResponse)(nil),       // 16: atlas.storage.v1.GetDeviceByUUIDResponse
-	(*GetDeviceByDevicePathRequest)(nil),  // 17: atlas.storage.v1.GetDeviceByDevicePathRequest
-	(*GetDeviceByDevicePathResponse)(nil), // 18: atlas.storage.v1.GetDeviceByDevicePathResponse
-	(*GetDeviceByNamespaceRequest)(nil),   // 19: atlas.storage.v1.GetDeviceByNamespaceRequest
-	(*GetDeviceByNamespaceResponse)(nil),  // 20: atlas.storage.v1.GetDeviceByNamespaceResponse
+	(*GetDeviceByNGUIDRequest)(nil),       // 17: atlas.storage.v1.GetDeviceByNGUIDRequest
+	(*GetDeviceByNGUIDResponse)(nil),      // 18: atlas.storage.v1.GetDeviceByNGUIDResponse
+	(*GetDeviceByDevicePathRequest)(nil),  // 19: atlas.storage.v1.GetDeviceByDevicePathRequest
+	(*GetDeviceByDevicePathResponse)(nil), // 20: atlas.storage.v1.GetDeviceByDevicePathResponse
+	(*GetDeviceByNamespaceRequest)(nil),   // 21: atlas.storage.v1.GetDeviceByNamespaceRequest
+	(*GetDeviceByNamespaceResponse)(nil),  // 22: atlas.storage.v1.GetDeviceByNamespaceResponse
 }
 var file_nvme_proto_depIdxs = []int32{
 	0,  // 0: atlas.storage.v1.Controller.address:type_name -> atlas.storage.v1.Address
@@ -1581,27 +1685,30 @@ var file_nvme_proto_depIdxs = []int32{
 	6,  // 9: atlas.storage.v1.ListDevicesBySelectorRequest.selector:type_name -> atlas.storage.v1.DeviceSelector
 	5,  // 10: atlas.storage.v1.ListDevicesBySelectorResponse.devices:type_name -> atlas.storage.v1.Device
 	5,  // 11: atlas.storage.v1.GetDeviceByUUIDResponse.device:type_name -> atlas.storage.v1.Device
-	5,  // 12: atlas.storage.v1.GetDeviceByDevicePathResponse.device:type_name -> atlas.storage.v1.Device
-	5,  // 13: atlas.storage.v1.GetDeviceByNamespaceResponse.device:type_name -> atlas.storage.v1.Device
-	7,  // 14: atlas.storage.v1.SubsystemService.ListSubsystems:input_type -> atlas.storage.v1.ListSubsystemsRequest
-	9,  // 15: atlas.storage.v1.SubsystemService.GetSubsystemByNQN:input_type -> atlas.storage.v1.GetSubsystemByNQNRequest
-	11, // 16: atlas.storage.v1.DeviceService.ListDevices:input_type -> atlas.storage.v1.ListDevicesRequest
-	13, // 17: atlas.storage.v1.DeviceService.ListDevicesBySelector:input_type -> atlas.storage.v1.ListDevicesBySelectorRequest
-	15, // 18: atlas.storage.v1.DeviceService.GetDeviceByUUID:input_type -> atlas.storage.v1.GetDeviceByUUIDRequest
-	17, // 19: atlas.storage.v1.DeviceService.GetDeviceByDevicePath:input_type -> atlas.storage.v1.GetDeviceByDevicePathRequest
-	19, // 20: atlas.storage.v1.DeviceService.GetDeviceByNamespace:input_type -> atlas.storage.v1.GetDeviceByNamespaceRequest
-	8,  // 21: atlas.storage.v1.SubsystemService.ListSubsystems:output_type -> atlas.storage.v1.ListSubsystemsResponse
-	10, // 22: atlas.storage.v1.SubsystemService.GetSubsystemByNQN:output_type -> atlas.storage.v1.GetSubsystemByNQNResponse
-	12, // 23: atlas.storage.v1.DeviceService.ListDevices:output_type -> atlas.storage.v1.ListDevicesResponse
-	14, // 24: atlas.storage.v1.DeviceService.ListDevicesBySelector:output_type -> atlas.storage.v1.ListDevicesBySelectorResponse
-	16, // 25: atlas.storage.v1.DeviceService.GetDeviceByUUID:output_type -> atlas.storage.v1.GetDeviceByUUIDResponse
-	18, // 26: atlas.storage.v1.DeviceService.GetDeviceByDevicePath:output_type -> atlas.storage.v1.GetDeviceByDevicePathResponse
-	20, // 27: atlas.storage.v1.DeviceService.GetDeviceByNamespace:output_type -> atlas.storage.v1.GetDeviceByNamespaceResponse
-	21, // [21:28] is the sub-list for method output_type
-	14, // [14:21] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	5,  // 12: atlas.storage.v1.GetDeviceByNGUIDResponse.device:type_name -> atlas.storage.v1.Device
+	5,  // 13: atlas.storage.v1.GetDeviceByDevicePathResponse.device:type_name -> atlas.storage.v1.Device
+	5,  // 14: atlas.storage.v1.GetDeviceByNamespaceResponse.device:type_name -> atlas.storage.v1.Device
+	7,  // 15: atlas.storage.v1.SubsystemService.ListSubsystems:input_type -> atlas.storage.v1.ListSubsystemsRequest
+	9,  // 16: atlas.storage.v1.SubsystemService.GetSubsystemByNQN:input_type -> atlas.storage.v1.GetSubsystemByNQNRequest
+	11, // 17: atlas.storage.v1.DeviceService.ListDevices:input_type -> atlas.storage.v1.ListDevicesRequest
+	13, // 18: atlas.storage.v1.DeviceService.ListDevicesBySelector:input_type -> atlas.storage.v1.ListDevicesBySelectorRequest
+	15, // 19: atlas.storage.v1.DeviceService.GetDeviceByUUID:input_type -> atlas.storage.v1.GetDeviceByUUIDRequest
+	17, // 20: atlas.storage.v1.DeviceService.GetDeviceByNGUID:input_type -> atlas.storage.v1.GetDeviceByNGUIDRequest
+	19, // 21: atlas.storage.v1.DeviceService.GetDeviceByDevicePath:input_type -> atlas.storage.v1.GetDeviceByDevicePathRequest
+	21, // 22: atlas.storage.v1.DeviceService.GetDeviceByNamespace:input_type -> atlas.storage.v1.GetDeviceByNamespaceRequest
+	8,  // 23: atlas.storage.v1.SubsystemService.ListSubsystems:output_type -> atlas.storage.v1.ListSubsystemsResponse
+	10, // 24: atlas.storage.v1.SubsystemService.GetSubsystemByNQN:output_type -> atlas.storage.v1.GetSubsystemByNQNResponse
+	12, // 25: atlas.storage.v1.DeviceService.ListDevices:output_type -> atlas.storage.v1.ListDevicesResponse
+	14, // 26: atlas.storage.v1.DeviceService.ListDevicesBySelector:output_type -> atlas.storage.v1.ListDevicesBySelectorResponse
+	16, // 27: atlas.storage.v1.DeviceService.GetDeviceByUUID:output_type -> atlas.storage.v1.GetDeviceByUUIDResponse
+	18, // 28: atlas.storage.v1.DeviceService.GetDeviceByNGUID:output_type -> atlas.storage.v1.GetDeviceByNGUIDResponse
+	20, // 29: atlas.storage.v1.DeviceService.GetDeviceByDevicePath:output_type -> atlas.storage.v1.GetDeviceByDevicePathResponse
+	22, // 30: atlas.storage.v1.DeviceService.GetDeviceByNamespace:output_type -> atlas.storage.v1.GetDeviceByNamespaceResponse
+	23, // [23:31] is the sub-list for method output_type
+	15, // [15:23] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_nvme_proto_init() }
@@ -1615,7 +1722,7 @@ func file_nvme_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nvme_proto_rawDesc), len(file_nvme_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -29,6 +29,10 @@ func (f *fakeDevices) ByUUID(ctx context.Context, uuid string) (nvme.Device, err
 	return f.first(ctx, nvme.DeviceSelector{UUID: uuid})
 }
 
+func (f *fakeDevices) ByNGUID(ctx context.Context, nguid string) (nvme.Device, error) {
+	return f.first(ctx, nvme.DeviceSelector{NGUID: nguid})
+}
+
 func (f *fakeDevices) ByDevicePath(ctx context.Context, devicePath string) (nvme.Device, error) {
 	return f.first(ctx, nvme.DeviceSelector{DevicePath: devicePath})
 }
@@ -98,9 +102,9 @@ var sharedSubsys = nvme.Subsystem{
 	ID:  "nvme-subsys0",
 	NQN: "nqn.test:shared",
 	Namespaces: []nvme.Namespace{
-		{ID: 1, Name: "nvme0n1", UUID: "vol-a", DevicePath: "/dev/nvme0n1"},
-		{ID: 2, Name: "nvme0n2", UUID: "vol-b", DevicePath: "/dev/nvme0n2"},
-		{ID: 3, Name: "nvme0n3", UUID: "vol-c", DevicePath: "/dev/nvme0n3"},
+		{ID: 1, Name: "nvme0n1", UUID: "vol-a", NGUID: "nguid-a", DevicePath: "/dev/nvme0n1"},
+		{ID: 2, Name: "nvme0n2", UUID: "vol-b", NGUID: "nguid-b", DevicePath: "/dev/nvme0n2"},
+		{ID: 3, Name: "nvme0n3", UUID: "vol-c", NGUID: "nguid-c", DevicePath: "/dev/nvme0n3"},
 	},
 }
 
@@ -258,6 +262,16 @@ func TestLookupsDelegateToTheResolvers(t *testing.T) {
 		}
 	})
 
+	t.Run("DeviceByNGUID", func(t *testing.T) {
+		got, err := s.DeviceByNGUID(ctx, "nguid-b")
+		if err != nil {
+			t.Fatalf("DeviceByNGUID: %v", err)
+		}
+		if got.Namespace.Name != "nvme0n2" {
+			t.Errorf("DeviceByNGUID = %s, want nvme0n2", got.Namespace.Name)
+		}
+	})
+
 	t.Run("DeviceByPath", func(t *testing.T) {
 		if _, err := s.DeviceByPath(ctx, "/dev/nvme0n1"); err != nil {
 			t.Fatalf("DeviceByPath: %v", err)
@@ -290,6 +304,7 @@ func TestLookupsWithoutAResolverFail(t *testing.T) {
 			return err
 		},
 		"DeviceByUUID":      func() error { _, err := s.DeviceByUUID(ctx, "vol-a"); return err },
+		"DeviceByNGUID":     func() error { _, err := s.DeviceByNGUID(ctx, "nguid-a"); return err },
 		"DeviceByPath":      func() error { _, err := s.DeviceByPath(ctx, "/dev/nvme0n1"); return err },
 		"DeviceByNamespace": func() error { _, err := s.DeviceByNamespace(ctx, "nqn.test:x", 1); return err },
 	} {

@@ -12,12 +12,17 @@ import (
 // single key cannot, notably "namespace N of subsystem NQN," which is how
 // simplyblock's namespaced lvols share one subsystem.
 //
-// UUID comparison is case-insensitive: sysfs reports namespace UUIDs in lower
+// UUID and NGUID comparison is case-insensitive: sysfs reports both in lower
 // case while the control plane may hand them over upper-cased.
+//
+// NGUID is the key a pNFS client resolves by. The block layout an MDS hands
+// out names the device by its NGUID rather than by the lvol UUID, so matching
+// one to a local block device is a by-NGUID lookup and nothing else.
 type DeviceSelector struct {
 	NQN        string      // subsystem NQN
 	NSID       NamespaceID // namespace id, where 0 means any
 	UUID       string      // namespace UUID (simplyblock: the lvol UUID)
+	NGUID      string      // namespace globally unique id, as sysfs reports it
 	DevicePath string      // block device node, e.g., "/dev/nvme0n1"
 }
 
@@ -30,6 +35,9 @@ func (s DeviceSelector) Matches(d Device) bool {
 		return false
 	}
 	if s.UUID != "" && !strings.EqualFold(d.Namespace.UUID, s.UUID) {
+		return false
+	}
+	if s.NGUID != "" && !strings.EqualFold(d.Namespace.NGUID, s.NGUID) {
 		return false
 	}
 	if s.DevicePath != "" && d.Namespace.DevicePath != s.DevicePath {
@@ -69,6 +77,9 @@ func (s DeviceSelector) String() string {
 	}
 	if s.UUID != "" {
 		parts = append(parts, "uuid="+s.UUID)
+	}
+	if s.NGUID != "" {
+		parts = append(parts, "nguid="+s.NGUID)
 	}
 	if s.DevicePath != "" {
 		parts = append(parts, "device="+s.DevicePath)

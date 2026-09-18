@@ -31,6 +31,10 @@ type DeviceResolver interface {
 	// ByUUID returns the device whose namespace UUID matches
 	// (simplyblock: the lvol UUID).
 	ByUUID(ctx context.Context, uuid string) (Device, error)
+	// ByNGUID returns the device whose namespace NGUID matches. It is the
+	// lookup a pNFS client needs: the block layout an MDS hands out names
+	// the device by NGUID rather than by the lvol UUID.
+	ByNGUID(ctx context.Context, nguid string) (Device, error)
 	// ByDevicePath returns the device for a block node such as
 	// "/dev/nvme0n1" (the subsystem multipath head).
 	ByDevicePath(ctx context.Context, devicePath string) (Device, error)

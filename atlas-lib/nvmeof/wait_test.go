@@ -42,7 +42,8 @@ func (f *fakeDevs) ListWithSelector(ctx context.Context, sel nvme.DeviceSelector
 	return sel.Filter(all), nil
 }
 
-func (f *fakeDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
+func (f *fakeDevs) ByUUID(context.Context, string) (nvme.Device, error)  { return nvme.Device{}, nil }
+func (f *fakeDevs) ByNGUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
 func (f *fakeDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, nil
 }

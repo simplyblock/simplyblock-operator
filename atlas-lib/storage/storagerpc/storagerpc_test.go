@@ -66,6 +66,10 @@ func (f *fakeDevices) ByUUID(ctx context.Context, uuid string) (nvme.Device, err
 	return f.first(ctx, nvme.DeviceSelector{UUID: uuid}, "uuid "+uuid)
 }
 
+func (f *fakeDevices) ByNGUID(ctx context.Context, nguid string) (nvme.Device, error) {
+	return f.first(ctx, nvme.DeviceSelector{NGUID: nguid}, "nguid "+nguid)
+}
+
 func (f *fakeDevices) ByDevicePath(ctx context.Context, devicePath string) (nvme.Device, error) {
 	return f.first(ctx, nvme.DeviceSelector{DevicePath: devicePath}, devicePath)
 }
@@ -159,6 +163,14 @@ func TestDeviceResolverLookups(t *testing.T) {
 		got, err := devs.ByUUID(ctx, want.Namespace.UUID)
 		if err != nil {
 			t.Fatalf("ByUUID: %v", err)
+		}
+		assertSameDevice(t, got, want)
+	})
+
+	t.Run("ByNGUID", func(t *testing.T) {
+		got, err := devs.ByNGUID(ctx, want.Namespace.NGUID)
+		if err != nil {
+			t.Fatalf("ByNGUID: %v", err)
 		}
 		assertSameDevice(t, got, want)
 	})

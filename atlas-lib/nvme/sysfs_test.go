@@ -181,6 +181,19 @@ func TestSysfsDeviceResolver(t *testing.T) {
 		t.Errorf("ByUUID(missing) err = %v, want ErrNotFound", err)
 	}
 
+	// ByNGUID is the lookup a pNFS client needs: the block layout the MDS
+	// hands out names the device by its NGUID, not by the lvol UUID.
+	byNGUID, err := r.ByNGUID(ctx, "51673754-7362-6165-6138-5074624c4e6e")
+	if err != nil {
+		t.Fatalf("ByNGUID: %v", err)
+	}
+	if byNGUID.Namespace.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("ByNGUID device path = %q, want /dev/nvme0n1", byNGUID.Namespace.DevicePath)
+	}
+	if _, err := r.ByNGUID(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("ByNGUID(missing) err = %v, want ErrNotFound", err)
+	}
+
 	// ListWithSelector: same fixture, but every match rather than the first.
 	sel := DeviceSelector{NQN: d.Subsystem.NQN, NSID: 1}
 	matches, err := r.ListWithSelector(ctx, sel)
