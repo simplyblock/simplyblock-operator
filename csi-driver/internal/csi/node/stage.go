@@ -113,6 +113,17 @@ func (ns *Server) NodeStageVolume(
 			nvmeInitiator.Disconnect(ctx) //nolint:errcheck // ignore error
 		}
 	}()
+
+	rawDevicePath := devicePath
+	if compression, deduplication, wantsVDO := vdoParams(vc); wantsVDO {
+		devicePath, err = ns.vdo.Up(ctx, vdoLvolID(volumeID), rawDevicePath, compression, deduplication)
+		if err != nil {
+			klog.Errorf("failed to bring up VDO stack, volumeID: %s devicePath:%s err: %v", volumeID, rawDevicePath, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		vc["rawDevicePath"] = rawDevicePath
+	}
+
 	if err = ns.stageVolume(ctx, devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
 		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -151,6 +162,18 @@ func (ns *Server) NodeUnstageVolume(
 		klog.Errorf("failed to lookup volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	if _, _, wantsVDO := vdoParams(volumeContext); wantsVDO {
+		// Deactivate, never destroy: this fires on every routine unstage, pod
+		// restarts included, not only when the volume is being deleted.
+		lvolID := vdoLvolID(volumeID)
+		rawDevicePath := volumeContext["rawDevicePath"]
+		if err := ns.vdo.Down(ctx, lvolID, rawDevicePath); err != nil {
+			klog.Errorf("failed to release VDO stack, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
 	nvmeInitiator, err := initiator.New(volumeContext)
 	if err != nil {
 		klog.Errorf("failed to create spdk initiator, volumeID: %s err: %v", volumeID, err)
@@ -292,7 +315,8 @@ func (ns *Server) stageVolume(
 	// is once the annotation has overridden it.
 	volumeContext[stagedFsTypeKey] = fsType
 
-	formatOptions := mount.FormatOptions(fsType, volumeContext)
+	_, _, wantsVDO := vdoParams(volumeContext)
+	formatOptions := mount.FormatOptions(fsType, volumeContext, wantsVDO)
 
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
 	klog.Infof("formatOptions %v", formatOptions)
@@ -351,6 +375,18 @@ func (ns *Server) restageVolume(
 	devicePath, err := nvmeInitiator.Connect(ctx) // idempotent: re-establishes the lost device
 	if err != nil {
 		return fmt.Errorf("reconnect device: %w", err)
+	}
+
+	rawDevicePath := devicePath
+	if compression, deduplication, wantsVDO := vdoParams(volumeContext); wantsVDO {
+		// The same Up a fresh stage runs: Ensure only reactivates an existing
+		// stack (pvscan --cache, vgchange -ay), never lvcreate, because the data
+		// already exists.
+		devicePath, err = ns.vdo.Up(ctx, vdoLvolID(volumeID), rawDevicePath, compression, deduplication)
+		if err != nil {
+			return fmt.Errorf("reattach VDO stack: %w", err)
+		}
+		volumeContext["rawDevicePath"] = rawDevicePath
 	}
 
 	if _, err := ns.mounter.EnsureDirectory(stagingTargetPath); err != nil {

@@ -23,6 +23,11 @@ type Server struct {
 	kubeClient  kubernetes.Interface
 	manager     *sbkube.Manager
 	guardian    *guardian.Guardian
+
+	// vdo builds and drives client-side compression/deduplication's device
+	// stack (issue #277), for the volumes whose volume context asks for it.
+	// Every other volume never touches it.
+	vdo *vdoStack
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
@@ -38,6 +43,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 		manager:           manager,
+		vdo:               newVDOStack(vdoStackRecordDir),
 	}, nil
 }
 

@@ -310,6 +310,31 @@ func TestLVMPVRefusesWhenTheGroupCannotBeProbed(t *testing.T) {
 	}
 }
 
+// Total path loss removes the member device entirely, leaving nothing for
+// this layer to read a label from at all. That is not the same question as a
+// probe that failed to read a device that is there: Release is unconditionally
+// a no-op for this layer regardless of state, so reporting Absent here costs
+// nothing, while an error would abort the whole Down walk before it reaches
+// the volume-group layer above, whose Release has real work to do.
+func TestLVMPVObserveWithNoDeviceReportsAbsentWithoutError(t *testing.T) {
+	cmds := newLVM()
+	l := newLVMPV(cmds, blockdev.Reading{}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe: %v, want no error when there is no device to read at all", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent", state)
+	}
+	if len(own.Devices) != 0 {
+		t.Errorf("an absent layer exposed %d devices", len(own.Devices))
+	}
+	if len(cmds.calls) != 0 {
+		t.Errorf("Observe ran LVM commands with no device to scope them to:\n%s", cmds.issued())
+	}
+}
+
 // A physical-volume signature is not a hold, so there is nothing for this host to
 // give up. Release does nothing, and above all does not remove the label, which
 // is what separates it from Destroy.

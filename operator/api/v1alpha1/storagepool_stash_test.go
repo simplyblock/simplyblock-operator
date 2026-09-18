@@ -28,9 +28,11 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 		Spec: v1alpha2.StoragePoolSpec{
 			ClusterRef: "production",
 			VolumeDefaults: &v1alpha2.VolumeDefaults{
-				EnableCompression: ptr.To(true),
-				EnableReplication: ptr.To(false),
-				PriorityClass:     "high",
+				EnableCompression:         ptr.To(true),
+				EnableClientCompression:   ptr.To(true),
+				EnableClientDeduplication: ptr.To(false),
+				EnableReplication:         ptr.To(false),
+				PriorityClass:             "high",
 			},
 		},
 		Status: v1alpha2.StoragePoolStatus{
@@ -51,7 +53,8 @@ func TestStoragePoolHubOnlyFieldsAreStashed(t *testing.T) {
 	// EnableReplication is false rather than absent, and a conversion that read
 	// a false pointer as nothing would drop it.
 	for _, key := range []string{
-		annoEnableCompression, annoEnableReplication, annoPriorityClass,
+		annoEnableCompression, annoEnableClientCompression, annoEnableClientDeduplication,
+		annoEnableReplication, annoPriorityClass,
 		annoStatusPhase, annoStatusClassNames, annoStatusDefaultClassName,
 		annoStatusActiveOpsRef, annoStatusMessage, annoStatusObservedGeneraton,
 	} {

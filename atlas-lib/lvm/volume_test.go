@@ -133,7 +133,11 @@ func TestManager_RemoveVolumeGroup_WrapsRunnerError(t *testing.T) {
 // fakeVolumeProvisioning is registered under a name other than "vdo" by the
 // test below, so a pass proves CreateLogicalVolume dispatches by asking each
 // registered handler whether it Handles the definition, not by hardcoding a
-// lookup of the "vdo" key.
+// lookup of the "vdo" key. Its predicate below keys on Stripes == 1 (a value
+// stripeArgs itself treats as "not striped," so it contributes no arguments
+// of its own) rather than Compression/Deduplication, so it does not overlap
+// with the real "vdo" handler this package's own init registers permanently
+// alongside it.
 type fakeVolumeProvisioning struct {
 	name    string
 	handles func(LogicalVolumeDefinition) bool
@@ -149,13 +153,13 @@ func (f *fakeVolumeProvisioning) CreateVolumeArgs(LogicalVolumeDefinition) []str
 func TestManager_CreateLogicalVolume_DispatchesByHandles(t *testing.T) {
 	RegisterVolumeProvisioning(&fakeVolumeProvisioning{
 		name:    "fake-provisioner",
-		handles: func(def LogicalVolumeDefinition) bool { return def.Compression },
+		handles: func(def LogicalVolumeDefinition) bool { return def.Stripes == 1 },
 		args:    []string{"--fake-flag"},
 	})
 
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	def := LogicalVolumeDefinition{Compression: true}
+	def := LogicalVolumeDefinition{Stripes: 1}
 	vg := VolumeGroup{Name: "vg1"}
 	lv, err := mgr.CreateLogicalVolume(context.Background(), vg, "pv1", "lv1", def)
 	if err != nil {

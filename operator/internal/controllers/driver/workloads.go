@@ -14,13 +14,20 @@
 package driver
 
 import (
+	"path"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
+
+// vdoCapableMountDir is the directory kube.VDOCapableMarkerPath's marker file
+// lives in, derived rather than repeated so the two cannot drift.
+var vdoCapableMountDir = path.Dir(kube.VDOCapableMarkerPath)
 
 const (
 	// socketDir is where both plugins put their Unix socket. The node plugin's
@@ -39,6 +46,19 @@ const (
 	kubeletPluginsDir = "/var/lib/kubelet/plugins"
 
 	verbosity = "--v=5"
+
+	// vdoCapableHostDir backs the directory kube.VDOCapableMarkerPath's marker
+	// file lives in, so it survives a plugin restart the same way guardian's own
+	// state does (issue #277). vdoCapableMountDir is that directory, derived
+	// from the shared constant rather than repeated, so the two cannot drift.
+	vdoCapableHostDir = "/var/lib/simplyblock/vdo-capable"
+
+	// vdoStacksHostDir and vdoStacksMountDir back the per-volume VDO stack
+	// records design-node-volume-stack.md §6 specifies: written before the
+	// first side effect, so a plugin restart mid-bring-up finds what the
+	// previous process built.
+	vdoStacksHostDir  = "/var/lib/simplyblock/stacks"
+	vdoStacksMountDir = "/var/run/simplyblock/stacks"
 )
 
 // nodeRegistrationPath is the socket the kubelet is told to open, which is under
@@ -168,6 +188,8 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
+			{Name: "vdo-capable", MountPath: vdoCapableMountDir},
+			{Name: "vdo-stacks", MountPath: vdoStacksMountDir},
 		}, tlsVolumeMount(d)...),
 	}
 }
@@ -176,11 +198,28 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 // NVMe host identity. The hostid is generated once and kept on the host, because
 // a host that comes back with a new NQN is a host the control plane does not
 // recognize as the one holding its connections.
-const nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
+//
+// The vdo-capable probe rides the same hook for the same reason the NVMe-oF
+// transports do: it has to run on every node that might stage a volume, and
+// again whenever the node's kernel changes, which is exactly when this pod
+// restarts. It tries two module names, because "VDO in the kernel" means two
+// different things depending on the node OS: dm-vdo is upstream's in-tree
+// name (kernel 6.9+), and kvdo is the name RHEL-family systems still ship it
+// under via the separate kmod-kvdo package, verified live on a real
+// Rocky/RHEL 9 kernel that has no dm-vdo at all. Either one loading means the
+// node can run VDO. The marker records the answer as the literal string
+// "true" or "false" so the node plugin's advertiser (design-issue-277 §4.1,
+// §4.3) has something to read regardless of the outcome. Neither branch is
+// fatal to the pod: a node that cannot run VDO is still a node that can
+// stage every other volume.
+var nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
 	`modprobe nvme-rdma || echo failed to modprobe nvme-rdma && ` +
 	`if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && ` +
 	`cp /var/lib/nvme/hostid /etc/nvme/hostid && ` +
-	`echo "nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)" > /etc/nvme/hostnqn`
+	`echo "nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)" > /etc/nvme/hostnqn && ` +
+	`mkdir -p ` + vdoCapableMountDir + ` && ` +
+	`if modprobe dm-vdo || modprobe kvdo; then echo -n true > ` + kube.VDOCapableMarkerPath + `; ` +
+	`else echo -n false > ` + kube.VDOCapableMarkerPath + `; fi`
 
 func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 	dirOrCreate := corev1.HostPathDirectoryOrCreate
@@ -196,6 +235,8 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 		hostPathVolume("host-sys", "/sys", nil),
 		hostPathVolume("host-modules", "/lib/modules", nil),
 		hostPathVolume("guardian-state", "/var/lib/simplyblock/guardian", &dirOrCreate),
+		hostPathVolume("vdo-capable", vdoCapableHostDir, &dirOrCreate),
+		hostPathVolume("vdo-stacks", vdoStacksHostDir, &dirOrCreate),
 		configMapVolume("csi-nodeserver-config", n.nodeServerConfigMap, true),
 		configMapVolume("csi-config", n.configMap, false),
 		secretVolume("csi-secret", n.secretV2),

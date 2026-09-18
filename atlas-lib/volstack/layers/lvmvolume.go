@@ -91,8 +91,15 @@ func (l *LVMLogicalVolume) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
 	if len(below.Devices) == 0 {
-		return volstack.StateAbsent, volstack.Artifact{}, errors.New(
-			"lvmLogicalVolume: the layer below exposes no devices to build a volume group on")
+		// Total path loss, not an interrupted bring-up: there is no device left
+		// to read a group off at all, which is a different question from a probe
+		// that failed on a device that is there. Release is unconditionally a
+		// no-op for this layer regardless of what Observe reports, so answering
+		// Absent here costs nothing, and it is what keeps a Down walk from being
+		// aborted here rather than reaching the group layer below, which has
+		// real work to do and answers this same situation independently
+		// (lvmVolumeGroup.Observe).
+		return volstack.StateAbsent, volstack.Artifact{}, nil
 	}
 
 	// Read the identity off the device rather than looking this volume's group up
