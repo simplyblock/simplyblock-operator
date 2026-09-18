@@ -288,19 +288,19 @@ func TestPrimeLayoutReportsAnUnwritableMount(t *testing.T) {
 // A stage that has already given up does not start I/O on the mount it gave up
 // on. The file operations are plain syscalls and cannot be interrupted once
 // begun, so the only useful place to look at the context is before them.
-func TestPrimeLayoutRespectsACancelledStage(t *testing.T) {
+func TestPrimeLayoutRespectsACanceledStage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	staging := t.TempDir()
 	if err := primeLayout(ctx, staging); err == nil {
-		t.Fatal("priming ran for a stage that had already been cancelled")
+		t.Fatal("priming ran for a stage that had already been canceled")
 	}
 	entries, err := os.ReadDir(staging)
 	if err != nil {
 		t.Fatalf("reading the staging path: %v", err)
 	}
 	if len(entries) != 0 {
-		t.Error("priming touched the mount despite the cancellation")
+		t.Error("priming touched the mount despite the cancelation")
 	}
 }
