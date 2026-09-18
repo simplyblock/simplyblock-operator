@@ -72,9 +72,11 @@ piece of work, and it is written here rather than left for a reader to infer
 from a phase that never advances.
 
 What that means for the API is the part worth stating. `FailingOver` was in the
-phase enum, and `status.serviceName`, `status.failoverGeneration`, and the
-`Fenced` and `Addressable` conditions were on the status, with nothing writing
-any of them. All are removed. A phase in a CRD's enum that no controller can
+phase enum; `status.subPhase` and its whole `NFSExportSubPhase` type existed to
+carry the step within a failover; and `status.serviceName`,
+`status.failoverGeneration`, and the `Fenced` and `Addressable` conditions were
+on the status. Nothing wrote any of them. All are removed, and the test for it
+is simply that every field the status still declares has a writer. A phase in a CRD's enum that no controller can
 drive is a promise the code does not keep: it shows up in `kubectl explain`, it
 reads to a reviewer as built, and an object that reaches it parks with a message
 saying the feature does not exist. A declared condition nothing sets reports

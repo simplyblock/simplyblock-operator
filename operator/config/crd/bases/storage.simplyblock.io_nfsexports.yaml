@@ -26,10 +26,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.subPhase
-      name: SubPhase
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -243,19 +239,6 @@ spec:
                   StorageNodeRef names the StorageNode currently acting as MDS. It is
                   operator-owned and is the serialization point for the one-MDS-per-export
                   invariant: no second host is a candidate until this field is rewritten.
-                type: string
-              subPhase:
-                description: |-
-                  SubPhase is the active failover step, persisted so a restart between
-                  quiescing, fencing, assembly, and re-pointing resumes rather than
-                  restarts.
-                enum:
-                - Quiescing
-                - Fencing
-                - Selecting
-                - Assembling
-                - Repointing
-                - Verifying
                 type: string
             type: object
         type: object

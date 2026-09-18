@@ -52,35 +52,6 @@ const (
 	NFSExportPhaseDeleting NFSExportPhase = "Deleting"
 )
 
-// NFSExportSubPhase is the step within a failover. Failover is multi-step and
-// each step has a side effect on a host, so the step is persisted: a restart
-// between fencing and assembly has to resume rather than begin again.
-// +kubebuilder:validation:Enum=Quiescing;Fencing;Selecting;Assembling;Repointing;Verifying
-type NFSExportSubPhase string
-
-const (
-	// NFSExportSubPhaseQuiescing is the old host being asked to unexport,
-	// unmount, and release the namespace. Only a planned move has this step;
-	// an unplanned one cannot ask.
-	NFSExportSubPhaseQuiescing NFSExportSubPhase = "Quiescing"
-	// NFSExportSubPhaseFencing is the old host's write access being revoked
-	// through the namespace's persistent reservation. A failover that cannot
-	// confirm the fence does not proceed.
-	NFSExportSubPhaseFencing NFSExportSubPhase = "Fencing"
-	// NFSExportSubPhaseSelecting is a new eligible host being chosen.
-	NFSExportSubPhaseSelecting NFSExportSubPhase = "Selecting"
-	// NFSExportSubPhaseAssembling is the new host building the export, with the
-	// same FSID and export path so the file handles clients already hold stay
-	// valid.
-	NFSExportSubPhaseAssembling NFSExportSubPhase = "Assembling"
-	// NFSExportSubPhaseRepointing is the Service's EndpointSlice being rewritten
-	// to the new host's address.
-	NFSExportSubPhaseRepointing NFSExportSubPhase = "Repointing"
-	// NFSExportSubPhaseVerifying is the export being confirmed serving from the
-	// new host before the move is called done.
-	NFSExportSubPhaseVerifying NFSExportSubPhase = "Verifying"
-)
-
 // Condition types an NFSExport reports. A phase says where the export is; these
 // say why, which a phase alone cannot express.
 const (
@@ -172,12 +143,6 @@ type NFSExportStatus struct {
 	// +optional
 	Phase NFSExportPhase `json:"phase,omitempty"`
 
-	// SubPhase is the active failover step, persisted so a restart between
-	// quiescing, fencing, assembly, and re-pointing resumes rather than
-	// restarts.
-	// +optional
-	SubPhase NFSExportSubPhase `json:"subPhase,omitempty"`
-
 	// PhaseDeadline is when the current phase must be given up on. The phase
 	// machine carries a per-state bound, and the bound has to outlive the
 	// process the way the phase itself does: an operator restarted mid-assembly
@@ -239,7 +204,6 @@ type NFSExportStatus struct {
 // +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.volumeRef"
 // +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.storageNodeRef"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
-// +kubebuilder:printcolumn:name="SubPhase",type=string,JSONPath=".status.subPhase",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // NFSExport is one pNFS export: a volume, the MDS host serving it, and the
