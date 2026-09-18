@@ -26,7 +26,7 @@ import (
 
 func aResolvedNode(uuid string) *simplyblockv1alpha2.StorageNode {
 	node := &simplyblockv1alpha2.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "a-node", Namespace: "simplyblock"},
+		ObjectMeta: metav1.ObjectMeta{Name: opsNodeName, Namespace: "simplyblock"},
 	}
 	node.Status.UUID = uuid
 	return node
