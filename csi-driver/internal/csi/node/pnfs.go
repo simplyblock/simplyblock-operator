@@ -217,6 +217,14 @@ const primeLayoutFile = ".simplyblock-pnfs-layout-probe"
 // The file is written and removed. A read would not do: a layout is per-inode
 // and a freshly made filesystem has nothing to read.
 func primeLayout(ctx context.Context, stagingPath string) error {
+	// Nothing here is cancellable once started -- the file operations below are
+	// plain syscalls against a mount that can hang -- so the context is checked
+	// before rather than during. A stage that has already given up should not
+	// add I/O to whatever it gave up on.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("pnfs: not taking the layout for %s: %w", stagingPath, err)
+	}
+
 	probe := filepath.Join(stagingPath, primeLayoutFile)
 	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {

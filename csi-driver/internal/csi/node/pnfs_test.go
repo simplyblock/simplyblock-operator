@@ -228,7 +228,7 @@ func TestPNFSVolumesAreRepairedByTheirOwnPath(t *testing.T) {
 // which is NFS. Passing it through means mount(8) looks for a helper named
 // after it, and /sbin/mount.nfs exists and does not bind.
 func TestPublishingAPNFSVolumeBindsWithNoFilesystemType(t *testing.T) {
-	if got := publishFSType("nfs:c:p:v", "xfs"); got != "" {
+	if got := publishFSType("nfs:c:p:v", xfsFS); got != "" {
 		t.Errorf("fsType = %q, want empty: a bind takes no type", got)
 	}
 	if got := publishFSType("nfs:c:p:v", "nfs"); got != "" {
@@ -238,7 +238,7 @@ func TestPublishingAPNFSVolumeBindsWithNoFilesystemType(t *testing.T) {
 
 // A block volume's own handling is untouched.
 func TestPublishingABlockVolumeKeepsItsFilesystemType(t *testing.T) {
-	if got := publishFSType("cluster:pool:volume", "xfs"); got != "xfs" {
+	if got := publishFSType("cluster:pool:volume", xfsFS); got != xfsFS {
 		t.Errorf("fsType = %q, want xfs", got)
 	}
 }
@@ -282,5 +282,25 @@ func TestPrimeLayoutTouchesTheMountAndLeavesNothingBehind(t *testing.T) {
 func TestPrimeLayoutReportsAnUnwritableMount(t *testing.T) {
 	if err := primeLayout(context.Background(), "/nonexistent/staging/path"); err == nil {
 		t.Error("priming an unwritable mount reported success")
+	}
+}
+
+// A stage that has already given up does not start I/O on the mount it gave up
+// on. The file operations are plain syscalls and cannot be interrupted once
+// begun, so the only useful place to look at the context is before them.
+func TestPrimeLayoutRespectsACancelledStage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	staging := t.TempDir()
+	if err := primeLayout(ctx, staging); err == nil {
+		t.Fatal("priming ran for a stage that had already been cancelled")
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		t.Fatalf("reading the staging path: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Error("priming touched the mount despite the cancellation")
 	}
 }
