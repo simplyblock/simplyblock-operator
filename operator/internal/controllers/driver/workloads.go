@@ -324,10 +324,20 @@ const csiAddonsControllerPort int32 = 9070
 // naming this pod so the manager can find it, and leader-elects across
 // replicas of this StatefulSet before serving controller requests.
 //
-// The pod runs on the host network (controllerStatefulSet), so the sidecar
-// advertises its own pod IP rather than a Service DNS name, the same way the
-// existing csi-provisioner/-snapshotter/etc. sidecars address the plugin's
-// socket by path instead of by name.
+// The endpoint the sidecar advertises MUST be the pod://<pod>.<namespace>
+// form, never a bare ip:port: the controller-manager's own resolveEndpoint
+// (internal/controller/csiaddons/csiaddonsnode_controller.go, v0.15.0)
+// hard-requires url.Parse's Scheme to equal "pod" and rejects everything
+// else with "endpoint scheme %q not supported" -- confirmed against a live
+// cluster, where passing --controller-ip produced the OTHER branch of the
+// sidecar's own BuildEndpointURL (a bare "<ip>:<port>", no scheme at all)
+// and the controller-manager failed every connection attempt with "first
+// path segment in URL cannot contain colon" until it gave up and deleted
+// the CSIAddonsNode. Omitting --controller-ip is the fix, not a missing
+// feature: the manager resolves the pod's CURRENT IP itself via a live API
+// read at connection time (see resolveEndpoint), which is more robust than
+// baking a static IP into the object anyway -- it survives the pod
+// restarting with a new IP without anyone having to update anything.
 func csiAddonsSidecarContainer(
 	d *simplyblockv1alpha2.SimplyblockDriver, image string, mounts []corev1.VolumeMount,
 ) corev1.Container {
@@ -339,7 +349,6 @@ func csiAddonsSidecarContainer(
 			verbosity,
 			"--csi-addons-address=" + controllerSocketPath,
 			"--node-id=$(NODE_ID)",
-			"--controller-ip=$(POD_IP)",
 			"--controller-port=" + strconv.Itoa(int(csiAddonsControllerPort)),
 			"--pod=$(POD_NAME)",
 			"--namespace=$(POD_NAMESPACE)",
@@ -352,7 +361,6 @@ func csiAddonsSidecarContainer(
 			// an empty value with "invalid configuration: missing node"
 			// before it ever creates the CSIAddonsNode object.
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
-			fieldRefEnv("POD_IP", "status.podIP"),
 			fieldRefEnv("POD_NAME", "metadata.name"),
 			fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
 			fieldRefEnv("POD_UID", "metadata.uid"),

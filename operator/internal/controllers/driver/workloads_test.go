@@ -117,9 +117,13 @@ func TestCSIAddonsSidecarIsAppliedAfterThePlugin(t *testing.T) {
 	}
 }
 
-// The sidecar advertises this pod, not a Service DNS name: the StatefulSet runs
-// on the host network, so its own pod IP is what the kubernetes-csi-addons
-// controller-manager can actually reach.
+// The sidecar advertises itself as pod://<pod>.<namespace>, never a bare
+// ip:port: the controller-manager's own resolveEndpoint (v0.15.0) hard-requires
+// url.Parse's Scheme to equal "pod" and rejects everything else with
+// "endpoint scheme %q not supported" -- confirmed against a live cluster,
+// where passing --controller-ip produced a bare "<ip>:<port>" (no scheme)
+// that the controller-manager could never parse, so it kept failing every
+// connection attempt and deleting the CSIAddonsNode in a tight loop.
 func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
 	d := testDriver("simplyblock")
 	c := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-addons")
@@ -128,7 +132,7 @@ func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
 	}
 
 	wantFieldPaths := map[string]string{
-		"NODE_ID": "spec.nodeName", "POD_IP": "status.podIP", "POD_NAME": "metadata.name",
+		"NODE_ID": "spec.nodeName", "POD_NAME": "metadata.name",
 		"POD_NAMESPACE": "metadata.namespace", "POD_UID": "metadata.uid",
 	}
 	for _, e := range c.Env {
@@ -151,8 +155,10 @@ func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
 	if nodeID, ok := argValue(c, "--node-id"); !ok || nodeID != "$(NODE_ID)" {
 		t.Errorf("--node-id = %q, want $(NODE_ID)", nodeID)
 	}
-	if ip, ok := argValue(c, "--controller-ip"); !ok || ip != "$(POD_IP)" {
-		t.Errorf("--controller-ip = %q, want $(POD_IP)", ip)
+	// --controller-ip must NEVER be set: it takes BuildEndpointURL's bare
+	// ip:port branch, which this controller-manager version cannot parse.
+	if _, ok := argValue(c, "--controller-ip"); ok {
+		t.Error("--controller-ip is set; the pod:// addressing scheme requires omitting it")
 	}
 	if ns, ok := argValue(c, "--leader-election-namespace"); !ok || ns != "$(POD_NAMESPACE)" {
 		t.Errorf("--leader-election-namespace = %q, want $(POD_NAMESPACE)", ns)
