@@ -117,6 +117,15 @@ func classifyDisableVolumeReplicationError(err error) classifiedError {
 func classifyGetVolumeReplicationInfoError(err error) classifiedError {
 	return classifiedError{GetVolumeReplicationInfoErrorClassifier.Classify(err), err}
 }
+func classifyPromoteVolumeError(err error) classifiedError {
+	return classifiedError{PromoteVolumeErrorClassifier.Classify(err), err}
+}
+func classifyDemoteVolumeError(err error) classifiedError {
+	return classifiedError{DemoteVolumeErrorClassifier.Classify(err), err}
+}
+func classifyResyncVolumeError(err error) classifiedError {
+	return classifiedError{ResyncVolumeErrorClassifier.Classify(err), err}
+}
 
 // Dispositions reused across RPCs.
 var (
@@ -181,6 +190,26 @@ var (
 		http.StatusConflict: cutoverInFlight,
 	}}
 	GetVolumeReplicationInfoErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
+	// PromoteVolumeErrorClassifier: a 409 on a planned promote means demote is
+	// still converging (design §5.2) -- reuses cutoverInFlight's ABORTED,
+	// retryable disposition, since the vendored csi-addons controller
+	// auto-escalates ANY FAILED_PRECONDITION to force=true inline with no
+	// wait-and-retry grace period of its own. A 412 falls through to the
+	// generic classifier's FailedPrecondition unchanged: that is the one case
+	// meant to let the controller's own escalation take over.
+	PromoteVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+		http.StatusConflict: cutoverInFlight,
+	}}
+	// DemoteVolumeErrorClassifier classifies only genuine backend failures.
+	// "Not yet done" (202) is not an error at atlas-lib's DemoteVolume, so it
+	// never reaches this classifier -- the RPC handler checks it directly.
+	DemoteVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
+		http.StatusNotFound: sourceNotFound,
+	}}
+	ResyncVolumeErrorClassifier = errorClassifier{overrides: map[int]controlPlaneErrorClass{
 		http.StatusNotFound: sourceNotFound,
 	}}
 )

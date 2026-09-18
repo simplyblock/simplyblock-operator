@@ -138,3 +138,88 @@ func (c *Client) GetVolumeReplicationInfo(ctx context.Context, h lvol.VolumeHand
 	}
 	return replicationStatusFromDTO(*d), nil
 }
+
+// PromoteVolume brings the volume up as primary on this cluster.
+//
+// force=true is the unplanned path: it ignores demote state entirely,
+// because its whole premise is that the peer may never have been reachable
+// to demote. force=false is the planned path, gated on a completed demote
+// (P0-3): a 409 (demote still converging, retryable) or 412 (no demote was
+// ever requested) surfaces as a *StatusError the caller classifies -- the
+// 409/412 split matters because the vendored csi-addons controller
+// auto-escalates ANY FAILED_PRECONDITION from a force=false promote to
+// force=true inline, with no wait-and-retry grace period of its own.
+func (c *Client) PromoteVolume(ctx context.Context, h lvol.VolumeHandle, force bool) error {
+	cluster, pool, volume, err := h.Split()
+	if err != nil {
+		return err
+	}
+	planned := !force
+	params := &cpapi.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams{
+		Planned: &planned,
+	}
+	resp, err := c.api.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostWithResponse(
+		ctx, cluster, pool, volume, params)
+	if err != nil {
+		return fmt.Errorf("promote volume %s: %w", h, err)
+	}
+	if code := resp.StatusCode(); code != http.StatusOK && code != http.StatusNoContent {
+		return respError("promote volume "+string(h), code, resp.Body)
+	}
+	return nil
+}
+
+// DemoteVolume fences the source and confirms the last write replicated
+// (P0-3) -- the lossless half of a planned swap. Synchronous and
+// re-drivable, not queued: it returns done=false while the final snapshot is
+// still converging, and the caller (the driver's DemoteVolume RPC) is
+// expected to call this again rather than block, matching the backend's own
+// call-repeatedly contract.
+func (c *Client) DemoteVolume(ctx context.Context, h lvol.VolumeHandle) (bool, error) {
+	cluster, pool, volume, err := h.Split()
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(
+		ctx, cluster, pool, volume)
+	if err != nil {
+		return false, fmt.Errorf("demote volume %s: %w", h, err)
+	}
+	switch code := resp.StatusCode(); code {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusAccepted:
+		return false, nil
+	default:
+		return false, respError("demote volume "+string(h), code, resp.Body)
+	}
+}
+
+// ResyncVolume reconciles a diverged copy back onto the current primary's
+// history. It configures the reverse direction only -- it never cuts over,
+// matching the design's own "it never merges": cutover is PromoteVolume's job
+// on a separate, later call. sourceClusterID selects the source explicitly
+// when it isn't the cluster's configured default; "" leaves it unset.
+func (c *Client) ResyncVolume(ctx context.Context, h lvol.VolumeHandle, sourceClusterID string) error {
+	cluster, pool, volume, err := h.Split()
+	if err != nil {
+		return err
+	}
+	var body cpapi.FailbackParams
+	if sourceClusterID != "" {
+		id, err := parseUUID("source cluster id", sourceClusterID)
+		if err != nil {
+			return err
+		}
+		body.SourceClusterId = &id
+	}
+	resp, err := c.api.ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostWithResponse(
+		ctx, cluster, pool, volume, body)
+	if err != nil {
+		return fmt.Errorf("resync volume %s: %w", h, err)
+	}
+	if code := resp.StatusCode(); code != http.StatusOK && code != http.StatusNoContent {
+		return respError("resync volume "+string(h), code, resp.Body)
+	}
+	return nil
+}

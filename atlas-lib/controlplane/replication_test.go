@@ -171,3 +171,132 @@ func TestClientGetVolumeReplicationInfoNotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestClientPromoteVolumeForcedIgnoresDemoteState(t *testing.T) {
+	var gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/replication/failover") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.PromoteVolume(context.Background(), testHandle, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotQuery, "planned=true") {
+		t.Errorf("query = %q, forced promote must not ask for the planned gate", gotQuery)
+	}
+}
+
+func TestClientPromoteVolumePlannedSendsThePlannedFlag(t *testing.T) {
+	var gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.PromoteVolume(context.Background(), testHandle, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotQuery, "planned=true") {
+		t.Errorf("query = %q, want planned=true", gotQuery)
+	}
+}
+
+// The whole point of the planned gate: a demote still converging must surface
+// as something the driver can map to codes.Aborted (retryable), never
+// codes.FailedPrecondition -- the vendored csi-addons controller escalates
+// ANY FAILED_PRECONDITION from a force=false promote to force=true inline,
+// with no wait-and-retry grace period of its own.
+func TestClientPromoteVolumeWhileDemoteConvergingIsA409(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	})
+	err := c.PromoteVolume(context.Background(), testHandle, false)
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusConflict {
+		t.Fatalf("err = %v, want a *StatusError carrying 409", err)
+	}
+}
+
+func TestClientPromoteVolumeWithNoDemoteIsA412(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+	})
+	err := c.PromoteVolume(context.Background(), testHandle, false)
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("err = %v, want a *StatusError carrying 412", err)
+	}
+}
+
+func TestClientDemoteVolumeNotYetDone(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/replication/demote") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+	done, err := c.DemoteVolume(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done {
+		t.Error("done = true, want false while still converging")
+	}
+}
+
+func TestClientDemoteVolumeDone(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	done, err := c.DemoteVolume(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !done {
+		t.Error("done = false, want true")
+	}
+}
+
+func TestClientDemoteVolumeFailureIsAnError(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if _, err := c.DemoteVolume(context.Background(), testHandle); err == nil {
+		t.Error("want an error on a genuine backend failure")
+	}
+}
+
+func TestClientResyncVolume(t *testing.T) {
+	var gotBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/replication/failback") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.ResyncVolume(context.Background(), testHandle, testCluster); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, `"source_cluster_id":"`+testCluster+`"`) {
+		t.Errorf("request body = %q, want source_cluster_id %s", gotBody, testCluster)
+	}
+}
+
+func TestClientResyncVolumeWithoutSourceCluster(t *testing.T) {
+	var gotBody string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.ResyncVolume(context.Background(), testHandle, ""); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotBody, "source_cluster_id") {
+		t.Errorf("request body = %q, want no source_cluster_id when none is given", gotBody)
+	}
+}

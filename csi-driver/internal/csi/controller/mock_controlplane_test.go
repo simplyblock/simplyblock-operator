@@ -122,6 +122,25 @@ type mockSBCLI struct {
 	// normal idempotent update, modeling a backend refusal (e.g. a policy
 	// that is not active) or a transient failure.
 	replicationPUTStatus int
+
+	// failoverStatus, when set, is the HTTP status POST .../failover answers
+	// with instead of its default success (204) -- modeling the planned
+	// gate's 409 (demote still converging) and 412 (no demote requested).
+	failoverStatus int
+	// lastFailoverQuery captures the raw query string of the last failover
+	// call, so a test can assert the driver actually sent planned=true/false
+	// rather than only checking the resulting gRPC code.
+	lastFailoverQuery string
+
+	// demoteStatus, when set, is the HTTP status POST .../demote answers with
+	// instead of its default success (204). 202 models "still converging."
+	demoteStatus int
+
+	// failbackStatus, when set, is the HTTP status POST .../failback answers
+	// with instead of its default success (204).
+	failbackStatus int
+	// lastFailbackBody captures the raw JSON body of the last failback call.
+	lastFailbackBody []byte
 }
 
 func newMockSBCLI() *mockSBCLI {
@@ -151,6 +170,18 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/status",
 		m.locked(m.handleReplicationStatus),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/failover",
+		m.locked(m.handleFailover),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/demote",
+		m.locked(m.handleDemote),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/failback",
+		m.locked(m.handleFailback),
 	)
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/connect",
@@ -335,6 +366,44 @@ func (m *mockSBCLI) handleReplicationStatus(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (m *mockSBCLI) handleFailover(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	m.lastFailoverQuery = r.URL.RawQuery
+	if m.failoverStatus != 0 {
+		writeJSON(w, m.failoverStatus, map[string]string{"detail": "injected status"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleDemote(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	if m.demoteStatus != 0 {
+		writeJSON(w, m.demoteStatus, map[string]bool{"demoted": m.demoteStatus == http.StatusNoContent})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mockSBCLI) handleFailback(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	if m.lookupVolume(w, volumeID) == nil {
+		return
+	}
+	m.lastFailbackBody, _ = io.ReadAll(r.Body)
+	if m.failbackStatus != 0 {
+		writeJSON(w, m.failbackStatus, map[string]string{"detail": "injected status"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (m *mockSBCLI) handleVolumeConnect(w http.ResponseWriter, r *http.Request) {

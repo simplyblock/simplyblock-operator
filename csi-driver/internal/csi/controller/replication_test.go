@@ -226,16 +226,3 @@ func TestGetVolumeReplicationInfoUnknownVolume(t *testing.T) {
 	}
 }
 
-// The remaining Replication verbs (Phase 2) fall through to the embedded
-// UnimplementedControllerServer until they are implemented.
-func TestUnimplementedReplicationVerbsAreUnimplemented(t *testing.T) {
-	mock := newMockSBCLI()
-	defer mock.Close()
-	cs := newReplicationTestServer(t, mock)
-
-	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{VolumeId: testReplVolID})
-	st, _ := status.FromError(err)
-	if st.Code() != codes.Unimplemented {
-		t.Errorf("PromoteVolume code = %v, want Unimplemented", st.Code())
-	}
-}

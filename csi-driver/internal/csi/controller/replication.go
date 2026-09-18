@@ -1,10 +1,9 @@
 // The csi-addons Replication service: EnableVolumeReplication,
-// DisableVolumeReplication, and GetVolumeReplicationInfo (design §5.1). Each
-// verb is a thin adapter onto the atlas-lib control-plane client's
-// replication calls, resolved through the same {clusterID}:{poolID}:{lvolID}
-// handle every other RPC uses. The remaining Replication verbs
-// (PromoteVolume, DemoteVolume, ResyncVolume) fall through to the embedded
-// UnimplementedControllerServer until Phase 2.
+// DisableVolumeReplication, GetVolumeReplicationInfo (design §5.1), and the
+// Phase 2 lifecycle verbs PromoteVolume, DemoteVolume, and ResyncVolume
+// (design §5.2). Each verb is a thin adapter onto the atlas-lib control-plane
+// client's replication calls, resolved through the same
+// {clusterID}:{poolID}:{lvolID} handle every other RPC uses.
 package controller
 
 import (
@@ -25,6 +24,13 @@ import (
 // to an id needs a policy-list-and-match call this phase does not yet wrap
 // in atlas-lib. A future change adds that resolution and accepts either.
 const replicationPolicyParam = "replicationPolicyID"
+
+// sourceClusterIDParam is the VolumeReplicationClass parameter naming the
+// cluster to resync from, when it isn't the one the backend already has on
+// record for this volume's relationship. Optional: sbcli's replication_failback
+// resolves it from the existing relationship when omitted (the common case,
+// design §5.2's "Recovered source").
+const sourceClusterIDParam = "sourceClusterID"
 
 // EnableVolumeReplication attaches the volume to the policy named by the
 // VolumeReplicationClass. Attaching to the policy the volume already follows
@@ -110,4 +116,88 @@ func (cs *Server) GetVolumeReplicationInfo(
 		resp.LastSyncTime = timestamppb.New(*info.LastReplicatedAt)
 	}
 	return resp, nil
+}
+
+// PromoteVolume brings the volume up as primary on this cluster (design
+// §5.2). Force=true is the unplanned path: it clones the last fully
+// replicated generation and ignores demote state entirely, because its whole
+// premise is that the peer may never have been reachable to demote.
+// Force=false is the planned path, refused with ABORTED (retryable) while a
+// demote is still converging and FAILED_PRECONDITION when no demote was ever
+// requested -- the split matters because the vendored csi-addons controller
+// auto-escalates ANY FAILED_PRECONDITION from a force=false promote to
+// force=true inline, with no wait-and-retry grace period of its own.
+func (cs *Server) PromoteVolume(
+	ctx context.Context,
+	req *replication.PromoteVolumeRequest,
+) (*replication.PromoteVolumeResponse, error) {
+	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	if err := client.PromoteVolume(ctx, h.Handle(), req.GetForce()); err != nil {
+		return nil, classifyPromoteVolumeError(err)
+	}
+	return &replication.PromoteVolumeResponse{}, nil
+}
+
+// DemoteVolume fences the source and confirms the last write replicated
+// (P0-3) -- the lossless half of a planned swap. Synchronous and
+// non-blocking: it never waits out the backend's own convergence loop.
+// While still converging it returns ABORTED (retryable), matching the actual
+// upstream reconciler's requeue-until-ready behavior for a Secondary
+// transition that has not yet settled, rather than holding the RPC open.
+func (cs *Server) DemoteVolume(
+	ctx context.Context,
+	req *replication.DemoteVolumeRequest,
+) (*replication.DemoteVolumeResponse, error) {
+	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	done, err := client.DemoteVolume(ctx, h.Handle())
+	if err != nil {
+		return nil, classifyDemoteVolumeError(err)
+	}
+	if !done {
+		return nil, status.Error(codes.Aborted, "demote is still converging")
+	}
+	return &replication.DemoteVolumeResponse{}, nil
+}
+
+// ResyncVolume reconciles a diverged copy back onto the current primary's
+// history. It configures the reverse direction only and reports readiness
+// off the ordinary lag read -- it never cuts over, matching the design's own
+// "it never merges" (§5.2): cutover is PromoteVolume's job, on a separate,
+// later call.
+func (cs *Server) ResyncVolume(
+	ctx context.Context,
+	req *replication.ResyncVolumeRequest,
+) (*replication.ResyncVolumeResponse, error) {
+	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	sourceClusterID := req.GetParameters()[sourceClusterIDParam]
+	if err := client.ResyncVolume(ctx, h.Handle(), sourceClusterID); err != nil {
+		return nil, classifyResyncVolumeError(err)
+	}
+	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
+	if err != nil {
+		return nil, classifyGetVolumeReplicationInfoError(err)
+	}
+	ready := info.LagSeconds == nil || info.LagBudgetSeconds == nil || *info.LagSeconds <= *info.LagBudgetSeconds
+	return &replication.ResyncVolumeResponse{Ready: ready}, nil
 }

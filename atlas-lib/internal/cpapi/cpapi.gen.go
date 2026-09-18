@@ -1901,7 +1901,8 @@ type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePo
 
 // ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
 type ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams struct {
-	Generation *int `form:"generation,omitempty" json:"generation,omitempty"`
+	Generation *int  `form:"generation,omitempty" json:"generation,omitempty"`
+	Planned    *bool `form:"planned,omitempty" json:"planned,omitempty"`
 }
 
 // ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost.
@@ -3216,6 +3217,19 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/cutover-proceed (the `ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost` operationId).
 	ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost Clusters:Storage-Pools:Volumes:Replication:Demote
+	//
+	// Fence the source and confirm the last write replicated (P0-3).
+	//
+	// Synchronous and re-drivable, not queued: each call does only the work its
+	// current state calls for (fence + trigger the final snapshot once, then
+	// just check whether it has landed), so the caller re-invokes this route
+	// until it reports 204. A 202 means still waiting -- call again, the same
+	// way `GET .../status` is re-read rather than pushed.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
+	ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostWithBody Clusters:Storage-Pools:Volumes:Replication:Failback
 	//
 	// Point replication back at a source cluster. The cutover itself is
@@ -3248,6 +3262,18 @@ type ClientInterface interface {
 	// history a retention schedule keeps. Failing over to an older generation
 	// is the recovery path for a logical corruption, which the newest copy has
 	// faithfully replicated.
+	//
+	// ``planned=True`` gates on a completed demote (P0-3) so a planned swap
+	// loses nothing: 412 when no demote was ever requested for this volume (the
+	// caller's premise that the source is reachable to demote was wrong, and a
+	// 412 is what lets the csi-addons controller's own force-escalation take
+	// over), 409 while demote is still converging (retryable -- 409 must never
+	// become a code the controller reads as permission to force, since that
+	// controller escalates on ANY FAILED_PRECONDITION from a force=false
+	// promote with no wait-and-retry grace period of its own). Unplanned
+	// failover (the default) ignores demote state entirely, unchanged from
+	// today: its whole premise is that the source may never have been
+	// reachable to demote.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
 	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -5572,6 +5598,29 @@ func (c *Client) ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2Cluste
 	return c.Client.Do(req)
 }
 
+// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost Clusters:Storage-Pools:Volumes:Replication:Demote
+//
+// Fence the source and confirm the last write replicated (P0-3).
+//
+// Synchronous and re-drivable, not queued: each call does only the work its
+// current state calls for (fence + trigger the final snapshot once, then
+// just check whether it has landed), so the caller re-invokes this route
+// until it reports 204. A 202 means still waiting -- call again, the same
+// way `GET .../status` is re-read rather than pushed.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
+func (c *Client) ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostRequest(c.Server, clusterId, poolId, volumeId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostWithBody Clusters:Storage-Pools:Volumes:Replication:Failback
 //
 // Point replication back at a source cluster. The cutover itself is
@@ -5624,6 +5673,18 @@ func (c *Client) ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClus
 // history a retention schedule keeps. Failing over to an older generation
 // is the recovery path for a logical corruption, which the newest copy has
 // faithfully replicated.
+//
+// “planned=True“ gates on a completed demote (P0-3) so a planned swap
+// loses nothing: 412 when no demote was ever requested for this volume (the
+// caller's premise that the source is reachable to demote was wrong, and a
+// 412 is what lets the csi-addons controller's own force-escalation take
+// over), 409 while demote is still converging (retryable -- 409 must never
+// become a code the controller reads as permission to force, since that
+// controller escalates on ANY FAILED_PRECONDITION from a force=false
+// promote with no wait-and-retry grace period of its own). Unplanned
+// failover (the default) ignores demote state entirely, unchanged from
+// today: its whole premise is that the source may never have been
+// reachable to demote.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
 func (c *Client) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -11801,6 +11862,54 @@ func NewClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersCluster
 	return req, nil
 }
 
+// NewClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostRequest constructs an http.Request for the ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost method
+func NewClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "pool_id", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "volume_id", volumeId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/demote", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostRequest calls the generic ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost builder with application/json body
 func NewClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostRequest(server string, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, body ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -11914,6 +12023,18 @@ func NewClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStor
 		if params.Generation != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "generation", *params.Generation, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Planned != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "planned", *params.Planned, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -13967,6 +14088,21 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/cutover-proceed (the `ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost` operationId).
 	ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPostResponse, error)
 
+	// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse Clusters:Storage-Pools:Volumes:Replication:Demote
+	//
+	// Fence the source and confirm the last write replicated (P0-3).
+	//
+	// Synchronous and re-drivable, not queued: each call does only the work its
+	// current state calls for (fence + trigger the final snapshot once, then
+	// just check whether it has landed), so the caller re-invokes this route
+	// until it reports 204. A 202 means still waiting -- call again, the same
+	// way `GET .../status` is re-read rather than pushed.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
+	ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse, error)
+
 	// ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostWithBodyWithResponse Clusters:Storage-Pools:Volumes:Replication:Failback
 	//
 	// Point replication back at a source cluster. The cutover itself is
@@ -13999,6 +14135,18 @@ type ClientWithResponsesInterface interface {
 	// history a retention schedule keeps. Failing over to an older generation
 	// is the recovery path for a logical corruption, which the newest copy has
 	// faithfully replicated.
+	//
+	// ``planned=True`` gates on a completed demote (P0-3) so a planned swap
+	// loses nothing: 412 when no demote was ever requested for this volume (the
+	// caller's premise that the source is reachable to demote was wrong, and a
+	// 412 is what lets the csi-addons controller's own force-escalation take
+	// over), 409 while demote is still converging (retryable -- 409 must never
+	// become a code the controller reads as permission to force, since that
+	// controller escalates on ANY FAILED_PRECONDITION from a force=false
+	// promote with no wait-and-retry grace period of its own). Unplanned
+	// failover (the default) ignores demote state entirely, unchanged from
+	// today: its whole premise is that the source may never have been
+	// reachable to demote.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -18895,6 +19043,47 @@ func (r ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersCluster
 	return ""
 }
 
+type ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -21593,6 +21782,27 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationCutoverProce
 	return ParseClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPostResponse(rsp)
 }
 
+// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse Clusters:Storage-Pools:Volumes:Replication:Demote
+//
+// Fence the source and confirm the last write replicated (P0-3).
+//
+// Synchronous and re-drivable, not queued: each call does only the work its
+// current state calls for (fence + trigger the final snapshot once, then
+// just check whether it has landed), so the caller re-invokes this route
+// until it reports 204. A 202 means still waiting -- call again, the same
+// way `GET .../status` is re-read rather than pushed.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote (the `ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost` operationId).
+func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse, error) {
+	rsp, err := c.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(ctx, clusterId, poolId, volumeId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse(rsp)
+}
+
 // ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostWithBodyWithResponse Clusters:Storage-Pools:Volumes:Replication:Failback
 //
 // Point replication back at a source cluster. The cutover itself is
@@ -21637,6 +21847,18 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationFailbackApiV
 // history a retention schedule keeps. Failing over to an older generation
 // is the recovery path for a logical corruption, which the newest copy has
 // faithfully replicated.
+//
+// “planned=True“ gates on a completed demote (P0-3) so a planned swap
+// loses nothing: 412 when no demote was ever requested for this volume (the
+// caller's premise that the source is reachable to demote was wrong, and a
+// 412 is what lets the csi-addons controller's own force-escalation take
+// over), 409 while demote is still converging (retryable -- 409 must never
+// become a code the controller reads as permission to force, since that
+// controller escalates on ANY FAILED_PRECONDITION from a force=false
+// promote with no wait-and-retry grace period of its own). Unplanned
+// failover (the default) ignores demote state entirely, unchanged from
+// today: its whole premise is that the source may never have been
+// reachable to demote.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -25257,6 +25479,38 @@ func ParseClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClust
 	}
 
 	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse parses an HTTP response from a ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse call
+func ParseClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse(rsp *http.Response) (*ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 202:
+		break // No content-type
+
 	case rsp.StatusCode == 204:
 		break // No content-type
 
