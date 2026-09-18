@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
+
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -24,6 +26,24 @@ func (cs *Server) ValidateVolumeCapabilities(
 	}
 	if len(req.GetVolumeCapabilities()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "volume capabilities are required")
+	}
+
+	// A pNFS volume is answered locally. Its handle names an export rather than
+	// a logical volume, so the control-plane lookup below would come back
+	// not-found and report a volume this driver provisioned as missing.
+	if lvol.VolumeHandle(volumeID).IsNFS() {
+		confirmed, err := validatePNFSCapabilities(volumeID, req.GetVolumeCapabilities())
+		if err != nil {
+			return nil, err
+		}
+		if !confirmed {
+			return &csi.ValidateVolumeCapabilitiesResponse{Message: ""}, nil
+		}
+		return &csi.ValidateVolumeCapabilitiesResponse{
+			Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
+				VolumeCapabilities: req.GetVolumeCapabilities(),
+			},
+		}, nil
 	}
 
 	spdkVol, err := csicommon.ParseVolumeHandle(volumeID)

@@ -30,6 +30,7 @@ var (
 	storage       = []string{"storage.k8s.io"}
 	snapshot      = []string{"snapshot.storage.k8s.io"}
 	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
+	simplyblock   = []string{"storage.simplyblock.io"}
 )
 
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
@@ -42,6 +43,27 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch"),
 		rule(storage, []string{"storageclasses"}, "get", "list", "watch"),
 		rule(core, []string{"events"}, "create", "patch"),
+		// pNFS (design-pnfs-rwx.md §9.3): the node plugin reads its own export
+		// back at stage time, to learn the address to mount and to notice a
+		// failover. It never writes one -- the operator drives assembly over
+		// the link, and a node that could write its own record could bind an
+		// export to itself.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch"),
+	},
+	// controllerComponent is the driver's own controller plugin, as distinct
+	// from the sidecars beside it. It had no role until pNFS, because until
+	// then the plugin itself reached only the control plane and every API-server
+	// call on that pod was a sidecar's.
+	controllerComponent: {
+		// delete is here because DeleteVolume issues it: the record is removed
+		// first, and the operator's finalizer tears the export down on its host
+		// before the backing volume is destroyed. Without the verb the call is
+		// refused and nothing converges.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "delete"),
+		// The record's status carries the backing volume's identity, which only
+		// this plugin knows: it has just provisioned it. The operator reads it
+		// back to tell the host which device to assemble on.
+		rule(simplyblock, []string{"nfsexports/status"}, "get", "update", "patch"),
 	},
 	"provisioner": {
 		rule(core, []string{"secrets"}, "get", "list"),

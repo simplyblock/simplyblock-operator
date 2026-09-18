@@ -28,23 +28,32 @@ import (
 	"fmt"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"google.golang.org/grpc"
+
+	"github.com/simplyblock/atlas/export/exportrpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
 
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/simplyblock/csi-driver/internal/csilink"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
+	csimount "github.com/simplyblock/csi-driver/internal/mount"
+	"github.com/simplyblock/csi-driver/internal/nfsexport"
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
@@ -65,8 +74,16 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
+		// MULTI_NODE_MULTI_WRITER is what a ReadWriteMany claim asks for, which a
+		// pNFS export can serve and a block volume cannot, and
+		// it is served by a pNFS export rather than by sharing a block device.
+		// The other multi-node modes are deliberately absent: the controller
+		// refuses them rather than routing them here, so a read-only or
+		// single-writer multi-node claim does not silently get a filesystem
+		// several nodes can write.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 		}
 	)
 
@@ -89,12 +106,22 @@ func Run(conf *config.Config) {
 	// its own in-cluster config + clientset. A missing in-cluster config is
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
+	var exports controller.ExportRegistry
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
+		// The NFSExport records a pNFS volume needs. A custom resource
+		// is out of reach of the typed client, and generating a typed one for a
+		// kind the driver only creates and reads would be a build dependency on
+		// the operator's module for very little.
+		if dyn, dynErr := dynamic.NewForConfig(k8sConfig); dynErr != nil {
+			klog.Warningf("no dynamic client, so pNFS volumes cannot be provisioned: %v", dynErr)
+		} else {
+			exports = controller.NewExportRegistry(dyn)
+		}
 	}
 
 	if conf.IsNodeServer {
@@ -107,7 +134,7 @@ func Run(conf *config.Config) {
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = controller.New(cd, kubeClient)
+		cs, err = controller.New(cd, kubeClient, exports)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
@@ -126,7 +153,7 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		if err := startLink(ctx, conf, kubeClient); err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
 		}
 	}
@@ -142,7 +169,7 @@ func Run(conf *config.Config) {
 // linking it, and is identified by the node it runs on. A controller plugin
 // links as itself and currently serves nothing. It is registered so the
 // operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+func startLink(ctx context.Context, conf *config.Config, kubeClient kubernetes.Interface) error {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
@@ -159,13 +186,30 @@ func startLink(ctx context.Context, conf *config.Config) error {
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
 		// another, which nothing wants and which doubles every round trip.
-		srv, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+		local := storage.Local(nvme.SysfsConfig{})
+		srv, err := storagerpc.NewServer(local)
 		if err != nil {
 			return fmt.Errorf("node storage: %w", err)
 		}
+		// The export service is separate from the storage one because it
+		// mutates the node: it makes filesystems, mounts them, and publishes
+		// them, where storagerpc only reads. Keeping them apart is what lets a
+		// credential be granted the reading and not the writing.
+		assembler, err := nfsexport.NewAssembler(
+			local.DeviceResolver, csimount.New(), hostNQNFor(conf.NodeID, kubeClient))
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
+		exportSrv, err := exportrpc.NewServer(assembler)
+		if err != nil {
+			return fmt.Errorf("node exports: %w", err)
+		}
 		cfg.ID = link.NodePeer(conf.NodeID)
-		cfg.Register = srv.Register
-		cfg.Capabilities = storagerpc.Capabilities()
+		cfg.Register = func(r grpc.ServiceRegistrar) {
+			srv.Register(r)
+			exportSrv.Register(r)
+		}
+		cfg.Capabilities = append(storagerpc.Capabilities(), exportrpc.Capabilities()...)
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
@@ -179,6 +223,30 @@ func startLink(ctx context.Context, conf *config.Config) error {
 
 	_, err := csilink.Start(ctx, cfg)
 	return err
+}
+
+// hostNQNFor reports this host's NVMe qualified name the way the node plugin's
+// staging path does: derived from the Kubernetes node's UID, so the control
+// plane sees the same identity whichever path connected the namespace.
+//
+// Two identities for one host would each hold their own reservation key, and the
+// fencing in design-pnfs-rwx.md §13.2 is written against one key per host.
+//
+// An empty answer is not a failure. A volume with no allowed_hosts needs no
+// identity, and the connect below fails with the control plane's own message if
+// one was required, which says more than anything this could say here.
+func hostNQNFor(nodeID string, kubeClient kubernetes.Interface) nfsexport.HostNQNFunc {
+	return func(ctx context.Context) string {
+		if kubeClient == nil || nodeID == "" {
+			return ""
+		}
+		node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+		if err != nil {
+			klog.Warningf("pnfs: reading node %s for the host NQN: %v", nodeID, err)
+			return ""
+		}
+		return nqn.Host(string(node.UID))
+	}
 }
 
 // startNodeServer builds the node service and starts the two background loops

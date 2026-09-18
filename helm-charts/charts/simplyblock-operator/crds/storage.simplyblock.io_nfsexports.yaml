@@ -1,0 +1,248 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: nfsexports.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: NFSExport
+    listKind: NFSExportList
+    plural: nfsexports
+    shortNames:
+    - nfsexp
+    singular: nfsexport
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.volumeRef
+      name: Volume
+      type: string
+    - jsonPath: .status.storageNodeRef
+      name: MDS
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NFSExport is one pNFS export: a volume, the MDS host serving it, and the
+          address clients mount. The operator owns the binding and the failover.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              NFSExportSpec is the desired state: which volume is exported, and under what
+              policy. The bound MDS host is deliberately not here. It is an observed
+              binding the operator owns, so it lives in status where a user edit cannot
+              race the failover machine.
+            properties:
+              clientPolicy:
+                description: ClientPolicy constrains which clients may mount.
+                properties:
+                  mode:
+                    default: NodeScoped
+                    description: Mode is how the effective client set is derived.
+                    enum:
+                    - NodeScoped
+                    - Subnet
+                    - Open
+                    type: string
+                  subnets:
+                    description: Subnets are the CIDRs allowed when Mode is Subnet.
+                      Ignored otherwise.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              exportPath:
+                description: |-
+                  ExportPath is the server-side mount point. It carries namespace and UID
+                  information because a PVC name is unique only within a namespace, and two
+                  same-named PVCs must not collide on one MDS host.
+                pattern: ^/mnt/[A-Za-z0-9._-]+$
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              fsid:
+                description: |-
+                  FSID is the NFS fsid this export is published under. It is the export
+                  UUID: exports(5) accepts a UUID of 32 hex digits with arbitrary
+                  punctuation, which makes the value unique cluster-wide and stable for the
+                  export's life by construction, with no allocator to run and no collision
+                  to handle. Stability is what lets a re-materialized export reproduce the
+                  file handles clients already hold.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              volumeRef:
+                description: |-
+                  VolumeRef is the CSI volume handle this export serves, in the four-part
+                  pNFS form nfs:{clusterID}:{poolID}:{exportUUID}.
+
+                  It names no Kubernetes object, so it is validated by pattern rather than
+                  resolved by a webhook.
+                pattern: ^nfs:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[^:]+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - exportPath
+            - fsid
+            - volumeRef
+            type: object
+          status:
+            description: |-
+              NFSExportStatus is what the export currently is. Everything the operator
+              decides lives here.
+            properties:
+              allowedClients:
+                description: |-
+                  AllowedClients is the effective client set written into the export,
+                  derived from ClientPolicy and current pod placement.
+                items:
+                  type: string
+                type: array
+              conditions:
+                description: |-
+                  Conditions carry why an export is not Ready. The types are Assembled and
+                  Exported, which are the two steps assembly has; a condition type is added
+                  here when something sets it, not before.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lvolID:
+                description: LVolID identifies the backing logical volume.
+                type: string
+              mdsNodeIP:
+                description: |-
+                  MDSNodeIP is the node address currently behind that Service, recorded for
+                  diagnosis rather than for clients to use.
+                type: string
+              message:
+                description: Message is a human-readable note on the current phase.
+                type: string
+              nguid:
+                description: |-
+                  NGUID is the backing namespace's globally unique id. It is what a client
+                  resolves the local block device by, and what the MDS names in the layout,
+                  so it is recorded rather than re-derived at stage time.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the spec generation this status was computed from.
+                  Without it a stale status and a disagreeing one are the same observation,
+                  so a spec edit cannot be waited on.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the export's lifecycle position.
+                enum:
+                - Pending
+                - Assembling
+                - Ready
+                - Degraded
+                - Deleting
+                type: string
+              phaseDeadline:
+                description: |-
+                  PhaseDeadline is when the current phase must be given up on. The phase
+                  machine carries a per-state bound, and the bound has to outlive the
+                  process the way the phase itself does: an operator restarted mid-assembly
+                  would otherwise grant the phase a fresh deadline on every pass and never
+                  time out.
+                format: date-time
+                type: string
+              storageNodeRef:
+                description: |-
+                  StorageNodeRef names the StorageNode currently acting as MDS. It is
+                  operator-owned and is the serialization point for the one-MDS-per-export
+                  invariant: no second host is a candidate until this field is rewritten.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

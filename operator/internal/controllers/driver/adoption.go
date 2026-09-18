@@ -112,22 +112,18 @@ func helmMetadataRemovalPatch() []byte {
 // lists env, volumes, and volumeMounts explicitly, and an entry the spec does
 // not name is an entry the apply removes.
 //
-// Refusing is the only safe answer. Dropping csi-link is an agent that stops
-// reaching the operator, which is not a change an administrator asked for by
-// writing a SimplyblockDriver.
+// Refusing is the only safe answer, because losing a feature is not a change an
+// administrator asked for by writing a SimplyblockDriver.
 //
-// It is off by default, which is why the driver could move out of the chart at
-// all. It needs a spec surface before it can be adopted, which is the TODO in
-// workloads.go. TLS had the same shape here until spec.tls existed;
-// tlsAdoptionMismatch below is what replaced it, since TLS's refusal now
-// compares against what the spec asks for rather than refusing outright.
+// It is empty. TLS and csi-link were both here, and both left the same way: a
+// field that describes the configuration turns an outright refusal into a
+// comparison against what the spec asks for, which is what tlsAdoptionMismatch
+// and linkAdoptionMismatch do below. The list stays for the next one.
 var inexpressible = []struct {
 	what   string
 	envVar string
 	arg    string
-}{
-	{what: "csi-link", arg: "--link"},
-}
+}{}
 
 // unsupportedConfiguration reports the first thing a running node plugin
 // carries that the spec cannot express.
@@ -194,6 +190,51 @@ func tlsAdoptionMismatch(d *simplyblockv1alpha2.SimplyblockDriver, ds *appsv1.Da
 			"so this either turns TLS off on a live data path or on for a plugin nothing has "+
 			"provisioned a certificate for",
 		running, wanted), true
+}
+
+// runningLink reports whether a deployed node plugin holds a link to the
+// operator, which is the presence of the flag that turns it on.
+func runningLink(ds *appsv1.DaemonSet) bool {
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, a := range c.Args {
+			if a == "--link" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// linkAdoptionMismatch compares a running node plugin's link against what
+// spec.link asks for, on tlsAdoptionMismatch's reasoning and with the same two
+// directions to get wrong.
+//
+// Adopting a linked deployment under a spec that says nothing about the link
+// drops it on the next apply, and an operator that can no longer reach a node
+// is one whose exports stop being assembled, silently, while the plugin keeps
+// serving kubelet and nothing looks wrong. Adopting an unlinked one under a
+// spec that asks for the link starts every plugin in the cluster dialing an
+// operator that may not be serving the endpoint at all.
+func linkAdoptionMismatch(
+	d *simplyblockv1alpha2.SimplyblockDriver, ds *appsv1.DaemonSet,
+) (string, bool) {
+	if ds == nil {
+		return "", false
+	}
+	running := runningLink(ds)
+	wanted := linkEnabled(d)
+	switch {
+	case running == wanted:
+		return "", false
+	case running:
+		return "the running node plugin holds a csi-link to the operator and spec.link.enableLink " +
+			"is not set; adopting it would reconcile the link away, and an operator that cannot " +
+			"reach a node is one whose exports stop being assembled without anything looking wrong", true
+	default:
+		return "spec.link.enableLink asks for a csi-link and the running node plugin has none; " +
+			"adopting it would start every plugin dialing an endpoint this cluster may not serve, " +
+			"so the handover stops until the running deployment and the spec agree", true
+	}
 }
 
 // runningDriverName reads the driver name a deployed node plugin registers

@@ -187,6 +187,7 @@ const (
 	DeviceService_ListDevices_FullMethodName           = "/atlas.storage.v1.DeviceService/ListDevices"
 	DeviceService_ListDevicesBySelector_FullMethodName = "/atlas.storage.v1.DeviceService/ListDevicesBySelector"
 	DeviceService_GetDeviceByUUID_FullMethodName       = "/atlas.storage.v1.DeviceService/GetDeviceByUUID"
+	DeviceService_GetDeviceByNGUID_FullMethodName      = "/atlas.storage.v1.DeviceService/GetDeviceByNGUID"
 	DeviceService_GetDeviceByDevicePath_FullMethodName = "/atlas.storage.v1.DeviceService/GetDeviceByDevicePath"
 	DeviceService_GetDeviceByNamespace_FullMethodName  = "/atlas.storage.v1.DeviceService/GetDeviceByNamespace"
 )
@@ -210,6 +211,11 @@ type DeviceServiceClient interface {
 	// GetDeviceByUUID returns the device whose namespace UUID matches
 	// (simplyblock: the lvol UUID). NOT_FOUND when nothing matches.
 	GetDeviceByUUID(ctx context.Context, in *GetDeviceByUUIDRequest, opts ...grpc.CallOption) (*GetDeviceByUUIDResponse, error)
+	// GetDeviceByNGUID returns the device whose namespace NGUID matches. It is
+	// the lookup a pNFS client needs: the block layout an MDS hands out names
+	// the device by NGUID rather than by the lvol UUID. NOT_FOUND when nothing
+	// matches.
+	GetDeviceByNGUID(ctx context.Context, in *GetDeviceByNGUIDRequest, opts ...grpc.CallOption) (*GetDeviceByNGUIDResponse, error)
 	// GetDeviceByDevicePath returns the device for a block node such as
 	// "/dev/nvme0n1". NOT_FOUND when nothing matches.
 	GetDeviceByDevicePath(ctx context.Context, in *GetDeviceByDevicePathRequest, opts ...grpc.CallOption) (*GetDeviceByDevicePathResponse, error)
@@ -257,6 +263,16 @@ func (c *deviceServiceClient) GetDeviceByUUID(ctx context.Context, in *GetDevice
 	return out, nil
 }
 
+func (c *deviceServiceClient) GetDeviceByNGUID(ctx context.Context, in *GetDeviceByNGUIDRequest, opts ...grpc.CallOption) (*GetDeviceByNGUIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDeviceByNGUIDResponse)
+	err := c.cc.Invoke(ctx, DeviceService_GetDeviceByNGUID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) GetDeviceByDevicePath(ctx context.Context, in *GetDeviceByDevicePathRequest, opts ...grpc.CallOption) (*GetDeviceByDevicePathResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetDeviceByDevicePathResponse)
@@ -296,6 +312,11 @@ type DeviceServiceServer interface {
 	// GetDeviceByUUID returns the device whose namespace UUID matches
 	// (simplyblock: the lvol UUID). NOT_FOUND when nothing matches.
 	GetDeviceByUUID(context.Context, *GetDeviceByUUIDRequest) (*GetDeviceByUUIDResponse, error)
+	// GetDeviceByNGUID returns the device whose namespace NGUID matches. It is
+	// the lookup a pNFS client needs: the block layout an MDS hands out names
+	// the device by NGUID rather than by the lvol UUID. NOT_FOUND when nothing
+	// matches.
+	GetDeviceByNGUID(context.Context, *GetDeviceByNGUIDRequest) (*GetDeviceByNGUIDResponse, error)
 	// GetDeviceByDevicePath returns the device for a block node such as
 	// "/dev/nvme0n1". NOT_FOUND when nothing matches.
 	GetDeviceByDevicePath(context.Context, *GetDeviceByDevicePathRequest) (*GetDeviceByDevicePathResponse, error)
@@ -321,6 +342,9 @@ func (UnimplementedDeviceServiceServer) ListDevicesBySelector(context.Context, *
 }
 func (UnimplementedDeviceServiceServer) GetDeviceByUUID(context.Context, *GetDeviceByUUIDRequest) (*GetDeviceByUUIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDeviceByUUID not implemented")
+}
+func (UnimplementedDeviceServiceServer) GetDeviceByNGUID(context.Context, *GetDeviceByNGUIDRequest) (*GetDeviceByNGUIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDeviceByNGUID not implemented")
 }
 func (UnimplementedDeviceServiceServer) GetDeviceByDevicePath(context.Context, *GetDeviceByDevicePathRequest) (*GetDeviceByDevicePathResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDeviceByDevicePath not implemented")
@@ -403,6 +427,24 @@ func _DeviceService_GetDeviceByUUID_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_GetDeviceByNGUID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDeviceByNGUIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).GetDeviceByNGUID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_GetDeviceByNGUID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).GetDeviceByNGUID(ctx, req.(*GetDeviceByNGUIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_GetDeviceByDevicePath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetDeviceByDevicePathRequest)
 	if err := dec(in); err != nil {
@@ -457,6 +499,10 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDeviceByUUID",
 			Handler:    _DeviceService_GetDeviceByUUID_Handler,
+		},
+		{
+			MethodName: "GetDeviceByNGUID",
+			Handler:    _DeviceService_GetDeviceByNGUID_Handler,
 		},
 		{
 			MethodName: "GetDeviceByDevicePath",

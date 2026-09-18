@@ -35,6 +35,17 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // use this directory to persistently store VolumeContext
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A pNFS volume is mounted from an export rather than from a local device,
+	// so it takes its own path: the namespace is still attached, because the
+	// client reads and writes it directly, but what gets mounted is the export.
+	if req.GetVolumeContext()[ctxAccessProtocol] == accessProtocolNFS {
+		if err := ns.stagePNFSVolume(ctx, req, stagingTargetPath); err != nil {
+			klog.Errorf("failed to stage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
 		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)
@@ -139,6 +150,18 @@ func (ns *Server) NodeUnstageVolume(
 
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := getStagingTargetPath(req)
+
+	// A pNFS volume unstages the way it staged: the NFS mount and the device
+	// alias come off, and then the namespace this node connected is given back.
+	// It is branched on the handle rather than on a stashed volume context,
+	// because the handle is the one thing NodeUnstageVolume is always given.
+	if spec, ok := backingVolumeOf(volumeID); ok {
+		if err := ns.unstagePNFSVolume(ctx, stagingTargetPath, spec); err != nil {
+			klog.Errorf("failed to unstage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
 
 	err := ns.mounter.Remove(stagingTargetPath) // idempotent
 	if err != nil {

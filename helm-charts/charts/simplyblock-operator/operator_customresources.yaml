@@ -151,3 +151,28 @@ spec:
   # image: docker.io/simplyblock/spdkcsi:latest
   # imagePullPolicy: Always
   # controllerReplicas: 1
+
+  # csi-link: both plugins dial the operator and hold the connection open, so
+  # the operator can reach a node without anything listening on it. Turning it
+  # on here needs the operator's own side on too, which is the chart's
+  # csiLink.enabled -- this field configures the plugins that dial, and that
+  # value configures the endpoint they dial and the certificate it serves.
+  # link:
+  #   enableLink: true
+  #   serviceName: simplyblock-csi-link   # in this namespace
+  #   port: 9500
+  #   caConfigMap: simplyblock-csi-link-ca
+  #   caKey: ca.crt
+  #   audience: simplyblock-csi-link
+
+  # pNFS ReadWriteMany (design-pnfs-rwx.md). It requires link.enableLink above,
+  # which admission enforces: the operator assembles an export by calling the
+  # metadata-server host over the link.
+  #
+  # It also requires two things of the node OS that no pod can install, and a
+  # host missing either fails visibly in the NFSExport's Assembling phase:
+  #   - every host that may serve an export: nfs-utils, with nfsd running
+  #   - every host that may run an RWX pod: blkmapd (nfs-blkmap), and a kernel
+  #     whose NVMe driver exports nvme_get_unique_id
+  # pnfs:
+  #   enablePNFS: true

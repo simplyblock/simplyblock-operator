@@ -66,6 +66,23 @@ func (m *Mounter) FormatAndMount(devicePath, target, fsType string, flags, forma
 	return safe.FormatAndMountSensitiveWithFormatOptions(devicePath, target, fsType, flags, nil, formatOptions)
 }
 
+// Format writes a filesystem to devicePath without mounting it.
+//
+// The Kubernetes mount-utils package has no standalone format -- SafeFormatAndMount only formats
+// on its way to a mount -- and a pNFS export needs the two apart: the export
+// package decides whether to format by probing, then mounts separately, so that
+// a re-entered assembly can skip either step on its own. The caller is
+// responsible for having established that formatting is the right thing to do,
+// because this does not check.
+func (m *Mounter) Format(ctx context.Context, devicePath, fsType string, options []string) error {
+	args := append(append([]string{}, options...), devicePath)
+	out, err := m.execer.CommandContext(ctx, "mkfs."+fsType, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.%s %s: %w: %s", fsType, devicePath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Unmount detaches whatever is mounted at target.
 func (m *Mounter) Unmount(target string) error {
 	return m.mounter.Unmount(target)

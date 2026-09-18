@@ -12,6 +12,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -37,6 +38,15 @@ func (cs *Server) CreateVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	// A claim whose StorageClass asks for fsType "pnfs" is served by an export
+	// rather than by a block device, so it takes a different path entirely.
+	// The access mode does not decide this, and the modes pNFS cannot serve
+	// are refused here rather than routed into it.
+	pnfs, err := isPNFSRequest(req.GetVolumeCapabilities())
+	if err != nil {
+		return nil, err
+	}
+
 	selection, err := cs.resolveClusterSelection(req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
@@ -56,6 +66,13 @@ func (cs *Server) CreateVolume(
 			return nil, err
 		}
 		return nil, classifyCreateVolumeError(err)
+	}
+
+	if pnfs {
+		// The backing volume exists; from here the export is the operator's.
+		// This returns Aborted while the export assembles, so the external
+		// provisioner retries rather than the call being held open.
+		return cs.createPNFSVolume(ctx, req, csiVolume, selection.clusterID)
 	}
 
 	volumeInfo, err := cs.publishVolume(ctx, csiVolume.GetVolumeId(), sbClient)
@@ -133,6 +150,24 @@ func (cs *Server) DeleteVolume(
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	// A pNFS volume is two things, and the export has to go first: the record
+	// is the only description of a live mount and an exports entry on the
+	// metadata-server host, and deleting the backing volume under them would
+	// pull the namespace out from beneath a mounted filesystem. Once the record
+	// is gone the host is torn down, and what is left is an ordinary volume,
+	// which the rest of this function deletes under its own handle.
+	//
+	// Without this branch the handle simply fails to parse below and deletion
+	// reports success, leaving the export, the mount, and the volume all
+	// running with nothing left naming them.
+	if lvol.VolumeHandle(volumeID).IsNFS() {
+		backing, err := deleteExportFor(ctx, cs.exports, volumeID)
+		if err != nil {
+			return nil, err
+		}
+		volumeID = backing
 	}
 
 	// Invalid format means the volume was never created by this driver - treat as already deleted.

@@ -340,7 +340,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	_ = csiPeers // handed to reconcilers as they start using it
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
 	// driven by scopes that reconcilers register (the StorageNode controller adds
@@ -390,6 +389,23 @@ func main() {
 		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		nodeCapacity = provider
+	}
+	// The export controller reaches its MDS host over the CSI link. Without the
+	// link there is no way to ask a host to assemble an export, so the
+	// controller still runs -- an export binds a host and then waits, visibly,
+	// with an event saying why -- rather than the kind disappearing when the
+	// link is off.
+	nfsExportReconciler := &controller.NFSExportReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("nfsexport-controller"),
+	}
+	if csiPeers != nil {
+		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
+	}
+	if err := nfsExportReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
+		os.Exit(1)
 	}
 	if err := (&controller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),

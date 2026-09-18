@@ -31,6 +31,9 @@ func (nullDeviceResolver) ListWithSelector(_ context.Context, _ atlasnvme.Device
 func (nullDeviceResolver) ByUUID(_ context.Context, _ string) (atlasnvme.Device, error) {
 	return atlasnvme.Device{}, errs.ErrNotFound
 }
+func (nullDeviceResolver) ByNGUID(_ context.Context, _ string) (atlasnvme.Device, error) {
+	return atlasnvme.Device{}, errs.ErrNotFound
+}
 func (nullDeviceResolver) ByDevicePath(_ context.Context, _ string) (atlasnvme.Device, error) {
 	return atlasnvme.Device{}, errs.ErrNotFound
 }

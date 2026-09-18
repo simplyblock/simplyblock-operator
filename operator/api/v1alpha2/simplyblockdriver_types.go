@@ -144,8 +144,87 @@ type DriverTLS struct {
 	Provider DriverTLSProvider `json:"provider,omitempty"`
 }
 
+// DriverLink configures csi-link: the connection both plugins open to the
+// operator and hold open, so the operator can reach a node without anything
+// listening on it. The direction is the reverse of how it reads -- the node
+// dials out and the operator issues calls back down the same connection --
+// which is what keeps a worker from having to expose a port.
+//
+// Unset is off, which is what every deployment ran before this field existed.
+// The defaults on the rest reproduce the csiLink Helm values the operator's own
+// side is still configured by, so a deployment that turns this on and changes
+// nothing else reaches the Service that chart installed.
+type DriverLink struct {
+	// EnableLink turns the link on for both plugins. It is required for pNFS,
+	// which is the first thing that needs the operator to call a node.
+	// +kubebuilder:default=false
+	// +optional
+	EnableLink *bool `json:"enableLink,omitempty"`
+
+	// ServiceName is the Service fronting the operator's link endpoint, in this
+	// object's own namespace. Both plugins dial it and verify it against the
+	// operator's serving certificate, so it has to be a name that certificate
+	// covers rather than an address.
+	// +kubebuilder:default=simplyblock-csi-link
+	// +optional
+	ServiceName string `json:"serviceName,omitempty"`
+
+	// Port is what that Service listens on, matching the operator's
+	// --csi-link-bind-address.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=9500
+	// +optional
+	Port *int32 `json:"port,omitempty"`
+
+	// CAConfigMap holds the bundle that signs the operator's link certificate,
+	// and CAKey is the key in it. The ConfigMap is mounted optional: a publicly
+	// rooted certificate needs none, and the agent falls back to the system
+	// roots, so a missing one must not stop a plugin from starting.
+	// +kubebuilder:default=simplyblock-csi-link-ca
+	// +optional
+	CAConfigMap string `json:"caConfigMap,omitempty"`
+	// +kubebuilder:default=ca.crt
+	// +optional
+	CAKey string `json:"caKey,omitempty"`
+
+	// Audience is what each plugin's projected token is bound to, and what the
+	// operator requires of it. A token bound to no particular audience is one
+	// anything holding it can replay against the operator, which is the whole
+	// reason the link authenticates.
+	// +kubebuilder:default=simplyblock-csi-link
+	// +optional
+	Audience string `json:"audience,omitempty"`
+}
+
+// DriverPNFS configures pNFS ReadWriteMany support, which makes the node plugin
+// an NFS metadata server as well as an NVMe-oF initiator: on the host an export
+// is bound to, it makes a filesystem on the namespace, mounts it, and publishes
+// it through the host's own nfsd.
+//
+// Turning it on is not sufficient by itself. The host needs nfs-utils and a
+// running nfsd, and a client host needs blkmapd, neither of which a pod can
+// install; a host missing either fails visibly in the export record's
+// Assembling phase rather than silently serving every byte through the metadata
+// server. See operator/docs/designs/design-pnfs-rwx.md §14.1.
+type DriverPNFS struct {
+	// EnablePNFS gives the node plugin what it needs to assemble exports: the
+	// host's exports directory, and an export root whose mounts the host can
+	// see. It requires EnableLink, because the operator drives assembly by
+	// calling the host over the link.
+	// +kubebuilder:default=false
+	// +optional
+	EnablePNFS *bool `json:"enablePNFS,omitempty"`
+}
+
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
+//
+// The rule is the one dependency between two of its fields that reconciling
+// cannot recover from: the operator assembles a pNFS export by calling the host
+// over csi-link, so pNFS without the link leaves every ReadWriteMany claim in
+// the cluster waiting on a call nothing will make.
+// +kubebuilder:validation:XValidation:rule="!(has(self.pnfs) && has(self.pnfs.enablePNFS) && self.pnfs.enablePNFS) || (has(self.link) && has(self.link.enableLink) && self.link.enableLink)",message="spec.pnfs.enablePNFS requires spec.link.enableLink: the operator assembles exports by calling the metadata-server host over csi-link"
 type SimplyblockDriverSpec struct {
 	// Image is the CSI driver image, used by both plugins. Unset takes the
 	// operator's own registry and tag with the CSI driver's repository, so a
@@ -237,6 +316,17 @@ type SimplyblockDriverSpec struct {
 	// object the way spec.driverName's default cannot be.
 	// +optional
 	TLS DriverTLS `json:"tls,omitempty"`
+
+	// Link configures csi-link, the connection both plugins open to the
+	// operator. Unset is off, the shape every deployment ran before this field
+	// existed.
+	// +optional
+	Link DriverLink `json:"link,omitempty"`
+
+	// PNFS configures pNFS ReadWriteMany support on the node plugin. It
+	// requires Link, which the rule on this type enforces.
+	// +optional
+	PNFS DriverPNFS `json:"pnfs,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from.

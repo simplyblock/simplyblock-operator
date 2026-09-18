@@ -77,7 +77,7 @@ func (ns *Server) NodeUnpublishVolume(
 func (ns *Server) publishVolume(stagingPath string, req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
 
-	fsType := req.GetVolumeCapability().GetMount().GetFsType()
+	fsType := publishFSType(req.GetVolumeId(), req.GetVolumeCapability().GetMount().GetFsType())
 
 	if req.GetVolumeCapability().GetBlock() != nil {
 		stagingParentPath := req.GetStagingTargetPath()
@@ -138,9 +138,17 @@ func (ns *Server) healVolumeBeforePublish(ctx context.Context, req *csi.NodePubl
 		return ns.ensureDeviceConnected(ctx, req.GetVolumeId(), stagingParentPath)
 	case volCap.GetMount() != nil:
 		stagingTargetPath := getStagingTargetPath(req)
-		if ns.mounter.IsDead(stagingTargetPath) {
-			return ns.restageVolume(ctx, req.GetVolumeId(), stagingTargetPath, stagingParentPath, volCap)
+		if !ns.mounter.IsDead(stagingTargetPath) {
+			return nil
 		}
+		// A pNFS volume stashes no volume context, so the generic repair --
+		// which reads that stash -- cannot repair one and would fail on a file
+		// that was never written, stranding the pod behind a publish kubelet
+		// retries forever.
+		if isPNFSVolume(req.GetVolumeId()) {
+			return ns.restagePNFSVolume(ctx, req, stagingTargetPath)
+		}
+		return ns.restageVolume(ctx, req.GetVolumeId(), stagingTargetPath, stagingParentPath, volCap)
 	}
 	return nil
 }

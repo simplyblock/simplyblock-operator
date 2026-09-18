@@ -131,6 +131,17 @@ func (s *Server) GetDeviceByUUID(
 	return &storagev1.GetDeviceByUUIDResponse{Device: deviceToProto(device)}, nil
 }
 
+// GetDeviceByNGUID returns the device whose namespace NGUID matches.
+func (s *Server) GetDeviceByNGUID(
+	ctx context.Context, req *storagev1.GetDeviceByNGUIDRequest,
+) (*storagev1.GetDeviceByNGUIDResponse, error) {
+	device, err := s.devs.ByNGUID(ctx, req.GetNguid())
+	if err != nil {
+		return nil, class.Status(err)
+	}
+	return &storagev1.GetDeviceByNGUIDResponse{Device: deviceToProto(device)}, nil
+}
+
 // GetDeviceByDevicePath returns the device for a block device node.
 func (s *Server) GetDeviceByDevicePath(
 	ctx context.Context, req *storagev1.GetDeviceByDevicePathRequest,
