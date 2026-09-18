@@ -177,8 +177,8 @@ func TestGetVolumeReplicationInfo(t *testing.T) {
 	mock.replicationStatus[testReplVolumeID] = map[string]any{
 		"role": "source", "state": "in_sync",
 		"last_replicated_at": "2026-09-17T12:00:00Z",
-		"lag_seconds":         42,
-		"outstanding_count":   0, "outstanding_bytes": 0,
+		"lag_seconds":        42,
+		"outstanding_count":  0, "outstanding_bytes": 0,
 		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
 	}
 
@@ -225,4 +225,3 @@ func TestGetVolumeReplicationInfoUnknownVolume(t *testing.T) {
 		t.Errorf("code = %v, want NotFound", st.Code())
 	}
 }
-

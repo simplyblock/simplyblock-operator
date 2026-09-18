@@ -91,7 +91,13 @@ type SidecarImages struct {
 	// kubernetes-csi-addons controller-manager (design
 	// design-csi-addons-replication.md §4.1) can reach the Replication
 	// service this driver serves.
-	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	//
+	// Unlike the other sidecars above, this one's upstream home is the
+	// csi-addons project's own registry, not simplyblock's: the allowlist
+	// carries quay.io/csiaddons alongside the simplyblock registries so a
+	// deployment can run the stock kubernetes-csi-addons sidecar image
+	// directly, ahead of (or instead of) a quay.io/simplyblock-io mirror.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block|quay\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	CSIAddons string `json:"csiAddons,omitempty"`
 }
