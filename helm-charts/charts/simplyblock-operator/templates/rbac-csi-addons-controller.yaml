@@ -93,6 +93,24 @@ rules:
       - patch
       - update
       - watch
+  # rbac-justified: an addition beyond the stock upstream manifest, which
+  # omits this too (it's an opt-in feature, not something every deployment
+  # uses). The manager's sidecar-facing ReplicationServer proxy
+  # (internal/sidecar/service/volumereplication.go) hard-requires resolving
+  # a Secret named by VolumeReplicationClass's
+  # replication.storage.openshift.io/replication-secret-name(space)
+  # parameters before it will proxy ANY Replication RPC, even to a driver
+  # (like this one) that never reads the secret's own contents -- confirmed
+  # against a live cluster, where every EnableVolumeReplication attempt
+  # failed with "Failed to get secret ... resource name may not be empty"
+  # before ever reaching the sidecar. get only, no list/watch: the manager
+  # reads one named Secret per VolumeReplicationClass, never enumerates.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
   - apiGroups:
       - ""
     resources:
