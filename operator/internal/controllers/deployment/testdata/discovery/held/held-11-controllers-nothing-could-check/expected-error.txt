@@ -1,0 +1,1 @@
+no worker has a device this run would use: worker-01: it presents no usable block device, and whether anything is driving 2 of its NVMe controllers (0000:5e:00.0 on uio_pci_generic, 0000:5f:00.0 on uio_pci_generic) could not be established, so they are not offered

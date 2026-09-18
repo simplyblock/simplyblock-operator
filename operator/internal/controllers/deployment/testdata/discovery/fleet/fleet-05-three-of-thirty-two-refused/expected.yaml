@@ -1,0 +1,61 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-fleet-05
+  name: discovered-discover-fleet-05
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-fleet-05-cluster
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+        - 0000:af:00.0
+        - 0000:b0:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-01
+      - worker-02
+      - worker-03
+      - worker-04
+      - worker-05
+      - worker-06
+      - worker-07
+      - worker-08
+      - worker-09
+      - worker-10
+      - worker-12
+      - worker-13
+      - worker-14
+      - worker-15
+      - worker-16
+      - worker-17
+      - worker-18
+      - worker-19
+      - worker-20
+      - worker-21
+      - worker-23
+      - worker-24
+      - worker-25
+      - worker-26
+      - worker-27
+      - worker-28
+      - worker-29
+      - worker-30
+      - worker-31
+      - worker-32
+    name: discovered
+status:
+  step: {}

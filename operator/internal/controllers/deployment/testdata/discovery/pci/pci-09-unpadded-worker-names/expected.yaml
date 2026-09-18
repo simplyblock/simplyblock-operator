@@ -1,0 +1,72 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-pci-09
+  name: discovered-discover-pci-09
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-pci-09-cluster
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+        - 0000:af:00.0
+        - 0000:b0:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-1
+      - worker-10
+      - worker-11
+      - worker-12
+      - worker-13
+      - worker-14
+      - worker-15
+      - worker-16
+      - worker-2
+      - worker-3
+      - worker-4
+      - worker-5
+      - worker-6
+      - worker-7
+      - worker-8
+      - worker-9
+    - devices:
+        nvme:
+        - 0000:3b:00.0
+        - 0000:3c:00.0
+        - 0000:d8:00.0
+        - 0000:d9:00.0
+      mgmtInterface: eth0
+      name: group-2-nvme-4x3T
+      workers:
+      - worker-17
+      - worker-18
+      - worker-19
+      - worker-20
+      - worker-21
+      - worker-22
+      - worker-23
+      - worker-24
+      - worker-25
+      - worker-26
+      - worker-27
+      - worker-28
+      - worker-29
+      - worker-30
+      - worker-31
+      - worker-32
+    name: discovered
+status:
+  step: {}
