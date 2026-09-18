@@ -356,6 +356,27 @@ can, and `DeviceNotFound` in `status.message` is what says so while the document
 is still editable. Approving without reading it is how a device mistake becomes
 an immutable document, and no mechanism below the reviewer prevents that.
 
+**The erasure coding is the other thing only this operator checks.** A scheme
+decides how many storage nodes the deployment must have: `ndcs+npcs` of them to
+place a stripe across, plus one spare per tolerated failure to rebuild onto,
+which is 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for 1+2, 6 for 2+2, and 8 for 4+2.
+The control plane validates the scheme itself on the cluster create and counts
+devices at activation — `ndcs+npcs+1` of them — and never nodes, so a fleet of
+four configured 4+2 is admitted everywhere below this document and produces a
+cluster that loses data on the second failure it was configured to survive.
+Validation counts the nodes the document produces, one per slot per worker, adds
+the ones the cluster already has for a growth document, and reports
+`StripeBelowMinimumNodes` when the total is short. A document that says nothing
+about erasure coding is counted as 1+1, because that is what the control plane
+defaults to.
+
+**Nodes that share a worker are counted, and then counted again.** The minimum is
+a node count, and a fleet that reaches it by running several nodes per socket on
+two workers has not bought the independent spare the count was asking for, since
+every node of a worker fails with the worker. `StripeBelowMinimumWorkers` is that
+case reported separately, so that the remedy — another machine rather than
+another slot — is the one stated.
+
 ### 4.2 The expansion machine
 
 ```
@@ -476,10 +497,20 @@ it found in `status.message` (§4.1) so that a reviewer fixes it in place.
 API.** Every worker named by every group has to exist as a Node,
 `spec.clusterRef` has to resolve to a `StorageCluster` when it is set and to
 nothing when it is not (§6), the class the groups name has to match that cluster's
-`spec.deviceClass` where one is named, and no other approved config may already
-own the cluster this one would create. All four are answerable from objects the
-operator already caches, which is what makes them cheap enough to answer inside an
-admission request.
+`spec.deviceClass` where one is named, no other approved config may already own
+the cluster this one would create, and the deployment has to have the storage
+nodes its erasure-coding scheme requires (§4.1). All five are answerable from
+objects the operator already caches, which is what makes them cheap enough to
+answer inside an admission request.
+
+**The erasure-coding check is the one with nothing behind it.** The other four
+are refused again later by something — a node create, the expansion's own
+refusals — where this one is refused by nothing: the control plane accepts a
+cluster whose fleet is too small for its stripe, activates it, and serves from
+it. The schema refuses an unsupported scheme at the apply, which is CEL's half
+(`StripeSpec` in
+[`design-storagecluster.md`](design-storagecluster.md) §3.1), and the node count
+is this webhook's, because a schema cannot count objects that do not exist yet.
 
 **The class check is the one of the four that has a schema half.** That every
 group agrees is CEL's (§3.1), and it holds from the first draft. What admission
@@ -816,25 +847,28 @@ Both kinds are new, so both tables are new infrastructure.
 
 ### 9.1 Kubernetes events
 
-| Event                                                    | Type      | Reason                   | On                        |
-|----------------------------------------------------------|-----------|--------------------------|---------------------------|
-| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`         | `ClusterDeploymentConfig` |
-| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`         | `ClusterDeploymentConfig` |
-| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`    | `ClusterDeploymentConfig` |
-| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`       | `ClusterDeploymentConfig` |
-| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`   | `ClusterDeploymentConfig` |
-| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`          | `ClusterDeploymentConfig` |
-| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`        | `ClusterDeploymentConfig` |
-| Expansion created the cluster                            | `Normal`  | `ClusterCreated`         | `ClusterDeploymentConfig` |
-| Expansion created the nodes                              | `Normal`  | `NodesCreated`           | `ClusterDeploymentConfig` |
-| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`   | `ClusterDeploymentConfig` |
-| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed` | `OperatorOps`             |
-| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`          | `OperatorOps`             |
-| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`        | `OperatorOps`             |
-| The run started                                          | `Normal`  | `OperationStarted`       | `OperatorOps`             |
-| The operation finished successfully                      | `Normal`  | `OperationSucceeded`     | `OperatorOps`             |
-| The operation failed                                     | `Warning` | `OperationFailed`        | `OperatorOps`             |
-| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`       | `OperatorOps`             |
+| Event                                                    | Type      | Reason                      | On                        |
+|----------------------------------------------------------|-----------|-----------------------------|---------------------------|
+| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`            | `ClusterDeploymentConfig` |
+| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`            | `ClusterDeploymentConfig` |
+| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`       | `ClusterDeploymentConfig` |
+| A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`         | `ClusterDeploymentConfig` |
+| A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`   | `ClusterDeploymentConfig` |
+| A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers` | `ClusterDeploymentConfig` |
+| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`          | `ClusterDeploymentConfig` |
+| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`      | `ClusterDeploymentConfig` |
+| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`             | `ClusterDeploymentConfig` |
+| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`           | `ClusterDeploymentConfig` |
+| Expansion created the cluster                            | `Normal`  | `ClusterCreated`            | `ClusterDeploymentConfig` |
+| Expansion created the nodes                              | `Normal`  | `NodesCreated`              | `ClusterDeploymentConfig` |
+| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`      | `ClusterDeploymentConfig` |
+| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed`    | `OperatorOps`             |
+| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`             | `OperatorOps`             |
+| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`           | `OperatorOps`             |
+| The run started                                          | `Normal`  | `OperationStarted`          | `OperatorOps`             |
+| The operation finished successfully                      | `Normal`  | `OperationSucceeded`        | `OperatorOps`             |
+| The operation failed                                     | `Warning` | `OperationFailed`           | `OperatorOps`             |
+| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`          | `OperatorOps`             |
 
 **No event reports a rejected approval.** An admission rejection fails the
 request, so what the administrator gets is the webhook's message on their own
