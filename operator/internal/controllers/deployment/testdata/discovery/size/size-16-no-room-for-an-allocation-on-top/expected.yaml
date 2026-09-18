@@ -13,6 +13,9 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 200G
     name: discovered-discover-size-16-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 0
     vcpuCount: 16
   environment: K3s
   nodeSets:

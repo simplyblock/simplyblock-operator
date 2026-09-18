@@ -13,6 +13,9 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-tmpl-06-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
     vcpuCount: 8
   environment: K3s
   nodeSets:
