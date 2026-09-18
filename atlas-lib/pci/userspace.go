@@ -71,12 +71,12 @@ func HeldBy(cfg Config, device Device) ([]Holder, error) {
 // CheckHolders fills in InUse for every device given, and returns what it could
 // not determine alongside the devices it could.
 //
-// The failures are returned rather than folded into InUse because the two are
-// not the same answer. A device nothing holds and a device that could not be
-// checked both leave InUse false, and only one of them is safe to reclaim, so a
-// caller that drops the error has quietly turned unknown into free. The
-// devices come back either way: a machine whose process table could not be read
-// still has controllers worth reporting.
+// The failures are returned as well as left on the device, because the two
+// answers are not the same. A device nothing holds and a device that could not
+// be checked are a set InUse and a nil one, and only the first is safe to
+// reclaim: a caller reading the field gets the distinction whether or not it
+// reads the error. The devices come back either way, since a machine whose
+// process table could not be read still has controllers worth reporting.
 func CheckHolders(cfg Config, devices []Device) ([]Device, error) {
 	out := make([]Device, 0, len(devices))
 	var errs []error
@@ -97,7 +97,8 @@ func CheckHolders(cfg Config, devices []Device) ([]Device, error) {
 			out = append(out, device)
 			continue
 		}
-		device.InUse = len(holders) > 0
+		held := len(holders) > 0
+		device.InUse = &held
 		out = append(out, device)
 	}
 	return out, errors.Join(errs...)

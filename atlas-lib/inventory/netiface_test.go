@@ -105,6 +105,7 @@ func TestReadInterfacesReportsAPhysicalNICWhole(t *testing.T) {
 		Driver:     "mlx5_core",
 		PCIAddress: "0000:3b:00.0",
 		NUMANode:   0,
+		Kind:       LinkPhysical,
 	}
 	if got := byName(t, ifaces, "eth0"); !reflect.DeepEqual(got, want) {
 		t.Errorf("read %+v, want %+v", got, want)

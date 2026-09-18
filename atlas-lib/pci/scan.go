@@ -119,16 +119,31 @@ type Device struct {
 	// was the one in slot 02.0.
 	UIODevices []string
 
-	// InUse reports whether anything holds one of UIODevices open.
+	// InUse reports whether anything holds one of UIODevices open, and is nil
+	// for a device nothing asked about.
 	//
-	// [Scan] does not set it, because answering needs the process table and a
-	// scan reads sysfs. [CheckHolders] fills it in, and a false on a device
-	// neither of them looked at is the zero value rather than an answer: a
-	// caller that needs to tell the two apart has to know which produced the
-	// device, which is why the check records its failures rather than leaving
-	// this field to carry them.
-	InUse bool
+	// The three states are the point. [Scan] does not set it, because answering
+	// needs the process table and a scan reads sysfs; [CheckHolders] sets it on
+	// every device it could check and leaves it nil on every device it could
+	// not. A device nothing holds and a device whose process table could not be
+	// read are then different values rather than one, which is what keeps a
+	// caller from reclaiming a disk it never established was free.
+	//
+	// Read it through [Device.Held] and [Device.Free], which are the two
+	// questions a caller actually has and neither of which is the negation of
+	// the other.
+	InUse *bool
 }
+
+// Held reports whether something is known to hold the device open.
+//
+// A device nothing checked is not held, because nothing established that it
+// was. It is not free either: see [Device.Free].
+func (d Device) Held() bool { return d.InUse != nil && *d.InUse }
+
+// Free reports whether the device was checked and found to be held by nothing,
+// which is the only state in which it is safe to take.
+func (d Device) Free() bool { return d.InUse != nil && !*d.InUse }
 
 // IsNVMe reports whether the device is an NVMe controller.
 func (d Device) IsNVMe() bool { return strings.HasPrefix(d.Class, classNVMePrefix) }

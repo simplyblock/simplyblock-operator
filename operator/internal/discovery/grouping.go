@@ -55,12 +55,16 @@ type Worker struct {
 	// was given no node objects.
 	Kube KubeNode
 
-	// MgmtInterface is the interface the draft names for management, or empty
-	// when the machine presents none that would serve. It is part of what makes
-	// two workers groupable: a NodeGroup names one interface for every worker in
-	// it, so machines that call theirs different things describe different
-	// groups however identical their disks are.
-	MgmtInterface string
+	// Mgmt is the interface the draft names for management, with what the stack
+	// says about it: the physical interfaces underneath a bond or a bridge, the
+	// speed they add up to, and the memory node they sit on. Its name is empty
+	// when the machine presents no interface that would serve.
+	//
+	// The name is part of what makes two workers groupable: a NodeGroup names
+	// one interface for every worker in it, so machines that call theirs
+	// different things describe different groups however identical their disks
+	// are.
+	Mgmt Management
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -132,14 +136,14 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses, worker.MgmtInterface)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name)
 
 		group, seen := bySignature[signature]
 		if !seen {
 			group = &Group{
 				Class:         worker.Class,
 				Addresses:     addresses,
-				MgmtInterface: worker.MgmtInterface,
+				MgmtInterface: worker.Mgmt.Name,
 			}
 			bySignature[signature] = group
 			order = append(order, signature)

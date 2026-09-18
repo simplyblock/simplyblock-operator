@@ -353,19 +353,19 @@ func TestCheckHoldersMarksOnlyTheDeviceSomethingHolds(t *testing.T) {
 	// The holder is a hypervisor rather than this product, which changes
 	// nothing: the question is whether anything is driving the disk.
 	held := nvmeSlot(t, checked, "0000:00:02.0")
-	if !held.InUse {
+	if !held.Held() {
 		t.Error("a controller a process holds open is not marked in use")
 	}
 	idle := nvmeSlot(t, checked, "0000:00:03.0")
-	if idle.InUse {
-		t.Error("a controller nothing holds is marked in use")
+	if !idle.Free() {
+		t.Error("a controller nothing holds is not marked free")
 	}
 }
 
-// The failure that matters: a process table that cannot be read leaves InUse
-// false, and the only thing standing between that and a reclaimed disk is the
-// error. So it is returned rather than swallowed, and the devices come back
-// regardless, because a machine whose procfs is unreadable still has
+// The failure that matters: a process table that cannot be read leaves the
+// answer unset rather than false, so a device nothing established as free is
+// not one a caller can take. The error is returned as well, and the devices
+// come back regardless, because a machine whose procfs is unreadable still has
 // controllers worth reporting.
 func TestCheckHoldersReportsWhatItCouldNotDetermine(t *testing.T) {
 	h := takenWorker()
@@ -387,8 +387,11 @@ func TestCheckHoldersReportsWhatItCouldNotDetermine(t *testing.T) {
 		t.Fatal("the controllers were dropped along with the answer")
 	}
 	for _, device := range checked {
-		if device.InUse {
+		if device.Held() {
 			t.Errorf("%s was marked in use by a check that never ran", device.Address)
+		}
+		if device.Free() {
+			t.Errorf("%s was marked free by a check that never ran", device.Address)
 		}
 	}
 }
