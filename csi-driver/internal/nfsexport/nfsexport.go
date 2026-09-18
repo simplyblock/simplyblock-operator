@@ -1,19 +1,15 @@
 // Package nfsexport wires the node's export assembler to the pieces the CSI
 // driver already owns.
 //
-// Everything substantive is in atlas: assembling an export is atlas/export, and
-// carrying the call is atlas/export/exportrpc. What lives here is the join --
-// connecting the namespace, answering whether a device is blank, and running
-// the commands -- because those are the driver's own seams and atlas has no
-// business knowing them.
+// Everything substantive is in atlas/export; what lives here is the join, which
+// is the driver's own seams.
 //
-// The theme running through this package is that an export is the host's, not
-// this container's. Its kernel mounts the filesystem, its nfsd serves it, and
-// its userspace has to be able to make it, so mkfs, mount, and exportfs all run
-// in the host's namespace with the host's tools (filesystem.go, runner in
-// hostCommand). What stays here is what is genuinely the driver's: the
-// control-plane client that says where a namespace lives, and the blkid probe
-// that decides whether formatting one would destroy something.
+// The theme is that an export is the host's, not this container's: its kernel
+// mounts the filesystem, its nfsd serves it, and its userspace has to be able to
+// make it. So mkfs, mount, and exportfs run in the host's namespace with the
+// host's tools (filesystem.go). What stays here is the driver's: the
+// control-plane client, and the blkid probe that decides whether formatting
+// would destroy something.
 package nfsexport
 
 import (

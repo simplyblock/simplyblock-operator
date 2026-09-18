@@ -1,17 +1,13 @@
-// NFSExportReconciler drives one pNFS export from creation to Ready and back
-// out again: it picks the MDS host, asks that host to assemble the export, and
-// is the only writer of the binding that says which host may have the
-// filesystem mounted.
+// NFSExportReconciler drives one pNFS export from creation to Ready and back.
 //
-// The binding is the point. A single XFS can be mounted by exactly one node, so
-// status.storageNodeRef is a mutual-exclusion field rather than a label: no
-// second host becomes a candidate until this controller rewrites it, under
-// optimistic concurrency. Getting that wrong destroys data rather than degrading
-// service, which is why the field is in status where a user edit cannot race it.
+// status.storageNodeRef is mutual exclusion, not a label: one XFS may be
+// mounted by exactly one node, so no second host becomes a candidate until this
+// controller rewrites the field under optimistic concurrency. It lives in
+// status so a user edit cannot race it. Getting it wrong destroys data rather
+// than degrading service.
 //
-// The phases are a declared graph rather than a switch over strings, so an
-// illegal jump is an error at the transition instead of silently skipped work,
-// and the position survives a restart through the snapshot in status.
+// The phases are a declared graph, so an illegal jump errors at the transition
+// instead of silently skipping work, and the position survives a restart.
 
 package controller
 
@@ -75,25 +71,18 @@ const (
 	nfsExportFreshCopyRequeue = time.Second
 )
 
-// ExportAssembler is the host-side half of an export: the operations this
-// controller drives on the MDS host over csi-link.
-//
-// It is an interface because the controller is complete without the transport
-// and must be testable without a node. The implementation that reaches a real
-// host lands with the csi-link export service; until then a reconcile against a
-// host that cannot be reached is a requeue, which is the same thing the
-// controller does for a node that is merely disconnected.
+// ExportAssembler is the host-side half of an export: what this controller
+// drives on the MDS host over csi-link. An interface so the controller is
+// testable without a node.
 type ExportAssembler interface {
 	// CreateExport assembles the export on the named node: attach the
-	// namespace, make or find the filesystem, mount it, and publish it. It is
-	// idempotent, because a reconcile that died mid-assembly will call it
-	// again.
+	// namespace, make or find the filesystem, mount it, and publish it.
+	// Idempotent, because a reconcile that died mid-assembly calls it again.
 	//
-	// It returns the NGUID the host observed on the namespace, which is the
-	// only place that value can come from: the target assigns it and a host
-	// reads it off the device, so neither provisioning nor this controller
-	// knows it. An empty string means the host could not report one, which is
-	// not an assembly failure.
+	// It returns the NGUID the host observed, which is the only place that
+	// value can come from: the target assigns it and a host reads it off the
+	// device. Empty means the host could not report one, which is not a
+	// failure.
 	CreateExport(ctx context.Context, nodeName string, export *simplyblockv1alpha2.NFSExport) (string, error)
 	// DeleteExport tears the export down on the named node in reverse order. It
 	// is idempotent and treats an already-absent export as success, because the
@@ -262,19 +251,12 @@ func (r *NFSExportReconciler) reconcilePending(
 }
 
 // workerNodeFor resolves status.storageNodeRef to the Kubernetes node the link
-// addresses.
+// addresses. They are two names for two objects, and spec.workerNode is the
+// mapping.
 //
-// They are two names for two objects and neither is derivable from the other: a
-// StorageNode is named by the set that created it and a Kubernetes node by its
-// hostname. spec.workerNode is the mapping, and the csi-node plugin registers
-// its link peer under the Kubernetes name, so this is what every call to the
-// assembler has to be given.
-//
-// Passing the StorageNode name instead fails silently, which is why this is a
-// function rather than a field access: HasSession returns false for a name no
-// peer registered under, the reconciler reads that as a host that is merely
-// disconnected, and the export waits out its deadline and reports a timeout
-// that names the wrong problem.
+// Passing the StorageNode name instead fails silently: HasSession returns false
+// for a name no peer registered under, which reads as a disconnected host, so
+// the export waits out its deadline and reports the wrong problem.
 func (r *NFSExportReconciler) workerNodeFor(ctx context.Context, ref string) (string, error) {
 	if ref == "" {
 		return "", nil

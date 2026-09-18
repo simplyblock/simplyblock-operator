@@ -2,18 +2,13 @@
 //
 // The driver image is built on a newer base than the hosts it runs on, and that
 // is not a detail: the container's mkfs.xfs enables on-disk features the host
-// kernel does not know, so a filesystem made in the container formats cleanly
-// and then cannot be mounted at all: the kernel reports a superblock with
-// unknown incompatible features, naming a flag rather than the version skew
-// behind it.
+// kernel does not know, so a filesystem made there formats cleanly and then
+// cannot be mounted, with the kernel naming a feature flag rather than the
+// version skew behind it.
 //
-// So the filesystem is made and mounted with the host's own tools, in the
-// host's mount namespace, for the same reason exportfs runs there: this
-// filesystem is the host's. Its kernel mounts it, its nfsd serves it, and its
-// userspace has to be able to make it.
-//
-// It also removes the last thing that depended on the export mount propagating
-// out of the container, which was true but delicate.
+// So it is made and mounted with the host's own tools, for the same reason
+// exportfs runs there: the filesystem is the host's. That also removes the last
+// dependency on the export mount propagating out of the container.
 
 package nfsexport
 

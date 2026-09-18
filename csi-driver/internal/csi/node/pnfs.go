@@ -1,15 +1,12 @@
-// The pNFS client path: what NodeStageVolume does when the volume is an export
-// rather than a block device.
+// The pNFS client path: what NodeStageVolume does for an export rather than a
+// block device.
 //
-// The shape is the ordinary one plus a device alias. The namespace is attached
-// exactly as it is for a block volume, because a pNFS client is an NVMe-oF
-// initiator for the same namespace the MDS made the filesystem on -- that is
-// the whole point, and it is why the data path bypasses the metadata server.
-// What is added is a name: the kernel builds a /dev/disk/by-id path from the
-// designator the MDS advertises, and nothing creates that path on its own.
-//
-// Then an ordinary NFSv4.1 mount, and the kernel does the rest: LAYOUTGET on
-// first I/O, then reads and writes straight to the namespace.
+// A pNFS client is an NVMe-oF initiator for the same namespace the MDS made the
+// filesystem on, which is why the data path bypasses the metadata server. So
+// the shape is the ordinary one plus a device alias: the kernel builds a
+// /dev/disk/by-id path from the designator the MDS advertises, and nothing
+// creates that path on its own. Then an NFSv4.1 mount, and the kernel does the
+// rest.
 
 package node
 
@@ -140,15 +137,10 @@ func mountOptions(extra string) []string {
 
 // stagePNFS attaches the export at the staging path.
 //
-// The mounter is the host's, not the driver's own. mount(8) hands an NFS mount
-// to /sbin/mount.nfs, a helper from nfs-utils that this image does not carry --
-// and a host that may run a ReadWriteMany pod needs nfs-utils anyway, so
-// shipping a second copy would be two things to keep in step. Mounting on the
-// host also puts the mount straight where kubelet looks instead of relying on
-// it propagating out of the container.
-//
-// Nothing here formats. The filesystem was made by the metadata server, and a
-// client that could format one would be a client that could destroy it.
+// The mounter is the host's: mount(8) hands an NFS mount to /sbin/mount.nfs,
+// from nfs-utils, which this image does not carry and a host running an RWX pod
+// needs anyway. Nothing here formats -- the filesystem is the metadata
+// server's, and a client that could format one could destroy it.
 func stagePNFS(
 	ctx context.Context,
 	mounter nfsexport.HostMounter,
@@ -194,28 +186,24 @@ func stagePNFS(
 	return nil
 }
 
-// primeLayoutFile is the file priming writes. It is removed immediately, and
-// the name says what it was for in case a crash leaves one behind.
+// primeLayoutFile is removed immediately; the name says what it was for in case
+// a crash leaves one behind.
 const primeLayoutFile = ".simplyblock-pnfs-layout-probe"
 
-// primeLayout triggers the first LAYOUTGET on a freshly mounted export, from
-// this process rather than from a pod.
+// primeLayout triggers the first LAYOUTGET, from this process rather than a pod.
 //
-// The client resolves a block layout's device by opening
-// /dev/disk/by-id/nvme-eui.<nguid>, and it resolves that path in the mount
-// namespace of whichever process caused the I/O. A pod's /dev is the minimal
-// one kubelet builds and has no disk/ in it, so a layout first requested by the
-// application cannot resolve. The failure is not a one-off either: the client
-// marks the device unavailable for two minutes and sets the layout's
-// read-write fail bit, so everything afterward skips pNFS and routes through
-// the metadata server -- which is FM-2, and looks exactly like working.
+// The client resolves a layout's device by opening
+// /dev/disk/by-id/nvme-eui.<nguid>, in the mount namespace of whichever process
+// caused the I/O. A pod's /dev is kubelet's minimal one and has no disk/, so a
+// layout the application asks for first can never resolve -- and the failure
+// sticks: the device is marked unavailable for two minutes and the layout's
+// read-write fail bit is set, so everything after it routes through the
+// metadata server. That is FM-2, and it looks exactly like working.
 //
-// This container mounts the host's /dev, so doing it here resolves the device
-// and leaves it in the client's device cache, which is per-client rather than
-// per-file. One touch per mount is enough for every file a pod later opens.
-//
-// The file is written and removed. A read would not do: a layout is per-inode
-// and a freshly made filesystem has nothing to read.
+// This container mounts the host's /dev. Resolving here leaves the device in
+// the client's cache, which is per-client, so one touch covers every file a pod
+// later opens. It writes rather than reads because a layout is per-inode and a
+// fresh filesystem has nothing to read.
 func primeLayout(ctx context.Context, stagingPath string) error {
 	// Nothing here is cancellable once started -- the file operations below are
 	// plain syscalls against a mount that can hang -- so the context is checked
@@ -301,13 +289,10 @@ func backingVolumeOf(volumeHandle string) (export.Spec, bool) {
 
 // stagePNFSVolume connects the backing namespace and mounts the export.
 //
-// The connect is not optional and not somebody else's: a pNFS client is an
-// NVMe-oF initiator for the same namespace the MDS made the filesystem on --
-// that is what lets the data path bypass the metadata server -- and the block
-// branch of NodeStageVolume is the other branch, so for a pNFS volume it never
-// runs. Without this the mount still succeeds, the client finds no local device
-// for the layout, and every byte routes through the metadata server, which
-// looks exactly like working.
+// The connect is not somebody else's: the block branch of NodeStageVolume is
+// the branch a pNFS volume does not take, so nothing else runs it. Without it
+// the mount succeeds, the client finds no local device for the layout, and
+// every byte routes through the metadata server -- which looks like working.
 func (ns *Server) stagePNFSVolume(
 	ctx context.Context,
 	req *csi.NodeStageVolumeRequest,
@@ -397,17 +382,12 @@ func (ns *Server) namespaceIdentity(
 	return nguid, device.Namespace.DevicePath, nil
 }
 
-// unstagePNFSVolume unmounts the export, drops the device alias, and gives the
-// namespace back.
+// unstagePNFSVolume unmounts the export, drops the alias, and detaches.
 //
-// The order is the reverse of staging and it matters: detaching under a live
-// mount leaves a filesystem over a device that is gone, which is an EIO every
-// process in it has to be killed to clear.
-//
-// The NGUID is read before the unmount, because the alias is named by it and
-// the device is what reports it: once the namespace is detached there is
-// nothing left to ask, and the alias would be left behind pointing at a device
-// node the next attach may hand to something else.
+// The order is staging's in reverse and it matters: detaching under a live
+// mount leaves a filesystem over a device that is gone, an EIO every process in
+// it must be killed to clear. The NGUID is read first because the device is
+// what reports it, and after detaching there is nothing left to ask.
 func (ns *Server) unstagePNFSVolume(
 	ctx context.Context, stagingTargetPath string, spec export.Spec,
 ) error {

@@ -1,19 +1,17 @@
 // The pNFS volume handle: the identifier an RWX volume is addressed by, and
 // the parsing that tells it apart from the three-part lvol handle beside it.
 //
-// It lives in its own file rather than in handle.go because the two forms name
-// different things. An lvol handle names a volume the control plane owns. A
-// pNFS handle names an export the operator owns, and the lvol behind it is read
-// from the NFSExport record instead of from the handle. Keeping the parsers
-// apart is what stops an export UUID reaching code that would use it to address
-// an lvol.
+// Its own file because the two forms name different things: an lvol handle names
+// a volume the control plane owns, a pNFS handle names an export the operator
+// owns. Keeping the parsers apart stops an export UUID reaching code that would
+// address an lvol with it.
 package lvol
 
 import "strings"
 
-// nfsHandlePrefix marks a handle as naming a pNFS export rather than an lvol.
-// It is matched exactly: a handle that differs by case belongs to something
-// else, and guessing which would be how a volume ends up addressed as another.
+// nfsHandlePrefix marks a handle as a pNFS export. Matched exactly: a handle
+// differing by case belongs to something else, and guessing which is how one
+// volume ends up addressed as another.
 const nfsHandlePrefix = "nfs"
 
 // nfsHandleSegments is the segment count of the pNFS form, the prefix included.

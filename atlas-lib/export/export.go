@@ -1,21 +1,14 @@
 // Package export assembles and tears down a pNFS export on the host that acts
 // as its metadata server.
 //
-// An export is a filesystem on one NVMe-oF namespace, mounted at a path, and
+// An export is a filesystem on one NVMe-oF namespace, mounted at a path and
 // published through the host's nfsd. Assembling one is four steps and tearing it
-// down is those four in reverse, and both have to be safe to re-run: the caller
-// is a reconciler, so every step is skipped when it is already satisfied rather
-// than repeated.
+// down is those four in reverse. The caller is a reconciler, so every step is
+// skipped when already satisfied rather than repeated.
 //
-// It lives in atlas rather than in the CSI driver because none of it is
-// Kubernetes-shaped. Finding a device by its NGUID, deciding whether a device is
-// blank, mounting it, and writing an exports drop-in are node-level operations,
-// and the operator reaches them over a link rather than owning them.
-//
-// What this package does not do is attach the namespace. The device is expected
-// to be present, because connecting it is the CSI driver's existing NVMe-oF
-// path, with its own reconnect and monitoring, and a second connect
-// implementation is the thing that path exists to avoid.
+// It is in atlas because none of it is Kubernetes-shaped: finding a device,
+// deciding whether it is blank, mounting it, and writing an exports drop-in are
+// node-level operations the operator reaches over a link.
 package export
 
 import (

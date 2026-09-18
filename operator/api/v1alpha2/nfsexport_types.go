@@ -1,25 +1,13 @@
-// NFSExport is one pNFS export: the RWX volume it serves, the MDS host serving
-// it, and the address clients mount. It is the authoritative record of the
-// binding between a volume and the single host that may have its filesystem
-// mounted, which is the invariant that keeps two hosts from mounting one XFS.
+// NFSExport is one pNFS export: the volume it serves, the host serving it, and
+// the address clients mount. It records the binding between a volume and the
+// single host that may mount its filesystem, which is what keeps two hosts from
+// mounting one XFS.
 //
-// The record is a CRD rather than a control-plane object because every consumer
-// is in-cluster: the CSI controller creates it while provisioning, csi-node
-// reads it while staging, and the operator rewrites it while draining or failing
-// over a host. A CRD gives those consumers a watch, and single-writer semantics
-// on the bound host come free from resourceVersion. The control plane has no NFS
-// concept at all, so putting the record there would mean inventing a backend
-// domain object for something that only exists inside Kubernetes.
+// It is a CRD because every consumer is in-cluster and the control plane has no
+// NFS concept to hang it on. v1alpha2 because the kind is new, so there is
+// nothing to convert from.
 //
-// The kind is declared in v1alpha2 rather than v1alpha1 because it is new:
-// nothing ever shipped a v1alpha1 spelling, so there is no older representation
-// to convert from. That is why this file carries no conversion and the type
-// implements no hub interface. The design document names v1alpha1 only because
-// it predates the group's move.
-//
-// The type follows design-pnfs-rwx.md section 7.1. Where it departs, the reason
-// is a convention the design predates, and each departure is commented at the
-// field.
+// Follows design-pnfs-rwx.md §7.1; departures are commented at the field.
 
 package v1alpha2
 
@@ -32,23 +20,19 @@ import (
 type NFSExportPhase string
 
 const (
-	// NFSExportPhasePending is an export with no MDS host bound yet. A newly
-	// created record starts here, and the reconciler leaves it here while no
-	// eligible host exists, which is a wait rather than a failure.
+	// NFSExportPhasePending is an export with no host bound yet. It stays here
+	// while no host is eligible, which is a wait rather than a failure.
 	NFSExportPhasePending NFSExportPhase = "Pending"
-	// NFSExportPhaseAssembling is an export whose bound host is building it:
-	// attaching the namespace, making or finding the filesystem, mounting, and
-	// publishing the export.
+	// NFSExportPhaseAssembling is the bound host attaching the namespace,
+	// making or finding the filesystem, mounting, and publishing it.
 	NFSExportPhaseAssembling NFSExportPhase = "Assembling"
 	// NFSExportPhaseReady is an export a client can mount.
 	NFSExportPhaseReady NFSExportPhase = "Ready"
-	// NFSExportPhaseDegraded is an export that exists but cannot serve its
-	// purpose, and that the operator will not act further on without help. A
-	// failover whose fence could not be confirmed lands here deliberately: a
-	// stalled export is recoverable and a double-mounted one is not.
+	// NFSExportPhaseDegraded is an export the operator will not act further on
+	// without help. Reached by declining to act: a stalled export is
+	// recoverable and a double-mounted one is not.
 	NFSExportPhaseDegraded NFSExportPhase = "Degraded"
-	// NFSExportPhaseDeleting is an export being torn down, with the finalizer
-	// still held.
+	// NFSExportPhaseDeleting is an export being torn down.
 	NFSExportPhaseDeleting NFSExportPhase = "Deleting"
 )
 

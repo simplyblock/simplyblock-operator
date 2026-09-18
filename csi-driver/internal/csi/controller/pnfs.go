@@ -1,16 +1,13 @@
 // The RWX provisioning path: what CreateVolume does differently when the claim
 // asks for MULTI_NODE_MULTI_WRITER.
 //
-// The shape of it is that the CSI controller creates two things and then stops.
-// It creates the backing volume, and it creates the NFSExport record that says
-// one exists and needs serving. Everything after that -- choosing the MDS host,
-// driving the host, the Service, drain, failover -- belongs to the operator, and
-// keeping the split there is what keeps provisioning out of the failover path.
+// The controller creates two things and stops: the backing volume, and the
+// NFSExport record saying one exists and needs serving. Everything after that
+// is the operator's, which is what keeps provisioning out of the failover path.
 //
-// The controller therefore never calls a node and never picks a host. It waits
-// for the record to say Ready, and reports Aborted while it is not, which is the
-// existing convention for asynchronous work behind a CSI call: the external
-// provisioner retries rather than the RPC being held open.
+// So it never calls a node and never picks a host. It waits for the record to
+// say Ready and reports Aborted until then, the existing convention for
+// asynchronous work behind a CSI call.
 
 package controller
 
@@ -182,14 +179,12 @@ type pnfsIdentity struct {
 
 // deriveIdentity computes the identity of a new RWX volume.
 //
-// The export UUID is the volume's own id rather than the backing volume's. An
-// RWX volume has one backing volume today and would have several once striping
-// arrives, so a handle built on the backing id would change identity the moment
-// that happened.
+// The export UUID is the volume's own id, not the backing volume's: striping
+// would give an RWX volume several backing volumes, and a handle built on one of
+// them would change identity the moment that happened.
 //
-// The fsid is the export UUID: exports(5) accepts a UUID of 32 hex digits with
-// arbitrary punctuation, which makes the value unique cluster-wide and stable
-// for the export's life by construction, with no allocator to run.
+// The fsid is that same UUID. exports(5) accepts one, so the value is unique
+// cluster-wide and stable by construction, with no allocator to run.
 func deriveIdentity(clusterID, poolRef, exportUUID, namespace, pvcName string) pnfsIdentity {
 	return pnfsIdentity{
 		ExportUUID: exportUUID,

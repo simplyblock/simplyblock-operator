@@ -1,11 +1,10 @@
 // Package exportrpc carries pNFS export assembly over a link: the node serves
 // it, and the operator calls it.
 //
-// It is the mutating counterpart to storagerpc, and deliberately a separate
-// service rather than more methods on that one. storagerpc is read-only by
-// construction -- its own documentation says attaching and detaching fabrics
-// belongs to a separate, mutating service so a credential can be granted the one
-// and not the other -- and everything here writes to the node.
+// It is the mutating counterpart to storagerpc, and a separate service rather
+// than more methods on it: storagerpc is read-only by construction, and keeping
+// them apart is what lets a credential be granted the reading and not the
+// writing.
 //
 // On the node:
 //
@@ -17,22 +16,11 @@
 //	    // ...
 //	})
 //
-// In the operator:
-//
-//	conn, err := hub.Registry().Conn(link.NodePeer(nodeName))
-//	if errors.Is(err, link.ErrNoSession) {
-//	    return ctrl.Result{RequeueAfter: backoff}, nil  // not a failure
-//	}
-//	err = exportrpc.Remote(conn).Create(ctx, spec)
-//
-// # Why the node is the server
-//
-// The direction is the reverse of how it reads. The node dials the operator and
+// The direction is the reverse of how it reads: the node dials the operator and
 // holds the connection open, and the operator issues these calls back down it,
-// so nothing has to listen on a node. That is the link's arrangement, not this
-// package's, and the consequence worth knowing is that a node with no live
-// session is a normal state rather than an error: it is legitimately
-// disconnected during a rollout. Callers get link.ErrNoSession and requeue.
+// so nothing listens on a node. The consequence worth knowing is that a node
+// with no live session is normal rather than an error -- it is legitimately
+// disconnected during a rollout -- so callers get link.ErrNoSession and requeue.
 package exportrpc
 
 import (
