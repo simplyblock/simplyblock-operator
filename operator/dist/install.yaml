@@ -862,6 +862,13 @@ spec:
                         minimum: 0
                         type: integer
                     type: object
+                    x-kubernetes-validations:
+                    - message: the erasure-coding scheme must be one of 1+0, 1+1,
+                        2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                        and an unstated half is 1
+                      rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                        ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1],
+                        [1, 2], [2, 2], [4, 2]]'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -5153,6 +5160,13 @@ spec:
                     format: int32
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: the erasure-coding scheme must be one of 1+0, 1+1, 2+1,
+                    4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and
+                    an unstated half is 1
+                  rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                    ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
+                    2], [2, 2], [4, 2]]'
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
@@ -6139,6 +6153,12 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+                - message: the erasure-coding scheme must be one of 1+0, 1+1, 2+1,
+                    4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and
+                    an unstated half is 1
+                  rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                    ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1,
+                    2], [2, 2], [4, 2]]'
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -6519,10 +6539,12 @@ spec:
                   rule: '!has(self.state) || self.state in [''Claiming'',''CheckingControlPlane'',''ResolvingConfig'',''Creating'',''Adopting'',''Persisting'']'
               tasks:
                 description: |-
-                  Tasks are the control plane's running and pending jobs, newest first and
-                  capped at twenty. Completed and canceled tasks are not here: they leave
-                  the list and become events, so the length tracks concurrency rather than
-                  history.
+                  Tasks are the control plane's running and pending jobs, capped at twenty
+                  and in the order the control plane reports them: its TaskDTO carries no
+                  creation date, so newest-first is not orderable from what is on the wire
+                  (design-storagecluster.md §12.1). Completed and canceled tasks are not
+                  here: they leave the list and become events, so the length tracks
+                  concurrency rather than history.
                 items:
                   description: |-
                     ClusterTask is one asynchronous job the control plane is running, as of the
@@ -9277,9 +9299,10 @@ spec:
             properties:
               allowedNodes:
                 description: |-
-                  AllowedNodes restricts which storage nodes may host this pool's volumes.
-                  Empty means every node in the cluster. Narrowing it stops new volumes
-                  landing on the removed nodes and leaves the existing ones where they are.
+                  AllowedNodes restricts which hosts may carry this pool's volumes, by
+                  Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+                  stops new volumes landing on the removed nodes and leaves the existing
+                  ones where they are.
 
                   The list is left exactly as authored: a name that no longer resolves is
                   dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -9463,10 +9486,11 @@ spec:
                 type: string
               allowedNodes:
                 description: |-
-                  AllowedNodes is Spec.AllowedNodes resolved against the StorageNodes that
-                  exist, which is what the control plane is sent. An empty list here is not
-                  the same as an absent Spec.AllowedNodes: absent means every node, and
-                  empty after resolution means the pool can place nothing.
+                  AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+                  exist, which is what the control plane's host list and the per-pool node
+                  labels are derived from. An empty list here is not the same as an absent
+                  Spec.AllowedNodes: absent means every node, and empty after resolution
+                  means the pool can place nothing.
                 items:
                   type: string
                 type: array
@@ -10971,6 +10995,26 @@ webhooks:
     - DELETE
     resources:
     - controlplaneops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-operatorops
+  failurePolicy: Fail
+  name: voperatorops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - operatorops
   sideEffects: None
 - admissionReviewVersions:
   - v1

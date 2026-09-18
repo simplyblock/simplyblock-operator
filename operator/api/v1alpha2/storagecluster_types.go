@@ -93,6 +93,21 @@ const (
 
 // StripeSpec is the erasure-coding layout: how many data chunks a stripe
 // carries and how many parity chunks protect them.
+//
+// The pair is one of the seven schemes simplyblock supports, and the rule below
+// is the same set the control plane holds in SUPPORTED_ERASURE_CODING_SCHEMES.
+// It is stated here as well because the control plane's refusal arrives at the
+// cluster create, which is several steps and — for a cluster a deployment config
+// produced — one irreversible approval after the apply that stated the scheme.
+//
+// Each scheme also has a storage-node count below which it must not be used,
+// which is ndcs+npcs nodes to place a stripe across plus one spare per tolerated
+// failure to rebuild onto: 1 for 1+0, 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for
+// 1+2, 6 for 2+2, and 8 for 4+2. That is not expressible here, because the nodes
+// are objects of their own and a cluster is created before any of them exists.
+// It is answered by the deployment config's validation, by its approval webhook,
+// and by the cluster's activation gate.
+// +kubebuilder:validation:XValidation:rule="[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks) ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4, 2]]",message="the erasure-coding scheme must be one of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and an unstated half is 1"
 type StripeSpec struct {
 	// DataChunks is the number of data chunks per stripe (ndcs).
 	// +kubebuilder:validation:Minimum=1

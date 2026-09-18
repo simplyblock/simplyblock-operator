@@ -189,6 +189,13 @@ spec:
                         minimum: 0
                         type: integer
                     type: object
+                    x-kubernetes-validations:
+                    - message: the erasure-coding scheme must be one of 1+0, 1+1,
+                        2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                        and an unstated half is 1
+                      rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                        ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1],
+                        [1, 2], [2, 2], [4, 2]]'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
