@@ -33,6 +33,11 @@ const (
 
 // aDocument is a valid, approved two-worker NVMe deployment, so a case states only
 // what it is about.
+//
+// It states 1+0 because two workers carry no other scheme: every redundant one
+// needs at least three storage nodes, and a document that says nothing about
+// erasure coding means the control plane's 1+1. A case about the stripe says so
+// by overwriting the field.
 func aDocument(
 	mutate func(*simplyblockv1alpha2.ClusterDeploymentConfig),
 ) *simplyblockv1alpha2.ClusterDeploymentConfig {
@@ -46,6 +51,9 @@ func aDocument(
 				MaxSubsystemCount: ptr.To(int32(20)),
 				VCPUCount:         ptr.To(int32(8)),
 				MinHugePagesSize:  "100G",
+				Stripe: &simplyblockv1alpha2.StripeSpec{
+					DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
+				},
 			},
 			NodeSets: []simplyblockv1alpha2.NodeSet{{
 				Name: "rack-a",
@@ -67,7 +75,10 @@ func aDocument(
 	return config
 }
 
-// aCluster is a StorageCluster the control plane has already created.
+// aCluster is a StorageCluster the control plane has already created. It states
+// the 1+0 the document fixture states, and for the same reason: a growth
+// document is answered against its cluster's stripe, and two workers carry no
+// redundant scheme.
 func aCluster(
 	mutate func(*simplyblockv1alpha2.StorageCluster),
 ) *simplyblockv1alpha2.StorageCluster {
@@ -76,6 +87,9 @@ func aCluster(
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			VCPUCount:        ptr.To(int32(8)),
 			MinHugePagesSize: "100G",
+			Stripe: &simplyblockv1alpha2.StripeSpec{
+				DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
+			},
 		},
 		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: "cluster-uuid"},
 	}

@@ -31,7 +31,7 @@
 // that was edited and what to do instead where CEL names the rule that failed.
 //
 // Specified by operator/docs/designs/crd-redesign/design-clusterdeploymentconfig.md
-// §5, whose four checks are checkApproval below.
+// §5, whose five checks are checkApproval below.
 
 package webhook
 
@@ -57,6 +57,7 @@ import (
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // ClusterDeploymentConfigValidator answers the approving edit against the
@@ -134,7 +135,7 @@ func (v *ClusterDeploymentConfigValidator) Handle(
 // under as well as the sentence the reviewer reads.
 //
 // The reason is the vocabulary the controller's own validation events use, for
-// the four checks both perform, so the two counters of §9.2 can be read against
+// the five checks both perform, so the two counters of §9.2 can be read against
 // each other: a rejection under a reason the draft never reported is a gap in
 // the draft's validation rather than a reviewer's slip.
 type problem struct {
@@ -165,7 +166,7 @@ func afterApproval(
 	return admission.Allowed("")
 }
 
-// checkApproval is §5.1's four checks, and returns everything wrong rather than
+// checkApproval is §5.1's five checks, and returns everything wrong rather than
 // the first thing wrong.
 //
 // A reviewer fixing a document that is about to become immutable wants the whole
@@ -188,6 +189,18 @@ func (v *ClusterDeploymentConfigValidator) checkApproval(
 				strings.Join(missing, ", "),
 				plural(len(missing), "is", "are"), plural(len(missing), "a node", "nodes")),
 		})
+	}
+
+	// What the document says about erasure coding, against the deployment it
+	// describes. It is the one check here that nothing downstream repeats: the
+	// control plane validates the scheme on the cluster create, which lands after
+	// this edit, and its activation gate counts devices rather than nodes.
+	stripe, err := deployment.StripeChecks(ctx, v.Client, namespace, config)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range stripe {
+		problems = append(problems, problem{reason: check.Reason, message: check.Message})
 	}
 
 	cluster, refused, err := v.resolveCluster(ctx, namespace, config)

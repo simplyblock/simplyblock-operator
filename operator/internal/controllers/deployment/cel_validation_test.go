@@ -169,3 +169,39 @@ func TestAnApprovedDocumentStillTakesLabelsAndStatus(t *testing.T) {
 		t.Fatalf("the controller cannot report on an approved document: %v", err)
 	}
 }
+
+// The scheme rule reaches this kind too, because the document states the
+// cluster's stripe with the cluster's own type. A rule declared on the shared
+// type and reaching only one of the two schemas would leave the document — the
+// thing a reviewer approves — the unguarded one.
+func TestTheDocumentsSchemaRefusesAnUnsupportedScheme(t *testing.T) {
+	apiClient := apiServer(t)
+
+	config := &simplyblockv1alpha2.ClusterDeploymentConfig{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "stripe-", Namespace: "default"},
+		Spec: simplyblockv1alpha2.ClusterDeploymentConfigSpec{
+			Cluster: &simplyblockv1alpha2.ClusterTemplate{
+				Name:              "a-cluster",
+				VCPUCount:         ptr.To(int32(4)),
+				MaxSubsystemCount: ptr.To(int32(30)),
+				Stripe: &simplyblockv1alpha2.StripeSpec{
+					DataChunks: ptr.To(int32(3)), ParityChunks: ptr.To(int32(1)),
+				},
+			},
+			NodeSets: []simplyblockv1alpha2.NodeSet{{
+				Name: "discovered",
+				Groups: []simplyblockv1alpha2.NodeGroup{{
+					Name: "group-1", Workers: []string{"worker-1"},
+				}},
+			}},
+		},
+	}
+
+	err := apiClient.Create(context.Background(), config)
+	if err == nil {
+		t.Fatal("a document stating 3+1 was stored")
+	}
+	if !strings.Contains(err.Error(), "erasure-coding scheme") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}

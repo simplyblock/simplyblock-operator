@@ -23,6 +23,14 @@ const (
 	// nodes to bind their management address to.
 	NoManagementInterface = "NoManagementInterface"
 
+	// What the document says about erasure coding, which is the one part of a
+	// deployment nothing below the operator checks: the control plane validates
+	// the scheme on the cluster create and counts devices at activation, never
+	// nodes, so a fleet too small for its stripe is admitted everywhere else.
+	StripeUnsupported         = "StripeUnsupported"
+	StripeBelowMinimumNodes   = "StripeBelowMinimumNodes"
+	StripeBelowMinimumWorkers = "StripeBelowMinimumWorkers"
+
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.
 	AwaitingNodes = "AwaitingNodes"

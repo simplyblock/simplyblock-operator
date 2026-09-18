@@ -448,14 +448,22 @@ func slotsPerWorker(cluster *simplyblockv1alpha2.StorageCluster) int32 {
 	if workload == nil {
 		return 1
 	}
-	sockets := int32(len(workload.SocketsToUse))
+	return slotsOf(workload.SocketsToUse, workload.NodesPerSocket)
+}
+
+// slotsOf is the same arithmetic against the fields themselves, because the
+// document states the layout on its cluster template and the cluster states it
+// on its node workload, and a deployment counted by one rule and built by
+// another is a deployment whose validation means nothing.
+func slotsOf(socketsToUse []string, nodesPerSocket *int32) int32 {
+	sockets := int32(len(socketsToUse))
 	if sockets == 0 {
 		// An empty list means socket 0 alone (design-storagenode.md §5.1).
 		sockets = 1
 	}
 	perSocket := int32(1)
-	if workload.NodesPerSocket != nil && *workload.NodesPerSocket > 0 {
-		perSocket = *workload.NodesPerSocket
+	if nodesPerSocket != nil && *nodesPerSocket > 0 {
+		perSocket = *nodesPerSocket
 	}
 	return sockets * perSocket
 }
