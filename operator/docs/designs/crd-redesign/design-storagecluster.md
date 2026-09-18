@@ -145,6 +145,30 @@ affinity-based placement for storage components. `deviceClass` names the one cla
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
 
+**`stripe` is one of seven schemes, and the schema is what says so.** simplyblock
+supports 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, and 4+2, which is the set the control
+plane holds in `SUPPORTED_ERASURE_CODING_SCHEMES` and refuses a cluster create
+outside of. A type-level CEL rule on `StripeSpec` states the same set, so the
+refusal arrives at the apply rather than from a cluster create that runs several
+steps — and, for a cluster a deployment config produced, one irreversible
+approval — later
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5.1).
+An unstated half is 1, which is what the control plane defaults each field to.
+
+**Each scheme also has a storage-node count below which it must not be used, and
+the activation gate is where that is enforced.** The minimum is `ndcs+npcs` nodes
+to place a stripe across plus one spare per tolerated failure to rebuild onto: 1
+for 1+0, 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for 1+2, 6 for 2+2, and 8 for 4+2.
+Nothing below the operator enforces it — the control plane's own activation gate
+counts devices, `ndcs+npcs+1` of them, and never nodes — so a cluster of four
+nodes configured 4+2 activates today and loses data on the second failure it was
+configured to survive. It cannot be a rule on this type, because the nodes are
+objects of their own and a cluster is created before any of them exists, so
+`Activate` holds on it instead and says why under `StripeNodesNotReady` (§6.3).
+The hold is placed after the "already active" check, so a re-activation of a
+cluster that is already serving is never held: the gate exists to stop a layout
+being brought up wrong, and a live cluster's layout is already a fact.
+
 **A cluster is built out of one class of device, and `deviceClass` is which.**
 NVMe devices are the class simplyblock has always accepted and logical block
 devices are the class 26.4 adds, and a cluster uses one of them. The two differ in
