@@ -38,7 +38,7 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | `nvme.DeviceSelector.NGUID` and the by-NGUID lookup  | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
 | pNFS volume handle (`nfs:` four-part form)           | §11          | **Merged path** — operator PR #547 in review           |
 | `ptpl_file` on the lvol namespace                    | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                     |
-| Direct block I/O end to end                          | §3, §4       | **Unconfirmed** -- see the open finding                |
+| Direct block I/O end to end                          | §3, §4       | **Validated** -- from inside a pod                     |
 | Many exports on one MDS host                         | §8.4         | **Validated**                                          |
 | Many clients on one export, coherent                 | §4, FR-7     | **Validated**                                          |
 | Fencing: preempt, and writes refused off-registry    | §13.2, FM-1  | **Validated**                                          |
@@ -145,99 +145,54 @@ Confirmed on the cluster, incidentally exercising §13.2: two stray registration
 left by hand were removed from the metadata-server host with
 `nvme resv-acquire --racqa=1` (preempt), leaving the nfsd key alone.
 
-**Open: a ReadWriteMany volume works end to end, and the layout is not being
-used.** The Kubernetes path is complete and measured: an RWX claim binds, the
-export assembles on the selected host, two pods on two nodes share one coherent
-filesystem over NFSv4.1, and `LAYOUTGET` and `GETDEVICEINFO` both succeed. But
-the client returns the layout and routes every byte through the metadata server
--- a 64 MiB write moved 67108864 bytes of NFS server traffic, which is FM-2
-exactly. The kernel says:
+**Direct block I/O works from inside a pod, and two things had to be true for
+it.** Measured on the .81 cluster with the priming fix in place:
 
 ```
-pNFS: no device found for volume 30634a596e4a6d70703051616c6e4e34
+NFS WRITE ops:        0            ← nothing reached the metadata server
+NVMe MiB written:     64           ← the data went straight to the namespace
+LAYOUTGET count:      3
+md5 agrees across two pods on two nodes
 ```
 
-This contradicts the direct-I/O measurement recorded above from the manual
-bring-up, so one of the two is wrong and the later one is the one that
-reproduces. **Treat the "Direct block I/O works" finding as unconfirmed until
-this is resolved.**
+**The metric in the earlier findings was wrong, and it is worth naming because it
+reads convincingly.** `mountstats`' `serverwrite` byte counter is bumped by the
+layout path too -- a block-layout write completes through the same generic
+writeback -- so it shows the full transfer even when nothing crossed the wire.
+Every "the write went through the MDS" conclusion recorded from that counter was
+an artifact of reading it. The honest pair is the NFS **WRITE operation count**
+and the block device's own bytes: zero ops and 64 MiB of NVMe writes cannot both
+be true unless the data went direct.
 
-Ruled out by measurement, so that nobody repeats it:
-
-- *The alias name.* `/dev/disk/by-id/nvme-eui.<nguid>` exists, points at the
-  right namespace (its `uuid` matches the export and its `nguid` matches what
-  the kernel prints), and was present both before and after the mount in a
-  tightly sequenced manual run.
-- *The prefix.* The client module tries `dm-uuid-mpath-0x`, `wwn-0x`, and
-  `nvme-eui.`, confirmed by `strings` on `blocklayoutdriver.ko`. All three were
-  created; all three failed.
-- *A stale device cache.* Reproduced after `rmmod blocklayoutdriver` with every
-  NFS mount to that server gone.
-- *The reservation.* The metadata server holds `rtype 4`, Exclusive Access
-  Registrants Only, and an unregistered client cannot even read the device.
-  Registering the client by hand makes reads work, and the layout still goes
-  unused.
-- *The open.* The device opens from userspace read-write and with `O_EXCL`, and
-  no process holds it.
-- *PTPL.* `ptpls: 1` on the namespace, so the sbcli fix is in effect.
-
-The `GETDEVICEINFO` reply is not the problem: it returns `status=0`, and a
-capture of the `LAYOUTGET` reply decodes cleanly to a valid RW SCSI layout whose
-one extent names the right device.
-
-```
-lo_iomode  0x00000002  LAYOUTIOMODE4_RW
-loc_type   0x00000005  LAYOUT4_SCSI
-extents    1
-  se_vol_id         04 00 00 ... (matches the deviceid the client resolves)
-  se_file_offset    0
-  se_length         0x400000      4 MiB
-  se_storage_offset 0x1f818000
-  se_state          0x00000002    PNFS_SCSI_INVALID_DATA
-```
-
-Two things were learned instead, and the first is the actionable one.
-
-**The device path is resolved in the calling process's mount namespace.** The
-`no device found` warning fires only when the writer is a process inside a pod,
-and never when the same write is issued from the host against the same mount
-with the same alias in place. A pod's `/dev` is the minimal one kubelet builds:
+**The real defect it was hiding was the mount namespace.** The client resolves a
+layout's device by opening `/dev/disk/by-id/nvme-eui.<nguid>`, in the mount
+namespace of whichever process triggered the I/O. A pod's `/dev` is the minimal
+one kubelet builds:
 
 ```
 core fd full mqueue null ptmx pts random shm stderr stdin stdout tty urandom zero
 ```
 
-There is no `disk/` in it, so `/dev/disk/by-id/nvme-eui.<nguid>` cannot resolve
-for that task however correct the alias on the host is. A CSI driver cannot put
-`/dev/disk/by-id` into arbitrary application pods, so the alias alone can never
-be enough.
+There is no `disk/` in it, so a layout first requested by the application could
+never resolve, and a CSI driver cannot put `/dev/disk/by-id` into arbitrary pods.
+The failure was also not a stumble the next I/O recovers from -- with NFS
+debugging on, which is the only way any of it is visible:
 
-**The fix this suggests, and it works:** have the node plugin issue the first
-I/O on the staging mount at the end of `NodeStageVolume`. The plugin's own
-container mounts the host's `/dev`, so resolution succeeds in *its* namespace
-and the device lands in the client's device cache. Tested by hand on a freshly
-purged cache: a 4 MiB write from inside the csi-node container produced **no**
-`no device found`, and every pod write afterward was equally quiet, where before
-priming each one logged it. That is a few lines in the stage path.
+```
+bl_alloc_lseg: number of extents 1
+pNFS: no device found for volume 30634a596e4a6d70703051616c6e4e34
+bl_alloc_lseg returns -19
+pnfs_layout_io_set_failed Setting layout IOMODE_RW fail bit
+```
 
-It is necessary and not sufficient: with the device resolving, the write still
-goes to the metadata server, for the reason below.
+One failed lookup marks the device unavailable for two minutes and sets the
+layout's read-write fail bit, so everything afterward skips pNFS entirely.
 
-**The client returns the layout without using it**, 54 to 80 microseconds after
-`LAYOUTGET` and before any I/O, with no `pnfs_mds_fallback_*` tracepoint firing.
-The rejection is therefore in `bl_alloc_lseg`, not in the write path: the client
-is refusing the layout it was given rather than trying and falling back. It does
-this with the device resolved and cached, so it is independent of the namespace
-problem above.
-
-The one thing in the layout that is not routine is `se_state =
-PNFS_SCSI_INVALID_DATA`, and whether the Linux SCSI-layout client accepts an
-`INVALID_DATA` extent for a RW layout is the question to answer next -- against
-the client source for 5.14.0-687, since that decides whether this is reachable
-on RHEL 9 at all or needs a newer client. A host-context run on a freshly purged
-cache also left the namespace with a third registrant, which only happens when
-`bl_parse_scsi` runs to completion, so the device half of the parse is
-demonstrably fine.
+The node plugin takes the layout at the end of `NodeStageVolume` instead. Its
+container mounts the host's `/dev`, so resolution succeeds in its namespace and
+the device lands in the client's device cache, which is per-client rather than
+per-file. With that in place the same debugging shows `bl_alloc_lseg returns 0`
+for the pod's own writes.
 
 **The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
 in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
