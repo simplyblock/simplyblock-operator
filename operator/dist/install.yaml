@@ -1294,10 +1294,6 @@ spec:
       name: SubPhase
       priority: 1
       type: string
-    - jsonPath: .status.serviceName
-      name: Service
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -1403,8 +1399,9 @@ spec:
                 type: array
               conditions:
                 description: |-
-                  Conditions carry why an export is Degraded or FailingOver. Expected types
-                  are Assembled, Exported, Fenced, and Addressable.
+                  Conditions carry why an export is not Ready. The types are Assembled and
+                  Exported, which are the two steps assembly has; a condition type is added
+                  here when something sets it, not before.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -1463,13 +1460,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              failoverGeneration:
-                description: |-
-                  FailoverGeneration counts completed failovers. A node plugin watching this
-                  record uses a bump to know its export was re-materialized elsewhere, which
-                  is the only signal it gets when the mount address did not change.
-                format: int64
-                type: integer
               lvolID:
                 description: LVolID identifies the backing logical volume.
                 type: string
@@ -1500,7 +1490,6 @@ spec:
                 - Pending
                 - Assembling
                 - Ready
-                - FailingOver
                 - Degraded
                 - Deleting
                 type: string
@@ -1512,12 +1501,6 @@ spec:
                   would otherwise grant the phase a fresh deadline on every pass and never
                   time out.
                 format: date-time
-                type: string
-              serviceName:
-                description: |-
-                  ServiceName is the Service whose ClusterIP clients mount. It is stable for
-                  the export's life, which is the point of it: a failover rewrites the
-                  Service's endpoint rather than the address clients hold.
                 type: string
               storageNodeRef:
                 description: |-

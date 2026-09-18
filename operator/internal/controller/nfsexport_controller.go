@@ -45,12 +45,11 @@ import (
 type phase = simplyblockv1alpha2.NFSExportPhase
 
 const (
-	phasePending     = simplyblockv1alpha2.NFSExportPhasePending
-	phaseAssembling  = simplyblockv1alpha2.NFSExportPhaseAssembling
-	phaseReady       = simplyblockv1alpha2.NFSExportPhaseReady
-	phaseFailingOver = simplyblockv1alpha2.NFSExportPhaseFailingOver
-	phaseDegraded    = simplyblockv1alpha2.NFSExportPhaseDegraded
-	phaseDeleting    = simplyblockv1alpha2.NFSExportPhaseDeleting
+	phasePending    = simplyblockv1alpha2.NFSExportPhasePending
+	phaseAssembling = simplyblockv1alpha2.NFSExportPhaseAssembling
+	phaseReady      = simplyblockv1alpha2.NFSExportPhaseReady
+	phaseDegraded   = simplyblockv1alpha2.NFSExportPhaseDegraded
+	phaseDeleting   = simplyblockv1alpha2.NFSExportPhaseDeleting
 )
 
 // How long each wait lasts, named rather than written inline at the return so
@@ -172,13 +171,11 @@ func (r *NFSExportReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileAssembling(ctx, &export, machine, logger)
 	case phaseReady:
 		return ctrl.Result{}, r.reconcileReady(ctx, &export)
-	case phaseFailingOver:
-		// Failover is the next milestone. Until it exists, an export that
-		// somehow reached the phase is parked rather than half-driven.
-		r.event(&export, corev1.EventTypeWarning, "FailoverNotImplemented",
-			"failover is not implemented yet; the export is parked")
-		return ctrl.Result{}, r.toDegraded(ctx, &export, machine, "failover not implemented")
 	default:
+		// An unrecognized phase is a downgrade or a hand-edited resource.
+		// restore() has already refused to build a machine for one, so
+		// reaching here means the phase is one this controller knows and has
+		// nothing to do in.
 		return ctrl.Result{}, nil
 	}
 }
@@ -506,8 +503,10 @@ func exportPhases() statemachine.Config[phase] {
 					return nfsExportAssembleDeadline, nil
 				},
 			},
-			phaseReady:       {To: []phase{phaseFailingOver, phaseDegraded, phaseDeleting}},
-			phaseFailingOver: {To: []phase{phaseReady, phaseDegraded, phaseDeleting}},
+			// Ready leaves only downward. Moving an export to another host is
+			// design-pnfs-rwx.md §13 and is not built, so the phase that would
+			// represent it is not declared either.
+			phaseReady: {To: []phase{phaseDegraded, phaseDeleting}},
 			// Terminal for this controller. Degraded is reached by declining to
 			// act, and is left by a human.
 			phaseDegraded: {To: []phase{phaseDeleting}},

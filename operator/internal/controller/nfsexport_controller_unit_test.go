@@ -678,3 +678,64 @@ func TestDeletingRetriesWhenTheHostRefuses(t *testing.T) {
 		t.Error("the finalizer was dropped while the host may still hold the export")
 	}
 }
+
+// The kind declares exactly the phases this controller implements.
+//
+// A phase in the CRD's enum that the controller cannot drive is a promise the
+// code does not keep: a user sees it in `kubectl explain`, a reviewer counts it
+// as built, and an object that somehow reaches it parks with a message saying
+// the feature does not exist. Failover is real work with its own section in the
+// design, and until it is written the kind should not advertise it.
+//
+// This is spelled as a comparison against the state graph rather than a list of
+// strings, so the two cannot drift: adding a phase to one without the other
+// fails here.
+func TestTheKindDeclaresOnlyThePhasesTheControllerDrives(t *testing.T) {
+	implemented := map[simplyblockv1alpha2.NFSExportPhase]bool{}
+	for p := range exportPhases().States {
+		implemented[p] = true
+	}
+
+	declared := []simplyblockv1alpha2.NFSExportPhase{
+		simplyblockv1alpha2.NFSExportPhasePending,
+		simplyblockv1alpha2.NFSExportPhaseAssembling,
+		simplyblockv1alpha2.NFSExportPhaseReady,
+		simplyblockv1alpha2.NFSExportPhaseDegraded,
+		simplyblockv1alpha2.NFSExportPhaseDeleting,
+	}
+	if len(implemented) != len(declared) {
+		t.Errorf("the graph has %d phases and the kind declares %d", len(implemented), len(declared))
+	}
+	for _, p := range declared {
+		if !implemented[p] {
+			t.Errorf("the kind declares %q, which the controller cannot drive", p)
+		}
+	}
+}
+
+// Every condition type the kind names is one the controller actually sets. An
+// unset condition reports absent rather than false, which reads as "not
+// evaluated yet" forever.
+func TestEveryDeclaredConditionHasAWriter(t *testing.T) {
+	asm := &fakeAssembler{}
+	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
+		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseAssembling
+		x.Status.StorageNodeRef = testMDSHost
+	})
+	r, cl := newExportReconciler(t, asm, e, testNode(testMDSHost, nil))
+
+	reconcileExport(t, r)
+
+	set := map[string]bool{}
+	for _, c := range loadExport(t, cl).Status.Conditions {
+		set[c.Type] = true
+	}
+	for _, want := range []string{
+		simplyblockv1alpha2.NFSExportConditionAssembled,
+		simplyblockv1alpha2.NFSExportConditionExported,
+	} {
+		if !set[want] {
+			t.Errorf("condition %q is declared but never set", want)
+		}
+	}
+}

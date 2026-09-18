@@ -28,7 +28,7 @@ import (
 )
 
 // NFSExportPhase is the lifecycle position of an export.
-// +kubebuilder:validation:Enum=Pending;Assembling;Ready;FailingOver;Degraded;Deleting
+// +kubebuilder:validation:Enum=Pending;Assembling;Ready;Degraded;Deleting
 type NFSExportPhase string
 
 const (
@@ -42,9 +42,6 @@ const (
 	NFSExportPhaseAssembling NFSExportPhase = "Assembling"
 	// NFSExportPhaseReady is an export a client can mount.
 	NFSExportPhaseReady NFSExportPhase = "Ready"
-	// NFSExportPhaseFailingOver is an export moving between hosts, planned or
-	// not. SubPhase says how far it has got.
-	NFSExportPhaseFailingOver NFSExportPhase = "FailingOver"
 	// NFSExportPhaseDegraded is an export that exists but cannot serve its
 	// purpose, and that the operator will not act further on without help. A
 	// failover whose fence could not be confirmed lands here deliberately: a
@@ -92,12 +89,6 @@ const (
 	NFSExportConditionAssembled = "Assembled"
 	// NFSExportConditionExported is whether the mount is published to clients.
 	NFSExportConditionExported = "Exported"
-	// NFSExportConditionFenced is whether a previous host's write access has
-	// been confirmed revoked. It is the condition a failover blocks on.
-	NFSExportConditionFenced = "Fenced"
-	// NFSExportConditionAddressable is whether the Service clients mount
-	// resolves to the bound host.
-	NFSExportConditionAddressable = "Addressable"
 )
 
 // NFSExportFinalizer keeps the record alive until the export it describes is
@@ -201,22 +192,10 @@ type NFSExportStatus struct {
 	// +optional
 	StorageNodeRef string `json:"storageNodeRef,omitempty"`
 
-	// ServiceName is the Service whose ClusterIP clients mount. It is stable for
-	// the export's life, which is the point of it: a failover rewrites the
-	// Service's endpoint rather than the address clients hold.
-	// +optional
-	ServiceName string `json:"serviceName,omitempty"`
-
 	// MDSNodeIP is the node address currently behind that Service, recorded for
 	// diagnosis rather than for clients to use.
 	// +optional
 	MDSNodeIP string `json:"mdsNodeIP,omitempty"`
-
-	// FailoverGeneration counts completed failovers. A node plugin watching this
-	// record uses a bump to know its export was re-materialized elsewhere, which
-	// is the only signal it gets when the mount address did not change.
-	// +optional
-	FailoverGeneration int64 `json:"failoverGeneration,omitempty"`
 
 	// LVolID identifies the backing logical volume.
 	// +optional
@@ -233,8 +212,9 @@ type NFSExportStatus struct {
 	// +optional
 	AllowedClients []string `json:"allowedClients,omitempty"`
 
-	// Conditions carry why an export is Degraded or FailingOver. Expected types
-	// are Assembled, Exported, Fenced, and Addressable.
+	// Conditions carry why an export is not Ready. The types are Assembled and
+	// Exported, which are the two steps assembly has; a condition type is added
+	// here when something sets it, not before.
 	// +optional
 	// +listType=map
 	// +listMapKey=type
@@ -260,7 +240,6 @@ type NFSExportStatus struct {
 // +kubebuilder:printcolumn:name="MDS",type=string,JSONPath=".status.storageNodeRef"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="SubPhase",type=string,JSONPath=".status.subPhase",priority=1
-// +kubebuilder:printcolumn:name="Service",type=string,JSONPath=".status.serviceName",priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // NFSExport is one pNFS export: a volume, the MDS host serving it, and the

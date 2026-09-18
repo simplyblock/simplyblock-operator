@@ -61,6 +61,34 @@ intention. "Validated" means measured on a live cluster, with the evidence in
 | A reaper for the keys of departed nodes              | §10.3, §13   | Not started — **new, see findings**                    |
 | Reservation handover on migration                    | §13.4        | Not started — **new, see findings**                    |
 | Host prerequisites: `nfs-utils`, `blkmapd`           | §14.1, P0-10 | Not started — node OS, not a pod                       |
+| MDS fault tolerance and failover                     | §13          | **Out of scope here** -- see below                     |
+
+### What this phase deliberately leaves out
+
+**§13, MDS fault tolerance and failover, is not implemented, and the kind does
+not pretend otherwise.** An export whose host is lost goes `Degraded` and stays
+there until a human moves it. That is a real limitation and the obvious next
+piece of work, and it is written here rather than left for a reader to infer
+from a phase that never advances.
+
+What that means for the API is the part worth stating. `FailingOver` was in the
+phase enum, and `status.serviceName`, `status.failoverGeneration`, and the
+`Fenced` and `Addressable` conditions were on the status, with nothing writing
+any of them. All are removed. A phase in a CRD's enum that no controller can
+drive is a promise the code does not keep: it shows up in `kubectl explain`, it
+reads to a reviewer as built, and an object that reaches it parks with a message
+saying the feature does not exist. A declared condition nothing sets reports
+absent forever, which is indistinguishable from not yet evaluated. Adding them
+back with the implementation is an additive, non-breaking change; shipping them
+empty and removing them later would not be.
+
+Two consequences follow, and both are already true above:
+
+- `status.mdsNodeIP` carries the bound host's own address rather than a Service.
+  §13.3 wants a Service so the address survives a move, and until an export can
+  move, the indirection would exist only to absorb a change that cannot happen.
+- Reservation handover (§13.4) and the reaper for the keys of departed nodes
+  (§10.3) belong with failover and are listed as not started.
 
 ### Where the implementation departs from this document
 
