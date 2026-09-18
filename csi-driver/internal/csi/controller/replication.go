@@ -137,6 +137,16 @@ func (cs *Server) GetVolumeReplicationInfo(
 	return resp, nil
 }
 
+// alreadyPromotedRoles are the ReplicationStatus.Role values for which
+// PromoteVolume has nothing to do: the volume is already the live source
+// (never failed over) or already sits on this side from an earlier promote.
+// Checked before any backend failover call -- see PromoteVolume's own
+// comment for why this check exists at all.
+var alreadyPromotedRoles = map[string]bool{
+	"source":      true,
+	"failed_over": true,
+}
+
 // PromoteVolume brings the volume up as primary on this cluster (design
 // §5.2). Force=true is the unplanned path: it clones the last fully
 // replicated generation and ignores demote state entirely, because its whole
@@ -146,6 +156,16 @@ func (cs *Server) GetVolumeReplicationInfo(
 // requested -- the split matters because the vendored csi-addons controller
 // auto-escalates ANY FAILED_PRECONDITION from a force=false promote to
 // force=true inline, with no wait-and-retry grace period of its own.
+//
+// The vendored controller-manager has no "already primary" awareness of its
+// own: markVolumeAsPrimary calls Promote unconditionally, every time a
+// VolumeReplication first declares primary intent -- including day-one
+// protection of a volume that has always lived at this cluster and has never
+// failed over. Left unguarded, that call would reach the backend's failover
+// and wrongly clone-and-retire against a healthy source (confirmed against a
+// live cluster). So this checks the volume's current role first and treats
+// an already-source or already-failed-over volume as a no-op, before either
+// the force value or the planned gate ever comes into play.
 func (cs *Server) PromoteVolume(
 	ctx context.Context,
 	req *replication.PromoteVolumeRequest,
@@ -157,6 +177,13 @@ func (cs *Server) PromoteVolume(
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	info, err := client.GetVolumeReplicationInfo(ctx, h.Handle())
+	if err != nil {
+		return nil, classifyGetVolumeReplicationInfoError(err)
+	}
+	if alreadyPromotedRoles[info.Role] {
+		return &replication.PromoteVolumeResponse{}, nil
 	}
 	if err := client.PromoteVolume(ctx, h.Handle(), req.GetForce()); err != nil {
 		return nil, classifyPromoteVolumeError(err)

@@ -82,6 +82,84 @@ func TestPromoteVolumePlannedWithNoDemoteIsFailedPrecondition(t *testing.T) {
 	}
 }
 
+// The vendored csi-addons controller has no "already primary" awareness of
+// its own (markVolumeAsPrimary calls Promote unconditionally, every time a
+// VolumeReplication first declares primary intent -- including day-one
+// protection of a volume that has always lived at this cluster, never
+// failed over). So the driver must supply that check itself: a volume
+// already reporting role=source has nothing to fail over, and calling the
+// backend's failover would wrongly clone+retire against a healthy source --
+// confirmed against a live cluster, where protecting a brand-new PVC
+// (VolumeReplication created directly as primary) triggered a real target-
+// cluster clone with no failover ever intended.
+func TestPromoteVolumeAlreadySourceIsNoOp(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.replicationStatus[testReplVolumeID] = map[string]any{
+		"role": "source", "state": "in_sync",
+		"outstanding_count": 0, "outstanding_bytes": 0,
+		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+	}
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverQuery != "" {
+		t.Errorf("failover query = %q, want no failover call: the volume is already the live source", mock.lastFailoverQuery)
+	}
+}
+
+// A repeat promote after an earlier one already succeeded is the same
+// no-op: nothing to fail over a second time.
+func TestPromoteVolumeAlreadyFailedOverIsNoOp(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.replicationStatus[testReplVolumeID] = map[string]any{
+		"role": "failed_over", "state": "in_sync",
+		"outstanding_count": 0, "outstanding_bytes": 0,
+		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+	}
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverQuery != "" {
+		t.Errorf("failover query = %q, want no failover call: already promoted", mock.lastFailoverQuery)
+	}
+}
+
+// A volume genuinely holding the replica side (role=secondary) is the real
+// promotion case, and must still reach the backend's failover exactly as
+// before.
+func TestPromoteVolumeSecondaryProceedsToFailover(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.replicationStatus[testReplVolumeID] = map[string]any{
+		"role": "secondary", "state": "in_sync",
+		"outstanding_count": 0, "outstanding_bytes": 0,
+		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+	}
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverQuery == "" {
+		t.Error("want a failover call: the volume genuinely holds the replica side")
+	}
+}
+
 // Same real-world shape as TestEnableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty:
 // the vendored controller-manager/sidecar chain sends every Replication RPC,
 // Promote included, via ReplicationSource with the legacy flat VolumeId left
