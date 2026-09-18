@@ -435,9 +435,10 @@ func (ns *Server) restagePNFSVolume(
 //
 // For a pNFS volume it is nothing. Publishing is a bind of an already-mounted
 // path, and a bind takes no type; the type on the volume capability comes from
-// the StorageClass's csi.storage.k8s.io/fstype, which for a pNFS volume is
-// the string that selected this path rather than a type anything mounts. Passing it on makes mount(8) look for a helper named
-// after the type, and /sbin/mount.nfs exists and does not bind.
+// the StorageClass's csi.storage.k8s.io/fstype, which for a pNFS volume is the
+// string that selected this path rather than a type anything mounts. Passing it
+// on makes mount(8) look for a helper named after the type, and
+// /sbin/mount.nfs exists and does not bind.
 func publishFSType(volumeHandle, requested string) string {
 	if isPNFSVolume(volumeHandle) {
 		return ""

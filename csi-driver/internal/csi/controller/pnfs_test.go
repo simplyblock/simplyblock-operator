@@ -18,13 +18,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func capWithMode(mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapability {
-	return &csi.VolumeCapability{
-		AccessMode: &csi.VolumeCapability_AccessMode{Mode: mode},
-		AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
-	}
-}
-
 func TestPNFSIsTakenOnlyForThePNFSFSType(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -39,7 +32,8 @@ func TestPNFSIsTakenOnlyForThePNFSFSType(t *testing.T) {
 		{"xfs many writers stays block", "xfs", csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, false, false},
 		{"no fsType stays block", "", csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER, false, false},
 		{"reader only is refused", pnfsFSType, csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY, false, true},
-		{"single writer across nodes is refused", pnfsFSType, csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER, false, true},
+		{"single writer across nodes is refused", pnfsFSType,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
