@@ -33,33 +33,34 @@ Updated as work lands, so the document tracks the code rather than describing an
 intention. "Validated" means measured on a live cluster, with the evidence in
 §Bring-up Findings.
 
-| Item                                                   | Section      | Status                                                 |
-|--------------------------------------------------------|--------------|--------------------------------------------------------|
-| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup    | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
-| pNFS volume handle (`nfs:` four-part form)             | §11          | **Merged path** — operator PR #547 in review           |
-| `ptpl_file` on the lvol namespace                      | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                     |
-| Direct block I/O end to end                            | §3, §4       | **Unconfirmed** -- see the open finding                |
-| Many exports on one MDS host                           | §8.4         | **Validated**                                          |
-| Many clients on one export, coherent                   | §4, FR-7     | **Validated**                                          |
-| Fencing: preempt, and writes refused off-registry      | §13.2, FM-1  | **Validated**                                          |
-| Service ClusterIP reached by a kernel mount            | §13.3, Q3    | **Validated** on stock kube-proxy                      |
-| `fsid=<uuid>`, XFS directly on the LUN                 | §8.2         | **Validated**                                          |
-| `NFSExport` CRD and types                              | §7.1         | **Done** -- v1alpha2                                   |
-| `NFSExportReconciler`                                  | §14.2        | **Done** -- phase graph, selection, finalizer          |
-| Export assembly on the MDS host (`atlas-lib/export`)   | §8.2, §8.3   | **Done** -- idempotent, unit-tested                    |
-| Carrying that over csi-link                            | §6.4         | **Done** -- exportrpc, both ends wired                 |
-| CSI controller RWX path                                | §9           | **Done** -- create, validate, and delete               |
-| CSI node client mount and `nvme-eui.` alias            | §10          | **Done** -- stage, unstage, and repair                 |
-| Attaching the namespace, on the host and the client    | §6.4(a), §10 | **Done** -- one path serves both                       |
-| Client policy resolved into the effective client set   | §7.1         | **Done** -- NodeScoped, Subnet, Open                   |
-| The address a client mounts                            | §13.3        | **Done** -- the host's own; a Service is failover      |
-| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs`   | §14.1        | **Done** -- adoption compares rather than refuses      |
-| RBAC over `nfsexports` for both plugins                | §9.3         | **Done** -- a role for the controller plugin           |
-| ReadWriteMany end to end through Kubernetes            | §9, §10      | **Validated** -- two pods, two nodes, coherent         |
-| Expanding an RWX volume                                | §16          | Refused in its own words -- `xfs_growfs` has no caller |
-| PR key release on unstage, and a reaper for dead nodes | §10.3, §13   | Not started — **new, see findings**                    |
-| Reservation handover on migration                      | §13.4        | Not started — **new, see findings**                    |
-| Host prerequisites: `nfs-utils`, `blkmapd`             | §14.1, P0-10 | Not started — node OS, not a pod                       |
+| Item                                                 | Section      | Status                                                 |
+|------------------------------------------------------|--------------|--------------------------------------------------------|
+| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup  | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
+| pNFS volume handle (`nfs:` four-part form)           | §11          | **Merged path** — operator PR #547 in review           |
+| `ptpl_file` on the lvol namespace                    | §6.2, P0-1   | **Fix in review** — sbcli PR #1375                     |
+| Direct block I/O end to end                          | §3, §4       | **Unconfirmed** -- see the open finding                |
+| Many exports on one MDS host                         | §8.4         | **Validated**                                          |
+| Many clients on one export, coherent                 | §4, FR-7     | **Validated**                                          |
+| Fencing: preempt, and writes refused off-registry    | §13.2, FM-1  | **Validated**                                          |
+| Service ClusterIP reached by a kernel mount          | §13.3, Q3    | **Validated** on stock kube-proxy                      |
+| `fsid=<uuid>`, XFS directly on the LUN               | §8.2         | **Validated**                                          |
+| `NFSExport` CRD and types                            | §7.1         | **Done** -- v1alpha2                                   |
+| `NFSExportReconciler`                                | §14.2        | **Done** -- phase graph, selection, finalizer          |
+| Export assembly on the MDS host (`atlas-lib/export`) | §8.2, §8.3   | **Done** -- idempotent, unit-tested                    |
+| Carrying that over csi-link                          | §6.4         | **Done** -- exportrpc, both ends wired                 |
+| CSI controller RWX path                              | §9           | **Done** -- create, validate, and delete               |
+| CSI node client mount and `nvme-eui.` alias          | §10          | **Done** -- stage, unstage, and repair                 |
+| Attaching the namespace, on the host and the client  | §6.4(a), §10 | **Done** -- one path serves both                       |
+| Client policy resolved into the effective client set | §7.1         | **Done** -- NodeScoped, Subnet, Open                   |
+| The address a client mounts                          | §13.3        | **Done** -- the host's own; a Service is failover      |
+| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs` | §14.1        | **Done** -- adoption compares rather than refuses      |
+| RBAC over `nfsexports` for both plugins              | §9.3         | **Done** -- a role for the controller plugin           |
+| ReadWriteMany end to end through Kubernetes          | §9, §10      | **Validated** -- two pods, two nodes, coherent         |
+| Expanding an RWX volume                              | §16          | Refused in its own words -- `xfs_growfs` has no caller |
+| PR key release on unstage                            | §10.3        | **Not ours** -- the client kernel does it              |
+| A reaper for the keys of departed nodes              | §10.3, §13   | Not started — **new, see findings**                    |
+| Reservation handover on migration                    | §13.4        | Not started — **new, see findings**                    |
+| Host prerequisites: `nfs-utils`, `blkmapd`           | §14.1, P0-10 | Not started — node OS, not a pod                       |
 
 ### Where the implementation departs from this document
 
@@ -127,6 +128,22 @@ finding rather than a fix, because the same shape applies to anything else this
 design has one controller reading across the two: **the host is a cluster
 resource and the export is a namespaced one.** Which hosts may serve is P0-6's
 node labeling, not a namespace boundary.
+
+**Releasing a client's reservation key is the kernel's job, and it does it.**
+The finding above that "PR keys are never released per departed node" is half
+wrong, and the half matters. `bl_unregister_scsi` in the client's block-layout
+driver calls `pr_register(bdev, key, 0, false)` when the device node is freed,
+which happens when the deviceid cache entry goes at unmount. A clean unstage
+therefore needs nothing from this design, and adding an unregister to
+`NodeUnstageVolume` would be a second implementation racing the kernel's.
+
+What remains is the other half: a node that dies without unmounting leaves its
+key registered with nothing to remove it. That is the reaper, and it is the
+operator's, because by definition the host that would clean up is gone.
+
+Confirmed on the cluster, incidentally exercising §13.2: two stray registrations
+left by hand were removed from the metadata-server host with
+`nvme resv-acquire --racqa=1` (preempt), leaving the nfsd key alone.
 
 **Open: a ReadWriteMany volume works end to end, and the layout is not being
 used.** The Kubernetes path is complete and measured: an RWX claim binds, the
