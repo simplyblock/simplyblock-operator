@@ -275,6 +275,7 @@ func selectorToProto(sel nvme.DeviceSelector) *storagev1.DeviceSelector {
 		Nqn:        sel.NQN,
 		Nsid:       uint32(sel.NSID),
 		Uuid:       sel.UUID,
+		Nguid:      sel.NGUID,
 		DevicePath: sel.DevicePath,
 	}
 }
@@ -287,6 +288,7 @@ func selectorFromProto(sel *storagev1.DeviceSelector) nvme.DeviceSelector {
 		NQN:        sel.GetNqn(),
 		NSID:       nvme.NamespaceID(sel.GetNsid()),
 		UUID:       sel.GetUuid(),
+		NGUID:      sel.GetNguid(),
 		DevicePath: sel.GetDevicePath(),
 	}
 }

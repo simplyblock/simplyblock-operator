@@ -210,7 +210,8 @@ func (r kernelDevs) ListWithSelector(ctx context.Context, sel nvme.DeviceSelecto
 	return sel.Filter(all), nil
 }
 
-func (r kernelDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
+func (r kernelDevs) ByUUID(context.Context, string) (nvme.Device, error)  { return nvme.Device{}, nil }
+func (r kernelDevs) ByNGUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
 func (r kernelDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
 	return nvme.Device{}, nil
 }

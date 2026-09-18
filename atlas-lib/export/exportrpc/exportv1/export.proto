@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+// Package atlas.export.v1 carries pNFS export assembly to the host that serves
+// it.
+//
+// Unlike atlas.storage.v1, which is read-only by construction, everything here
+// mutates the node: it makes filesystems, mounts them, and publishes them. That
+// is why it is a separate service rather than more methods on the storage one --
+// a credential can be granted the reading and not the writing.
+//
+// The operator is the only caller. No consuming pod runs on the host that serves
+// an export, so kubelet never issues a stage for it and something else has to
+// ask; this is that something.
+package atlas.export.v1;
+
+option go_package = "github.com/simplyblock/atlas/export/exportrpc/exportv1;exportv1";
+
+// ExportService assembles and tears down exports on the node it runs on. Both
+// calls are idempotent, because the caller is a reconciler and will make them
+// again.
+service ExportService {
+  // CreateExport assembles the export: find the device, make a filesystem only
+  // if the device is blank, mount it, and publish it. Re-running it over a
+  // finished export changes nothing on the host.
+  rpc CreateExport(CreateExportRequest) returns (CreateExportResponse);
+
+  // DeleteExport tears it down in reverse. An export that is already gone is
+  // success, not an error, because the caller is a finalizer and has to
+  // converge.
+  rpc DeleteExport(DeleteExportRequest) returns (DeleteExportResponse);
+}
+
+// ExportSpec is one export: which device, where it goes, and who may mount it.
+// It mirrors export.Spec field for field.
+message ExportSpec {
+  // volume_uuid identifies the backing namespace: for a simplyblock volume the
+  // namespace UUID is the logical volume's own id. It is the identifier rather
+  // than a device path because a path is assigned in attach order and differs
+  // across hosts, while this is a property of the namespace.
+  //
+  // It is the UUID rather than the NGUID because the UUID is what the control
+  // plane knows when it provisions; the NGUID is assigned by the target and
+  // read back from the device.
+  string volume_uuid = 1;
+
+  // path is the mount point and the exported directory.
+  string path = 2;
+
+  // fsid is what the export is published under. Holding it stable across hosts
+  // is what lets a re-materialized export reproduce the file handles clients
+  // already hold.
+  string fsid = 3;
+
+  // clients is the set allowed to mount, as exports(5) spells it. An empty set
+  // is refused rather than widened to everyone.
+  repeated string clients = 4;
+
+  // cluster_id and pool_id identify the volume to the control plane, which is
+  // what the host needs to ask where the namespace is served from and to be
+  // allowed to connect to it. They do not find the device -- volume_uuid does
+  // that -- and a host that does not attach its own namespaces ignores them.
+  string cluster_id = 5;
+  string pool_id = 6;
+}
+
+message CreateExportRequest {
+  ExportSpec spec = 1;
+}
+
+message CreateExportResponse {}
+
+message DeleteExportRequest {
+  ExportSpec spec = 1;
+}
+
+message DeleteExportResponse {}
