@@ -16,10 +16,14 @@ import (
 	"testing"
 )
 
+// hostEntry is the command every host-namespace call is wrapped in, named so
+// the tests assert against one spelling of it.
+const hostEntry = "nsenter"
+
 func TestFormatUsesTheHostsMkfs(t *testing.T) {
 	name, args := formatCommand("/dev/nvme0n1", "xfs", nil)
 
-	if name != "nsenter" {
+	if name != hostEntry {
 		t.Fatalf("mkfs runs as %q, want the host's", name)
 	}
 	joined := strings.Join(args, " ")
@@ -47,12 +51,12 @@ func TestFormatPassesExtraOptions(t *testing.T) {
 
 func TestMountAndUnmountUseTheHost(t *testing.T) {
 	name, args := mountCommand("/dev/nvme0n1", "/mnt/share", "xfs", nil)
-	if name != "nsenter" || !strings.Contains(strings.Join(args, " "), "-- mount -t xfs") {
+	if name != hostEntry || !strings.Contains(strings.Join(args, " "), "-- mount -t xfs") {
 		t.Errorf("mount = %s %v, want the host's mount", name, args)
 	}
 
 	name, args = unmountCommand("/mnt/share")
-	if name != "nsenter" || !strings.Contains(strings.Join(args, " "), "-- umount /mnt/share") {
+	if name != hostEntry || !strings.Contains(strings.Join(args, " "), "-- umount /mnt/share") {
 		t.Errorf("umount = %s %v, want the host's umount", name, args)
 	}
 }
@@ -63,7 +67,7 @@ func TestMountAndUnmountUseTheHost(t *testing.T) {
 // already there.
 func TestMountPointIsCheckedOnTheHost(t *testing.T) {
 	name, args := mountPointCommand("/mnt/share")
-	if name != "nsenter" || !strings.Contains(strings.Join(args, " "), "-- mountpoint -q /mnt/share") {
+	if name != hostEntry || !strings.Contains(strings.Join(args, " "), "-- mountpoint -q /mnt/share") {
 		t.Errorf("check = %s %v, want the host's mountpoint", name, args)
 	}
 }
@@ -84,7 +88,7 @@ func TestNFSMountUsesTheHostsHelper(t *testing.T) {
 		t.Fatal("no host filesystem is exposed for the node plugin to mount with")
 	}
 	joined := strings.Join(args, " ")
-	if name != "nsenter" {
+	if name != hostEntry {
 		t.Fatalf("the NFS mount runs as %q, want the host's", name)
 	}
 	if !strings.Contains(joined, "-- mount -t nfs -o vers=4.1") {

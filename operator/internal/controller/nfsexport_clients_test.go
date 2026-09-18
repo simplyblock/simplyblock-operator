@@ -18,6 +18,10 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// testNodeIP is the address the baseline Kubernetes node publishes, and so the
+// one a NodeScoped policy resolves to and the one an export is reachable at.
+const testNodeIP = "192.168.10.81"
+
 func kubeNode(name, internalIP string) *corev1.Node {
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -34,14 +38,14 @@ func kubeNode(name, internalIP string) *corev1.Node {
 // refinement noted in the design, and until it exists this is the floor.
 func TestNodeScopedAllowsClusterNodesAndNothingElse(t *testing.T) {
 	r, _ := newExportReconciler(t, &fakeAssembler{}, readyExport(),
-		kubeNode("vm01", "192.168.10.81"), kubeNode("vm02", "192.168.10.82"))
+		kubeNode("vm01", testNodeIP), kubeNode("vm02", "192.168.10.82"))
 
 	got, err := r.allowedClients(context.Background(), readyExport())
 	if err != nil {
 		t.Fatalf("allowedClients: %v", err)
 	}
 	slices.Sort(got)
-	want := []string{"192.168.10.81", "192.168.10.82"}
+	want := []string{testNodeIP, "192.168.10.82"}
 	if !slices.Equal(got, want) {
 		t.Errorf("clients = %v, want %v", got, want)
 	}
@@ -58,7 +62,7 @@ func TestSubnetTakesTheNamedCIDRsOnly(t *testing.T) {
 		Mode:    simplyblockv1alpha2.NFSExportClientPolicyModeSubnet,
 		Subnets: []string{"10.42.0.0/16"},
 	}
-	r, _ := newExportReconciler(t, &fakeAssembler{}, e, kubeNode("vm01", "192.168.10.81"))
+	r, _ := newExportReconciler(t, &fakeAssembler{}, e, kubeNode("vm01", testNodeIP))
 
 	got, err := r.allowedClients(context.Background(), e)
 	if err != nil {
@@ -94,7 +98,7 @@ func TestSubnetWithNoSubnetsResolvesToNothing(t *testing.T) {
 	e.Spec.ClientPolicy = &simplyblockv1alpha2.NFSExportClientPolicy{
 		Mode: simplyblockv1alpha2.NFSExportClientPolicyModeSubnet,
 	}
-	r, _ := newExportReconciler(t, &fakeAssembler{}, e, kubeNode("vm01", "192.168.10.81"))
+	r, _ := newExportReconciler(t, &fakeAssembler{}, e, kubeNode("vm01", testNodeIP))
 
 	got, err := r.allowedClients(context.Background(), e)
 	if err != nil {

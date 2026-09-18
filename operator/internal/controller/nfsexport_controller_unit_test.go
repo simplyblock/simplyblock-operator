@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/simplyblock/atlas/export"
+	exportpkg "github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 
@@ -169,7 +169,7 @@ func withBaselineKubeNode(objects []client.Object) []client.Object {
 		objects = append(objects, &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: sn.Spec.WorkerNode},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
-				{Type: corev1.NodeInternalIP, Address: "192.168.10.81"},
+				{Type: corev1.NodeInternalIP, Address: testNodeIP},
 			}},
 		})
 		added = true
@@ -181,7 +181,7 @@ func withBaselineKubeNode(objects []client.Object) []client.Object {
 	return append(objects, &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "kube-baseline"},
 		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
-			{Type: corev1.NodeInternalIP, Address: "192.168.10.81"},
+			{Type: corev1.NodeInternalIP, Address: testNodeIP},
 		}},
 	})
 }
@@ -625,7 +625,7 @@ func TestTeardownReachesTheKubernetesNode(t *testing.T) {
 // finalizer nothing will ever remove, and the only remedy is editing finalizers
 // by hand -- on an object whose whole purpose was to avoid that.
 func TestDeletingAnExportThatNeverAssembledConverges(t *testing.T) {
-	asm := &fakeAssembler{deleteErr: export.ErrInvalidSpec}
+	asm := &fakeAssembler{deleteErr: exportpkg.ErrInvalidSpec}
 	now := metav1.Now()
 	e := testExport(func(x *simplyblockv1alpha2.NFSExport) {
 		x.Status.Phase = simplyblockv1alpha2.NFSExportPhaseDegraded

@@ -16,13 +16,18 @@ import (
 	"github.com/simplyblock/atlas/export"
 )
 
+// testVolume is the backing namespace these tests speak about. One spelling,
+// because the point of most of them is that the same identifier reaches the
+// initiator unchanged.
+const testVolume = "bfc56677-d602-4017-804b-975f3b929e3f"
+
 func TestVolumeContextCarriesEveryIdentifierTheInitiatorNeeds(t *testing.T) {
 	spec := export.Spec{
-		VolumeUUID: "bfc56677-d602-4017-804b-975f3b929e3f",
+		VolumeUUID: testVolume,
 		ClusterID:  "f0bb9077-78c4-4482-9ccf-a5693ce2df78",
 		PoolID:     "9d016dd4-34d7-42f0-b549-52a5af2f1399",
 		Path:       "/mnt/team-a-shared-bfc56677",
-		FSID:       "bfc56677-d602-4017-804b-975f3b929e3f",
+		FSID:       testVolume,
 	}
 	const hostNQN = "nqn.2014-08.org.nvmexpress:uuid:9f1c4d0e-2a3b-4c5d-8e6f-7a8b9c0d1e2f"
 
@@ -50,7 +55,7 @@ func TestVolumeContextCarriesEveryIdentifierTheInitiatorNeeds(t *testing.T) {
 // authority on where the namespace is served from, and a local value that
 // disagreed would connect to a stale target after a failover.
 func TestControlPlaneInfoOverridesTheLocalContext(t *testing.T) {
-	spec := export.Spec{VolumeUUID: "bfc56677-d602-4017-804b-975f3b929e3f"}
+	spec := export.Spec{VolumeUUID: testVolume}
 	vc := volumeContextFor(spec, "", map[string]string{"uuid": "the-target-lvol"})
 
 	if vc["uuid"] != "the-target-lvol" {
