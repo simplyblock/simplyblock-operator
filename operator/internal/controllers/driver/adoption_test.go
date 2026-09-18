@@ -26,16 +26,16 @@ import (
 // helmMeta is what a release leaves behind, measured from the live namespace.
 func helmMeta() (map[string]string, map[string]string) {
 	return map[string]string{
-		"app.kubernetes.io/managed-by": "Helm",
-		"chart":                        "simplyblock-operator",
-		"chartVersion":                 "26.2.7",
-		"heritage":                     "Helm",
-		"release":                      "simplyblock-operator",
-		"revision":                     "1",
-	}, map[string]string{
-		"meta.helm.sh/release-name":      "simplyblock-operator",
-		"meta.helm.sh/release-namespace": "simplyblock",
-	}
+			"app.kubernetes.io/managed-by": "Helm",
+			"chart":                        "simplyblock-operator",
+			"chartVersion":                 "26.2.7",
+			"heritage":                     "Helm",
+			"release":                      "simplyblock-operator",
+			"revision":                     "1",
+		}, map[string]string{
+			"meta.helm.sh/release-name":      "simplyblock-operator",
+			"meta.helm.sh/release-namespace": "simplyblock",
+		}
 }
 
 // chartInstalledNodeDaemonSet is the object a chart install leaves running,

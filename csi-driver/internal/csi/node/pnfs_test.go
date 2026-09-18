@@ -301,6 +301,6 @@ func TestPrimeLayoutRespectsACanceledStage(t *testing.T) {
 		t.Fatalf("reading the staging path: %v", err)
 	}
 	if len(entries) != 0 {
-		t.Error("priming touched the mount despite the cancelation")
+		t.Error("priming touched the mount despite the cancellation")
 	}
 }
