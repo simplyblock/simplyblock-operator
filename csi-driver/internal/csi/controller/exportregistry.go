@@ -22,6 +22,11 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
+// identityWriteAttempts bounds the conflict retry. The competing writer is the
+// operator recording the host it picked, which it does once, so a couple of
+// attempts is enough and CreateVolume is itself retried by the provisioner.
+const identityWriteAttempts = 3
+
 // nfsExportGVR is the resource the records live in. It is v1alpha2 because the
 // kind is new: nothing ever shipped a v1alpha1 spelling of it.
 var nfsExportGVR = schema.GroupVersionResource{
@@ -62,7 +67,7 @@ func (r *dynamicExportRegistry) EnsureExport(
 	existing, err := api.Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		return recordFrom(existing), nil
+		return r.ensureIdentity(ctx, api, existing, spec)
 	case !apierrors.IsNotFound(err):
 		return ExportRecord{}, fmt.Errorf("reading export %s: %w", name, err)
 	}
@@ -76,7 +81,7 @@ func (r *dynamicExportRegistry) EnsureExport(
 			if getErr != nil {
 				return ExportRecord{}, fmt.Errorf("reading export %s after a create race: %w", name, getErr)
 			}
-			return recordFrom(existing), nil
+			return r.ensureIdentity(ctx, api, existing, spec)
 		}
 		return ExportRecord{}, fmt.Errorf("creating export %s: %w", name, err)
 	}
@@ -85,36 +90,76 @@ func (r *dynamicExportRegistry) EnsureExport(
 	// than left for the operator, because the CSI controller is the only thing
 	// that knows it: it just created the volume. The operator reads it back to
 	// tell the host which device to assemble on.
-	if err := r.writeIdentity(ctx, api, created, spec); err != nil {
-		return ExportRecord{}, err
-	}
-	return recordFrom(created), nil
+	return r.ensureIdentity(ctx, api, created, spec)
 }
 
-// writeIdentity records the backing volume on the new object's status.
-func (r *dynamicExportRegistry) writeIdentity(
+// ensureIdentity puts the backing volume on the record's status if it is not
+// there already, and reports the record either way.
+//
+// It runs on every path rather than only after a create, which is the whole
+// point. The operator holds in Assembling until status.lvolID arrives, and it
+// writes the same status object to record the host it picked, so the two writes
+// race. Losing that race returns a conflict, and if the identity were only
+// written by the create branch, the retried CreateVolume would take the fetch
+// branch, skip the write, and return Aborted forever against an operator
+// waiting for a field that would never be set. That is a deadlock rather than a
+// delay, and it is not specific to any access mode: it is whichever claim loses
+// the race.
+//
+// The write is skipped when the identity is already there, so a retry does not
+// churn the object, and it never touches any other status field.
+func (r *dynamicExportRegistry) ensureIdentity(
 	ctx context.Context,
 	api dynamic.ResourceInterface,
 	object *unstructured.Unstructured,
 	spec ExportSpec,
-) error {
-	status := map[string]any{"phase": "Pending"}
-	if spec.LVolID != "" {
-		status["lvolID"] = spec.LVolID
+) (ExportRecord, error) {
+	if spec.LVolID == "" {
+		return recordFrom(object), nil
 	}
-	if spec.NGUID != "" {
-		status["nguid"] = spec.NGUID
+	if current, _, _ := unstructured.NestedString(object.Object, "status", "lvolID"); current != "" {
+		return recordFrom(object), nil
 	}
-	if err := unstructured.SetNestedMap(object.Object, status, "status"); err != nil {
-		return fmt.Errorf("building the status of export %s: %w", object.GetName(), err)
+
+	// Re-read before each attempt: the object in hand may already be stale,
+	// which is exactly the case this exists for.
+	var last error
+	for attempt := 0; attempt < identityWriteAttempts; attempt++ {
+		fresh, err := api.Get(ctx, object.GetName(), metav1.GetOptions{})
+		if err != nil {
+			return ExportRecord{}, fmt.Errorf("reading export %s: %w", object.GetName(), err)
+		}
+		if current, _, _ := unstructured.NestedString(fresh.Object, "status", "lvolID"); current != "" {
+			// Another attempt wrote it.
+			return recordFrom(fresh), nil
+		}
+		if err := unstructured.SetNestedField(fresh.Object, spec.LVolID, "status", "lvolID"); err != nil {
+			return ExportRecord{}, fmt.Errorf("building the status of export %s: %w", object.GetName(), err)
+		}
+		if spec.NGUID != "" {
+			if err := unstructured.SetNestedField(fresh.Object, spec.NGUID, "status", "nguid"); err != nil {
+				return ExportRecord{}, fmt.Errorf("building the status of export %s: %w", object.GetName(), err)
+			}
+		}
+		// Only set the phase when the operator has not set one, so this never
+		// moves a record backward out of a phase the operator is driving.
+		if phase, _, _ := unstructured.NestedString(fresh.Object, "status", "phase"); phase == "" {
+			if err := unstructured.SetNestedField(fresh.Object, "Pending", "status", "phase"); err != nil {
+				return ExportRecord{}, fmt.Errorf("building the status of export %s: %w", object.GetName(), err)
+			}
+		}
+		updated, err := api.UpdateStatus(ctx, fresh, metav1.UpdateOptions{})
+		if err == nil {
+			return recordFrom(updated), nil
+		}
+		if !apierrors.IsConflict(err) {
+			return ExportRecord{}, fmt.Errorf(
+				"recording the backing volume of export %s: %w", object.GetName(), err)
+		}
+		last = err
 	}
-	if _, err := api.UpdateStatus(ctx, object, metav1.UpdateOptions{}); err != nil {
-		// The record exists, so the export is not lost; the operator will hold
-		// in Pending until the identity arrives. Reporting it lets the retried
-		// CreateVolume try the write again.
-		return fmt.Errorf("recording the backing volume of export %s: %w", object.GetName(), err)
-	}
-	return nil
+	return ExportRecord{}, fmt.Errorf(
+		"recording the backing volume of export %s: %w", object.GetName(), last)
 }
 
 // desiredExport is the object to create. Every spec field is immutable on the
