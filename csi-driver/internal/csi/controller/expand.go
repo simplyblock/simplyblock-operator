@@ -25,7 +25,7 @@ func (cs *Server) ControllerExpandVolume(
 	if req.GetCapacityRange() == nil {
 		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
 	}
-	if err := refuseRWXExpansion(volumeID); err != nil {
+	if err := refusePNFSExpansion(volumeID); err != nil {
 		return nil, err
 	}
 

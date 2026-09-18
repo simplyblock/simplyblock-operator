@@ -37,7 +37,7 @@ type dynamicExportRegistry struct {
 
 // NewExportRegistry returns a registry over a dynamic client, or nil when there
 // is none. A nil registry is not an error here: the driver runs outside a
-// cluster in tests, and the RWX path refuses the claim with a clear message
+// cluster in tests, and the pNFS path refuses the claim with a clear message
 // rather than the driver failing to start.
 func NewExportRegistry(client dynamic.Interface) ExportRegistry {
 	if client == nil {

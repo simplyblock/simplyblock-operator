@@ -1,4 +1,4 @@
-// Tearing an RWX volume down, which is the RWX provisioning path in reverse.
+// Tearing a pNFS volume down, which is the pNFS provisioning path in reverse.
 //
 // The order is forced and it is the whole content of this file. The record is
 // the only description of a mount, an exports entry, and an attached namespace
@@ -46,7 +46,7 @@ func deleteExportFor(
 		// backing volume anyway would strand the export. Refusing leaves both
 		// in place, which is recoverable; the other order is not.
 		return "", status.Error(codes.FailedPrecondition,
-			"ReadWriteMany needs the NFSExport registry, which is not configured")
+			"a pNFS volume needs the NFSExport registry, which is not configured")
 	}
 
 	name := exportRecordName(handle.ClusterID, handle.PoolRef, handle.ExportUUID)
@@ -68,7 +68,7 @@ func deleteExportFor(
 	}.String(), nil
 }
 
-// refuseRWXExpansion turns away an expand of a pNFS volume, in its own words.
+// refusePNFSExpansion turns away an expand of a pNFS volume, in its own words.
 //
 // Growing one is two steps on two hosts: grow the logical volume, and then run
 // xfs_growfs on whichever host currently serves the export. The second has no
@@ -79,16 +79,16 @@ func deleteExportFor(
 // all: the pNFS handle does not parse as a block one, and the user reads
 // "invalid volume handle" about a volume this driver created, which reads like
 // corruption and sends them looking in the wrong place.
-func refuseRWXExpansion(volumeHandle string) error {
+func refusePNFSExpansion(volumeHandle string) error {
 	if !lvol.VolumeHandle(volumeHandle).IsNFS() {
 		return nil
 	}
 	return status.Error(codes.Unimplemented,
-		"a ReadWriteMany volume cannot be expanded yet: growing one means growing the volume "+
+		"a pNFS volume cannot be expanded yet: growing one means growing the volume "+
 			"and then the filesystem on the host serving the export, and the second half is not built")
 }
 
-// validateRWXCapabilities answers ValidateVolumeCapabilities for a pNFS volume.
+// validatePNFSCapabilities answers ValidateVolumeCapabilities for a pNFS volume.
 //
 // It cannot go through the control plane the way a block volume does: the
 // handle names an export rather than a logical volume, so the lookup would come
@@ -96,17 +96,24 @@ func refuseRWXExpansion(volumeHandle string) error {
 // missing, which reads as data loss to whoever asked.
 //
 // What can be answered locally is everything that matters. A pNFS volume is a
-// ReadWriteMany filesystem and nothing else, so the question is only whether
-// the caller is asking for that.
-func validateRWXCapabilities(volumeHandle string, caps []*csi.VolumeCapability) (bool, error) {
+// filesystem, served to one writer or to many, so the question is whether the
+// caller is asking for a filesystem and for a mode an export can serve.
+func validatePNFSCapabilities(volumeHandle string, caps []*csi.VolumeCapability) (bool, error) {
 	if _, ok := lvol.ParseNFSHandle(lvol.VolumeHandle(volumeHandle)); !ok {
 		return false, status.Errorf(codes.NotFound, "volume %q not found", volumeHandle)
 	}
-	rwx, err := isRWX(caps)
-	if err != nil {
-		// A refused mode is an answer rather than a failure here: the caller
-		// asked whether the volume supports it, and it does not.
-		return false, nil
+	for _, c := range caps {
+		if c.GetBlock() != nil {
+			// Not a failure: the caller asked whether an export can be a raw
+			// device, and the answer is that it cannot.
+			return false, nil
+		}
+		switch c.GetAccessMode().GetMode() {
+		case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
+		default:
+			return false, nil
+		}
 	}
-	return rwx, nil
+	return true, nil
 }

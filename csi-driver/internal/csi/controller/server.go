@@ -21,8 +21,8 @@ type Server struct {
 	// config is available (e.g., unit tests), in which case the annotation helpers
 	// are no-ops.
 	kubeClient kubernetes.Interface
-	// exports records the NFSExport a ReadWriteMany volume needs. Nil outside a
-	// cluster and when the CRD is unavailable, in which case an RWX claim is
+	// exports records the NFSExport a pNFS volume needs. Nil outside a
+	// cluster and when the CRD is unavailable, in which case a pNFS claim is
 	// refused with a clear message rather than the driver failing to start.
 	exports ExportRegistry
 }

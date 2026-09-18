@@ -1,11 +1,10 @@
-// Tests for the RWX provisioning path: which access modes are taken, which are
+// Tests for the pNFS provisioning path: which requests take it, which are
 // refused, and that the identity a volume is given is derived once and agrees
 // with itself.
 //
-// The refusals matter as much as the acceptance. A read-only or single-writer
-// multi-node claim that silently got RWX behavior would hand a user a filesystem
-// several nodes can write, which is neither what they asked for nor what their
-// application is built for.
+// The routing is on fsType, so most of these are about what does *not* take the
+// path. A claim that asked for a block volume and silently got an NFS export
+// would be a different product than the one its StorageClass named.
 
 package controller
 
@@ -26,21 +25,25 @@ func capWithMode(mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapabilit
 	}
 }
 
-func TestRWXIsTakenOnlyForMultiWriter(t *testing.T) {
+func TestPNFSIsTakenOnlyForThePNFSFSType(t *testing.T) {
 	cases := []struct {
-		name string
-		mode csi.VolumeCapability_AccessMode_Mode
-		rwx  bool
-		errs bool
+		name   string
+		fsType string
+		mode   csi.VolumeCapability_AccessMode_Mode
+		pnfs   bool
+		errs   bool
 	}{
-		{"single node writer stays block", csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER, false, false},
-		{"multi node multi writer is RWX", csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, true, false},
-		{"multi node reader only is refused", csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY, false, true},
-		{"multi node single writer is refused", csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER, false, true},
+		{"pnfs with one writer", pnfsFSType, csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER, true, false},
+		{"pnfs with many writers", pnfsFSType, csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, true, false},
+		{"xfs stays block", "xfs", csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER, false, false},
+		{"xfs many writers stays block", "xfs", csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER, false, false},
+		{"no fsType stays block", "", csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER, false, false},
+		{"reader only is refused", pnfsFSType, csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY, false, true},
+		{"single writer across nodes is refused", pnfsFSType, csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rwx, err := isRWX([]*csi.VolumeCapability{capWithMode(tc.mode)})
+			pnfs, err := isPNFSRequest([]*csi.VolumeCapability{mountCapMode(tc.fsType, tc.mode)})
 			if tc.errs {
 				if err == nil {
 					t.Fatalf("mode %s was accepted", tc.mode)
@@ -51,10 +54,10 @@ func TestRWXIsTakenOnlyForMultiWriter(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("mode %s: %v", tc.mode, err)
+				t.Fatalf("fsType %q, mode %s: %v", tc.fsType, tc.mode, err)
 			}
-			if rwx != tc.rwx {
-				t.Errorf("rwx = %v, want %v", rwx, tc.rwx)
+			if pnfs != tc.pnfs {
+				t.Errorf("pnfs = %v, want %v", pnfs, tc.pnfs)
 			}
 		})
 	}
@@ -240,13 +243,13 @@ func TestDeletedExportYieldsTheBackingBlockHandle(t *testing.T) {
 // alone the handle simply fails to parse somewhere further in, and the user
 // reads "invalid volume handle" about a volume the driver created, which sends
 // them looking for corruption rather than for a missing feature.
-func TestExpandingAnRWXVolumeIsRefusedInItsOwnWords(t *testing.T) {
-	err := refuseRWXExpansion(
+func TestExpandingAPNFSVolumeIsRefusedInItsOwnWords(t *testing.T) {
+	err := refusePNFSExpansion(
 		"nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f")
 	if err == nil {
-		t.Fatal("expanding a ReadWriteMany volume was accepted")
+		t.Fatal("expanding a pNFS volume was accepted")
 	}
-	if !strings.Contains(err.Error(), "ReadWriteMany") {
+	if !strings.Contains(err.Error(), "pNFS") {
 		t.Errorf("the refusal %q does not say what kind of volume this is", err)
 	}
 	if strings.Contains(err.Error(), "invalid volume handle") {
@@ -256,7 +259,7 @@ func TestExpandingAnRWXVolumeIsRefusedInItsOwnWords(t *testing.T) {
 
 // A block volume still expands.
 func TestExpandingABlockVolumeIsNotRefusedHere(t *testing.T) {
-	if err := refuseRWXExpansion("f0bb9077:pool-a:bfc56677"); err != nil {
+	if err := refusePNFSExpansion("f0bb9077:pool-a:bfc56677"); err != nil {
 		t.Errorf("a block volume was refused: %v", err)
 	}
 }
@@ -265,11 +268,11 @@ func TestExpandingABlockVolumeIsNotRefusedHere(t *testing.T) {
 // answer NotFound. The handle does not parse as a block one, so without a
 // branch the driver reports a volume it provisioned as missing -- which reads
 // as data loss to whoever asked.
-func TestValidatingAnRWXVolumeDoesNotReportItMissing(t *testing.T) {
+func TestValidatingAPNFSVolumeDoesNotReportItMissing(t *testing.T) {
 	const handle = "nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f"
 
 	// A ReadWriteMany filesystem request is what this volume is for.
-	confirmed, err := validateRWXCapabilities(handle, []*csi.VolumeCapability{{
+	confirmed, err := validatePNFSCapabilities(handle, []*csi.VolumeCapability{{
 		AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
 		AccessMode: &csi.VolumeCapability_AccessMode{
 			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
@@ -283,13 +286,13 @@ func TestValidatingAnRWXVolumeDoesNotReportItMissing(t *testing.T) {
 	}
 }
 
-// Asking whether an RWX volume can be a raw block device is answered no, not
+// Asking whether a pNFS volume can be a raw block device is answered no, not
 // confirmed: pNFS exports a filesystem, and a caller told yes would go on to
 // use it as a device.
-func TestValidatingAnRWXVolumeRefusesBlock(t *testing.T) {
+func TestValidatingAPNFSVolumeRefusesBlock(t *testing.T) {
 	const handle = "nfs:f0bb9077-78c4-4482-9ccf-a5693ce2df78:pool-a:bfc56677-d602-4017-804b-975f3b929e3f"
 
-	confirmed, err := validateRWXCapabilities(handle, []*csi.VolumeCapability{{
+	confirmed, err := validatePNFSCapabilities(handle, []*csi.VolumeCapability{{
 		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
 		AccessMode: &csi.VolumeCapability_AccessMode{
 			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
@@ -303,8 +306,17 @@ func TestValidatingAnRWXVolumeRefusesBlock(t *testing.T) {
 	}
 }
 
-// blockCap and mountCap build the two shapes a ReadWriteMany request arrives in.
-func blockCap() *csi.VolumeCapability {
+// mountCapMode and pnfsBlockCap build the shapes a request arrives in.
+func mountCapMode(fsType string, mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{
+			Mount: &csi.VolumeCapability_MountVolume{FsType: fsType},
+		},
+		AccessMode: &csi.VolumeCapability_AccessMode{Mode: mode},
+	}
+}
+
+func pnfsBlockCap() *csi.VolumeCapability {
 	return &csi.VolumeCapability{
 		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
 		AccessMode: &csi.VolumeCapability_AccessMode{
@@ -313,47 +325,31 @@ func blockCap() *csi.VolumeCapability {
 	}
 }
 
-func mountCap(fsType string) *csi.VolumeCapability {
-	return &csi.VolumeCapability{
-		AccessType: &csi.VolumeCapability_Mount{
-			Mount: &csi.VolumeCapability_MountVolume{FsType: fsType},
-		},
-		AccessMode: &csi.VolumeCapability_AccessMode{
-			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-		},
+// A raw-block claim has no filesystem to ask for, so fsType cannot select pNFS
+// for one. Reaching here means volumeMode and the StorageClass disagree, and
+// the claim is refused rather than quietly given one or the other.
+func TestPNFSRefusesARawBlockClaim(t *testing.T) {
+	caps := []*csi.VolumeCapability{pnfsBlockCap(), mountCapMode(pnfsFSType,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER)}
+	if _, err := isPNFSRequest(caps); err == nil {
+		t.Error("a raw-block claim asking for pNFS was accepted")
 	}
 }
 
-// ReadWriteMany with volumeMode: Block is ordinary multi-attach: one namespace,
-// several initiators, no filesystem. The block path has always served it, and
-// KubeVirt live migration needs it. pNFS is not involved, so this must route to
-// the block path rather than be refused -- refusing it is a regression against
-// every release before pNFS existed.
-func TestRWXBlockIsNotAPNFSVolume(t *testing.T) {
-	rwx, err := isRWX([]*csi.VolumeCapability{blockCap()})
-	if err != nil {
-		t.Fatalf("RWX block was refused: %v", err)
-	}
-	if rwx {
-		t.Error("RWX block routed to pNFS; it is plain multi-attach and belongs on the block path")
-	}
-}
-
-// XFS is the only filesystem a SCSI layout can be served from, so a request for
-// anything else cannot be honored. It has to be refused rather than quietly
-// formatted as XFS, which is what happens when nothing checks: the user asks
-// for ext4, the export is XFS, and nothing says so.
-func TestRWXRefusesANonXFSFilesystem(t *testing.T) {
-	if _, err := isRWX([]*csi.VolumeCapability{mountCap("ext4")}); err == nil {
-		t.Error("RWX with ext4 was accepted; the export is always XFS, so this has to be refused")
-	}
-	for _, fsType := range []string{"", "xfs"} {
-		rwx, err := isRWX([]*csi.VolumeCapability{mountCap(fsType)})
+// ReadWriteMany on an ordinary filesystem is not this path's business. It is
+// what every release before pNFS did, and KubeVirt live migration needs the
+// raw-block form of it, so neither is refused here.
+func TestRWXWithoutPNFSIsLeftAlone(t *testing.T) {
+	for _, c := range []*csi.VolumeCapability{
+		mountCapMode("xfs", csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER),
+		pnfsBlockCap(),
+	} {
+		pnfs, err := isPNFSRequest([]*csi.VolumeCapability{c})
 		if err != nil {
-			t.Errorf("RWX with fsType %q was refused: %v", fsType, err)
+			t.Errorf("a ReadWriteMany claim was refused: %v", err)
 		}
-		if !rwx {
-			t.Errorf("RWX with fsType %q did not route to pNFS", fsType)
+		if pnfs {
+			t.Error("a ReadWriteMany claim was routed to pNFS without asking for it")
 		}
 	}
 }

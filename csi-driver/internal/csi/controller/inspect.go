@@ -32,7 +32,7 @@ func (cs *Server) ValidateVolumeCapabilities(
 	// a logical volume, so the control-plane lookup below would come back
 	// not-found and report a volume this driver provisioned as missing.
 	if lvol.VolumeHandle(volumeID).IsNFS() {
-		confirmed, err := validateRWXCapabilities(volumeID, req.GetVolumeCapabilities())
+		confirmed, err := validatePNFSCapabilities(volumeID, req.GetVolumeCapabilities())
 		if err != nil {
 			return nil, err
 		}

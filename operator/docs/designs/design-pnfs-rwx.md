@@ -248,14 +248,15 @@ to `/sbin/mount.nfs`, from `nfs-utils`, which the driver image does not carry an
 should not -- §14.1 already requires it on any host that may run an RWX pod, and
 a second copy would be two things to keep in step. And publishing into the pod is
 a bind, which takes no filesystem type: the type on the volume capability comes
-from the StorageClass's `csi.storage.k8s.io/fstype`, which for an RWX volume
-describes the filesystem the *metadata server* makes, and passing it on sends
+from the StorageClass's `csi.storage.k8s.io/fstype`, which for a pNFS volume is
+the string that selected the path, and passing it on sends
 `mount(8)` looking for a helper named after it -- `/sbin/mount.nfs` exists and
 does not bind.
 
-Worth recording for §16 as well: `csi.storage.k8s.io/fstype` has no effect on an
-RWX volume. A pNFS SCSI layout can only be served from XFS, so the export's
-filesystem is XFS whatever the class says.
+Worth recording for §16 as well: `csi.storage.k8s.io/fstype` selects this path
+rather than describing a filesystem anything mounts (§9.1). The export is XFS
+because a SCSI layout can be served from nothing else, and the client mounts
+NFS 4.1, so the value names neither.
 
 **`exportfs` has to run on the host, and §14.1 half said so.** The section asks
 for `nfs-utils` on MDS hosts, which is right, and then has csi-node run
@@ -476,7 +477,7 @@ this document.
 
 ### 1.1 Goals
 
-- Provide **`ReadWriteMany` (RWX)** persistent volumes backed by simplyblock storage, so that multiple pods on multiple worker nodes can share a single filesystem concurrently.
+- Provide **`ReadWriteMany` (RWX)** persistent volumes backed by simplyblock storage, so that multiple pods on multiple worker nodes can share a single filesystem concurrently. The same path serves `ReadWriteOnce`, since what selects it is the StorageClass rather than the access mode (§9.1).
 - Deliver near-block performance for the shared data path by using the **pNFS SCSI layout** (RFC 8154): the NFS server (Metadata Server, "MDS") hands out block layouts, and clients perform **direct NVMe-oF I/O** to the underlying namespaces, bypassing the MDS for bulk data.
 - Reuse the existing simplyblock control-plane API, NVMe-oF connect/reconnect machinery, and CSI plumbing wherever possible.
 - Support the full volume lifecycle for RWX volumes: create, delete, resize, snapshot, clone, and restore.
@@ -486,7 +487,7 @@ this document.
 
 - Cross-cluster / cross-region RWX volumes (an RWX volume lives in exactly one simplyblock cluster).
 - Automatic re-striping / re-balancing of an existing RWX volume across a changed set of storage nodes.
-- RWX for raw-block (`volumeMode: Block`) PVCs, which pNFS is not involved in. A raw-block ReadWriteMany claim is plain multi-attach: one namespace, several initiators, and no filesystem between them, which the existing block path already serves and KubeVirt live migration needs. It is out of scope here rather than refused, and `ReadWriteMany` therefore selects pNFS only together with `volumeMode: Filesystem`.
+- Raw-block (`volumeMode: Block`) PVCs, which pNFS is not involved in. A raw-block claim is plain multi-attach: one namespace, several initiators, and no filesystem between them, which the existing block path already serves and KubeVirt live migration needs. Such a claim never reaches this path, because it has no filesystem to ask for: a `volumeMode: Block` claim whose class nevertheless names `fsType: pnfs` is refused, since volumeMode and the StorageClass contradict each other and honoring either would pick a winner the user did not.
 - Windows / non-Linux clients (the pNFS SCSI layout and `blkmapd` are Linux-only here).
 - NFSv3 or plain (non-parallel) NFSv4 as a supported fallback product feature. Non-pNFS NFSv4.1 MDS-routed I/O exists only as an automatic degraded fallback (see §16).
 
@@ -618,7 +619,7 @@ If the client cannot establish the block path (device missing, fenced, reservati
 - **FR-4** On the MDS host: attach the lvol, `mkfs.xfs`, mount at `/mnt/{pvc-name}`, add a `pnfs` export, and run `exportfs -ra`.
 - **FR-5** On each client node: attach the same lvol, create the `nvme-eui.${NGUID}` alias under `/dev/disk/by-id/`, ensure `blkmapd` is running, and mount the export's Service address via NFSv4.1 into the pod.
 - **FR-6** Support delete, online resize, snapshot (quiesced through `xfs_freeze` on the MDS), clone, and restore for RWX volumes.
-- **FR-7** Advertise `MULTI_NODE_MULTI_WRITER` access mode for RWX volumes while keeping RWO behavior unchanged.
+- **FR-7** Advertise the `MULTI_NODE_MULTI_WRITER` access mode, and select the pNFS path from `csi.storage.k8s.io/fstype: pnfs`, leaving every class that does not name it behaving exactly as before.
 - **FR-8** Handle planned and unplanned MDS migration with automatic client reconnect.
 
 ### 5.2 Non-Functional
@@ -1028,7 +1029,7 @@ UID information, and the same identifier names the `fsid` allocation below.
 Idempotent steps, each skipped when already satisfied:
 
 1. **Attach the namespace:** csi-node connects the backing namespace and owns its reconnect lifecycle (§8 intro, `initiator.Connect` and `MonitorConnection`). CreateExport waits for the device to appear, then proceeds.
-2. **Filesystem:** `mkfs.xfs` on the namespace, only if it is not already formatted, detected through `blkid`. XFS is mandatory for the pNFS SCSI layout, so a request for any other `fsType` is refused by `CreateVolume` before anything is provisioned, rather than here (FM-7).
+2. **Filesystem:** `mkfs.xfs` on the namespace, only if it is not already formatted, detected through `blkid`. XFS is not a choice here: it is the only filesystem a SCSI layout can be served from, which is why `fsType: pnfs` names the path rather than a format (§9.1).
 3. **Mount:** create `/mnt/{pvc-name}` and mount the device there.
 4. **Export:** write the `/etc/exports.d/{pvc}.exports` entry:
    ```
@@ -1077,8 +1078,11 @@ Changes in `internal/csi/controller`, `internal/controlplane/cluster.go`, `inter
 
 ### 9.1 Access-mode / capability changes
 
-- Advertise `MULTI_NODE_MULTI_WRITER` in the driver's access modes (`internal/csi-common/driver.go` via `AddVolumeCapabilityAccessModes`, currently only `SINGLE_NODE_WRITER` in `sanity_test.go`).
-- In `CreateVolume`, branch on the requested access mode: `MULTI_NODE_MULTI_WRITER` alone, or the StorageClass flag, selects the **pNFS path**. The other `MULTI_NODE_*` modes are not specified by this design and are rejected rather than routed, so a read-only or single-writer multi-node request does not silently get RWX behavior.
+- Advertise `MULTI_NODE_MULTI_WRITER` in the driver's access modes (`internal/csi-common/driver.go` via `AddVolumeCapabilityAccessModes`, currently only `SINGLE_NODE_WRITER` in `sanity_test.go`), because an export can serve many writers and a block volume cannot.
+- **The StorageClass selects the pNFS path, through `csi.storage.k8s.io/fstype: pnfs`, and nothing else does.** `CreateVolume` branches on that string. The access mode is orthogonal: `ReadWriteOnce` over pNFS is as valid as `ReadWriteMany` and gets the same machinery, and a claim that does not ask for `pnfs` takes the block path whatever its access mode.
+- The value names a request rather than an on-disk format. What the metadata server makes is XFS, the only filesystem a SCSI layout can be served from (§8.2), and what a client mounts is NFS 4.1. So `xfs` is not a way to ask for this path: it asks for a block device with XFS on it, which is a different product.
+- Routing on the access mode instead would change what an existing StorageClass provisions. `ReadWriteMany` on an ordinary filesystem is what every release before this one served, and raw-block `ReadWriteMany` is the multi-attach KubeVirt live migration needs, so neither can be reinterpreted as a request for an export.
+- The `MULTI_NODE_*` modes an export cannot serve, read-only and single-writer, are rejected rather than routed, so such a request does not silently get shared-writer behavior.
 - No group capability is advertised. `GROUP_CONTROLLER_SERVICE` and `CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT` belong to the striped design (§9.5), and claiming them here would have the driver advertise a service it does not implement.
 
 ### 9.2 New StorageClass parameters
@@ -1535,7 +1539,7 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 | FM-4  | Partial provisioning failure (some lvols created, export not)           | Record stuck in `Provisioning`. A retry resumes, and the reconciler GCs after a timeout.                                                                                                                                               |
 | FM-5  | The backing namespace is lost                                           | XFS errors and the export goes `Degraded`. Redundancy is the backend's responsibility through per-lvol erasure coding or replication. This design adds no redundancy of its own.                                                       |
 | FM-6  | Snapshot requested on a volume whose filesystem cannot be frozen        | The freeze is attempted, and a failure aborts the snapshot rather than taking an unquiesced one. A single-volume snapshot needs no consistency group (§6.3), so it is never refused for that reason.                                   |
-| FM-7  | Non-XFS fsType requested for RWX                                        | Rejected by `CreateVolume`, because a SCSI layout can only be served from XFS.                                                                                                                                                         |
+| FM-7  | `fsType: pnfs` on a `volumeMode: Block` claim                           | Rejected by `CreateVolume`: the class asks for a filesystem and the claim for a raw device.                                                                                                                                            |
 | FM-8  | Two pods on different nodes writing same file                           | Handled by NFSv4 byte-range locking via the MDS. Correctness is NFS's responsibility.                                                                                                                                                  |
 | FM-9  | `blkmapd` not running on client                                         | No block layout is obtained, and I/O silently falls back to the MDS. Node plugin must detect and (re)start `blkmapd`, and log.                                                                                                         |
 | FM-10 | Debian/Ubuntu `/dev/disk/by-id` naming differs                          | The alias step may fail → no direct path, silently. Must be tested per-distro (§18).                                                                                                                                                   |

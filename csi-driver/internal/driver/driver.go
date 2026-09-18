@@ -74,7 +74,8 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
-		// MULTI_NODE_MULTI_WRITER is what a ReadWriteMany claim asks for, and
+		// MULTI_NODE_MULTI_WRITER is what a ReadWriteMany claim asks for, which a
+		// pNFS export can serve and a block volume cannot, and
 		// it is served by a pNFS export rather than by sharing a block device.
 		// The other multi-node modes are deliberately absent: the controller
 		// refuses them rather than routing them here, so a read-only or
@@ -112,12 +113,12 @@ func Run(conf *config.Config) {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
-		// The NFSExport records a ReadWriteMany volume needs. A custom resource
+		// The NFSExport records a pNFS volume needs. A custom resource
 		// is out of reach of the typed client, and generating a typed one for a
 		// kind the driver only creates and reads would be a build dependency on
 		// the operator's module for very little.
 		if dyn, dynErr := dynamic.NewForConfig(k8sConfig); dynErr != nil {
-			klog.Warningf("no dynamic client, so ReadWriteMany volumes cannot be provisioned: %v", dynErr)
+			klog.Warningf("no dynamic client, so pNFS volumes cannot be provisioned: %v", dynErr)
 		} else {
 			exports = controller.NewExportRegistry(dyn)
 		}

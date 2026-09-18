@@ -104,7 +104,7 @@ func run(ctx context.Context, name string, args []string) error {
 //
 // A client needs the host for a reason of its own. mount(8) hands an NFS mount
 // to /sbin/mount.nfs, a helper from nfs-utils that this image does not carry
-// and should not -- a host that may run a ReadWriteMany pod needs nfs-utils
+// and should not -- a host that may run a pNFS pod needs nfs-utils
 // anyway, and two copies of it would be two things to keep in step. Mounting
 // there also puts the mount directly where kubelet looks, rather than relying
 // on it propagating out of the container.

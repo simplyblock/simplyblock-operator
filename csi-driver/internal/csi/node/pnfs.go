@@ -138,7 +138,7 @@ func mountOptions(extra string) []string {
 // stagePNFS attaches the export at the staging path.
 //
 // The mounter is the host's: mount(8) hands an NFS mount to /sbin/mount.nfs,
-// from nfs-utils, which this image does not carry and a host running an RWX pod
+// from nfs-utils, which this image does not carry and a host running a pNFS pod
 // needs anyway. Nothing here formats -- the filesystem is the metadata
 // server's, and a client that could format one could destroy it.
 func stagePNFS(
@@ -435,9 +435,8 @@ func (ns *Server) restagePNFSVolume(
 //
 // For a pNFS volume it is nothing. Publishing is a bind of an already-mounted
 // path, and a bind takes no type; the type on the volume capability comes from
-// the StorageClass's csi.storage.k8s.io/fstype, which for a ReadWriteMany
-// volume describes the filesystem the metadata server makes rather than what
-// this client mounted. Passing it on makes mount(8) look for a helper named
+// the StorageClass's csi.storage.k8s.io/fstype, which for a pNFS volume is
+// the string that selected this path rather than a type anything mounts. Passing it on makes mount(8) look for a helper named
 // after the type, and /sbin/mount.nfs exists and does not bind.
 func publishFSType(volumeHandle, requested string) string {
 	if isPNFSVolume(volumeHandle) {

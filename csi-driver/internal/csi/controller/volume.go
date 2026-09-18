@@ -38,10 +38,11 @@ func (cs *Server) CreateVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	// A ReadWriteMany claim is served by a pNFS export rather than by a block
-	// device several nodes attach, so it takes a different path entirely. The
-	// other multi-node modes are refused here rather than routed into it.
-	rwx, err := isRWX(req.GetVolumeCapabilities())
+	// A claim whose StorageClass asks for fsType "pnfs" is served by an export
+	// rather than by a block device, so it takes a different path entirely.
+	// The access mode does not decide this, and the modes pNFS cannot serve
+	// are refused here rather than routed into it.
+	pnfs, err := isPNFSRequest(req.GetVolumeCapabilities())
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +68,11 @@ func (cs *Server) CreateVolume(
 		return nil, classifyCreateVolumeError(err)
 	}
 
-	if rwx {
+	if pnfs {
 		// The backing volume exists; from here the export is the operator's.
 		// This returns Aborted while the export assembles, so the external
 		// provisioner retries rather than the call being held open.
-		return cs.createRWXVolume(ctx, req, csiVolume, selection.clusterID)
+		return cs.createPNFSVolume(ctx, req, csiVolume, selection.clusterID)
 	}
 
 	volumeInfo, err := cs.publishVolume(ctx, csiVolume.GetVolumeId(), sbClient)

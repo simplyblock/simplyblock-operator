@@ -1,4 +1,4 @@
-// The RWX provisioning path: what CreateVolume does differently when the claim
+// The pNFS provisioning path: what CreateVolume does differently when the claim
 // asks for MULTI_NODE_MULTI_WRITER.
 //
 // The controller creates two things and stops: the backing volume, and the
@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/lvol"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -35,10 +34,15 @@ const AccessProtocolNFS = "nfs"
 // this path and read by NodeStageVolume, and nothing else produces them.
 const (
 	ctxAccessProtocol = "access_protocol"
-	ctxExportService  = "export_service"
-	ctxExportPath     = "export_path"
-	ctxFSID           = "fsid"
-	ctxNGUID          = "nguid"
+
+	// pnfsFSType is what a StorageClass sets csi.storage.k8s.io/fstype to in
+	// order to ask for a pNFS export. It names a request, not an on-disk
+	// format: the export itself is export.FSType, and the client mounts NFS.
+	pnfsFSType       = "pnfs"
+	ctxExportService = "export_service"
+	ctxExportPath    = "export_path"
+	ctxFSID          = "fsid"
+	ctxNGUID         = "nguid"
 )
 
 // exportNameHashLength is how much of the handle digest the record's name
@@ -48,53 +52,47 @@ const (
 // short enough to read in a kubectl listing.
 const exportNameHashLength = 20
 
-// isRWX reports whether the request asks for a shared filesystem served by
-// pNFS, and refuses the multi-node modes this design does not implement.
+// isPNFSRequest reports whether the request asks for a pNFS export, and
+// refuses the access modes this design does not implement.
 //
-// The other MULTI_NODE_* modes are rejected rather than routed. A read-only or
-// single-writer multi-node claim silently getting RWX behavior would hand a
-// user a filesystem several nodes can write, which is not what they asked for
-// and not what their application expects.
+// **The StorageClass selects pNFS, through `csi.storage.k8s.io/fstype: pnfs`,
+// and nothing else does.** The access mode is not the switch: ReadWriteMany on
+// an ordinary filesystem is what every release before pNFS served, raw-block
+// ReadWriteMany is the multi-attach KubeVirt live migration needs, and
+// inferring an export from either would change what an existing StorageClass
+// provisions. ReadWriteOnce over pNFS is equally legitimate and gets the same
+// machinery, so the mode is orthogonal.
 //
-// ReadWriteMany with volumeMode: Block is not one of those refusals, and the
-// distinction is the whole reason this returns a bool rather than an error.
-// Raw multi-attach -- one namespace, several initiators, no filesystem between
-// them -- is what the block path has always done and what KubeVirt live
-// migration needs. pNFS is not involved in it, so it reports false and the
-// caller provisions a block volume exactly as it did before pNFS existed.
-// Refusing it here would take away a mode every earlier release served.
-func isRWX(caps []*csi.VolumeCapability) (bool, error) {
-	rwx := false
+// `pnfs` names a request rather than an on-disk format. What the metadata
+// server actually makes is XFS (export.FSType), because that is the only
+// filesystem a SCSI layout can be served from, and what a client mounts is
+// NFS 4.1. A user asking for `xfs` is therefore not asking for this path: they
+// would get a block device with XFS on it, which is a different product.
+func isPNFSRequest(caps []*csi.VolumeCapability) (bool, error) {
+	pnfs := false
 	for _, c := range caps {
+		if c.GetMount().GetFsType() == pnfsFSType {
+			pnfs = true
+		}
+	}
+	if !pnfs {
+		return false, nil
+	}
+	for _, c := range caps {
+		// A raw-block claim has no filesystem to ask for, so reaching here
+		// means volumeMode and the StorageClass disagree. Refusing says so;
+		// honoring either one silently picks a winner the user did not.
+		if c.GetBlock() != nil {
+			return false, status.Errorf(codes.InvalidArgument,
+				"fsType %q asks for a pNFS export, which is a filesystem, "+
+					"and volumeMode: Block asks for a raw device", pnfsFSType)
+		}
 		switch c.GetAccessMode().GetMode() {
-		case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
-			rwx = true
 		case csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
 			csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER:
 			return false, status.Errorf(codes.InvalidArgument,
 				"access mode %s is not supported; use ReadWriteOnce or ReadWriteMany",
 				c.GetAccessMode().GetMode())
-		}
-	}
-	if !rwx {
-		return false, nil
-	}
-	for _, c := range caps {
-		if c.GetBlock() != nil {
-			return false, nil
-		}
-	}
-	// XFS is the only filesystem a SCSI layout can be served from, so a request
-	// for another one cannot be honored. It is refused rather than quietly
-	// formatted as XFS: the export ignores the request either way, and a user
-	// who asked for ext4 and was told nothing has no way to learn that.
-	// An empty fsType is the caller expressing no preference, which XFS meets.
-	for _, c := range caps {
-		fsType := c.GetMount().GetFsType()
-		if fsType != "" && fsType != export.FSType {
-			return false, status.Errorf(codes.InvalidArgument,
-				"ReadWriteMany is served by a pNFS SCSI layout, which only %s can serve, "+
-					"so fsType %q cannot be honored", export.FSType, fsType)
 		}
 	}
 	return true, nil
@@ -190,7 +188,7 @@ type ExportSpec struct {
 	NGUID      string
 }
 
-// pnfsIdentity is everything about an RWX volume that is derived rather than
+// pnfsIdentity is everything about a pNFS volume that is derived rather than
 // observed, computed in one place so the handle, the record's name, the mount
 // point, and the fsid cannot disagree with each other.
 type pnfsIdentity struct {
@@ -201,10 +199,10 @@ type pnfsIdentity struct {
 	FSID       string
 }
 
-// deriveIdentity computes the identity of a new RWX volume.
+// deriveIdentity computes the identity of a new pNFS volume.
 //
 // The export UUID is the volume's own id, not the backing volume's: striping
-// would give an RWX volume several backing volumes, and a handle built on one of
+// would give a pNFS volume several backing volumes, and a handle built on one of
 // them would change identity the moment that happened.
 //
 // The fsid is that same UUID. exports(5) accepts one, so the value is unique
@@ -270,7 +268,7 @@ func phaseOrPending(phase string) string {
 	return phase
 }
 
-// ensureExportRecord creates or fetches the record for an RWX volume.
+// ensureExportRecord creates or fetches the record for a pNFS volume.
 func (cs *Server) ensureExportRecord(
 	ctx context.Context,
 	registry ExportRegistry,
@@ -282,7 +280,7 @@ func (cs *Server) ensureExportRecord(
 		// needed, and a backing volume with nothing to serve it is worse than a
 		// refused claim.
 		return ExportRecord{}, status.Error(codes.FailedPrecondition,
-			"ReadWriteMany needs the NFSExport registry, which is not configured")
+			"a pNFS volume needs the NFSExport registry, which is not configured")
 	}
 	record, err := registry.EnsureExport(ctx, identity.RecordName, ExportSpec{
 		Namespace:  namespace,
@@ -298,14 +296,14 @@ func (cs *Server) ensureExportRecord(
 	return record, nil
 }
 
-// createRWXVolume finishes provisioning an RWX volume once its backing volume
+// createPNFSVolume finishes provisioning a pNFS volume once its backing volume
 // exists: it records the export and waits for the operator to serve it.
 //
 // The backing volume is created first and deliberately. An export with no volume
 // behind it is a record describing nothing, while a volume with no export yet is
 // exactly the state the record is about to describe, and the record's name is
 // derived rather than generated so a retry addresses the same object.
-func (cs *Server) createRWXVolume(
+func (cs *Server) createPNFSVolume(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
 	csiVolume *csi.Volume,
@@ -319,7 +317,7 @@ func (cs *Server) createRWXVolume(
 		// Without them two claims of the same name in different namespaces
 		// would collide on one MDS host, so this is refused rather than guessed.
 		return nil, status.Error(codes.InvalidArgument,
-			"ReadWriteMany needs the PVC name and namespace; enable --extra-create-metadata on the provisioner")
+			"a pNFS volume needs the PVC name and namespace; enable --extra-create-metadata on the provisioner")
 	}
 
 	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolume.GetVolumeId()))
