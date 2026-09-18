@@ -338,6 +338,7 @@ func csiAddonsSidecarContainer(
 		Args: []string{
 			verbosity,
 			"--csi-addons-address=" + controllerSocketPath,
+			"--node-id=$(NODE_ID)",
 			"--controller-ip=$(POD_IP)",
 			"--controller-port=" + strconv.Itoa(int(csiAddonsControllerPort)),
 			"--pod=$(POD_NAME)",
@@ -346,6 +347,11 @@ func csiAddonsSidecarContainer(
 			"--leader-election-namespace=$(POD_NAMESPACE)",
 		},
 		Env: []corev1.EnvVar{
+			// Required, not cosmetic: csiaddonsnode.Manager.Node ("the
+			// hostname of the system where the sidecar is running") rejects
+			// an empty value with "invalid configuration: missing node"
+			// before it ever creates the CSIAddonsNode object.
+			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			fieldRefEnv("POD_IP", "status.podIP"),
 			fieldRefEnv("POD_NAME", "metadata.name"),
 			fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),

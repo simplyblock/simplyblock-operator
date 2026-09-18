@@ -128,7 +128,7 @@ func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
 	}
 
 	wantFieldPaths := map[string]string{
-		"POD_IP": "status.podIP", "POD_NAME": "metadata.name",
+		"NODE_ID": "spec.nodeName", "POD_IP": "status.podIP", "POD_NAME": "metadata.name",
 		"POD_NAMESPACE": "metadata.namespace", "POD_UID": "metadata.uid",
 	}
 	for _, e := range c.Env {
@@ -145,6 +145,12 @@ func TestCSIAddonsSidecarAdvertisesItsOwnPod(t *testing.T) {
 		t.Errorf("no %s env var", name)
 	}
 
+	// Required, not cosmetic: csiaddonsnode.Manager.Node rejects an empty
+	// value with "invalid configuration: missing node" before it ever
+	// creates the CSIAddonsNode object (confirmed against a live cluster).
+	if nodeID, ok := argValue(c, "--node-id"); !ok || nodeID != "$(NODE_ID)" {
+		t.Errorf("--node-id = %q, want $(NODE_ID)", nodeID)
+	}
 	if ip, ok := argValue(c, "--controller-ip"); !ok || ip != "$(POD_IP)" {
 		t.Errorf("--controller-ip = %q, want $(POD_IP)", ip)
 	}
