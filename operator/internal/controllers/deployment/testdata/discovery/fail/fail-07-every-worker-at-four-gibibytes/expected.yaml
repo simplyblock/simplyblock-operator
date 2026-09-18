@@ -13,6 +13,9 @@ spec:
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-fail-07-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
     vcpuCount: 4
   environment: K3s
   nodeSets:
