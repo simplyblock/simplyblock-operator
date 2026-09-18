@@ -60,7 +60,7 @@ class Sbctl:
         try:
             return json.loads(cp.stdout)
         except json.JSONDecodeError as e:
-            raise SbctlError(f"sbctl {' '.join(argv)} returned unparseable output: {e}") from e
+            raise SbctlError(f"sbctl {' '.join(argv)} returned unparsable output: {e}") from e
 
     # ── queries ────────────────────────────────────────────────────────────────────
 
