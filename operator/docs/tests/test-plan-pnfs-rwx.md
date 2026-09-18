@@ -23,7 +23,7 @@ Scenario IDs are permanent. This plan keeps the prefixes the design assigned:
 | `O-`   | Operator unit and envtest | fake client, mock webapi, `envtest`                                               |
 | `SAN-` | CSI sanity                | `csi-sanity` against the driver                                                   |
 | `I-`   | Integration               | driver plus MDS-host csi-node against a mock control plane, host commands stubbed |
-| `E-`   | End-to-end                | live cluster, kernel ≥ 6.11                                                       |
+| `E-`   | End-to-end                | live cluster, kernel carrying `nvme_get_unique_id`                                |
 | `F-`   | Failure injection         | live cluster plus fault injection                                                 |
 | `SEC-` | Security                  | live cluster, allow-listing and fencing                                           |
 | `L-`   | Load, scale, and soak     | live cluster, multi-day for `L-03`                                                |
@@ -135,24 +135,31 @@ stubbed rather than left to the backend.
 | I-07 | `nvme connect` fails for one member → abort, no LVM assembly, partial members cleaned up                                           | Negative | —    |
 | I-08 | Snapshot without consistency-group support → clean `FailedPrecondition`                                                            | Negative | —    |
 
-## 5. End-to-End Tests (`e2e/pnfs.go`, real cluster, kernel ≥ 6.11)
+## 5. End-to-End Tests (`e2e/pnfs.go`, real cluster, kernel carrying `nvme_get_unique_id`)
 
-| #    | Scenario                                                                                                                        | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| E-01 | Provision RWX PVC; 3 pods across 3 nodes mount and read/write a shared file; data visible across pods                           | Positive | —    |
-| E-02 | Direct block path used: `n` namespaces attached on client; layout stats show block (not MDS) I/O for large sequential writes    | Positive | —    |
-| E-03 | Concurrent writers with byte-range locks: two pods append to the same file, checksum verified                                   | Positive | —    |
-| E-04 | `stripe_count=1` MVP path (Phase 1) end-to-end                                                                                  | Positive | —    |
-| E-05 | `stripe_count=n` (n ≥ 3) end-to-end; throughput vs. RWO baseline (NFR-1)                                                        | Positive | —    |
-| E-06 | Snapshot RWX (consistency group) → restore into new RWX PVC → data matches; new PVC has its own MDS binding                     | Positive | —    |
-| E-07 | Clone RWX → independent RWX PVC                                                                                                 | Positive | —    |
-| E-08 | Online resize under active I/O: `xfs_growfs` grows the mount; pods see new capacity; no I/O interruption                        | Positive | —    |
-| E-09 | Delete RWX PVC → unexported, LV/VG removed, namespaces disconnected (MDS + clients), lvols deleted                              | Positive | —    |
-| E-10 | Distro matrix: core provision/mount/rw on RHEL/Rocky/Alma **and** Ubuntu; `eui64`+direct path work or graceful fallback (FM-10) | Positive | —    |
-| E-11 | RWX pod on kernel < 6.11 node → scheduling avoided / stage fails with clear event; no partial mount                             | Negative | —    |
-| E-12 | Request RWX with `ext4` → provisioning fails with a clear message                                                               | Negative | —    |
-| E-13 | Two RWX PVCs never share an `fsid` on the same MDS host (provision many, assert uniqueness)                                     | Negative | —    |
-| E-14 | `blkmapd` stopped on a client → I/O continues via MDS fallback; node plugin restarts `blkmapd` and logs                         | Negative | —    |
+Every scenario that claims the direct path asserts on the **count of NFS `READ`
+and `WRITE` operations**, paired with the block device's own counters in
+`/proc/diskstats`. The `bytes:` line in `/proc/self/mountstats` cannot show it:
+its `serverread` and `serverwrite` fields are incremented by the layout path too,
+so they read the same whether pNFS is working or silently disabled. See design
+§20.
+
+| #    | Scenario                                                                                                                                                                 | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| E-01 | Provision RWX PVC; 3 pods across 3 nodes mount and read/write a shared file; data visible across pods                                                                    | Positive | —    |
+| E-02 | Direct block path used: namespaces attached on the client; a large sequential write moves zero NFS `WRITE` operations and the whole transfer through the local namespace | Positive | —    |
+| E-03 | Concurrent writers with byte-range locks: two pods append to the same file, checksum verified                                                                            | Positive | —    |
+| E-04 | `stripe_count=1` MVP path (Phase 1) end-to-end                                                                                                                           | Positive | —    |
+| E-05 | `stripe_count=n` (n ≥ 3) end-to-end; throughput vs. RWO baseline (NFR-1)                                                                                                 | Positive | —    |
+| E-06 | Snapshot RWX (consistency group) → restore into new RWX PVC → data matches; new PVC has its own MDS binding                                                              | Positive | —    |
+| E-07 | Clone RWX → independent RWX PVC                                                                                                                                          | Positive | —    |
+| E-08 | Online resize under active I/O: `xfs_growfs` grows the mount; pods see new capacity; no I/O interruption                                                                 | Positive | —    |
+| E-09 | Delete RWX PVC → unexported, LV/VG removed, namespaces disconnected (MDS + clients), lvols deleted                                                                       | Positive | —    |
+| E-10 | Distro matrix: core provision/mount/rw on RHEL/Rocky/Alma **and** Ubuntu; the `nvme-eui.` alias and the direct path work, or fall back gracefully (FM-10)                | Positive | —    |
+| E-11 | RWX pod on a node whose kernel lacks `nvme_get_unique_id` → scheduling avoided / stage fails with clear event; no partial mount                                          | Negative | —    |
+| E-12 | Request RWX with `ext4` → provisioning fails with a clear message                                                                                                        | Negative | —    |
+| E-13 | Two RWX PVCs never share an `fsid` on the same MDS host (provision many, assert uniqueness)                                                                              | Negative | —    |
+| E-14 | `blkmapd` stopped on a client → I/O continues via MDS fallback; node plugin restarts `blkmapd` and logs                                                                  | Negative | —    |
 
 ## 6. Failure-Injection / Resilience E2E (extend `e2e/reconnect*.go` patterns)
 
@@ -194,7 +201,7 @@ stubbed rather than left to the backend.
 ## 9. Test Environment Requirements
 
 
-- Kubernetes cluster with worker + storage nodes on kernel ≥ 6.11, `nfs-utils`/`nfs-common` installed, storage data network reachable.
+- Kubernetes cluster with worker + storage nodes on a kernel carrying `nvme_get_unique_id`, `nfs-utils`/`nfs-common` installed, storage data network reachable.
 - Backend (`sbcli`) build with `-pr` and consistency-group APIs (Phase 0); operator build with the CRD/reconciler changes (design §14.2).
 - Distro matrix: at least one RHEL-family and one Debian-family node pool.
 - Fault-injection tooling consistent with the existing reconnect e2e suites (network partition, process kill, node drain).
@@ -208,15 +215,15 @@ stubbed rather than left to the backend.
 Which topologies the matrix exercises. An axis value with no IDs is a gap, not an
 omission, see §12.
 
-| Axis              | Values covered                                                   | IDs                           | Not covered                                                                                                                                        |
-|-------------------|------------------------------------------------------------------|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| Cluster topology  | 3 nodes (three clients, three members)                           | E-01, E-05, F-08              | single-node cluster; a cluster with fewer eligible MDS hosts than `stripe_count` beyond the `U-08` unit check; 5+ nodes                            |
-| Stripe width      | 1 member, `n ≥ 3`, `n == #eligible nodes`, 0 and negative        | E-04, E-05, U-06, U-07, U-08  | `n` larger than the member limit of one MDS host                                                                                                   |
-| Namespace scope   | single namespace (implicit in every e2e row)                     | —                             | **multi-namespace: two PVCs of the same name in two namespaces sharing one MDS host, `fsid` and export-path collision, cross-namespace isolation** |
-| Cluster count     | one cluster; sources spanning two clusters or pools rejected     | VGS-04                        | two `StorageCluster`s each hosting RWX exports; per-cluster `fsid` allocation                                                                      |
-| Kernel and distro | kernel ≥ 6.11, kernel < 6.11, RHEL family, Debian family         | E-10, E-11, O-02              | a mixed-kernel cluster where only some nodes are eligible                                                                                          |
-| Lifecycle         | create, resize, snapshot, clone, delete, migrate, drain, restart | E-06 … E-09, F-01, F-04, F-08 | operator restart mid-export-assembly (`I-05` covers the record, not the operator)                                                                  |
-| Scale             | 20–50 clients, many volumes per MDS host, churn                  | L-01, L-02, L-05              | zero-member and single-client degenerate cases                                                                                                     |
+| Axis              | Values covered                                                    | IDs                           | Not covered                                                                                                                             |
+|-------------------|-------------------------------------------------------------------|-------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| Cluster topology  | 3 nodes (three clients, three members)                            | E-01, E-05, F-08              | single-node cluster; a cluster with fewer eligible MDS hosts than `stripe_count` beyond the `U-08` unit check; 5+ nodes                 |
+| Stripe width      | 1 member, `n ≥ 3`, `n == #eligible nodes`, 0 and negative         | E-04, E-05, U-06, U-07, U-08  | `n` larger than the member limit of one MDS host                                                                                        |
+| Namespace scope   | single namespace (implicit in every e2e row)                      | —                             | **multi-namespace: two PVCs of the same name in two namespaces sharing one MDS host, export-path collision, cross-namespace isolation** |
+| Cluster count     | one cluster; sources spanning two clusters or pools rejected      | VGS-04                        | two `StorageCluster`s each hosting RWX exports                                                                                          |
+| Kernel and distro | with and without `nvme_get_unique_id`, RHEL family, Debian family | E-10, E-11, O-02              | a mixed-kernel cluster where only some nodes are eligible                                                                               |
+| Lifecycle         | create, resize, snapshot, clone, delete, migrate, drain, restart  | E-06 … E-09, F-01, F-04, F-08 | operator restart mid-export-assembly (`I-05` covers the record, not the operator)                                                       |
+| Scale             | 20–50 clients, many volumes per MDS host, churn                   | L-01, L-02, L-05              | zero-member and single-client degenerate cases                                                                                          |
 
 ---
 
@@ -246,8 +253,8 @@ what turns this plan from a proposal into coverage.
 | #         | Gap                                                                                                      | Reason                                                                                                                                                                                                                                                                           |
 |-----------|----------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-01…L-06 | Every scenario in this plan                                                                              | The feature is unimplemented: no pNFS code exists in `csi-driver` or `operator`, so no test can be written against it yet                                                                                                                                                        |
-| —         | Multi-namespace RWX provisioning                                                                         | No scenario exists. Two PVCs of the same name in different namespaces sharing an MDS host is exactly where the export path and the `fsid` can collide, and the design's §11 volume handle is the only thing separating them. Needs rows before implementation starts             |
-| —         | Single-node cluster                                                                                      | `stripe_count=1` on a one-node cluster leaves the MDS host and the only member host identical; whether that is supported or rejected is undecided (design §18)                                                                                                                   |
-| —         | Two `StorageCluster`s with RWX exports                                                                   | `fsid` allocation is per MDS host (design §18); with two clusters on one host the allocator's scope is undefined                                                                                                                                                                 |
+| —         | Multi-namespace RWX provisioning                                                                         | No scenario exists. Two PVCs of the same name in different namespaces sharing an MDS host is exactly where the export path can collide, and the design's §11 volume handle is the only thing separating them. Needs rows before implementation starts                            |
+| —         | Single-node cluster                                                                                      | `stripe_count=1` on a one-node cluster leaves the MDS host and the only member host identical, which design §7.2 permits but nothing exercises                                                                                                                                   |
+| —         | Two `StorageCluster`s with RWX exports                                                                   | Nothing exercises one MDS host serving exports from two clusters, where the member namespaces come from separate backends                                                                                                                                                        |
 | —         | Operator restart during export assembly                                                                  | `I-05` covers a record stuck in `Provisioning`; nothing covers the operator dying between the backend call and the record write                                                                                                                                                  |
 | —         | Backend behavior (`-pr` on lvol create, consistency-group atomicity, `/snode/info` capability reporting) | Out of scope for this repository: those suites live in the `sbcli` repository. The design tracks them as external blockers in design §6.1, and this plan covers only the boundary against them — `U-16`, `U-19`, `O-08`, `O-09`, and the outcome assertions in `E-06` and `E-07` |
