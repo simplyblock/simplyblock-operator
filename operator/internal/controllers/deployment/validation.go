@@ -91,6 +91,14 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		})
 	}
 
+	stripe, err := StripeChecks(ctx, r.Client, config.Namespace, config)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range stripe {
+		findings = append(findings, finding{reason: check.Reason, message: check.Message})
+	}
+
 	if found := conflictingInterfaces(config); found != "" {
 		findings = append(findings, finding{reason: WorkerNotFound, message: found})
 	}

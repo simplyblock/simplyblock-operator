@@ -41,7 +41,9 @@ func testWorker(name string) *corev1.Node {
 
 // testDeploymentStorageCluster is the cluster every test in this file names,
 // because the checks under test are about whether a cluster of that name exists
-// and what class it is, never about which name it carries.
+// and what class it is, never about which name it carries. It carries the 1+0 a
+// cluster of one node can carry, so that a case about something else is not also
+// a case about erasure coding; a case about the stripe states its own.
 func testDeploymentStorageCluster(
 	class simplyblockv1alpha2.StorageClusterDeviceClass,
 ) *simplyblockv1alpha2.StorageCluster {
@@ -50,7 +52,12 @@ func testDeploymentStorageCluster(
 			Name:      testDeploymentCluster,
 			Namespace: testDeploymentNamespace,
 		},
-		Spec: simplyblockv1alpha2.StorageClusterSpec{DeviceClass: class},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			DeviceClass: class,
+			Stripe: &simplyblockv1alpha2.StripeSpec{
+				DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
+			},
+		},
 	}
 }
 
@@ -60,6 +67,10 @@ const testSecondCluster = "rack-two"
 
 // testConfig is a document that passes every check: one group, one worker that
 // exists, NVMe devices, and a cluster of its own to create.
+//
+// It states 1+0 because one worker carries no other scheme: every redundant one
+// needs at least three storage nodes, and a document saying nothing about
+// erasure coding means the control plane's 1+1.
 func testConfig() *simplyblockv1alpha2.ClusterDeploymentConfig {
 	return &simplyblockv1alpha2.ClusterDeploymentConfig{
 		ObjectMeta: metav1.ObjectMeta{
@@ -71,6 +82,9 @@ func testConfig() *simplyblockv1alpha2.ClusterDeploymentConfig {
 				Name:              testDeploymentCluster,
 				MaxSubsystemCount: ptr.To(int32(10)),
 				VCPUCount:         ptr.To(int32(4)),
+				Stripe: &simplyblockv1alpha2.StripeSpec{
+					DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(0)),
+				},
 			},
 			NodeSets: []simplyblockv1alpha2.NodeSet{{
 				Name: "rack-b",
@@ -114,6 +128,18 @@ func withBlockDevices(
 		Block: []string{"/dev/sdb"},
 	}
 	return config
+}
+
+// testStorageNode is a node the cluster a growth document names already has.
+func testStorageNode(name, worker string) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testDeploymentNamespace},
+		Spec: simplyblockv1alpha2.StorageNodeSpec{
+			ClusterRef: testDeploymentCluster,
+			WorkerNode: worker,
+			Slot:       ptr.To(int32(0)),
+		},
+	}
 }
 
 func configRaw(t *testing.T, config *simplyblockv1alpha2.ClusterDeploymentConfig) runtime.RawExtension {
@@ -387,4 +413,47 @@ func TestTheRequestNamespaceIsUsedWhenTheObjectCarriesNone(t *testing.T) {
 	config.Namespace = ""
 
 	mustDeny(t, review(t, nil, admissionv1.Create, nil, config), "worker-1")
+}
+
+// A document whose fleet is too small for its erasure coding is refused at the
+// approving edit, which is the last moment it can be corrected: the control
+// plane validates the scheme on the cluster create and counts devices at
+// activation, never nodes, so nothing after this edit refuses it.
+func TestApprovingADocumentTooSmallForItsStripeIsRefused(t *testing.T) {
+	config := testConfig()
+	config.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
+		DataChunks: ptr.To(int32(2)), ParityChunks: ptr.To(int32(1)),
+	}
+
+	mustDeny(t, approve(t, []client.Object{testWorker("worker-1")}, config),
+		"2+1", "4")
+}
+
+// A scheme the control plane's supported set does not hold is refused here too,
+// because the create that refuses it runs after approval has made the document
+// immutable.
+func TestApprovingAnUnsupportedSchemeIsRefused(t *testing.T) {
+	config := testConfig()
+	config.Spec.Cluster.Stripe = &simplyblockv1alpha2.StripeSpec{
+		DataChunks: ptr.To(int32(3)), ParityChunks: ptr.To(int32(1)),
+	}
+
+	mustDeny(t, approve(t, []client.Object{testWorker("worker-1")}, config), "3+1")
+}
+
+// A growth document is answered against the cluster it grows, so the nodes that
+// cluster already has count toward the minimum and the approval stands.
+func TestApprovingAGrowthDocumentCountsTheClustersNodes(t *testing.T) {
+	config := grows(testConfig(), testDeploymentCluster)
+	config.Spec.NodeSets[0].Groups[0].Workers = []string{"worker-3"}
+
+	cluster := testDeploymentStorageCluster(simplyblockv1alpha2.StorageClusterDeviceClassNVMe)
+	cluster.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{
+		DataChunks: ptr.To(int32(1)), ParityChunks: ptr.To(int32(1)),
+	}
+
+	mustAllow(t, approve(t, []client.Object{
+		testWorker("worker-3"), cluster,
+		testStorageNode("node-1", "worker-1"), testStorageNode("node-2", "worker-2"),
+	}, config))
 }
