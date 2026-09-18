@@ -184,6 +184,30 @@ func TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount(t *testing.T) {
 	}
 }
 
+// The csi-addons sidecar's gRPC server authenticates every incoming call
+// from the controller-manager via TokenReview (internal/kubernetes/token/grpc.go,
+// --enable-auth defaults to true), which is cluster-scoped and so cannot be
+// granted by the namespaced Role above -- confirmed against a live cluster,
+// where omitting this left every connection failing with "failed to review
+// token ... is forbidden ... at the cluster scope".
+func TestCSIAddonsSidecarCanAuthenticateIncomingCalls(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	binding := csiAddonsAuthDelegatorBinding(d)
+	if binding.Namespace != "" {
+		t.Errorf("namespace = %q, want \"\" (ClusterRoleBinding is cluster-scoped)", binding.Namespace)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != n.controllerServiceAccount ||
+		binding.Subjects[0].Namespace != d.Namespace {
+		t.Errorf("binding subject = %+v, want the controller account in %q",
+			binding.Subjects, d.Namespace)
+	}
+	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "system:auth-delegator" {
+		t.Errorf("roleRef = %+v, want the built-in ClusterRole system:auth-delegator", binding.RoleRef)
+	}
+}
+
 // The rule set is exactly what the sidecar's own job needs: its CSIAddonsNode
 // and its leader-election Lease, both scoped to this namespace.
 func TestCSIAddonsRoleRulesAreScopedToItsOwnJob(t *testing.T) {

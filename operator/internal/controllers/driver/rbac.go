@@ -134,6 +134,41 @@ func csiAddonsRoleBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.Role
 	}
 }
 
+// authDelegatorClusterRole is the well-known, built-in ClusterRole every
+// component that validates bearer tokens via TokenReview binds to, rather
+// than each defining its own copy of the same two-verb rule.
+const authDelegatorClusterRole = "system:auth-delegator"
+
+// csiAddonsAuthDelegatorBinding grants the controller plugin's account
+// tokenreviews.authentication.k8s.io:create, cluster-scoped since TokenReview
+// has no namespaced form. Required, not optional: the csi-addons sidecar's
+// gRPC server authenticates every incoming call from the controller-manager
+// by reviewing its bearer token (internal/kubernetes/token/grpc.go,
+// --enable-auth defaults to true) — confirmed against a live cluster, where
+// omitting this left every connection attempt failing with "failed to
+// review token ... is forbidden ... at the cluster scope". Binding to the
+// built-in role rather than a hand-rolled ClusterRole needs no new marker on
+// the operator's own ClusterRole: the operator already holds `bind` on
+// every ClusterRole unconditionally (rbac.go's clusterroles;clusterrolebindings
+// marker), which is what Kubernetes' escalation prevention checks for
+// referencing an existing role instead of granting its permissions directly.
+func csiAddonsAuthDelegatorBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.ClusterRoleBinding {
+	n := names(d)
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: n.clusterRoleBinding("csi-addons-auth-delegator")},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      n.controllerServiceAccount,
+			Namespace: d.Namespace,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     authDelegatorClusterRole,
+		},
+	}
+}
+
 // serviceAccountFor names the account each role is bound to. The node plugin has
 // its own, and the controller plugin's sidecars share one.
 func serviceAccountFor(n objectNames, component string) string {
