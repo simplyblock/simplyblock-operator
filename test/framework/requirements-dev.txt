@@ -1,0 +1,3 @@
+# Optional: only needed to author YAML suites and to lint.
+pyyaml>=6
+ruff>=0.6
