@@ -82,6 +82,23 @@ func TestPromoteVolumePlannedWithNoDemoteIsFailedPrecondition(t *testing.T) {
 	}
 }
 
+// Same real-world shape as TestEnableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty:
+// the vendored controller-manager/sidecar chain sends every Replication RPC,
+// Promote included, via ReplicationSource with the legacy flat VolumeId left
+// empty.
+func TestPromoteVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID), Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDemoteVolumeDone(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -128,6 +145,19 @@ func TestDemoteVolumeBackendFailureIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestDemoteVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	_, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResyncVolume(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -135,6 +165,19 @@ func TestResyncVolume(t *testing.T) {
 
 	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
 		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResyncVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -32,6 +32,25 @@ const replicationPolicyParam = "replicationPolicyID"
 // design §5.2's "Recovered source").
 const sourceClusterIDParam = "sourceClusterID"
 
+// volumeIDCarrier is every Replication request type: each exposes the legacy
+// flat VolumeId field and the ReplicationSource oneof.
+type volumeIDCarrier interface {
+	GetVolumeId() string
+	GetReplicationSource() *replication.ReplicationSource
+}
+
+// volumeIDFrom resolves a request's volume ID. The real upstream sidecar
+// (kubernetes-csi-addons v0.15.0, internal/sidecar/service.ReplicationServer)
+// proxies every Replication RPC through ReplicationSource and never sets the
+// legacy flat VolumeId, so that field is checked first; the flat field is
+// kept as a fallback for any caller that still sends it.
+func volumeIDFrom(req volumeIDCarrier) string {
+	if v := req.GetReplicationSource().GetVolume().GetVolumeId(); v != "" {
+		return v
+	}
+	return req.GetVolumeId()
+}
+
 // EnableVolumeReplication attaches the volume to the policy named by the
 // VolumeReplicationClass. Attaching to the policy the volume already follows
 // is success (the backend's own idempotency, P0-2).
@@ -53,7 +72,7 @@ func (cs *Server) EnableVolumeReplication(
 	if policyID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "VolumeReplicationClass parameter %q is required", replicationPolicyParam)
 	}
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -74,7 +93,7 @@ func (cs *Server) DisableVolumeReplication(
 	ctx context.Context,
 	req *replication.DisableVolumeReplicationRequest,
 ) (*replication.DisableVolumeReplicationResponse, error) {
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -99,7 +118,7 @@ func (cs *Server) GetVolumeReplicationInfo(
 	ctx context.Context,
 	req *replication.GetVolumeReplicationInfoRequest,
 ) (*replication.GetVolumeReplicationInfoResponse, error) {
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -131,7 +150,7 @@ func (cs *Server) PromoteVolume(
 	ctx context.Context,
 	req *replication.PromoteVolumeRequest,
 ) (*replication.PromoteVolumeResponse, error) {
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -155,7 +174,7 @@ func (cs *Server) DemoteVolume(
 	ctx context.Context,
 	req *replication.DemoteVolumeRequest,
 ) (*replication.DemoteVolumeResponse, error) {
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -182,7 +201,7 @@ func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
-	h, err := csicommon.ParseVolumeHandle(req.GetVolumeId())
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}

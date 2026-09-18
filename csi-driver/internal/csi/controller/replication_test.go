@@ -21,6 +21,18 @@ func newReplicationTestServer(t *testing.T, mock *mockSBCLI) *Server {
 	return newTestControllerServer(t, mock)
 }
 
+// replicationSourceFor builds the ReplicationSource the real
+// kubernetes-csi-addons v0.15.0 sidecar sends on every Replication RPC
+// instead of the legacy flat VolumeId field (internal/sidecar/service's
+// ReplicationServer proxy never sets it).
+func replicationSourceFor(volumeID string) *replication.ReplicationSource {
+	return &replication.ReplicationSource{
+		Type: &replication.ReplicationSource_Volume{
+			Volume: &replication.ReplicationSource_VolumeSource{VolumeId: volumeID},
+		},
+	}
+}
+
 func TestEnableVolumeReplication(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -54,6 +66,28 @@ func TestEnableVolumeReplicationRepeatedIsIdempotent(t *testing.T) {
 	}
 	if _, err := cs.EnableVolumeReplication(context.Background(), req); err != nil {
 		t.Errorf("second EnableVolumeReplication = %v, want nil (idempotent)", err)
+	}
+}
+
+// The real controller-manager/sidecar chain (v0.15.0) sends the volume
+// identity via ReplicationSource, leaving the legacy flat VolumeId field
+// empty -- confirmed against a live cluster, where every Replication RPC
+// failed with "invalid volume handle \"\"" despite the controller-manager's
+// own log showing it resolved a correct handle.
+func TestEnableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID),
+		Parameters:        map[string]string{replicationPolicyParam: testReplPolicyID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.volumes[testReplVolumeID].ReplicationPolicyID; got != testReplPolicyID {
+		t.Errorf("ReplicationPolicyID = %q, want %q", got, testReplPolicyID)
 	}
 }
 
@@ -155,6 +189,23 @@ func TestDisableVolumeReplicationNotAttachedIsSuccess(t *testing.T) {
 	}
 }
 
+func TestDisableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplVolumeID].ReplicationPolicyID = testReplPolicyID
+
+	_, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.volumes[testReplVolumeID].ReplicationPolicyID; got != "" {
+		t.Errorf("ReplicationPolicyID = %q, want cleared", got)
+	}
+}
+
 func TestDisableVolumeReplicationDuringCutoverIsAborted(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
@@ -208,6 +259,29 @@ func TestGetVolumeReplicationInfoNeverReplicated(t *testing.T) {
 	}
 	if resp.LastSyncTime != nil {
 		t.Errorf("LastSyncTime = %v, want nil", resp.LastSyncTime)
+	}
+}
+
+func TestGetVolumeReplicationInfoUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.replicationStatus[testReplVolumeID] = map[string]any{
+		"role": "source", "state": "in_sync",
+		"last_replicated_at": "2026-09-17T12:00:00Z",
+		"lag_seconds":        42,
+		"outstanding_count":  0, "outstanding_bytes": 0,
+		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+	}
+
+	resp, err := cs.GetVolumeReplicationInfo(context.Background(), &replication.GetVolumeReplicationInfoRequest{
+		ReplicationSource: replicationSourceFor(testReplVolID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.LastSyncTime == nil || resp.LastSyncTime.AsTime().Unix() != 1789646400 {
+		t.Errorf("LastSyncTime = %v, want 2026-09-17T12:00:00Z", resp.LastSyncTime)
 	}
 }
 
