@@ -242,3 +242,45 @@ func TestPublishingABlockVolumeKeepsItsFilesystemType(t *testing.T) {
 		t.Errorf("fsType = %q, want xfs", got)
 	}
 }
+
+// primeLayout is what makes the block layout usable from a pod at all.
+//
+// The client resolves the layout's device by opening
+// /dev/disk/by-id/nvme-eui.<nguid>, and it resolves that path in the mount
+// namespace of whichever process triggered the I/O. A pod's /dev is the minimal
+// one kubelet builds -- no disk/ in it -- so a layout first requested by the
+// application can never resolve, and the failure is expensive: the device is
+// marked unavailable for two minutes and the layout's read-write fail bit is
+// set, so everything afterward bypasses pNFS and routes through the metadata
+// server.
+//
+// The node plugin's own container mounts the host's /dev. Touching the mount
+// here, before any pod does, puts the resolution in a namespace where it
+// succeeds and leaves the device cached for every later reader.
+func TestPrimeLayoutTouchesTheMountAndLeavesNothingBehind(t *testing.T) {
+	staging := t.TempDir()
+
+	if err := primeLayout(context.Background(), staging); err != nil {
+		t.Fatalf("primeLayout: %v", err)
+	}
+
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		t.Fatalf("reading the staging path: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("priming left %v behind; the export is the user's filesystem", names)
+	}
+}
+
+// A staging path that cannot be written is reported rather than hidden, but it
+// is the caller that decides what to do about it.
+func TestPrimeLayoutReportsAnUnwritableMount(t *testing.T) {
+	if err := primeLayout(context.Background(), "/nonexistent/staging/path"); err == nil {
+		t.Error("priming an unwritable mount reported success")
+	}
+}

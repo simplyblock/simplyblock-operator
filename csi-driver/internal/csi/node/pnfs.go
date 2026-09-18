@@ -178,6 +178,68 @@ func stagePNFS(
 	if err := mounter.Mount(ctx, source, stagingPath, "nfs", mountOptions(extraOptions)); err != nil {
 		return fmt.Errorf("pnfs: mounting %s at %s: %w", source, stagingPath, err)
 	}
+
+	// Take the layout here, before any pod can. See primeLayout: the client
+	// resolves the layout's device in the mount namespace of whoever triggers
+	// the first I/O, and a pod has no /dev/disk to resolve it in.
+	if err := primeLayout(ctx, stagingPath); err != nil {
+		// Not fatal. The mount is correct and the volume is usable; what is
+		// lost is the direct data path, and refusing to stage would take the
+		// whole volume away to protect its throughput. Loud, because the
+		// failure is otherwise invisible -- everything works and is slow.
+		klog.Warningf(
+			"pnfs: could not take the block layout for %s, so I/O will route through "+
+				"the metadata server instead of going direct: %v", stagingPath, err)
+	}
+	return nil
+}
+
+// primeLayoutFile is the file priming writes. It is removed immediately, and
+// the name says what it was for in case a crash leaves one behind.
+const primeLayoutFile = ".simplyblock-pnfs-layout-probe"
+
+// primeLayout triggers the first LAYOUTGET on a freshly mounted export, from
+// this process rather than from a pod.
+//
+// The client resolves a block layout's device by opening
+// /dev/disk/by-id/nvme-eui.<nguid>, and it resolves that path in the mount
+// namespace of whichever process caused the I/O. A pod's /dev is the minimal
+// one kubelet builds and has no disk/ in it, so a layout first requested by the
+// application cannot resolve. The failure is not a one-off either: the client
+// marks the device unavailable for two minutes and sets the layout's
+// read-write fail bit, so everything afterward skips pNFS and routes through
+// the metadata server -- which is FM-2, and looks exactly like working.
+//
+// This container mounts the host's /dev, so doing it here resolves the device
+// and leaves it in the client's device cache, which is per-client rather than
+// per-file. One touch per mount is enough for every file a pod later opens.
+//
+// The file is written and removed. A read would not do: a layout is per-inode
+// and a freshly made filesystem has nothing to read.
+func primeLayout(ctx context.Context, stagingPath string) error {
+	probe := filepath.Join(stagingPath, primeLayoutFile)
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("pnfs: opening the layout probe at %s: %w", probe, err)
+	}
+	// Removed whatever happens next: this is the user's filesystem, and a
+	// probe file left in the root of a shared volume is litter every pod sees.
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(probe)
+	}()
+
+	// One filesystem block, which is enough to make the client ask for a
+	// read-write layout and resolve the device behind it.
+	if _, err := f.Write(make([]byte, 4096)); err != nil {
+		return fmt.Errorf("pnfs: writing the layout probe: %w", err)
+	}
+	// Synced, because the layout is taken when the data is written back rather
+	// than when it enters the page cache, and this has to happen before the
+	// function returns for the ordering against pod I/O to mean anything.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("pnfs: syncing the layout probe: %w", err)
+	}
 	return nil
 }
 
