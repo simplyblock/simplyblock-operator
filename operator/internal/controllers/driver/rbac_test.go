@@ -192,7 +192,7 @@ func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
 func TestPluginRolesCarryTheExportRules(t *testing.T) {
 	wanted := map[string]map[string][]string{
 		controllerComponent: {
-			"nfsexports":        {"get", "list", "watch", "create"},
+			"nfsexports":        {"get", "list", "watch", "create", "delete"},
 			"nfsexports/status": {"get", "update", "patch"},
 		},
 		nodeComponent: {
@@ -234,4 +234,25 @@ func TestNodeRoleCannotWriteExports(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The controller plugin deletes an export record: DeleteVolume calls
+// deleteExportFor, which issues the delete and then waits for the operator's
+// finalizer to finish tearing the export down on its host.
+//
+// Without the verb the delete is refused, DeleteVolume returns Internal
+// forever, and the PersistentVolume parks in Released with the export, the
+// host mount, and the backing lvol all still live. Nothing converges: the
+// provisioner retries a call that cannot succeed.
+func TestControllerRoleCanDeleteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "delete") {
+			return
+		}
+	}
+	t.Error("the controller role cannot delete nfsexports, so DeleteVolume can never converge")
 }

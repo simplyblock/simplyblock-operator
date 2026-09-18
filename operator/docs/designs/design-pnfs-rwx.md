@@ -346,7 +346,7 @@ visible.
 ## Overview
 
 **What this is.** RWX (`MULTI_NODE_MULTI_WRITER`) volumes for the Simplyblock CSI
-driver, built on pNFS with the SCSI/block layout. One storage node acts as the
+driver, built on the pNFS SCSI layout (RFC 8154). One storage node acts as the
 metadata server (MDS) for a volume and exports an XFS filesystem over NFS 4.1.
 Every client mounts that export for metadata, and then reads and writes the data
 **directly** over NVMe-oF to the same namespace the MDS made the filesystem on.
@@ -368,7 +368,7 @@ MDS host connects it, makes an XFS filesystem on it, mounts it, and exports it
 and mounts the export, so `blkmapd` can map file layouts onto the local block
 device (§10).
 
-**Why the layout matters.** Without the block layout, every byte would cross the
+**Why the layout matters.** Without the layout, every byte would cross the
 MDS and RWX throughput would be capped by one node. With it, the MDS carries
 metadata only, which is what makes the shared filesystem scale with the number of
 clients rather than against it (§3).
@@ -449,7 +449,7 @@ this document.
 
 1. [Goals and Non-Goals](#1-goals-and-non-goals)
 2. [Background and Current Architecture](#2-background-and-current-architecture)
-3. [Why pNFS SCSI/Block Layout](#3-why-pnfs-scsiblock-layout)
+3. [Why the pNFS SCSI Layout (RFC 8154)](#3-why-the-pnfs-scsi-layout-rfc-8154)
 4. [High-Level Architecture](#4-high-level-architecture)
 5. [Requirements](#5-requirements)
 6. [Backend / Control-Plane (sbcli) Changes](#6-backend--control-plane-sbcli-changes)
@@ -477,7 +477,7 @@ this document.
 ### 1.1 Goals
 
 - Provide **`ReadWriteMany` (RWX)** persistent volumes backed by simplyblock storage, so that multiple pods on multiple worker nodes can share a single filesystem concurrently.
-- Deliver near-block performance for the shared data path by using **pNFS SCSI/block layout**: the NFS server (Metadata Server, "MDS") hands out block layouts, and clients perform **direct NVMe-oF I/O** to the underlying namespaces, bypassing the MDS for bulk data.
+- Deliver near-block performance for the shared data path by using the **pNFS SCSI layout** (RFC 8154): the NFS server (Metadata Server, "MDS") hands out block layouts, and clients perform **direct NVMe-oF I/O** to the underlying namespaces, bypassing the MDS for bulk data.
 - Reuse the existing simplyblock control-plane API, NVMe-oF connect/reconnect machinery, and CSI plumbing wherever possible.
 - Support the full volume lifecycle for RWX volumes: create, delete, resize, snapshot, clone, and restore.
 - Survive planned and unplanned MDS (server) migration with a bounded I/O freeze rather than data loss.
@@ -486,8 +486,8 @@ this document.
 
 - Cross-cluster / cross-region RWX volumes (an RWX volume lives in exactly one simplyblock cluster).
 - Automatic re-striping / re-balancing of an existing RWX volume across a changed set of storage nodes.
-- RWX for raw-block (`volumeMode: Block`) PVCs. pNFS exports a **filesystem** (XFS), so RWX is filesystem-mode only.
-- Windows / non-Linux clients (pNFS block layout + `blkmapd` is Linux-only here).
+- RWX for raw-block (`volumeMode: Block`) PVCs, which pNFS is not involved in. A raw-block ReadWriteMany claim is plain multi-attach: one namespace, several initiators, and no filesystem between them, which the existing block path already serves and KubeVirt live migration needs. It is out of scope here rather than refused, and `ReadWriteMany` therefore selects pNFS only together with `volumeMode: Filesystem`.
+- Windows / non-Linux clients (the pNFS SCSI layout and `blkmapd` are Linux-only here).
 - NFSv3 or plain (non-parallel) NFSv4 as a supported fallback product feature. Non-pNFS NFSv4.1 MDS-routed I/O exists only as an automatic degraded fallback (see §16).
 
 ---
@@ -523,12 +523,12 @@ Storage-node components already exist and are relevant to the server side of pNF
 
 ---
 
-## 3. Why pNFS SCSI/Block Layout
+## 3. Why the pNFS SCSI Layout (RFC 8154)
 
 Plain NFS (v3 / v4.x) routes **all** data through a single server process, making the NFS head a throughput and latency bottleneck and a single point of contention. simplyblock's value proposition is direct, low-latency NVMe-oF I/O. **pNFS decouples metadata from data**:
 
 - The **Metadata Server (MDS)** owns the filesystem namespace, handles `LOOKUP`/`OPEN`/locking, and hands clients a **layout** describing where a file's blocks physically live.
-- With the **SCSI/block layout type**, that "where" is a set of block devices (here, the **NVMe-oF namespaces**) plus block extents. The client then does **direct block I/O** to those namespaces over NVMe/TCP, in parallel, bypassing the MDS entirely for data.
+- With the **SCSI layout type**, that "where" is a set of block devices (here, the **NVMe-oF namespaces**) plus block extents. The client then does **direct block I/O** to those namespaces over NVMe/TCP, in parallel, bypassing the MDS entirely for data.
 
 This matches the PoC notes precisely:
 
@@ -1028,7 +1028,7 @@ UID information, and the same identifier names the `fsid` allocation below.
 Idempotent steps, each skipped when already satisfied:
 
 1. **Attach the namespace:** csi-node connects the backing namespace and owns its reconnect lifecycle (§8 intro, `initiator.Connect` and `MonitorConnection`). CreateExport waits for the device to appear, then proceeds.
-2. **Filesystem:** `mkfs.xfs` on the namespace, only if it is not already formatted, detected through `blkid`. XFS is mandatory for the pNFS SCSI layout, so a request for any other `fsType` is rejected at admission rather than here (FM-7).
+2. **Filesystem:** `mkfs.xfs` on the namespace, only if it is not already formatted, detected through `blkid`. XFS is mandatory for the pNFS SCSI layout, so a request for any other `fsType` is refused by `CreateVolume` before anything is provisioned, rather than here (FM-7).
 3. **Mount:** create `/mnt/{pvc-name}` and mount the device there.
 4. **Export:** write the `/etc/exports.d/{pvc}.exports` entry:
    ```
@@ -1535,7 +1535,7 @@ The PoC exports are open to everyone (`*`). **This is the largest open security 
 | FM-4  | Partial provisioning failure (some lvols created, export not)           | Record stuck in `Provisioning`. A retry resumes, and the reconciler GCs after a timeout.                                                                                                                                               |
 | FM-5  | The backing namespace is lost                                           | XFS errors and the export goes `Degraded`. Redundancy is the backend's responsibility through per-lvol erasure coding or replication. This design adds no redundancy of its own.                                                       |
 | FM-6  | Snapshot requested on a volume whose filesystem cannot be frozen        | The freeze is attempted, and a failure aborts the snapshot rather than taking an unquiesced one. A single-volume snapshot needs no consistency group (§6.3), so it is never refused for that reason.                                   |
-| FM-7  | Non-XFS fsType requested for RWX                                        | Rejected. pNFS SCSI layout requires XFS.                                                                                                                                                                                               |
+| FM-7  | Non-XFS fsType requested for RWX                                        | Rejected by `CreateVolume`, because a SCSI layout can only be served from XFS.                                                                                                                                                         |
 | FM-8  | Two pods on different nodes writing same file                           | Handled by NFSv4 byte-range locking via the MDS. Correctness is NFS's responsibility.                                                                                                                                                  |
 | FM-9  | `blkmapd` not running on client                                         | No block layout is obtained, and I/O silently falls back to the MDS. Node plugin must detect and (re)start `blkmapd`, and log.                                                                                                         |
 | FM-10 | Debian/Ubuntu `/dev/disk/by-id` naming differs                          | The alias step may fail → no direct path, silently. Must be tested per-distro (§18).                                                                                                                                                   |
@@ -1714,7 +1714,7 @@ mount -t nfs -o v4.1 <export-service-clusterip>:/mnt/<pvc-name> <staging-path>
 
 - **pNFS:** Parallel NFS (NFSv4.1+ extension) separating metadata from data.
 - **MDS:** Metadata Server: the `nfsd` host owning the namespace and issuing layouts.
-- **Layout / block (SCSI) layout:** description of where a file's data blocks live. The SCSI/block layout points clients at block devices (here, NVMe-oF namespaces) for direct I/O.
+- **Layout / SCSI layout:** description of where a file's data blocks live. The SCSI layout (RFC 8154) points clients at block devices (here, NVMe-oF namespaces) for direct I/O.
 - **`blkmapd` / `nfs-blkmap`:** client daemon that maps block-layout device signatures to local block devices.
 - **PR:** Persistent Reservations (SCSI-3 / NVMe): used by pNFS SCSI layout to fence clients and protect shared devices.
 - **Consistency group:** a set of lvols snapshotted or cloned atomically so a striped filesystem stays crash-consistent. Out of scope here, and the subject of [`design-pnfs-striped.md`](design-pnfs-striped.md).

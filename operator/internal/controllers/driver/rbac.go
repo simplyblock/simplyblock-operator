@@ -55,7 +55,11 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 	// then the plugin itself reached only the control plane and every API-server
 	// call on that pod was a sidecar's.
 	controllerComponent: {
-		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create"),
+		// delete is here because DeleteVolume issues it: the record is removed
+		// first, and the operator's finalizer tears the export down on its host
+		// before the backing volume is destroyed. Without the verb the call is
+		// refused and nothing converges.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "delete"),
 		// The record's status carries the backing volume's identity, which only
 		// this plugin knows: it has just provisioned it. The operator reads it
 		// back to tell the host which device to assemble on.

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/lvol"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -47,13 +48,21 @@ const (
 // short enough to read in a kubectl listing.
 const exportNameHashLength = 20
 
-// isRWX reports whether the request asks for a shared filesystem, and refuses
-// the multi-node modes this design does not implement.
+// isRWX reports whether the request asks for a shared filesystem served by
+// pNFS, and refuses the multi-node modes this design does not implement.
 //
 // The other MULTI_NODE_* modes are rejected rather than routed. A read-only or
 // single-writer multi-node claim silently getting RWX behavior would hand a
 // user a filesystem several nodes can write, which is not what they asked for
 // and not what their application expects.
+//
+// ReadWriteMany with volumeMode: Block is not one of those refusals, and the
+// distinction is the whole reason this returns a bool rather than an error.
+// Raw multi-attach -- one namespace, several initiators, no filesystem between
+// them -- is what the block path has always done and what KubeVirt live
+// migration needs. pNFS is not involved in it, so it reports false and the
+// caller provisions a block volume exactly as it did before pNFS existed.
+// Refusing it here would take away a mode every earlier release served.
 func isRWX(caps []*csi.VolumeCapability) (bool, error) {
 	rwx := false
 	for _, c := range caps {
@@ -66,14 +75,29 @@ func isRWX(caps []*csi.VolumeCapability) (bool, error) {
 				"access mode %s is not supported; use ReadWriteOnce or ReadWriteMany",
 				c.GetAccessMode().GetMode())
 		}
-		// A block volume cannot be shared through a filesystem export, and
-		// silently giving one a filesystem would be worse than refusing.
-		if rwx && c.GetBlock() != nil {
-			return false, status.Error(codes.InvalidArgument,
-				"ReadWriteMany is filesystem-mode only; pNFS exports a filesystem, not a raw device")
+	}
+	if !rwx {
+		return false, nil
+	}
+	for _, c := range caps {
+		if c.GetBlock() != nil {
+			return false, nil
 		}
 	}
-	return rwx, nil
+	// XFS is the only filesystem a SCSI layout can be served from, so a request
+	// for another one cannot be honored. It is refused rather than quietly
+	// formatted as XFS: the export ignores the request either way, and a user
+	// who asked for ext4 and was told nothing has no way to learn that.
+	// An empty fsType is the caller expressing no preference, which XFS meets.
+	for _, c := range caps {
+		fsType := c.GetMount().GetFsType()
+		if fsType != "" && fsType != export.FSType {
+			return false, status.Errorf(codes.InvalidArgument,
+				"ReadWriteMany is served by a pNFS SCSI layout, which only %s can serve, "+
+					"so fsType %q cannot be honored", export.FSType, fsType)
+		}
+	}
+	return true, nil
 }
 
 // exportPathFor builds the server-side mount point.

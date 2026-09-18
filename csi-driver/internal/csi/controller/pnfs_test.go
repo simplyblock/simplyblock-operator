@@ -60,21 +60,6 @@ func TestRWXIsTakenOnlyForMultiWriter(t *testing.T) {
 	}
 }
 
-// pNFS exports a filesystem. A raw-block RWX claim is refused rather than given
-// one, because silently giving a block claim a filesystem is worse than saying
-// no.
-func TestRWXRefusesRawBlock(t *testing.T) {
-	blockCap := &csi.VolumeCapability{
-		AccessMode: &csi.VolumeCapability_AccessMode{
-			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-		},
-		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
-	}
-	if _, err := isRWX([]*csi.VolumeCapability{blockCap}); err == nil {
-		t.Fatal("a raw-block ReadWriteMany claim was accepted")
-	}
-}
-
 // Two claims with the same name in different namespaces must not collide on one
 // MDS host, in the mount point or in the exports file.
 func TestExportPathSeparatesNamespaces(t *testing.T) {
@@ -315,5 +300,60 @@ func TestValidatingAnRWXVolumeRefusesBlock(t *testing.T) {
 	}
 	if confirmed {
 		t.Error("a pNFS volume confirmed a raw block capability")
+	}
+}
+
+// blockCap and mountCap build the two shapes a ReadWriteMany request arrives in.
+func blockCap() *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+	}
+}
+
+func mountCap(fsType string) *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{
+			Mount: &csi.VolumeCapability_MountVolume{FsType: fsType},
+		},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		},
+	}
+}
+
+// ReadWriteMany with volumeMode: Block is ordinary multi-attach: one namespace,
+// several initiators, no filesystem. The block path has always served it, and
+// KubeVirt live migration needs it. pNFS is not involved, so this must route to
+// the block path rather than be refused -- refusing it is a regression against
+// every release before pNFS existed.
+func TestRWXBlockIsNotAPNFSVolume(t *testing.T) {
+	rwx, err := isRWX([]*csi.VolumeCapability{blockCap()})
+	if err != nil {
+		t.Fatalf("RWX block was refused: %v", err)
+	}
+	if rwx {
+		t.Error("RWX block routed to pNFS; it is plain multi-attach and belongs on the block path")
+	}
+}
+
+// XFS is the only filesystem a SCSI layout can be served from, so a request for
+// anything else cannot be honored. It has to be refused rather than quietly
+// formatted as XFS, which is what happens when nothing checks: the user asks
+// for ext4, the export is XFS, and nothing says so.
+func TestRWXRefusesANonXFSFilesystem(t *testing.T) {
+	if _, err := isRWX([]*csi.VolumeCapability{mountCap("ext4")}); err == nil {
+		t.Error("RWX with ext4 was accepted; the export is always XFS, so this has to be refused")
+	}
+	for _, fsType := range []string{"", "xfs"} {
+		rwx, err := isRWX([]*csi.VolumeCapability{mountCap(fsType)})
+		if err != nil {
+			t.Errorf("RWX with fsType %q was refused: %v", fsType, err)
+		}
+		if !rwx {
+			t.Errorf("RWX with fsType %q did not route to pNFS", fsType)
+		}
 	}
 }
