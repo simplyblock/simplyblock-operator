@@ -89,7 +89,7 @@ func byName(t *testing.T, ifaces []Interface, name string) Interface {
 func TestReadInterfacesReportsAPhysicalNICWhole(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestReadInterfacesReportsNoSpeedForALinkThatIsDown(t *testing.T) {
 	// nobody was going to use.
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestReadInterfacesReportsNoSpeedForALinkThatIsDown(t *testing.T) {
 func TestReadInterfacesMarksTheVirtualOnesAsVirtual(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestReadInterfacesMarksTheVirtualOnesAsVirtual(t *testing.T) {
 func TestReadInterfacesIsOrderedByName(t *testing.T) {
 	root := netHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestReadInterfacesIsOrderedByName(t *testing.T) {
 func TestReadInterfacesReportsNoneRatherThanFailingWithoutTheClassDirectory(t *testing.T) {
 	root := fixture{files: map[string]string{"meminfo": "MemTotal: 1024 kB"}}.write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces of a tree without class/net: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestABridgeIsReadFromItsOwnDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: filepath.Join(root, "sys")})
+	ifaces, err := ReadInterfaces(syntheticHost(filepath.Join(root, "sys")))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -287,5 +287,30 @@ func TestAFailedAddressReadStillReportsTheInterfaces(t *testing.T) {
 	}
 	if len(ifaces[0].Addresses) != 0 {
 		t.Errorf("addresses were invented: %v", ifaces[0].Addresses)
+	}
+}
+
+// A reading of a captured tree carries only what the tree declares.
+//
+// sysfs holds no addresses, so the reader supplies them, and its default
+// answers from this process's own network namespace. A test that reads a
+// fixture without naming a reader therefore asserts against whatever the
+// machine running it has configured, and it does so silently: the fixture's
+// interfaces carry the ordinary names, so any host with an `eth0` or a `lo` of
+// its own fills them in. That is how this suite passed on a developer's machine
+// and failed on a runner, which had both.
+func TestAFixtureTakesNoAddressesFromTheRunningHost(t *testing.T) {
+	ifaces, err := ReadInterfaces(syntheticHost(netHost().write(t)))
+	if err != nil {
+		t.Fatalf("read the interfaces: %v", err)
+	}
+	if len(ifaces) == 0 {
+		t.Fatal("the fixture produced no interfaces to check")
+	}
+	for _, iface := range ifaces {
+		if len(iface.Addresses) != 0 {
+			t.Errorf("%s carries %v, which the fixture does not declare and the host does",
+				iface.Name, iface.Addresses)
+		}
 	}
 }
