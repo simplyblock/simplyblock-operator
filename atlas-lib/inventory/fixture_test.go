@@ -24,6 +24,22 @@ type fixture struct {
 	dirs  []string
 }
 
+// syntheticHost reads the tree at root and nothing else.
+//
+// The address reader has to be named, because sysfs does not carry addresses
+// and the default answers from this process's own network namespace. A test
+// that left it out would assert a fixture against whatever the machine running
+// it happens to have configured, and it would do so silently: the fixture's
+// interface names are the ordinary ones, so any host with an `eth0` or a `lo`
+// of its own fills them in.
+func syntheticHost(root string) Config {
+	return Config{
+		SysfsRoot:          root,
+		ProcRoot:           root,
+		InterfaceAddresses: func() (map[string][]string, error) { return nil, nil },
+	}
+}
+
 // write materializes the fixture and returns its root.
 func (f fixture) write(t *testing.T) string {
 	t.Helper()

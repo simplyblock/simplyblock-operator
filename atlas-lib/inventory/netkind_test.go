@@ -114,7 +114,7 @@ func stackedNetHost() fixture {
 func TestReadInterfacesNamesTheKindOfEachDevice(t *testing.T) {
 	root := stackedNetHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestReadInterfacesReportsTheMembersOfABondAndABridge(t *testing.T) {
 	// own, so the members are the only route to the hardware underneath one.
 	root := stackedNetHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestReadInterfacesReportsTheMembersOfABondAndABridge(t *testing.T) {
 func TestReadInterfacesReportsTheParentOfADerivedDevice(t *testing.T) {
 	root := stackedNetHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestReadInterfacesReportsWhatIsStackedOnAnInterface(t *testing.T) {
 	// might hold one.
 	root := stackedNetHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestReadInterfacesStillMarksEveryStackedDeviceVirtual(t *testing.T) {
 	// keeps the answer it had.
 	root := stackedNetHost().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
@@ -281,7 +281,7 @@ func kernelWithoutDeviceTypes() fixture {
 func TestReadInterfacesFallsBackToWhatTheDriverExports(t *testing.T) {
 	root := kernelWithoutDeviceTypes().write(t)
 
-	ifaces, err := ReadInterfaces(Config{SysfsRoot: root, ProcRoot: root})
+	ifaces, err := ReadInterfaces(syntheticHost(root))
 	if err != nil {
 		t.Fatalf("read the interfaces: %v", err)
 	}
