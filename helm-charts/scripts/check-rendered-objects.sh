@@ -64,7 +64,46 @@ check() {
   fi
 }
 
+# render prints the objects a profile produces, with the extra settings given.
+render() {
+  local profile="$1"
+  shift
+  helm template sb "$CHART" --namespace simplyblock \
+    --set deployment.profile="$profile" \
+    --set controlplane.managed.endpoint=https://cp.example.com \
+    "$@" 2>/dev/null | objects
+}
+
+# checkPair asserts that a StorageClass and the provisioner it names are
+# rendered together.
+#
+# A class naming a provisioner nothing installed is worse than no class: it is
+# advertised by `kubectl get storageclass`, a PVC can be pointed at it, and that
+# PVC then waits for a provisioner that is never coming, with nothing in the
+# cluster saying why.
+checkPair() {
+  local present
+
+  present="$(render standalone)"
+  if printf '%s\n' "$present" | grep -qxF "StorageClass/local-hostpath"; then
+    echo "  hostpath: StorageClass/local-hostpath is rendered while its provisioner is not installed"
+    fail=1
+  else
+    echo "  hostpath: no StorageClass without its provisioner"
+  fi
+
+  present="$(render standalone --set controlplane.csiHostpathDriver.enabled=true)"
+  local want
+  for want in "StorageClass/local-hostpath" "CSIDriver/hostpath.csi.k8s.io"; do
+    if ! printf '%s\n' "$present" | grep -qxF "$want"; then
+      echo "  hostpath: MISSING ${want} with the driver enabled"
+      fail=1
+    fi
+  done
+}
+
 check standalone "${COMMON[@]}"
 check managed "${COMMON[@]}"
+checkPair
 
 exit "$fail"
