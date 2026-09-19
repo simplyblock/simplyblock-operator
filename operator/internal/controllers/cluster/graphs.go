@@ -80,8 +80,15 @@ func graphs() statemachine.MultiConfig[step] {
 		return statemachine.Config[step]{
 			Initial: stepRequesting,
 			States: map[step]statemachine.StateDef[step]{
-				stepRequesting: {To: []step{stepAwaiting}, OnEnter: deadline(requestingDeadline)},
-				stepAwaiting:   {OnEnter: deadline(awaitingDeadline)},
+				// Requesting has issued nothing. Awaiting is past the call, and
+				// a cluster told to shut down is shutting down whatever this
+				// object says.
+				stepRequesting: {
+					To:        []step{stepAwaiting},
+					Abortable: true,
+					OnEnter:   deadline(requestingDeadline),
+				},
+				stepAwaiting: {OnEnter: deadline(awaitingDeadline)},
 			},
 		}
 	}
@@ -111,9 +118,18 @@ func graphs() statemachine.MultiConfig[step] {
 		action(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart): {
 			Initial: stepCheckingPeers,
 			States: map[step]statemachine.StateDef[step]{
+				// CheckingPeers performs no side effect and is the step before
+				// the walk touches a node. From ShuttingDownNode to
+				// RestartingNode the node is offline and this operation is the
+				// only thing that will bring it back, so an abort honored there
+				// would leave a storage node down with nothing driving it up.
+				// Rebalancing is after the node is back and the cluster is
+				// settling on its own, which it finishes whether or not this
+				// operation is watching.
 				stepCheckingPeers: {
-					To:      []step{stepShuttingDownNode},
-					OnEnter: deadline(checkingPeersDeadline),
+					To:        []step{stepShuttingDownNode},
+					Abortable: true,
+					OnEnter:   deadline(checkingPeersDeadline),
 				},
 				stepShuttingDownNode: {
 					To:      []step{stepRefreshingPod, stepRestartingNode},
@@ -135,7 +151,7 @@ func graphs() statemachine.MultiConfig[step] {
 				// machine never carries a cycle. Starting the next node is
 				// Machine.Reset, which returns to CheckingPeers, clears the
 				// deadline, validates no edge, and runs no hook.
-				stepRebalancing: {OnEnter: deadline(rebalancingDeadline)},
+				stepRebalancing: {Abortable: true, OnEnter: deadline(rebalancingDeadline)},
 			},
 		},
 	}
@@ -156,37 +172,27 @@ var initialDeadlines = map[statemachine.Action]time.Duration{
 	action(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart): checkingPeersDeadline,
 }
 
-// abortableSteps are the steps from which an abort stops the operation cleanly.
+// Which steps an abort stops cleanly is declared on the states above, because
+// the line it draws is a property of the step rather than of this kind: whether
+// anything is currently down or half-done. Awaiting, ShuttingDown, and Starting
+// are that rule at cluster scale, and the rolling restart's four middle steps
+// are the sharpest case of it at node scale.
 //
-// The line is whether anything is currently down or half-done. Requesting has
-// issued nothing. CheckingPeers performs no side effect at all and is the step
-// before the walk touches a node. Rebalancing is after the node is back online
-// and the cluster is settling on its own, which it will finish whether or not
-// this operation is watching.
-//
-// Everything else is mid-flight, and the rolling restart's four middle steps
-// are the sharpest case: from ShuttingDownNode to RestartingNode the node is
-// offline, and this operation is the only thing that will bring it back.
-// Honoring an abort there would leave a storage node down with nothing driving
-// it up, so the walk runs on to the restart and the abort is refused until
-// then. Awaiting, ShuttingDown, and Starting are the same rule at cluster
-// scale: a cluster told to shut down is shutting down whatever this object
-// says.
-//
-// It is a table beside the graph rather than an edge in it, because a terminal
-// Aborted step would be an eleventh value in the API and the phase already
-// carries that meaning. A test asserts every step here is one some graph
-// declares, and another asserts that no step between a node's shutdown and its
-// restart appears, so the two cannot drift.
-var abortableSteps = map[step]bool{
-	stepRequesting:    true,
-	stepCheckingPeers: true,
-	stepRebalancing:   true,
-}
+// It is a property of the state rather than an edge to a terminal one, because a
+// terminal Aborted step would be an eleventh value in the API and the phase
+// already carries that meaning.
 
-// abortable reports whether an abort asked for while the operation sits on this
-// step can be honored.
-func abortable(current step) bool { return abortableSteps[current] }
+// UnabortableSteps are the declared steps an abort cannot be honored from,
+// sorted.
+//
+// It is exported for the DELETE guard on this kind, which asks the same question
+// this package's unwind asks: a deletion may not express something spec.abort
+// could not, so both channels read one graph (design-crd-model.md §3.1). The
+// guard has a step out of a status and no machine, which is the whole reason
+// this reads the graphs rather than the machine the reconciler holds.
+func UnabortableSteps() []step {
+	return statemachine.UnabortableMultiStates(graphs())
+}
 
 // action converts the API's action enum into the MultiConfig's key. The
 // conversion exists because statemachine.Action is a concrete string type

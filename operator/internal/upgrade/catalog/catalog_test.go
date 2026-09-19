@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -93,6 +94,10 @@ func preflight(t *testing.T, opts upgrade.Options, objects ...client.Object) upg
 	}
 	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("registering v1alpha1: %v", err)
+	}
+	// §16.4 reads VolumeSnapshotContent, and the shipped catalog discovers it.
+	if err := snapshotv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering the snapshot API: %v", err)
 	}
 
 	// The preflight promises it changes nothing, so the run is given a client

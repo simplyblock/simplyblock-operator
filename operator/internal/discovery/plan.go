@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/simplyblock/atlas/blockdev"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -25,12 +26,14 @@ import (
 // this package documents, so a caller replaces the one decision it wants to
 // change and leaves the rest.
 type Planner struct {
-	// Class is which of the two classes of backend storage the run scans.
-	// Empty is ClassNVMe.
-	Class DeviceClass
-
 	// DeviceRules are applied to every reported device, in order. Nil is the
 	// default set, which is what BasicDeviceRules returns.
+	//
+	// The class a run scans is not a field here. It is the filter's to state,
+	// through EnableLogicalBlockDevices, and a second statement of it could
+	// only ever agree or be wrong: a planner scanning NVMe with a filter
+	// carrying block lists read those lists on a branch that never ran and
+	// dropped them without a word.
 	DeviceRules []DeviceRule
 
 	// WorkerRules are applied to every worker whose devices survived. Nil is
@@ -44,7 +47,8 @@ type Planner struct {
 	// Grouper puts the workers into groups. Nil is GroupByHardware.
 	Grouper Grouper
 
-	// NodeSetBuilder organizes the groups. Nil is SingleNodeSet.
+	// NodeSetBuilder organizes the groups. Nil is SplitByRole, which puts the
+	// infrastructure tier in a node set of its own and ahead of the workers.
 	NodeSetBuilder NodeSetBuilder
 
 	// KubeNodes is what Kubernetes says about each worker, keyed by name, from
@@ -71,10 +75,7 @@ type Plan struct {
 
 // Summary is the sentence a run's status carries.
 func (p Plan) Summary() string {
-	devices := 0
-	for _, worker := range p.Workers {
-		devices += len(worker.Addresses())
-	}
+	devices := p.DeviceCount()
 
 	groups := 0
 	for _, set := range p.NodeSets {
@@ -86,6 +87,129 @@ func (p Plan) Summary() string {
 		len(p.Workers), devices, p.Class, groups, len(p.NodeSets), len(p.Refusals))
 }
 
+// DeviceCount is how many devices the draft names across every worker in it,
+// which is the number the plan is worth: a run that found ten machines and one
+// disk between them has produced nothing to deploy.
+func (p Plan) DeviceCount() int {
+	devices := 0
+	for _, worker := range p.Workers {
+		devices += len(worker.Addresses())
+	}
+	return devices
+}
+
+// Explain says why the plan holds nothing, one line per worker.
+//
+// A worker is refused either as a whole, because its controllers are on a
+// userspace driver and the kernel presents no disk, or one device at a time, and
+// the two need different answers. The first is on the worker's own refusal. The
+// second leaves a worker-level reason that is the arithmetic ("no device
+// survived the rules") and puts the reason on the devices, so the device
+// refusals are folded in behind it and counted.
+//
+// They are counted by the rule that made them, which is the fact the refusal
+// carries. Counting by the sentence instead meant a rule whose sentence names
+// the device never counted at all: forty disks declined by one allow list
+// produced forty clauses, each a sentence long, where the reader wanted a rule
+// and a number. Where a rule's sentences agree the sentence is still quoted,
+// because for most rules it is the substance.
+//
+// Refusals that were pre-filters are left out of both. A machine presents
+// sixteen network block devices and four disks, and a line saying the sixteen
+// were not whole disks is true, longer than the rest of the message, and not
+// the answer to anything.
+func (p Plan) Explain() []string {
+	type byRule struct {
+		rule    string
+		count   int
+		order   []string
+		reasons map[string]int
+	}
+	type perWorker struct {
+		worker string
+		line   string
+		order  []string
+		rules  map[string]*byRule
+	}
+
+	order := make([]string, 0, len(p.Refusals))
+	byWorker := map[string]*perWorker{}
+	at := func(worker string) *perWorker {
+		if found, ok := byWorker[worker]; ok {
+			return found
+		}
+		fresh := &perWorker{worker: worker, rules: map[string]*byRule{}}
+		byWorker[worker] = fresh
+		order = append(order, worker)
+		return fresh
+	}
+
+	for _, refusal := range p.Refusals {
+		if refusal.Device == "" {
+			at(refusal.Worker).line = refusal.Reason
+			continue
+		}
+		if refusal.PreFilter {
+			continue
+		}
+
+		entry := at(refusal.Worker)
+		group, seen := entry.rules[refusal.Rule]
+		if !seen {
+			group = &byRule{rule: refusal.Rule, reasons: map[string]int{}}
+			entry.rules[refusal.Rule] = group
+			entry.order = append(entry.order, refusal.Rule)
+		}
+		group.count++
+		if _, counted := group.reasons[refusal.Reason]; !counted {
+			group.order = append(group.order, refusal.Reason)
+		}
+		group.reasons[refusal.Reason]++
+	}
+
+	lines := make([]string, 0, len(order))
+	for _, worker := range order {
+		entry := byWorker[worker]
+		if entry.line == "" && len(entry.order) == 0 {
+			// Every refusal on it was a pre-filter and the worker itself was
+			// admitted, so there is nothing about it to explain.
+			continue
+		}
+
+		detail := make([]string, 0, len(entry.order))
+		for _, rule := range entry.order {
+			group := entry.rules[rule]
+			counted := fmt.Sprintf("%d devices declined by %s", group.count, group.rule)
+			if group.count == 1 {
+				counted = "1 device declined by " + group.rule
+			}
+			if len(group.order) == 1 {
+				detail = append(detail, counted+": "+group.order[0])
+				continue
+			}
+			// The rule refused them for different reasons, and the reasons are
+			// the substance: a disk refused for being mounted and one refused
+			// for carrying a partition table are two findings.
+			parts := make([]string, 0, len(group.order))
+			for _, reason := range group.order {
+				parts = append(parts, fmt.Sprintf("%d %s", group.reasons[reason], reason))
+			}
+			detail = append(detail, counted+": "+strings.Join(parts, ", "))
+		}
+
+		switch {
+		case len(detail) == 0:
+			lines = append(lines, entry.worker+": "+entry.line)
+		case entry.line == "":
+			lines = append(lines, entry.worker+": "+strings.Join(detail, ", "))
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %s (%s)",
+				entry.worker, entry.line, strings.Join(detail, ", ")))
+		}
+	}
+	return lines
+}
+
 // RefusalLines renders the refusals for a log or an event, one per line.
 func (p Plan) RefusalLines() []string {
 	lines := make([]string, 0, len(p.Refusals))
@@ -95,15 +219,87 @@ func (p Plan) RefusalLines() []string {
 	return lines
 }
 
-// BasicDeviceRules is the default device pipeline for a class and a filter.
+// claimableControllers is a device for every NVMe controller the machine owns,
+// nothing is driving, and the kernel presents no disk for.
+//
+// A controller on a userspace driver has no block device, so it cannot reach a
+// draft through the device reading at all: everything known about it is its PCI
+// address. That is not a gap, because a PCI address is precisely how a NodeGroup
+// names an NVMe device — the draft that would be written from a block device and
+// the draft written from the controller name the same string. Leaving them out
+// refused a machine's storage on the grounds that the machine was not currently
+// presenting it, which on a fleet that has run this product before is every
+// machine.
+//
+// Only what nothing is using is offered. A held controller is a disk in service,
+// and whatever is driving it need not be this product: the same binding is how a
+// disk is passed through to a guest.
+//
+// What is lost with the block device is everything the disk would have said
+// about itself — its size, its partition table, whether it looks blank. A
+// controller therefore reaches the draft unsized and uninspected, and approving
+// it is approving a disk nobody read. That is the trade the draft makes visible
+// rather than one it hides: the group it lands in is named for the count and not
+// a capacity, so a reviewer sees which machines are being taken on trust.
+func claimableControllers(report nodeprobe.Report, class DeviceClass) []nodeprobe.Device {
+	if class != ClassNVMe {
+		// The other class names devices by path, and a controller with no block
+		// device has none to name.
+		return nil
+	}
+
+	presented := map[string]struct{}{}
+	for _, device := range report.Devices {
+		if device.PCIAddress != "" {
+			presented[device.PCIAddress] = struct{}{}
+		}
+	}
+
+	var out []nodeprobe.Device
+	for _, controller := range report.NVMeControllers {
+		if !controller.BoundToUserspace() || !controller.Free() {
+			// Free rather than "not held": a controller the probe could not
+			// check is not one this may offer. Reading the unchecked state as
+			// free is how a disk something is driving reaches a draft.
+			continue
+		}
+		if _, already := presented[controller.Address]; already {
+			// The kernel is presenting it after all, so the device reading has
+			// it and naming it twice would propose one disk under two entries.
+			continue
+		}
+		out = append(out, nodeprobe.Device{
+			Name:       controller.Address,
+			PCIAddress: controller.Address,
+			Kind:       string(blockdev.KindDisk),
+			Transport:  string(blockdev.TransportNVMe),
+			NUMANode:   controller.NUMANode,
+			Available:  true,
+		})
+	}
+	return out
+}
+
+// BasicDeviceRules is the default device pipeline for a filter.
 //
 // The order is deliberate and is the order a reader wants the refusal in: what
 // the device is, then whether it is free, then whether this run wants it. A
 // partition refused as "not in the allow list" would be a true statement and
 // the wrong one.
-func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
+//
+// The volume rule sits second, ahead of the class rule, for the same reason
+// read the other way. A disk that is one of this fleet's own volumes is refused
+// by the class rule too, as a device on a bus this run does not scan, and that
+// answer is both true and useless to somebody asking why a machine full of
+// disks proposed none. Putting the specific answer first is what puts it in
+// front of the reviewer, since the class rule's is a pre-filter and never
+// reaches the explanation.
+func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
+	class := ClassOf(filter)
+
 	rules := []DeviceRule{
 		WholeDiskRule{},
+		SimplyblockVolumeRule{},
 		ClassRule{Class: class},
 	}
 
@@ -112,9 +308,21 @@ func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilte
 	rules = append(rules, AvailableRule{AllowPartitioned: allowPartitioned})
 
 	if filter == nil {
-		return rules
+		// A run with no filter names nothing, so every LUN is refused and every
+		// other device is taken on its own terms.
+		return append(rules, ISCSIRule{Class: class})
 	}
 
+	// An iSCSI LUN is refused unless the run's allow list names it, and that
+	// holds for a run carrying no filter too, which is why the rule is added
+	// before the filter's own lists and not beside them.
+	rules = append(rules, ISCSIRule{Class: class, Allow: allowListFor(filter)})
+
+	// Each class reads its own lists, and the class is the filter's own answer,
+	// so the branch cannot be the one the filter was not written for. A PCI
+	// filter beside EnableLogicalBlockDevices describes devices the run will
+	// never look at, which is why the API refuses that combination rather than
+	// leaving it to be ignored here.
 	if class == ClassNVMe {
 		if len(filter.PcieAllowList) > 0 || len(filter.PcieDenyList) > 0 {
 			rules = append(rules, AllowDenyRule{
@@ -131,15 +339,30 @@ func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilte
 	}
 
 	if filter.DriveSizeRange != "" {
-		// A range that cannot be parsed is not a range that admits everything.
-		// ParseSizeRange is called by the caller that validates the spec, and
-		// this one skips what it cannot read rather than silently widening the
-		// filter; the run reports the parse failure separately.
+		// A range that cannot be read builds no rule, which widens the filter
+		// to every disk rather than narrowing it to none. That is why a run
+		// carrying one never reaches here: the admission webhook refuses it at
+		// the request, and the Inspecting step refuses it again for a cluster
+		// whose webhook is not installed. Skipping is what is left for a caller
+		// that built a Planner directly, and it is the same answer as omitting
+		// the field.
 		if min, max, err := ParseSizeRange(filter.DriveSizeRange); err == nil {
-			rules = append(rules, SizeRule{Min: min, Max: max})
+			rules = append(rules, SizeRule{Min: min, Max: max, Spec: filter.DriveSizeRange})
 		}
 	}
 	return rules
+}
+
+// allowListFor is the run's allow list in the vocabulary of the class it scans,
+// which is the list an iSCSI LUN has to be named in.
+func allowListFor(filter *simplyblockv1alpha2.DeviceFilter) []string {
+	if filter == nil {
+		return nil
+	}
+	if ClassOf(filter) == ClassBlock {
+		return filter.BlockAllowList
+	}
+	return filter.PcieAllowList
 }
 
 // Plan runs the pipeline over a fleet's reports.
@@ -148,14 +371,11 @@ func BasicDeviceRules(class DeviceClass, filter *simplyblockv1alpha2.DeviceFilte
 // depend on it: workers are sorted by name before grouping, so two runs over
 // one fleet produce the same draft.
 func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.DeviceFilter) Plan {
-	class := p.Class
-	if class == "" {
-		class = ClassNVMe
-	}
+	class := ClassOf(filter)
 
 	deviceRules := p.DeviceRules
 	if deviceRules == nil {
-		deviceRules = BasicDeviceRules(class, filter)
+		deviceRules = BasicDeviceRules(filter)
 	}
 	workerRules := p.WorkerRules
 	if workerRules == nil {
@@ -171,7 +391,7 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 	}
 	builder := p.NodeSetBuilder
 	if builder == nil {
-		builder = SingleNodeSet{}
+		builder = SplitByRole{}
 	}
 
 	plan := Plan{Class: class}
@@ -180,6 +400,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 	slices.SortFunc(ordered, func(a, b nodeprobe.Report) int { return cmp.Compare(a.Node, b.Node) })
 
 	for _, report := range ordered {
+		report.Devices = append(report.Devices, claimableControllers(report, class)...)
+
 		admitted, refusals := admitDevices(report, deviceRules)
 		plan.Refusals = append(plan.Refusals, refusals...)
 
@@ -210,13 +432,15 @@ func (p Planner) Plan(reports []nodeprobe.Report, filter *simplyblockv1alpha2.De
 			}
 		}
 
+		kube := p.KubeNodes[report.Node]
 		plan.Workers = append(plan.Workers, Worker{
 			Name:            report.Node,
 			Report:          report,
 			Devices:         chosen,
 			Class:           class,
 			PlacementReason: why,
-			Kube:            p.KubeNodes[report.Node],
+			Kube:            kube,
+			Mgmt:            ManagementOf(report, kube.InternalIP),
 		})
 	}
 
@@ -234,10 +458,13 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 	var refusals []Refusal
 
 	for _, device := range report.Devices {
-		ok, rule, reason := true, "", ""
+		ok, rule, reason, pre := true, "", "", false
 		for _, r := range rules {
 			if admit, why := r.Admit(report, device); !admit {
 				ok, rule, reason = false, r.Name(), why
+				if marker, says := r.(PreFilter); says {
+					pre = marker.PreFilter()
+				}
 				break
 			}
 		}
@@ -246,7 +473,8 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 			continue
 		}
 		refusals = append(refusals, Refusal{
-			Worker: report.Node, Device: device.Name, Rule: rule, Reason: reason,
+			Worker: report.Node, Device: device.Name,
+			Rule: rule, Reason: reason, PreFilter: pre,
 		})
 	}
 	return admitted, refusals

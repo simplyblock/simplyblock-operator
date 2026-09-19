@@ -35,6 +35,7 @@ rules:
   - storagedevicemetrics
   - storagepoolmetrics
   - storageclustermetrics
+  - storagenodemetrics
   verbs:
   - get
   - list

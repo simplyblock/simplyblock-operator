@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,10 +13,6 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
-
-// statusSubresource is the name a client passes to a SubResourceUpdate
-// interceptor for a status write, which is how a test makes one fail.
-const statusSubresource = "status"
 
 // newTestScheme builds a scheme carrying both simplyblock API versions, plus
 // whatever else the caller adds.
@@ -82,4 +80,21 @@ func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha2.Stora
 			UUID: uuid,
 		},
 	}
+}
+
+// testClusterUUID is the backend cluster every test in this package that needs
+// one reports. It was the volume migration tests' constant and stayed when they
+// left, because the replication tests read it too.
+const testClusterUUID = "cluster-uuid"
+
+// unreachableAPI is a base URL that always fails to connect; use it for tests
+// that must never reach the storage API.
+const unreachableAPI = "http://127.0.0.1:1"
+
+// newAPIServer starts an httptest server that is closed at test end.
+func newAPIServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
 }

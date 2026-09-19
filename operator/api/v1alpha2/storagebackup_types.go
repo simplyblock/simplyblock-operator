@@ -178,6 +178,10 @@ type BackupCopy struct {
 type StorageBackupSpec struct {
 	// ClusterRef names the StorageCluster whose store this backup was found in.
 	// With BackupID it is the whole of this object's identity.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
 	// +k8s:immutable

@@ -90,10 +90,23 @@ type Config struct {
 	// kernel.
 	Exclusive blockdev.ExclusiveOpener
 
+	// InterfaceAddresses answers which IP addresses each interface holds. A nil
+	// reader is LocalAddresses, this process's own network namespace, which is
+	// the host's for a caller running with host networking.
+	InterfaceAddresses AddressReader
+
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
 	// outside a cluster has.
 	Kubernetes KubernetesSources
+}
+
+// addresses is the reader to use, defaulted.
+func (c Config) addresses() AddressReader {
+	if c.InterfaceAddresses != nil {
+		return c.InterfaceAddresses
+	}
+	return LocalAddresses
 }
 
 // KubernetesSources is what the environment is concluded from.
@@ -226,14 +239,19 @@ func (i Inventory) AvailableDevices() []blockdev.Candidate {
 	return free
 }
 
-// ControllersTakenByUserspace is the NVMe controllers a userspace driver owns,
+// ControllersBoundToUserspace is the NVMe controllers a userspace driver owns,
 // which are the disks this machine has and the kernel does not present.
 //
 // A discovery run that found no candidate devices should say whether this is
 // empty: no disks and no controllers is a machine with no storage, and no disks
 // with four controllers is a machine whose storage something else is already
 // driving. They are different answers and only one of them is a surprise.
-func (i Inventory) ControllersTakenByUserspace() []pci.Device {
+//
+// Whether that something is still running is a separate question, answered per
+// controller by [pci.Device.InUse]. Both belong in the refusal, because they
+// ask a reviewer for opposite things: reclaim these disks, or leave the machine
+// alone.
+func (i Inventory) ControllersBoundToUserspace() []pci.Device {
 	var taken []pci.Device
 	for _, controller := range i.NVMeControllers {
 		if controller.BoundToUserspace() {
@@ -414,15 +432,25 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 	}
 	inv.Devices = devices
 
-	controllers, err := pci.Scan(pci.Config{
+	pciCfg := pci.Config{
 		SysfsRoot: cfg.sysfs(),
 		ProcRoot:  cfg.proc(),
 		DevRoot:   cfg.dev(),
-	})
+	}
+	controllers, err := pci.Scan(pciCfg)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("read the PCI controllers: %w", err))
 	}
-	inv.NVMeControllers = pci.NVMeControllers(controllers)
+	// Which driver is bound comes from sysfs and whether anything is driving it
+	// comes from the process table, and the second is the one that says whether
+	// a controller can be reclaimed. A failure to answer it is recorded rather
+	// than defaulted, because an unchecked controller and an idle one are
+	// indistinguishable once the error is dropped.
+	checked, err := pci.CheckHolders(pciCfg, pci.NVMeControllers(controllers))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	inv.NVMeControllers = checked
 
 	if cfg.Kubernetes.Discovery != nil || len(cfg.Kubernetes.Nodes) > 0 {
 		env, err := CollectEnvironment(ctx, cfg.Kubernetes.Discovery, cfg.Kubernetes.Nodes)

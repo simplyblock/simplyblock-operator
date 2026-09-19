@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -122,6 +123,12 @@ func migration(t *testing.T, objects ...client.Object) *upgrade.Scope {
 	// them out of the cluster.
 	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("registering apiextensions: %v", err)
+	}
+	// §16.4 normalizes the handles on VolumeSnapshotContent objects as well as
+	// on PersistentVolumes, and the kind belongs to the external snapshotter
+	// rather than to the core API.
+	if err := snapshotv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering the snapshot API: %v", err)
 	}
 
 	// The fake client routes a status write through the subresource tracker only

@@ -365,9 +365,31 @@ the API is served the operator adds nothing. Where it is absent the operator
 applies the CRDs and a controller, which is what the chart does for the CRDs alone
 today (§8).
 
+The detection is a discovery question rather than a search for an object, and
+the answer is cached for a window shorter than the driver's resync, so a cluster
+that gains the snapshot API is noticed on a reconcile rather than on the one
+after it. An answer that is neither yes nor no fails the reconcile instead of
+being guessed at: guessing served applies a class the API server has no kind
+for, and guessing absent withdraws a class an adopted cluster is using.
+
+**The install half is not built.** The chart applies the CRDs and the controller
+today, and conditionally — its templates are guarded on
+`.Capabilities.APIVersions.Has`, which is the same rule stated here. What a
+chart cannot cover is an installation that is not a chart, or a release with
+`snapshotcontroller.create` false, and that is the case still open. It needs the
+upstream manifests carried in the operator's binary and an image for the
+controller that no field names, so `status.snapshotSupport` reaches `Detected`
+and not yet `Installed`.
+
 **The `VolumeSnapshotClass` for this driver is applied either way.** It names
 `spec.driverName` and belongs to this deployment, unlike the CRDs and the
 controller, which belong to the cluster.
+
+Either way means either origin, and not either cluster. A cluster serving no
+snapshot API has no kind for the object, so the class is built only where the
+kinds exist — an apply of a kind the API server does not serve fails the apply
+of the whole set on that one object, which takes the node plugin and the
+controller plugin down with a snapshot class nobody asked to be essential.
 
 **What the operator installs here it does not own.** The CRDs and the controller
 are cluster-scoped and shared, and a second CSI driver installed afterward
@@ -511,13 +533,25 @@ derives them, so `simplyblock-csi-node-role` identifies one object the way
 #### The spec is seeded from what is running
 
 **Upgrade tool:** write the `SimplyblockDriver` for an existing deployment, with
-its spec seeded from the table below rather than left to the defaults. Nothing
-else does: the chart no longer renders the object, so on an upgraded cluster it
-is written by hand or not at all. `driverName` is the row that costs the most,
-because omitting it defaults to `csi.simplyblock.io` on a deployment registered
-under another name, the field is immutable, and the object is then unrepairable
-by an edit. The controller refuses such an object rather than orphaning volumes
-(§4.3, step 2), which contains the damage without removing the need.
+its spec seeded from the table below rather than left to the defaults.
+`driverName` is the row that costs the most, because omitting it defaults to
+`csi.simplyblock.io` on a deployment registered under another name, the field is
+immutable, and the object is then unrepairable by an edit. The controller refuses
+such an object rather than orphaning volumes (§4.3, step 2), which contains the
+damage without removing the need.
+
+**The chart renders the object**, for every deployment profile that runs a CSI
+driver, which today is both of them. The earlier reading of this section was that
+it did not, and that left the kind with no producer at all: a fresh install came
+up with an operator, a control plane, and nothing able to provision a volume. So
+the chart writes it with the values below on its spec, and this table stays the
+upgrade tool's, because the two cases differ in what the spec has to say. A fresh
+install is describing a deployment that does not exist yet and the defaults are
+right for it. An upgrade is describing one that is already running, where a
+default is a reconfiguration of a live deployment on the pass that adopts it, and
+`driverName` is a reconfiguration nothing can undo. An upgraded cluster therefore
+still needs the seeding, either from the tool or by setting `driver.driverName`
+and the rest in `values.yaml` before the chart upgrade applies the object.
 
 **The first reconcile after adoption has to be a no-op**, because these objects
 were rendered from Helm values and are about to be rendered from a spec. A field
@@ -852,9 +886,10 @@ reconcile that takes it over in place.
 
 **Upgrade tool:** apply the `SimplyblockDriver` CRD before the chart upgrade
 that expects it. The chart ships CRDs in `crds/`, which Helm applies on install
-and skips on upgrade, so an existing release upgraded onto a chart that
-references the kind fails while rendering, with an error naming the template
-rather than the missing CRD. §11 installs the CRDs, and this is one of them.
+and skips on upgrade, so an existing release upgraded onto a chart that renders
+the object templates it happily and fails on the apply, with
+`no matches for kind "SimplyblockDriver"` and no indication that the CRD is the
+thing missing. §11 installs the CRDs, and this is one of them.
 
 **Moving the install out of the chart is not free**, and it is the same cost
 [`design-controlplane.md`](design-controlplane.md) §5.1 names for the control

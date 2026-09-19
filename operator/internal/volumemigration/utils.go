@@ -8,10 +8,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -26,44 +24,15 @@ const (
 	MigrationStuckWarningTimeout = 30 * time.Minute
 )
 
-// StartMigration creates a VolumeMigration CR for the given volume UUID and
-// target node. It first resolves the volume UUID to a PV name by scanning all
-// PersistentVolumes for a matching CSI volume handle.
-// name is used as the VolumeMigration object name; namespace is the namespace
-// to create it in; ownerRefs lets the caller attach owner references (e.g.
-// a StorageCluster) so the CR is garbage-collected with the owner.
-func StartMigration(
-	ctx context.Context,
-	c client.Client,
-	volumeUUID, targetNodeUUID, name, namespace string,
-	ownerRefs []metav1.OwnerReference,
-	labels map[string]string,
-) error {
-	pvName, err := findPVForVolume(ctx, c, volumeUUID)
-	if err != nil {
-		return fmt.Errorf("resolve PV for volume %s: %w", volumeUUID, err)
-	}
-	vm := &simplyblockv1alpha1.VolumeMigration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			Namespace:       namespace,
-			OwnerReferences: ownerRefs,
-			Labels:          labels,
-		},
-		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         pvName,
-			TargetNodeUUID: targetNodeUUID,
-		},
-	}
-	return c.Create(ctx, vm)
-}
-
-// findPVForVolume returns the PV name backing the given simplyblock logical-volume
-// UUID. simplyblock CSI volume handles have the form
-// "<clusterUUID>:<poolUUID>:<volumeUUID>", so the bare volume UUID is matched
-// against the final ":"-separated segment. An exact match against the whole
-// handle is also accepted for robustness.
-func findPVForVolume(
+// VolumeFronting returns the name of the PersistentVolume backing the given
+// simplyblock logical-volume UUID.
+//
+// Every caller that moves a volume holds its backend UUID and has to name the
+// Kubernetes object instead, because that is what both kinds of move take. CSI
+// volume handles have the form "<cluster>:<pool>:<volume>", so the bare volume
+// UUID is matched against the final segment; an exact match against the whole
+// handle is also accepted, for a caller that already holds one.
+func VolumeFronting(
 	ctx context.Context,
 	c client.Client,
 	volumeUUID string,

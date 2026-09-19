@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -36,11 +37,8 @@ const (
 	IDNormalizeHandles   upgrade.ID = "normalize-volume-handles"
 )
 
-// What the unimplemented halves wait on.
-const (
-	needsTargetTypes = "the v1alpha2 target type does not exist yet (§29.1), so the object cannot be constructed"
-	needsResolver    = "resolving a pool name to its UUID needs the control-plane client of §16.4"
-)
+// What the unimplemented half waits on.
+const needsTargetTypes = "the v1alpha2 target type does not exist yet (§29.1), so the object cannot be constructed"
 
 // Migrate returns §16's steps.
 func Migrate() []upgrade.Step {
@@ -56,9 +54,7 @@ func Migrate() []upgrade.Step {
 			as:        "Migrate",
 		},
 		absorbBackupRestores{},
-		normalizeHandles{
-			described: described{id: IDNormalizeHandles, blocked: needsResolver},
-		},
+		normalizeHandles{id: IDNormalizeHandles},
 	}
 }
 
@@ -310,15 +306,20 @@ func (renameKind) Done(context.Context, *upgrade.Scope, upgrade.Subject) (bool, 
 	return false, nil
 }
 
-// normalizeHandles describes the volumes whose handle carries a pool name
-// rather than a UUID.
+// normalizeHandles records the resolved handle on every object whose own is
+// spelled with a pool name rather than a pool UUID.
 //
 // Detecting one needs no control plane: §16.4's shape is
 // clusterID:poolID:volumeID, and lvol.ParseHandle accepts a pool segment that
-// is not a UUID precisely because both spellings occur. What needs the control
-// plane is the other half, which is the UUID the name resolves to.
+// is not a UUID precisely because both spellings occur. Resolving the name is
+// the half that does, and it is the Scope's PoolResolver.
+//
+// Nothing here rewrites the handle itself. The API server refuses any edit to a
+// PersistentVolume's CSI source or a VolumeSnapshotContent's source, so the
+// field keeps the spelling it was provisioned with and the annotation carries
+// the identity every reader wants.
 type normalizeHandles struct {
-	described
+	id upgrade.ID
 }
 
 func (n normalizeHandles) ID() upgrade.ID       { return n.id }
@@ -350,7 +351,99 @@ func (normalizeHandles) Done(_ context.Context, _ *upgrade.Scope, subject upgrad
 	return legacy && normalized(subject), nil
 }
 
-// normalized reports a volume that already carries the resolved handle.
+// Validate resolves the pool the handle names, and refuses the subject when
+// nothing answers to it.
+//
+// The refusal is here rather than in Apply because this runs in the preflight,
+// where nothing has been written yet: a handle naming a pool that no longer
+// exists is a finding somebody has to look at, and finding it before the
+// migration starts is the difference between a question and a half-migrated
+// cluster.
+func (normalizeHandles) Validate(ctx context.Context, s *upgrade.Scope, subject upgrade.Subject) error {
+	_, err := resolvedHandle(ctx, s, subject)
+	return err
+}
+
+// Apply writes the resolved handle to the annotation.
+func (normalizeHandles) Apply(ctx context.Context, s *upgrade.Scope, subject upgrade.Subject) error {
+	handle, err := resolvedHandle(ctx, s, subject)
+	if err != nil {
+		return err
+	}
+
+	obj, ok := subject.Object.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("%T is not a Kubernetes object", subject.Object)
+	}
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[atlaskube.AnnoVolumeHandle] = handle.String()
+	obj.SetAnnotations(annotations)
+
+	if err := s.Client.Update(ctx, obj); err != nil {
+		return fmt.Errorf("recording the normalized handle: %w", err)
+	}
+	s.Adopt(obj)
+	return nil
+}
+
+// Verify re-reads the object and checks the annotation is on it and agrees with
+// the field, which is the same rule every reader applies.
+func (normalizeHandles) Verify(ctx context.Context, s *upgrade.Scope, subject upgrade.Subject) error {
+	fresh, ok := subject.Object.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("%T is not a Kubernetes object", subject.Object)
+	}
+	if err := s.Client.Get(ctx, subject.Ref.Key(), fresh); err != nil {
+		return fmt.Errorf("re-reading it: %w", err)
+	}
+
+	field, carried := handleOf(fresh)
+	if !carried {
+		return fmt.Errorf("it no longer carries a handle this migration is about")
+	}
+	written, wellFormed := atlaskube.NormalizedHandle(field, fresh.GetAnnotations())
+	switch {
+	case !wellFormed:
+		return fmt.Errorf("the handle %q is no longer readable", field)
+	case !written.FromAnnotation:
+		return fmt.Errorf("%s was not written", atlaskube.AnnoVolumeHandle)
+	case written.Ignored != "":
+		return fmt.Errorf("the annotation would be ignored by a reader: %s", written.Ignored)
+	case !lvol.IsCanonicalUUID(written.Handle.PoolRef):
+		return fmt.Errorf("the annotated pool %q is still not a UUID", written.Handle.PoolRef)
+	}
+	return nil
+}
+
+// resolvedHandle is the handle this subject should carry once its pool name is
+// resolved, and the error a caller reports when it cannot be.
+func resolvedHandle(
+	ctx context.Context, s *upgrade.Scope, subject upgrade.Subject,
+) (lvol.Handle, error) {
+	handle, legacy := legacyHandle(subject)
+	if !legacy {
+		return lvol.Handle{}, nil
+	}
+	if s.Pools == nil {
+		return lvol.Handle{}, fmt.Errorf(
+			"the handle names pool %q rather than a UUID, and only the control plane knows "+
+				"which pool that is; give --control-plane the management API's base URL",
+			handle.PoolRef)
+	}
+
+	uuid, err := s.Pools.PoolUUID(ctx, handle.ClusterID, handle.PoolRef)
+	if err != nil {
+		return lvol.Handle{}, fmt.Errorf(
+			"the handle names pool %q in cluster %s: %w", handle.PoolRef, handle.ClusterID, err)
+	}
+	handle.PoolRef = uuid
+	return handle, nil
+}
+
+// normalized reports an object that already carries the resolved handle.
 func normalized(subject upgrade.Subject) bool {
 	if subject.Object == nil {
 		return false
@@ -359,16 +452,11 @@ func normalized(subject upgrade.Subject) bool {
 	return carried
 }
 
-// legacyHandle reports the handle of a PersistentVolume whose pool segment is
-// not a UUID.
+// legacyHandle reports the handle of an object whose pool segment is not a
+// UUID, and false for everything else.
 func legacyHandle(subject upgrade.Subject) (lvol.Handle, bool) {
-	pv, ok := subject.Object.(*corev1.PersistentVolume)
-	if !ok || !atlaskube.IsManaged(pv) {
-		return lvol.Handle{}, false
-	}
-
-	raw, err := atlaskube.VolumeHandleFromPV(pv)
-	if err != nil {
+	raw, carried := handleOf(subject.Object)
+	if !carried {
 		return lvol.Handle{}, false
 	}
 	handle, wellFormed := lvol.ParseHandle(raw)
@@ -376,4 +464,38 @@ func legacyHandle(subject upgrade.Subject) (lvol.Handle, bool) {
 		return lvol.Handle{}, false
 	}
 	return handle, true
+}
+
+// handleOf is the handle an object of either kind carries in the field §16.4
+// cannot rewrite, and false for an object of any other kind or another driver's.
+//
+// A VolumeSnapshotContent names one of two things, and both are the same three
+// segments: a pre-existing snapshot names itself in spec.source.snapshotHandle,
+// and a dynamically taken one names the volume it was taken from in
+// spec.source.volumeHandle. Whichever it carries is the one whose pool segment
+// may be a name.
+func handleOf(obj client.Object) (lvol.VolumeHandle, bool) {
+	switch object := obj.(type) {
+	case *corev1.PersistentVolume:
+		raw, err := atlaskube.VolumeHandleFromPV(object)
+		if err != nil {
+			return "", false
+		}
+		return raw, true
+
+	case *snapshotv1.VolumeSnapshotContent:
+		if object.Spec.Driver != atlaskube.DriverName {
+			return "", false
+		}
+		for _, source := range []*string{
+			object.Spec.Source.SnapshotHandle,
+			object.Spec.Source.VolumeHandle,
+		} {
+			if source != nil && *source != "" {
+				return lvol.VolumeHandle(*source), true
+			}
+		}
+		return "", false
+	}
+	return "", false
 }

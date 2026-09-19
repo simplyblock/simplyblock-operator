@@ -1,0 +1,35 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-held-07
+  name: discovered-discover-held-07
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    name: discovered-discover-held-07-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 0
+    vcpuCount: 16
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+        - 0000:af:00.0
+        - 0000:b0:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-01
+    name: discovered
+status:
+  step: {}

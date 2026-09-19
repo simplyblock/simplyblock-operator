@@ -125,6 +125,18 @@ type Formula struct {
 	// copied into its pods as a label, so a formula that names a Job sets 63
 	// here while remaining an ObjectName.
 	Limit int
+
+	// AlwaysDigest makes the digest part of every value the formula produces,
+	// rather than only of the ones the limit had to cut.
+	//
+	// It is for a formula whose parts can join into one stem from different
+	// inputs, which is §19.8's ambiguous concatenation: <run>-<node> reads the
+	// same for run a-b with node c as for run a with node b-c, and truncation
+	// is not what makes those two collide. The digest is taken over the parts
+	// rather than over the stem, so spending it unconditionally is what tells
+	// them apart. A formula whose parts are already unique as a joined string
+	// leaves it off and keeps a readable name.
+	AlwaysDigest bool
 }
 
 // Derived is one identifier a [Formula] produced, carrying enough to report a
@@ -194,10 +206,18 @@ func (f Formula) Derive(parts ...string) Derived {
 	stem := strings.Join(sanitized, separator)
 
 	derived := Derived{
-		Natural: f.Prefix + stem + f.Suffix,
-		Digest:  digestOf(parts),
-		Limit:   limit,
-		Kind:    f.Kind,
+		Digest: digestOf(parts),
+		Limit:  limit,
+		Kind:   f.Kind,
+	}
+	// With AlwaysDigest the digest is part of the formula rather than part of
+	// the bounding, so it is in the natural name too. That keeps the two
+	// properties Derived promises: Value equals Natural for an input the limit
+	// never touched, and Truncated says something was cut rather than that a
+	// digest is present.
+	derived.Natural = f.Prefix + stem + f.Suffix
+	if f.AlwaysDigest {
+		derived.Natural = f.Prefix + stem + "-" + derived.Digest + f.Suffix
 	}
 	if len(derived.Natural) <= limit {
 		derived.Value = derived.Natural

@@ -74,6 +74,86 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig
+  failurePolicy: Fail
+  name: vclusterdeploymentconfig.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - clusterdeploymentconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-controlplaneops
+  failurePolicy: Fail
+  name: vcontrolplaneops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - DELETE
+    resources:
+    - controlplaneops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-operatorops
+  failurePolicy: Fail
+  name: voperatorops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - operatorops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-persistentvolumeops
+  failurePolicy: Fail
+  name: vpersistentvolumeops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - DELETE
+    resources:
+    - persistentvolumeops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha1-replicationops
   failurePolicy: Fail
   name: vreplicationops.simplyblock.io
@@ -171,6 +251,25 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-storageclusterops
+  failurePolicy: Fail
+  name: vstorageclusterops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storageclusterops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-storagedevice
   failurePolicy: Ignore
   name: vstoragedevice.simplyblock.io
@@ -190,18 +289,39 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+      path: /validate-storage-simplyblock-io-v1alpha2-storagenode
   failurePolicy: Fail
+  matchPolicy: Equivalent
   name: vstoragenode.simplyblock.io
   rules:
   - apiGroups:
     - storage.simplyblock.io
     apiVersions:
-    - v1alpha1
+    - v1alpha2
     operations:
+    - CREATE
     - UPDATE
     resources:
     - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-storage-simplyblock-io-v1alpha2-storagenodeops
+  failurePolicy: Fail
+  name: vstoragenodeops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - DELETE
+    resources:
+    - storagenodeops
   sideEffects: None
 - admissionReviewVersions:
   - v1

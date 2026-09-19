@@ -111,7 +111,6 @@ storagenode:
   ubuntuHost: false
   enableCpuTopology: false
   enableDevicePlugin: true
-  skipKubeletConfiguration: false
   openShiftCluster: false
   reservedSystemCpu:
   multiCluster:
@@ -147,7 +146,101 @@ storagenode:
         value:
       
 
+deployment:
+  # One of: standalone, managed.
+  #
+  # standalone hosts its own control plane. The operator installs FoundationDB,
+  # the object store, and the management API from the ControlPlane object this
+  # chart writes.
+  #
+  # managed registers this cluster's storage with a control plane elsewhere,
+  # named by controlplane.managed below. Nothing is installed here.
+  #
+  # Observability under controlplane is rendered for standalone only: it stores
+  # what it collects in the object store a hosted control plane brings.
+  profile: standalone
+
+# The CSI driver, as the SimplyblockDriver the chart renders for every profile
+# that runs one.
+#
+# The plugins themselves are the operator's: it applies the DaemonSet, the
+# StatefulSet, their RBAC, and the CSIDriver registration from this object, so
+# these values reach them through a spec rather than through a template. What
+# each one replaces is in design-simplyblockdriver.md §8.
+#
+# An empty field means whatever this operator release ships, which is the
+# pairing the release was tested as. Set one only to move away from it.
+driver:
+  # The CSI driver name a StorageClass provisions with.
+  #
+  # It is immutable once the object exists, and every PersistentVolume the
+  # driver created records it, so changing it later orphans every volume rather
+  # than renaming anything. An upgraded cluster registered under another name has
+  # to set it here before the operator adopts the running deployment.
+  driverName: csi.simplyblock.io
+
+  # The plugin image both plugins run. Empty takes the operator's own registry
+  # and tag with the CSI driver's repository.
+  image:
+    repository: ""
+    tag: ""
+    # Always, because the default image follows a moving tag: IfNotPresent
+    # against a tag that was rebuilt leaves some workers on the old plugin and
+    # some on the new one.
+    pullPolicy: Always
+
+  # Instances of the controller plugin, which is what provisions volumes.
+  controllerReplicas: 1
+
+  # Where the node plugin runs. Empty is every schedulable worker, which is the
+  # usual case: a worker that cannot attach a volume cannot run a workload that
+  # needs one.
+  nodeSelector: {}
+  tolerations: []
+
+  # Where the controller plugin runs. This is ordinary pod placement for one
+  # workload, unlike the pair above.
+  controllerNodeSelector: {}
+  controllerTolerations: []
+
+  # Whether snapshot support is part of this deployment: the VolumeSnapshotClass
+  # for driverName, and the CRDs and a controller where the cluster serves
+  # neither.
+  enableVolumeSnapshots: true
+
+  # Authenticate both plugins to the management API with their pod's
+  # service-account token instead of the static cluster secret.
+  #
+  # Set it together with controlplane.trustCSIServiceAccounts above. This is the
+  # plugins' half and that is the control plane's: one without the other is
+  # either a driver whose tokens are refused, or a control plane trusting
+  # accounts nothing presents.
+  enableServiceAccountAuth: false
+
+  # Overrides for the six CSI sidecars, as full `repository:tag` references.
+  # Empty takes the version this operator release ships, which is the
+  # combination it was tested against.
+  sidecarImages:
+    provisioner: ""
+    attacher: ""
+    resizer: ""
+    snapshotter: ""
+    healthMonitor: ""
+    nodeDriverRegistrar: ""
+
 controlplane:
+  # Where the control plane is, for deployment.profile: managed.
+  managed:
+    # Base URL of the management API. Required for that profile. A loopback or
+    # link-local address is rejected.
+    endpoint: ""
+    # Secret in this namespace holding the bearer token, under `token` or
+    # `secret`. Empty sends no token.
+    credentialsSecretRef: ""
+    # Secret holding the CA the endpoint is verified against, under `ca.crt` or
+    # `tls.crt`. Empty uses the system trust store. Named and unusable fails.
+    caBundleSecretRef: ""
+
   # Accept a pod's service-account token from the CSI driver's two accounts
   # instead of requiring the static cluster secret. This is the control
   # plane's half of the switch: set it together with
@@ -178,38 +271,6 @@ controlplane:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
       pullPolicy: IfNotPresent
-      # Alert rules derived from the control plane's cluster event log rather
-      # than from Thanos. The event log carries what the metrics cannot: the
-      # transition a node, device, or cluster made, and therefore whether an
-      # operator asked for it. Reading it needs a REST data source, which is
-      # what the Infinity plugin below provides.
-      eventAlerts:
-        enabled: false
-        # Every rule reads the newest `logLimit` records of the event log and
-        # folds them into the current state of each node, device, and cluster.
-        # A limit too low silently heals an alert whose opening transition has
-        # scrolled out of the window, so raise it on a cluster that produces
-        # events quickly; every rule evaluation pays for it in one request.
-        logLimit: 1000
-        # How often the rules run, and how long a condition must hold before it
-        # notifies. Both are Grafana durations.
-        interval: 1m
-        for: 1m
-        plugin:
-          # The Grafana image this chart deploys is a plain upstream mirror with
-          # no plugins in it, and /var/lib/grafana is an emptyDir, so the plugin
-          # is fetched on every pod start. Grafana's entrypoint reads
-          # GF_INSTALL_PLUGINS as a URL, a semicolon, and an install folder.
-          #
-          # 2.12.2 is the last Infinity release whose grafanaDependency
-          # (>=9.5.15) admits the Grafana 10.0.12 pinned above; every release
-          # still in the plugin catalog requires >=10.4.8. Moving Grafana
-          # forward is what unpins this.
-          url: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/2.12.2/download"
-          # Set to true once the plugin is baked into the Grafana image, which
-          # is what an air-gapped or restart-sensitive install wants: the
-          # download is ~74 MB and repeats on every pod start.
-          preinstalled: false
       endpoint: ""
       # Receivers Grafana provisions into the "grafana-alerts" contact point.
       # Every enabled channel is notified for every simplyblock alert. With none
@@ -368,8 +429,20 @@ controlplane:
           memory: 128Mi
 
 operator:
-  enabled: true
   openShiftCluster: true
+
+# How a volume's move is raised. The operator raises one when the rebalancer
+# moves a volume off a hot node, when a node is drained, and when a claim is
+# pinned to a node it is not on.
+#
+# The redesigned PersistentVolumeOps is the default and the registered
+# VolumeMigration is opt-in. Turn the registered kind back on for an upgrade,
+# and only for as long as the migrations already raised against it take to
+# drain: a rename and a scope change make a new CRD rather than a new version,
+# so an in-flight migration cannot be carried across and is left to finish on
+# the kind it started on.
+volumeMigration:
+  legacy: false
 
 # The CSI link: the CSI node and controller pods dial the operator and hold the
 # connection open, so the operator can query a node's storage state without
@@ -498,6 +571,9 @@ opensearch:
     enabled: false
 
 reloader:
+  # Rolls the workloads mounting the FoundationDB cluster file when coordinators
+  # move. Off means they pick the change up on their next restart instead.
+  enabled: true
   nameOverride: simplyblock-reloader
   fullnameOverride: simplyblock-reloader
   reloader:
@@ -509,6 +585,9 @@ reloader:
       tolerations: []
 
 prometheus:
+  # Where the control plane pushes what it measures. A managed deployment
+  # reports to the control plane administering it, so it can turn this off.
+  enabled: true
   simplyblock:
     prometheusURL: simplyblock-prometheus
     prometheusPORT: 9090   

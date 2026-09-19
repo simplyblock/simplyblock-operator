@@ -47,6 +47,22 @@ type Scope struct {
 	// reaches.
 	Graph *Graph
 
+	// Pools resolves a pool's name to its UUID, which §16.4 needs and nothing
+	// in Kubernetes can answer: a volume handle provisioned before the v2 API
+	// migration spells its pool as a name, and only the control plane knows
+	// which pool that is.
+	//
+	// It is the one thing a rule reads that is not the cluster, and it is an
+	// interface for that reason: every other rule is testable with a fake
+	// Kubernetes client alone, and this one would otherwise need a control
+	// plane to be tested at all.
+	//
+	// Nil where the run could not reach a control plane, which is the ordinary
+	// state of a plan being read rather than applied. A step needing it refuses
+	// rather than proceeding, since a handle it cannot resolve is one it must
+	// not write.
+	Pools PoolResolver
+
 	// Stage is the command being run, so a rule registered for more than one
 	// can tell which it is in.
 	Stage Stage

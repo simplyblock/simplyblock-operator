@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -56,6 +55,13 @@ spec:
             - --csi-link-bind-address=:{{ .Values.csiLink.port }}
             - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
             - --csi-link-audience={{ .Values.csiLink.audience }}
+            {{- end }}
+            {{- if .Values.volumeMigration.legacy }}
+            # An upgrade turns this on so the migrations already raised against
+            # the registered kind keep being driven. A rename and a scope change
+            # make a new CRD rather than a new version, so an in-flight
+            # migration cannot be carried across and is drained instead.
+            - --legacy-volume-migration
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
@@ -517,4 +523,4 @@ subjects:
 - kind: ServiceAccount
   name: simplyblock-operator
   namespace: {{ .Release.Namespace }}
-{{- end }}
+

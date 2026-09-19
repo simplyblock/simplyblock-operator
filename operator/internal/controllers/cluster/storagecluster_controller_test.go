@@ -351,25 +351,8 @@ func TestAMissingBackupSecretHoldsTheCreation(t *testing.T) {
 // Steady state
 // ---------------------------------------------------------------------------
 
-// The phase is the operator's reading of the control plane's own lifecycle
-// string, which is why the values on one side are lowercase and the values on
-// the other are not.
-func TestThePhaseFollowsTheControlPlanesStatus(t *testing.T) {
-	for status, want := range map[string]simplyblockv1alpha2.StorageClusterPhase{
-		utils.ClusterStatusActive:    simplyblockv1alpha2.StorageClusterPhaseOnline,
-		"degraded":                   simplyblockv1alpha2.StorageClusterPhaseDegraded,
-		"read_only":                  simplyblockv1alpha2.StorageClusterPhaseDegraded,
-		utils.ClusterStatusSuspended: simplyblockv1alpha2.StorageClusterPhaseSuspended,
-		utils.ClusterStatusUnready:   simplyblockv1alpha2.StorageClusterPhaseUnavailable,
-		"in_expansion":               simplyblockv1alpha2.StorageClusterPhaseUnavailable,
-	} {
-		t.Run(status, func(t *testing.T) {
-			if got := phaseFor(status); got != want {
-				t.Errorf("phaseFor(%q) = %q, want %q", status, got, want)
-			}
-		})
-	}
-}
+// The mapping this file used to assert here lives in phase_test.go, which covers
+// every status rather than six of them. Two tables for one function drift.
 
 // status.tasks is a window on the present: only running and pending tasks are
 // in it, newest first, and never more than twenty.

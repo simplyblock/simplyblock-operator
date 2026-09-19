@@ -78,15 +78,41 @@ spec:
               document carries no field for it.
             properties:
               approved:
+                default: false
                 description: |-
                   Approved is the review gate. A document is expanded only once it is set,
                   and is validated but otherwise inert before that, which is what makes
                   reviewing a wrong document safe.
+
+                  It is defaulted and serialized rather than omitted when false, and the
+                  two are the same requirement read twice. A reviewer has to see the gate
+                  they are being asked to open, and the rules above have to find the field
+                  they read: a bool omitted when false is a key the apiserver never stores,
+                  so a rule reading it fails rather than reading false, and the first rule
+                  guarding approval denied every approval there could ever be. The has()
+                  guards are what carry documents written before the default existed.
                 type: boolean
               cluster:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  enableDriveFormat:
+                    description: |-
+                      EnableDriveFormat formats every device the document names before a storage
+                      node takes it, which is how a drive carrying anything already is made
+                      usable.
+
+                      It says what is wanted rather than how, because the how differs by device
+                      class: an NVMe device is formatted to a 4K block size, and a logical block
+                      device has its signatures wiped. One field covers both, so a document does
+                      not have to know which class the expansion will resolve it to.
+
+                      It is on the document rather than defaulted further down because it is
+                      destructive and the document is what somebody approves. A reviewer reading
+                      a draft has to see that the drives it lists will be formatted, and be able
+                      to strike it before approving; the cluster's own field is immutable once
+                      the cluster exists, so a default nobody saw could not be undone either.
+                    type: boolean
                   enableFailureDomains:
                     description: |-
                       EnableFailureDomains opts the cluster into failure-domain mode, in which
@@ -114,9 +140,38 @@ spec:
                     maxLength: 32
                     type: string
                   name:
-                    description: Name is the StorageCluster's name.
-                    maxLength: 253
+                    description: |-
+                      Name is the StorageCluster's name, and is therefore held to what such a
+                      name may be rather than to what an object name may be. A longer value is a
+                      document the API server accepts and a CreatingCluster step that can never
+                      succeed, since the cluster it would write is one the API server refuses
+                      (design-api-upgrade.md §19.4).
+                    maxLength: 63
                     type: string
+                  nodesPerSocket:
+                    description: |-
+                      NodesPerSocket is how many storage nodes run per NUMA socket. See
+                      SocketsToUse, which it multiplies.
+                    format: int32
+                    maximum: 8
+                    minimum: 1
+                    type: integer
+                  socketsToUse:
+                    description: |-
+                      SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+                      means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+                      each worker runs, so a group of two workers on a two-socket layout expands
+                      to four nodes.
+
+                      It is here rather than on a node set because it is immutable on the cluster
+                      it lands on: the layout a fleet was built with is not one a later document
+                      can vary, and a reviewer should see it before the cluster exists.
+                    items:
+                      maxLength: 16
+                      type: string
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-type: set
                   stripe:
                     description: Stripe is the erasure-coding layout.
                     properties:
@@ -134,6 +189,13 @@ spec:
                         minimum: 0
                         type: integer
                     type: object
+                    x-kubernetes-validations:
+                    - message: the erasure-coding scheme must be one of 1+0, 1+1,
+                        2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                        and an unstated half is 1
+                      rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                        ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1],
+                        [1, 2], [2, 2], [4, 2]]'
                   vcpuCount:
                     description: |-
                       VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -158,7 +220,11 @@ spec:
                   Absent means the document creates the cluster in Cluster. Setting it to a
                   cluster that does not exist, or leaving it absent when one already does,
                   is refused rather than reconciled.
-                maxLength: 253
+
+                  The maximum is what a StorageCluster name may be and not the 253 an object
+                  name may be: a reference between the two names nothing that can exist
+                  (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
               edgeCluster:
                 description: |-
@@ -259,11 +325,14 @@ spec:
                                 description: Count is the number of journal managers
                                   to configure.
                                 format: int32
+                                minimum: 1
                                 type: integer
                               percentPerDevice:
-                                description: PercentPerDevice is the journal manager
-                                  capacity percentage per device.
+                                description: PercentPerDevice is the share of each
+                                  device given to the journal.
                                 format: int32
+                                maximum: 100
+                                minimum: 1
                                 type: integer
                             type: object
                           mgmtInterface:
@@ -320,9 +389,9 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: an approved deployment config is immutable
-              rule: '!oldSelf.approved || self == oldSelf'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
             - message: approval cannot be withdrawn
-              rule: '!oldSelf.approved || self.approved'
+              rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
             - message: 'every group must name the same device class: all nvme or all
                 block'
               rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
@@ -336,6 +405,19 @@ spec:
                   ClusterRef names the StorageCluster the expansion produced or added to. It
                   is a record rather than a dependency: nothing resolves it after expansion,
                   which is what makes the document safe to delete.
+                type: string
+              expansionStartedAt:
+                description: |-
+                  ExpansionStartedAt is when the expansion machine was born, which is the
+                  first reconcile after the document was approved. A document may sit as a
+                  draft for as long as a review takes, so this is not creationTimestamp and
+                  the difference is the whole point: how long a deployment takes is measured
+                  from the moment somebody said yes.
+
+                  It is the start of §9.2's expansion_duration_seconds. A histogram needs an
+                  instant that survives the operator restarting mid-expansion, which nothing
+                  in memory and no step deadline supplies.
+                format: date-time
                 type: string
               message:
                 description: |-
@@ -384,7 +466,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'']'
+                  rule: '!has(self.state) || self.state in [''Validating'',''CreatingCluster'',''AwaitingCluster'',''CreatingNodes'',''Activating'']'
             type: object
         type: object
     served: true

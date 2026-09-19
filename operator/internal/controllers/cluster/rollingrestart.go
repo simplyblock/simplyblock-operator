@@ -112,7 +112,7 @@ func (r *StorageClusterOpsReconciler) planWalk(
 	for _, node := range nodes {
 		planned = append(planned, node.UUID)
 	}
-	rollingRestartNodeTotal.WithLabelValues(ops.Spec.ClusterRef).Set(float64(len(planned)))
+	rollingRestartNodeCount.WithLabelValues(ops.Spec.ClusterRef).Set(float64(len(planned)))
 	rollingRestartNodeIndex.WithLabelValues(ops.Spec.ClusterRef).Set(0)
 
 	return r.writeStatus(ctx, ops, func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {

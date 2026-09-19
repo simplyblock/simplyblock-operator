@@ -1,0 +1,3 @@
+worker-01/sda: declined by size range because it is 512G and the range 3T-8T starts above it
+worker-01/sdb: declined by size range because it is 2T and the range 3T-8T starts above it
+worker-01/sdc: declined by size range because it is 2T and the range 3T-8T starts above it

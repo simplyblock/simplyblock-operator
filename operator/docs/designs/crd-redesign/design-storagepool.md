@@ -2,7 +2,7 @@
 
 **Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-11)  
+**Date:** 2026-08-29 (last updated 2026-09-17)  
 **Test Plan:** [`tests/test-plan-storagepool.md`](../../tests/test-plan-storagepool.md)
 
 Both kinds are built at `storage.simplyblock.io/v1alpha2`, with a `v1alpha1`
@@ -149,8 +149,9 @@ by default.
 ClusterRef string `json:"clusterRef"`
 ```
 
-`spec.allowedNodes` restricts which storage nodes may host the pool's volumes.
-Empty means every node in the cluster, which is the usual case.
+`spec.allowedNodes` restricts which hosts may carry the pool's volumes, and it
+names Kubernetes `Node` objects rather than `StorageNode`s, for the reason §4.3
+gives. Empty means every node in the cluster, which is the usual case.
 
 **The pool's own ceilings, under `spec.limits`.** These are what the pool as a
 whole may consume, enforced by the control plane against the pool.
@@ -234,8 +235,9 @@ between doing the work and declining to redo it.
 
 `status.limits` is what the control plane reports the pool's ceilings actually
 are, which is not necessarily what `spec.limits` asked for.
-`status.allowedNodes` is `spec.allowedNodes` resolved against the nodes that exist,
-which is what the control plane is sent (§4.3). `status.activeOpsRef` is the
+`status.allowedNodes` is `spec.allowedNodes` resolved against the `Node` objects
+that exist, and it is what the host list sent to the control plane and the per-pool
+node labels are both derived from (§4.3). `status.activeOpsRef` is the
 operation lock ([`design-crd-model.md`](design-crd-model.md) §3.2), and
 `status.observedGeneration` is required by that document's §7.9.
 
@@ -381,14 +383,29 @@ returns without patching.
 A node drained and removed through `StorageNodeOps` leaves its name in every pool
 that listed it, and the list is desired state a person wrote.
 
+**The names are Kubernetes `Node` names, not `StorageNode` names.** A pool
+restricts placement to hosts, and the two facts the restriction is expressed with
+both live on the `Node` object: its UID, from which the host NQN is derived, and
+its labels, which is where the per-pool allowance is written. Naming the
+`StorageNode` would mean resolving it to its worker before either could be read,
+and the worker is what the user is choosing in the first place.
+
 **The controller resolves the list on every pass and publishes the result as
-`status.allowedNodes`.** A name that no longer resolves to a `StorageNode` in the
-pool's namespace is dropped from the resolved set, reported once with
-`AllowedNodeMissing` (§9.1), and what the control plane is sent is the resolved set
-rather than the authored one. A pool whose every allowed node has been removed
-resolves to an empty set, which is not the same as an absent list: absent means every
-node, and empty after resolution means the pool can place nothing, so the phase holds
-and the event says which names failed.
+`status.allowedNodes`.** A name that resolves to no `Node` is dropped from the
+resolved set, reported once with `AllowedNodeMissing` (§9.1), and what the control
+plane is sent is the resolved set rather than the authored one. A pool whose every
+allowed node has been removed resolves to an empty set, which is not the same as an
+absent list: absent means every node, and empty after resolution means the pool can
+place nothing, so the phase holds and the event says which names failed.
+
+**The resolved set reaches two places, and neither of them is a name.** The
+control plane is sent one host NQN per node, derived from that node's UID by the
+same formula the CSI node plugin uses, so no NQN is written by hand on either
+side. Kubernetes is given one label per pool on each resolved node, keyed by the
+pool's UUID and removed from every node that leaves the set, which is what the
+class republishes as the DHCHAP node selector (§4.4). Both are derived on every
+pass, so a node added back under the same name is re-derived rather than
+repaired.
 
 **`spec.allowedNodes` itself is left exactly as authored, and the operator does not
 prune it.** Rewriting a user's spec to match the world makes the object stop
@@ -400,10 +417,14 @@ harmful, which is the property the resolution provides and a prune would not.
 
 ### 4.4 A Default Pool Is Created With the Cluster
 
-**Creating a `StorageCluster` creates one `StoragePool` in it.** A cluster with no
-pool can hold no volumes, so the first pool is not a decision worth making a
-prerequisite: the cluster's own creation path creates it, owns it by the same
-controller reference every pool has (§6), and names it for the cluster it belongs to.
+**A `StorageCluster` is given one `StoragePool`.** A cluster with no pool can hold
+no volumes, so the first pool is not a decision worth making a prerequisite: the
+cluster's own reconciler writes it, owns it by the same controller reference every
+pool has (§6), and names it for the cluster it belongs to. It is written on the
+cluster's steady-state pass rather than as a step of the creation machine, because
+the pool's own controller needs the cluster's UUID and a pool written before there
+is one would only wait. An annotation on the cluster records that the pool was
+written, so nothing writes it a second time.
 
 **It is an ordinary pool in every other respect, deletion included.** Its limits are
 the cluster's defaults, it can be edited, and it deletes like any other pool: §6's two
@@ -413,13 +434,25 @@ because a cluster that has outgrown one pool per tenant is not obliged to keep o
 What the default is for is the case where somebody wants storage from a cluster they
 just created and has not yet decided how to divide it.
 
-**One `StorageClass` is created with it, so the cluster is provisionable on arrival.**
-A pool nothing can consume is not a usable default, so the cluster's creation path
-writes both: the pool, and one class assigned to it by the three labels of §5. The
-class needs no ordering against the backend, because its `parameters` name the cluster
-UUID and the pool *name* rather than the pool's UUID, and both are known before the
-pool exists in the control plane. A claim made in the window before it does fails at
-provision time and succeeds afterward.
+**One `StorageClass` is written for it, once the pool exists in the control
+plane.** A pool nothing can consume is not a usable default, so the pool's own
+controller writes one class assigned to it by the three labels of §5, and it does
+so on the first pass where `status.uuid` is set rather than beside the pool. The
+ordering is the DHCHAP node selector's: the parameter republishes the per-pool
+label key so the driver can turn it into the volume's node affinity, and that key
+carries the pool's UUID, which does not exist until the control plane has created
+the pool. A class whose `parameters` are immutable cannot gain the key later, so
+it is written when the key can be stated. A claim made in the window before that
+fails at provision time and succeeds afterward.
+
+**The class is written once, and a name already taken is reported rather than
+overwritten.** A `StorageClass` is cluster-scoped, so an existing object under the
+name may have nothing to do with this pool, and recording it as the pool's default
+would leave the pool pointing at a class that provisions somewhere else and never
+writing the one it needs. The name is adopted only when the occupant is
+recognizably the class this operator would have written. Otherwise
+`StorageClassNameTaken` (§9.1) says so and names the two remedies, which are
+assigning a class by label or deleting the occupant.
 
 ```yaml
 kind: StorageClass
@@ -819,6 +852,7 @@ has open, and on the `StoragePoolOps` for an operation.
 | The cluster is not ready, so creation is held            | `Normal`  | `ClusterNotReady`           | `StoragePool`    |
 | A `StorageClass` was assigned to this pool               | `Normal`  | `StorageClassAssigned`      | `StoragePool`    |
 | The default class was created with the default pool      | `Normal`  | `StorageClassCreated`       | `StoragePool`    |
+| The default class's name is taken by another class       | `Warning` | `StorageClassNameTaken`     | `StoragePool`    |
 | A class assigned to this pool sets both QoS spellings    | `Warning` | `QoSParameterConflict`      | `StoragePool`    |
 | An entry in `spec.allowedNodes` resolves to no node      | `Warning` | `AllowedNodeMissing`        | `StoragePool`    |
 | Deletion is held because a class is still assigned       | `Warning` | `StorageClassStillAssigned` | `StoragePool`    |
@@ -847,6 +881,11 @@ saying which kind of reference would leave an administrator guessing between the
 leaves `spec.allowedNodes` as authored, so a removed node's name stays there and would
 otherwise produce an event on every reconcile forever. The event is what tells somebody
 the name is inert, and repeating it would tell them nothing new.
+
+**`StorageClassNameTaken` is the one an administrator has to act on.** The class
+is written once (§4.4), so a name already held by a class this operator would not
+have written leaves the default pool with none until somebody intervenes, and the
+event names both remedies rather than only the collision.
 
 **`QoSParameterConflict` is the proactive half of §5.1's conflict.** The driver emits
 the same reason on the claim it is provisioning, and this one fires when the class is
@@ -1172,9 +1211,15 @@ type StoragePoolSpec struct {
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
 
-	// AllowedNodes restricts which storage nodes may host this pool's volumes.
-	// Empty means every node in the cluster. Narrowing it stops new volumes
-	// landing on the removed nodes and leaves the existing ones where they are.
+	// AllowedNodes restricts which hosts may carry this pool's volumes, by
+	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+	// stops new volumes landing on the removed nodes and leaves the existing
+	// ones where they are.
+	//
+	// The list is left exactly as authored: a name that no longer resolves is
+	// dropped from Status.AllowedNodes rather than pruned from here, so a node
+	// removed for maintenance and added back under the same name returns to the
+	// pools that named it without anybody re-authoring them.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
@@ -1242,7 +1287,11 @@ type StoragePoolStatus struct {
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
 
-	// AllowedNodes is the resolved node list.
+	// AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+	// exist, which is what the control plane's host list and the per-pool node
+	// labels are derived from. An empty list here is not the same as an absent
+	// Spec.AllowedNodes: absent means every node, and empty after resolution
+	// means the pool can place nothing.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`

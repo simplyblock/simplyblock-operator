@@ -105,6 +105,11 @@ func interfacesOf(ifaces []inventory.Interface) []Interface {
 			NUMANode:   iface.NUMANode,
 			Virtual:    iface.Virtual,
 			Loopback:   iface.Loopback,
+			Bridge:     iface.Bridge,
+			Kind:       string(iface.Kind),
+			Lower:      iface.Lower,
+			Upper:      iface.Upper,
+			Addresses:  iface.Addresses,
 		})
 	}
 	return out
@@ -114,19 +119,20 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	out := make([]Device, 0, len(candidates))
 	for _, c := range candidates {
 		device := Device{
-			Name:        c.Name,
-			Path:        c.Path,
-			PCIAddress:  c.PCIAddress,
-			SizeBytes:   c.SizeBytes,
-			Kind:        string(c.Kind),
-			Transport:   string(c.Transport),
-			Vendor:      c.Vendor,
-			Model:       c.Model,
-			Serial:      c.Serial,
-			Rotational:  c.Rotational,
-			NUMANode:    c.NUMANode,
-			Available:   c.Available(),
-			ContentType: c.Reading.Type,
+			Name:         c.Name,
+			Path:         c.Path,
+			PCIAddress:   c.PCIAddress,
+			SizeBytes:    c.SizeBytes,
+			Kind:         string(c.Kind),
+			Transport:    string(c.Transport),
+			Vendor:       c.Vendor,
+			Model:        c.Model,
+			Serial:       c.Serial,
+			Rotational:   c.Rotational,
+			NUMANode:     c.NUMANode,
+			SubsystemNQN: c.SubsystemNQN,
+			Available:    c.Available(),
+			ContentType:  c.Reading.Type,
 		}
 		// A device refused before anything was opened carries ContentUnknown,
 		// and the report leaves the field empty rather than writing "Unknown":
@@ -150,12 +156,12 @@ func controllersOf(devices []pci.Device) []Controller {
 	out := make([]Controller, 0, len(devices))
 	for _, device := range devices {
 		out = append(out, Controller{
-			Address:          device.Address,
-			Driver:           device.Driver,
-			Vendor:           device.Vendor,
-			Product:          device.Product,
-			NUMANode:         device.NUMANode,
-			TakenByUserspace: device.BoundToUserspace(),
+			Address:  device.Address,
+			Driver:   device.Driver,
+			Vendor:   device.Vendor,
+			Product:  device.Product,
+			NUMANode: device.NUMANode,
+			InUse:    device.InUse,
 		})
 	}
 	return out
@@ -187,7 +193,7 @@ func sentences(err error) []string {
 func Summary(report Report) string {
 	return fmt.Sprintf(
 		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
-			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
+			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers bound to a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
 		len(report.AvailableDevices()), len(report.Devices),
@@ -195,7 +201,7 @@ func Summary(report Report) string {
 		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,
 		report.HugePageBytes()>>20,
 		len(report.Interfaces),
-		len(report.ControllersTakenByUserspace()),
+		len(report.ControllersBoundToUserspace()),
 		len(report.Unreadable),
 	)
 }

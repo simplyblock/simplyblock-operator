@@ -1,27 +1,44 @@
-The Simplyblock Operator is getting deployed to your cluster.
+The simplyblock operator is being deployed to your cluster.
 
 The following components are being installed or updated:
-- Simplyblock CSI Driver
-{{- if .Values.operator.enabled }}
-- Simplyblock Control Plane
+- simplyblock CSI Driver
+- simplyblock Operator and its CRDs
+{{- if eq .Values.deployment.profile "standalone" }}
+- simplyblock Control Plane, installed by the operator
 {{- end }}
 
-{{- if .Values.operator.enabled }}
+{{ if eq .Values.deployment.profile "standalone" -}}
+This deployment hosts its own control plane. The chart wrote the ControlPlane
+object and the operator installs FoundationDB, the object store, and the
+management API from it, in that order. The database has to reach quorum before
+the management API starts, so the first install takes a few minutes.
 
-The Operator components and its CRDs are installed.
+Watch it settle:
 
-ait for the ControlPlane to become Ready:
+  kubectl --namespace={{ .Release.Namespace }} get controlplane simplyblock -w
 
-  kubectl --namespace={{ .Release.Namespace }} wait controlplane simplyblock --for=jsonpath='{.status.phase}'=Ready --timeout=180s
+Wait for it to become Available:
 
-Once the ControlPlane is Ready, you can start creating Simplyblock resources.
+  kubectl --namespace={{ .Release.Namespace }} wait controlplane simplyblock \
+    --for=jsonpath='{.status.phase}'=Available --timeout=600s
+{{- else }}
+This deployment is managed by a control plane at
+{{ .Values.controlplane.managed.endpoint }}. Nothing is installed here for it:
+the operator resolves that endpoint, probes it, and reports.
 
-Please refer to our documentation to get started:
+Check that it is reachable:
+
+  kubectl --namespace={{ .Release.Namespace }} get controlplane simplyblock
+{{- end }}
+
+status.phase is Available once the control plane answers. Degraded means it
+answers while something behind it is short, and status.components names which.
+
+Once it is Available, you can start creating simplyblock resources. Refer to the
+documentation to get started:
 
   https://docs.simplyblock.io/dev/deployments/kubernetes/k8s-storage-plane/
-{{- else }}
 
-To follow the pods status, please run:
+To follow the pods, please run:
 
   kubectl --namespace={{ .Release.Namespace }} get pods --watch
-{{- end }}

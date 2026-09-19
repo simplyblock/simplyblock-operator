@@ -1,8 +1,8 @@
 # Design Document: API Upgrade and Resource-Model Migration
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-09-10  
+**Date:** 2026-09-10 (last updated 2026-09-17)  
 **Related designs:** [`design-crd-model.md`](design-crd-model.md) §9 is the migration inventory this document delivers  
 **Test Plan:** [`test-plan-api-upgrade.md`](../../tests/test-plan-api-upgrade.md), not yet written
 
@@ -333,10 +333,23 @@ annotation keyed `storage.simplyblock.io/conversion-<field>` on the way down and
 restores it on the way up, so a `v1alpha1` client that reads and writes an object
 back does not truncate it.
 
-`skipKubeletConfiguration` is the one field whose conversion is not a copy. It
-becomes `enableKubeletConfiguration`, which inverts the sense, so a mechanical
-rename produces the wrong behavior and the conversion negates the value in both
-directions (`design-crd-model.md` §9.6).
+`migrationEnabled` is the one field whose conversion is not a copy. It becomes
+`disableMigration`, which inverts the sense, so a mechanical rename produces the
+wrong behavior and the conversion negates a stated value in both directions while
+leaving an unstated one unstated, since both spellings mean the same thing when
+absent (`design-property-renames.md` §3.4).
+
+`enableDataRealignment` is the one field whose *default* changes direction, from
+on to off. An object that stated nothing is indistinguishable in the stored shape
+from one that deliberately turned the feature off, so the conversion writes the
+value into an annotation on every trip down and reads that annotation's absence on
+the way up as the mark of a client that only ever spoke `v1alpha1`.
+
+`skipKubeletConfiguration` is not a conversion at all. The toggle left the node
+kinds for `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is
+a different kind, so the registered field is a removal that stashes under
+`storage.simplyblock.io/v1alpha1-spec.overrides.skipKubeletConfiguration` and
+restores from it (`design-storagenode.md` §15.1).
 
 ### 6.3 What Conversion Can and Cannot Carry
 
@@ -347,10 +360,10 @@ the upgrade needs two phases rather than a webhook.
 
 | Change                                                                             | Carried by         | Reason                                                                                                                                                                        |
 |------------------------------------------------------------------------------------|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Boolean toggle renames, eleven fields across five kinds                            | Conversion         | Same kind, both spellings expressible                                                                                                                                         |
+| Boolean toggle renames, eleven fields across five kinds                            | Conversion, partly | Same kind, both spellings expressible, except the kubelet toggle, which moves to another kind and is stashed rather than converted                                            |
 | Enum recasing, `StorageClusterOpsAction`, `StorageNodeOpsAction`, `MetricsBackend` | Conversion         | Same kind, value maps one to one                                                                                                                                              |
 | `status.subPhase` string becoming `status.step` object                             | Conversion         | The old string reads into `step.state`, leaving `step.deadline` absent, which restores as a step with no deadline, so an operation in flight across the upgrade keeps running |
-| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The field converts, but the value it should hold is only known once §20 has reparented the node                                                                               |
+| `StorageNode.spec.storageNodeSetRef` becoming a cluster reference                  | Conversion, partly | The hub reads its parent off the controller owner reference, which §20 writes. A node converted before that carries an empty `spec.clusterRef` until the reparent has run     |
 | `BackupPolicy` becoming `StorageBackupPolicy`                                      | `migrate`          | A different kind is a different CRD, and no conversion webhook is invoked across kinds                                                                                        |
 | `VolumeMigration` absorbed into `PersistentVolumeOps`                              | `migrate`          | Different kind, and the target is cluster-scoped while the source is namespaced                                                                                               |
 | `BackupRestore` absorbed into `StorageBackupOps`                                   | `migrate`          | Different kind                                                                                                                                                                |
@@ -401,7 +414,7 @@ The Delta column cites the design that owns the change.
 |---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------|
 | `StorageCluster`    | `maxHugePagesSize` → `minHugePagesSize`, `hashicorpVaultSettings` → `kms.vault`, six toggles renamed, `backup.localEndpoint` → `endpoint`, and five spec removals. `design-storagecluster.md` §12 | `v1alpha1`, `v1alpha2` |
 | `StorageClusterOps` | `nodeRollingRestart` → `rollingRestart`, six action values recased, `status.triggered` removed. `design-storagecluster.md` §12                                                                    | `v1alpha1`, `v1alpha2` |
-| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, `skipKubeletConfiguration` inverted, four dead fields removed. `design-storagenode.md` §15.1    | `v1alpha1`, `v1alpha2` |
+| `StorageNode`       | `storageNodeSetRef` → `clusterRef` and `nodeSet`, `overrides` → `config`, `socketIndex` → `slot`, five dead fields stashed and removed. `design-storagenode.md` §15.1                             | `v1alpha1`, `v1alpha2` |
 | `StorageNodeOps`    | `storageNodeRef` → `nodeRef`, `drain` → `remove`, six action values recased, `status.triggered` removed. `design-storagenode.md` §15.2                                                            | `v1alpha1`, `v1alpha2` |
 | `StoragePool`       | `clusterName` → `clusterRef`, `dhchap` → `volumeDefaults.enableDHCHAP`, `encryption` and `replicate` renamed, `spec.action` and `spec.status` removed. `design-storagepool.md` §11                | `v1alpha1`, `v1alpha2` |
 | `ControlPlane`      | `spec.image` → `spec.source.managed.image`, and `status.phase` becomes a four-value typed phase. `design-controlplane.md` §11                                                                     | `v1alpha1`, `v1alpha2` |
@@ -436,6 +449,14 @@ registers `v1alpha2` as its only version: the ten additions of
 `StoragePoolOps`, `PersistentVolumeOps`, `StorageBackupOps`, and `NFSExport`,
 plus `StorageBackupPolicy`, which is `BackupPolicy` under its new name.
 
+Ten of the eleven are registered. `NFSExport` is specified on another branch
+([`design-pnfs-rwx.md`](../design-pnfs-rwx.md) §7.1) and is born with the work
+that owns it rather than with this migration, which changes nothing here: a kind
+with no CRD is a kind the installer does not apply. `VolumeGroupSnapshotOps`
+joined the group from [`design-consistency-groups.md`](../design-consistency-groups.md)
+after this document was written and is on the same footing as the ten: born at
+`v1alpha2`, with no conversion function and no place in the storage rewrite.
+
 None of them needs a conversion function, and none appears in the storage
 rewrite, because nothing was ever persisted at an older version of them.
 
@@ -445,10 +466,12 @@ installed before the controller that reconciles it exists, which is inert: a
 registered kind with no controller and no objects does nothing until the
 operator carrying its controller is running.
 
-### 7.4 The Staging
+### 7.4 What the Manifests Declare
 
-Each of the seven converting CRDs is installed with both versions served and
-`v1alpha1` retained as the storage version:
+There is one set of CRD manifests rather than a staged pair. Each of the seven
+converting CRDs serves both versions and stores `v1alpha2` from the moment it is
+applied, because `+kubebuilder:storageversion` sits on the `v1alpha2` type and
+controller-gen writes the flag from there:
 
 ```yaml
 # operator/config/crd/bases/storage.simplyblock.io_storageclusters.yaml
@@ -461,58 +484,76 @@ spec:
   versions:
     - name: v1alpha1
       served: true
-      storage: true
+      storage: false
     - name: v1alpha2
       served: true
-      storage: false
+      storage: true
   conversion:
     strategy: Webhook
     webhook:
       conversionReviewVersions: ["v1"]
       clientConfig:
         service:
-          namespace: simplyblock
+          namespace: simplyblock-operator-system
           name: simplyblock-operator-conversion-webhook-service
           path: /convert
           port: 443
 ```
 
-The `conversion` stanza is not written by hand. `operator/config/crd/kustomization.yaml`
-carries the `+kubebuilder:scaffold:crdkustomizewebhookpatch` marker and a
-commented `patches` block, and `operator/config/default/kustomization.yaml`
-carries `+kubebuilder:scaffold:crdkustomizecainjectionns` and
-`crdkustomizecainjectionname` with a comment stating that the markers exist so
-`kubebuilder create webhook --conversion` can wire up a future conversion
-webhook. That scaffold is the intended entry point, and the one deviation from
-what it generates is the CA bundle: the scaffold injects it with cert-manager's
-`cert-manager.io/inject-ca-from` annotation, and this repository provisions
-webhook certificates at runtime instead (§8).
+**One set of manifests is what a fresh install needs.** A cluster installed today
+has no `v1alpha1` object to convert, so it writes `v1alpha2` from the first write,
+converts nothing, and deploys no webhook. Holding storage at `v1alpha1` in the
+shipped manifests would make the ordinary install the exceptional case: every
+object would be stored in a version nothing reads, behind a webhook that exists
+only for upgrades.
 
-**The patch is applied per CRD and not to the whole `crd/bases` directory.** Ten
-of the seventeen keep `strategy: None`, and a `conversion` stanza pointing at a
-webhook on a CRD with one version is a dependency on a Deployment that has no
-reason to exist for that kind, which is what §27 eventually removes.
+**The `conversion` stanza is written into the base rather than patched over it.**
+`operator/hack/apply-conversion-webhook.sh` runs after controller-gen, which
+regenerates each base from the Go types and has no marker for `spec.conversion`,
+and writes the stanza into every CRD named by
+`operator/config/crd/converted-kinds.txt`. That file is the single list three
+consumers have to agree on (the script, the webhook registration in
+`internal/webhook/conversion.go`, and the CA injection in
+`internal/webhook/cert.go`), and `TestConvertedKindsMatchTheManifestList` asserts
+two of them against each other. A Kustomize patch would reach `make install` and
+the installer and miss the chart, which copies `config/crd/bases` verbatim into
+its own `crds/` directory and does not template it, and the chart is what
+installs these CRDs on a cluster.
 
-The staging exists so that five things can fail separately:
+**The ten single-version CRDs keep `strategy: None`.** A `conversion` stanza on a
+kind with one version is a dependency on a Deployment that has no reason to exist
+for it, which is what §28 eventually removes for the seven.
+
+**The stanza ships pointing at a Service the chart does not deploy, and the
+namespace in it is a default rather than a fact.** A CRD is cluster-scoped and
+lands in `crds/`, so the namespace cannot be templated, and the operator patches
+the service reference and the CA bundle together at runtime because it is the only
+party that knows which namespace it is running in. Leaving the strategy at `None`
+until the operator raises it is the worse trade: under `None` the API server
+answers a `v1alpha2` read of a stored `v1alpha1` object by relabeling the
+apiVersion and pruning every field the new schema does not know, which is silently
+wrong data rather than a failed read.
+
+Five things still fail separately, and what separates them is ordering rather than
+a held flag:
 
 1. Introducing the new API.
 2. Proving conversion works.
 3. Upgrading the operator.
 4. Migrating the application resource model.
-5. Changing the persisted storage representation.
+5. Changing the persisted representation of each object.
 
-Once the new operator is verified and the application-level migration has run,
-storage switches on those same seven:
+§9.1 is that order. The conversion webhook is deployed, awaited, and smoke-tested
+against a real object before `apply-crds` runs, so there is something to convert
+with at the moment storage moves. The operator upgrade follows the CRDs, and the
+resource-model migration follows the operator.
 
-```yaml
-versions:
-  - name: v1alpha1
-    served: true
-    storage: false
-  - name: v1alpha2
-    served: true
-    storage: true
-```
+**The apply moves storage, and it does not move the objects.** The flag decides
+what a write encodes, so an object untouched since the apply stays in the
+`v1alpha1` representation, is converted up on every read, and keeps
+`.status.storedVersions` listing `v1alpha1`. §24 is the rewrite that drains it,
+and until that has run an upgraded cluster is one where the storage version and
+the stored representations disagree.
 
 `v1alpha1` becomes `served: false` on the seven under §28's conditions. Its
 readers are the operator's own reconcilers and webhooks under
@@ -678,9 +719,9 @@ The smoke test verifies that:
 - The conversion webhook is reachable.
 - Conversion succeeds for each of the seven converting kinds that has at least
   one object (§7.2).
-- The fields whose conversion is not a copy are correct, which means at minimum
-  a recased action enum, a renamed boolean toggle, and the.
-  `skipKubeletConfiguration` inversion (§6.2).
+- The fields whose conversion is not a copy are correct, which means at minimum a
+  recased action enum, a renamed boolean toggle, the `migrationEnabled` inversion,
+  and a field the hub removed reading back from its stash (§6.2).
 - A `v1alpha2` read followed by a `v1alpha1` read returns the original
   representation.
 
@@ -913,10 +954,9 @@ has meant until now, so `upgrade` says so in its closing report.
 helm upgrade <release> helm-charts/charts/simplyblock-operator
 ```
 
-The chart carries the same field names the API does, so it moves with the API.
-`values.yaml` holds `skipKubeletConfiguration` under the storage-node settings,
-and `multiCluster.enable` is a spelling that exists only there. Two consequences
-follow.
+The chart carries the same field names the API does, so it moves with the API,
+and it carries spellings of its own that name no API field at all, of which
+`multiCluster.enable` is one. Two consequences follow.
 
 **A user's existing values file may not validate against the new chart.**
 `helm-charts/charts/simplyblock-operator/values.schema.json` sets
@@ -1118,11 +1158,29 @@ the phase writes the rows below that line instead.
 
 **Resolve and report.** Every `PersistentVolume` and `VolumeSnapshotContent`
 whose pool segment is not a canonical UUID is listed with the name it carries and
-the UUID that name resolves to, through `lvol.Resolver` against the control
-plane. A pool name resolving to nothing is a finding: the handle names a pool
-that no longer exists, and the migration reports it and does not proceed. This
-part is a read, so it belongs to `preflight` (§19.10) and runs long before the
-migration does.
+the UUID that name resolves to. A pool name resolving to nothing is a finding:
+the handle names a pool that no longer exists, and the migration reports it and
+does not proceed. This part is a read, so it belongs to `preflight` (§19.10) and
+runs long before the migration does — it is the step's own `Validate`, which the
+framework runs in the preflight and again before applying.
+
+The lookup is `PoolResolver`, an interface on the run's `Scope`, and not
+`lvol.Resolver`: that interface answers where a volume is and how to reach it,
+and has no pool listing in it. The implementation lists a cluster's pools once
+and answers from that, through the credentials the cluster keeps beside its own
+object — an installation holds several clusters, each with its own secret, and a
+pool called `production` exists in two of them, so asking the wrong one returns a
+UUID that looks normalized and names a pool the volume is not in. The cluster a
+handle names is found by the UUID a `StorageCluster` reports rather than by what
+one is called.
+
+**The endpoint is given rather than discovered.** The model being upgraded
+records it nowhere a tool running outside the cluster can read: the operator
+takes it from its own environment, and a `v1alpha1` `ControlPlane` carries no
+endpoint at all. So it is `--control-plane`, and without it the step refuses and
+names the flag. That refusal is the right outcome rather than a gap — a cluster
+whose volumes were all provisioned after the boundary has no pool name to
+resolve and never reaches it.
 
 **Rewrite the records the migration owns.** Anywhere the operator has written a
 handle into a field it controls, a custom resource's status or a `ConfigMap`, the
@@ -1151,8 +1209,27 @@ otherwise.** Consistency is exact: the annotation's cluster and volume segments
 MUST equal the field's, and only the pool segment may differ. A reader finding
 any other difference ignores the annotation and reports it, so a hand-edited
 annotation cannot redirect a volume to another cluster. That rule is one
-function in `atlas-lib`, beside `ParseHandle`, and no call site implements it
-twice.
+function in `atlas-lib`, `lvol.NormalizeHandle`, beside `ParseHandle`, and no
+call site implements it twice.
+
+It compares two handles and knows nothing about Kubernetes, which is what lets
+both kinds share it. Where the two strings come from is the other half, and it
+is `kube.NormalizedHandle`, which takes a handle and an object's annotations:
+`VolumeSnapshotContent` belongs to the external snapshotter's module, and
+`atlas-lib` does not take a dependency on it for a map lookup.
+`kube.NormalizedVolumeHandleFromPV` is the same thing for the kind that is in
+the core API.
+
+**`kube.VolumeHandleFromPV` stays, and stays the field's own answer.** The two
+questions differ the way `ParseHandle` and `Split` differ: which pool a volume
+is in is what a caller reaching for the control plane wants, and what an
+object's spec literally says is what the migration wants, since that is how it
+finds the volumes whose spelling is legacy at all.
+
+A `VolumeSnapshotContent` names one of two things and both are the same three
+segments, so whichever it carries is normalized: a pre-existing snapshot names
+itself in `spec.source.snapshotHandle`, and a dynamically taken one names the
+volume it came from in `spec.source.volumeHandle`.
 
 **This is what makes the normalized pool reachable without the control plane.**
 The CSI driver already indexes `PersistentVolume` objects by the lvol id in
@@ -1288,9 +1365,9 @@ Seven labels are built from a name a user chose. Every row is live today.
 
 | What is built                                               | Breaks when                                                                    | Longest input that works    | Fix               |
 |-------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------|-------------------|
-| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Truncate and hash |
-| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Use a UUID        |
-| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Use a UUID        |
+| `simplyblock.io/pool.<ns>.<cluster>.<pool>`, a key          | The namespace, cluster, and pool names together exceed 56 characters           | A 27-character pool name    | Use a UUID        |
+| `storage.simplyblock.io/cluster` on a `StorageClass`        | The cluster name exceeds 63 characters                                         | A 63-character cluster name | Bound the input   |
+| `storage.simplyblock.io/pool` on a `StorageClass`           | The `StoragePool` name exceeds 63 characters                                   | A 63-character pool name    | Bound the input   |
 | `io.simplyblock.storagenodeset`                             | The `StorageNodeSet` name exceeds 63 characters                                | A 63-character set name     | Bound the input   |
 | `storage.simplyblock.io/worker`                             | The `Node` name exceeds 63 characters                                          | A 63-character node name    | Truncate and hash |
 | `simplyblock.io/drain-node`                                 | Character 63 is `-` or `.`, which a label value may not end on                 | A 62-character node name    | Truncate and hash |
@@ -1333,21 +1410,29 @@ characters long.
 
 ### 19.4 Bounding the Cluster Reference
 
-`spec.clusterName` carries no maximum length and no pattern on either
-`StoragePoolSpec` (`storagepool_types.go:115`) or `StorageNodeSetSpec`
-(`storagenodeset_types.go:40`), and it feeds three of the seven labels and three
-of the object names above. **A `+kubebuilder:validation:MaxLength=63` on it is
-what turns an overlong cluster reference into a rejected create rather than a
-reconcile that retries forever.** The marker lands on `v1alpha2`'s
-`spec.clusterRef`, because §7.2 renames the field and retires `StorageNodeSet`,
-and never on `v1alpha1` (§19.9).
+**A `+kubebuilder:validation:MaxLength=63` on a cluster reference is what turns
+an overlong one into a rejected create rather than a reconcile that retries
+forever.** The markers land on `v1alpha2` and never on `v1alpha1` (§19.9).
 
-**63 is a label's limit and not a budget the marker can guarantee.** Two of the
-rows a cluster name feeds share their 63 bytes with a namespace and a pool name,
-so a cluster reference inside the limit still overflows the `simplyblock.io/pool`
-key when the other two are long. What the marker closes is the rows where the
-cluster name stands alone, which are the `StorageClass` label and the two
-`Secret` names.
+**The bound on a reference follows from the bound on the name, so it is the same
+number on every kind that carries one.** A reference longer than a
+`StorageCluster` name may be names nothing that can exist, which makes the
+question of what the referring kind does with it beside the point: eight fields
+across seven kinds carry a cluster's name, and a bound applied to the ones
+somebody remembered is not a bound. Two of the eight are not references at all
+but names — `ClusterDeploymentConfig.spec.cluster.name` becomes a
+`StorageCluster`'s `metadata.name`, so admitting more there is a document the API
+server accepts and a `CreatingCluster` step that can never succeed.
+
+A `status` carrying the same reference is deliberately left unbounded. It records
+what the operator resolved, copied from an input this rule already bounds, so a
+maximum there could catch no mistake and could only turn a status write into one
+the API server refuses.
+
+**63 is a label's limit and not a budget the marker can guarantee.** A row that
+shares its 63 bytes with a namespace and a pool name still overflows when the
+other two are long. What the marker closes is the rows where the cluster name
+stands alone.
 
 **The cluster's own name is bounded by a type-level rule, which no `MaxLength`
 can reach.** `metadata.name` is one of the two metadata fields a CRD validation
@@ -1355,8 +1440,33 @@ rule can see (§19.7), so the name itself is bounded by the rule and the
 reference by the marker:
 
 ```go
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into a StorageClass label"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes"
 ```
+
+**Three kinds carry that rule, not one.** The cluster's name is the one §19.2
+measured, but the target model writes two more names into label values, and both
+were found by asking the same question of the kinds around it rather than by
+re-deriving the table:
+
+| Kind             | Written into                                                          |
+|------------------|-----------------------------------------------------------------------|
+| `StorageCluster` | `storage.simplyblock.io/cluster`, and `io.simplyblock.storagenodeset` |
+| `StoragePool`    | `storage.simplyblock.io/pool`                                         |
+| `StorageNode`    | `storage.simplyblock.io/node`                                         |
+
+The pool's row is the one with a second failure behind it. That label is also the
+selector a pool lists its own classes with, so an overlong pool name is not only a
+write the API server refuses but a read: the pool would never find a class it had
+been given.
+
+The node's row is the one where the bound is the smaller half of the fix. A
+`StorageNode` is named by the operator rather than by a user, from the formula in
+`expansion.go`, and that formula was declared against an object name's 253 bytes
+while its output travels into a label — the mistake §19.1 exists to name. A
+regional cluster name and a worker a cloud named after its fully qualified domain
+name are 68 bytes between them, so the overflow was what ordinary inputs
+produced. The formula carries the label's limit now, and the rule on the type is
+what holds a node somebody authored to the same bound.
 
 ### 19.5 The Three Fixes
 
@@ -1364,8 +1474,20 @@ Every row above resolves one of three ways, and which one applies follows from
 who owns the name rather than from how long it is.
 
 **Use a UUID.** When a stable identifier is already at hand, nothing reads the
-current value, and the label exists to be selected on rather than read. The two
-`StorageClass` labels are this case.
+current value, and the label exists to be selected on rather than read.
+
+The row this turned out to fit is the per-pool key on a worker `Node`, which the
+target model writes as `storage.simplyblock.io/storage-pool.<poolUUID>`: it is
+the tightest row of §19.2, it is read by the CSI node plugin as a prefix match
+rather than by its parts, and a UUID retires the whole of its budget problem
+along with §19.8's ambiguous concatenation.
+
+The two `StorageClass` labels were assumed to be this case and are not.
+`storage.simplyblock.io/cluster` and `storage.simplyblock.io/pool` are the
+assignment itself — they are how a person assigns a class they wrote to a pool —
+so a value nobody can type is a contract nobody can enter. Those two rows resolve
+by bounding the input instead, which is what makes §19.4's rule on three kinds
+rather than one load-bearing.
 
 **Bound the input.** When the long name is this API's to refuse. A field
 somebody types has no business being 200 characters, so the answer is no at
@@ -1399,9 +1521,15 @@ adopt rather than a new invention:
 - **The Helm chart** names every resource literally rather than building names
   from the release name.
 
-`nodeprobe.ObjectName` lands with the discovery work, so the shared helper is
-extracted from it rather than written twice, into `atlas-lib/kube/names.go`
-beside the formulas it bounds.
+`nodeprobe.ObjectName` landed with the discovery work, the shared helper was
+extracted from it rather than written twice, into `atlas-lib/kube/derived.go`
+beside the formulas it bounds, and the reference call site now derives its names
+through it. What the extraction had to carry over is that the digest is
+unconditional there: the run and the node join on a separator both of them may
+contain, so two runs of one deployment reach one stem without either being long
+enough to truncate. Where a formula's parts are unambiguous the digest stays
+conditional and the name stays readable, so `Formula.AlwaysDigest` is what the
+two cases differ in.
 
 ### 19.7 Where a Rule Is Enforced
 
@@ -1423,6 +1551,21 @@ admission webhook or nothing.
 The webhook races itself. Two creates admitted concurrently each see a free
 derived name, so the reconciler treats a collision as a terminal condition with
 an event rather than as something admission prevented.
+
+**In the target model that fallback is the whole of the answer, and no
+uniqueness webhook is built.** The row above is written for the current model,
+where four routes take two resources to one derived name (§19.8), and the target
+model closes three of them by construction: every kind but
+`PersistentVolumeOps` is namespaced, and the names they derive are unique within
+the namespace their inputs are unique in. What is left is the default
+`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`.
+The pool's reconcile already answers that one the way this row prescribes — it
+adopts the name only when the occupant is recognizably the class it would have
+written, and otherwise emits `StorageClassNameTaken` and leaves the pool without
+a default. A fail-closed webhook in front of that would refuse a legal cluster
+over a class that is not required for the cluster to work, which is worse than
+the condition it replaces. The remaining two routes of §19.8 are what an upgrade
+introduces rather than what a write can, and they stay the preflight's.
 
 The last row is the one this document turns on: every mechanism above it runs on
 a write, and the objects an upgrade has to survive were written before the rule
@@ -1733,19 +1876,24 @@ process has to stay alive for the migration to be recoverable.
 
 ## 24. Storage-Version Migration
 
-Changing the storage version is separate from application-level migration. For
-each CRD:
+Draining the old storage representation is separate from application-level
+migration, and by the time this stage runs the storage version has already moved:
+`apply-crds` installed manifests that declare `v1alpha2` as storage (§7.4).
+
+What the flag did not do is touch what is already in etcd. Objects that have not
+been written since the apply still exist in the old representation, and
+`.status.storedVersions` still lists `v1alpha1`:
 
 ```text
-v1alpha1 storage=true      v1alpha1 storage=false
-v1alpha2 storage=false  →  v1alpha2 storage=true
+CRD:      v1alpha1 storage=false, v1alpha2 storage=true
+etcd:     object A encoded v1alpha1   ← until something writes it
+          object B encoded v1alpha2   ← written since the apply
+storedVersions: ["v1alpha1", "v1alpha2"]
 ```
 
-After the switch, objects that have not been written since still exist in etcd
-in the old representation, and `.status.storedVersions` still lists
-`v1alpha1`. Until that list holds `v1alpha2` alone, `v1alpha1` cannot be
-removed from the CRD, because the API server refuses to drop a version it still
-has stored objects in.
+Until that list holds `v1alpha2` alone, `v1alpha1` cannot be removed from the
+CRD, because the API server refuses to drop a version it still has stored
+objects in.
 
 **The migration rewrites the objects itself.** The Kubernetes
 `StorageVersionMigration` API is not used: it is served at
@@ -1757,7 +1905,8 @@ alpha feature gate is not a migration path.
 
 The rewrite is:
 
-1. Switch the CRD to the new storage version.
+1. Confirm the CRD stores `v1alpha2`, which `verify-crd-versions` already
+   established and this stage re-reads rather than assumes.
 2. List every object of that kind, in every namespace.
 3. Write each object back unchanged.
 4. Verify the write.
@@ -2291,8 +2440,10 @@ is proven red before the fix.
 
 Every field mapping, renamed field, moved field, default value, removed field,
 enum change, type change, nested object, list, map, and nil or empty value.
-`skipKubeletConfiguration` gets its own test for the inversion, and each of the
-three recased action enums gets a test per value.
+`migrationEnabled` gets its own test for the inversion, `enableDataRealignment`
+one for the default that changes direction, each field the hub removed one for the
+stash it round-trips through, and each of the three recased action enums a test
+per value.
 
 ### 30.2 Round-Trip Tests
 
@@ -2424,26 +2575,30 @@ prose, its check is here and not repeated in both places.
 
 **Volume handles (§16.4)**
 
-- [ ] Every legacy handle is reported with the UUID its pool name resolves to,
+- [x] Every legacy handle is reported with the UUID its pool name resolves to,
       and an unresolvable one fails the preflight.
-- [ ] A `PersistentVolume` is replaced only under `Retain`, one at a time, and
-      never while a pod has the claim mounted.
-- [ ] The normalized handle is written to
+- [x] No `PersistentVolume` is replaced at all. The field keeps the spelling it
+      was provisioned with and the annotation carries the identity, so the
+      replacement this row guarded against does not arise.
+- [x] The normalized handle is written to
       `storage.simplyblock.io/volume-handle` on every `PersistentVolume` and
       `VolumeSnapshotContent` whose field carries a pool name.
-- [ ] One `atlas-lib` function decides between the annotation and the field, and
+- [x] One `atlas-lib` function decides between the annotation and the field, and
       it rejects an annotation whose cluster or volume segment differs.
-- [ ] `lvol.ParseHandle` stays tolerant for objects with no annotation.
+- [x] `lvol.ParseHandle` stays tolerant for objects with no annotation.
 
 **Names (§19)**
 
 - [ ] Every name and label of §19.2 and §19.3 has a bounded derivation.
-- [ ] `metadata.name` on the `v1alpha2` `StorageCluster` is bounded at 63 by an
-      `XValidation` rule, and `StoragePoolSpec.clusterRef` by `MaxLength`.
+- [x] `metadata.name` is bounded at 63 by an `XValidation` rule on the `v1alpha2`
+      `StorageCluster`, `StoragePool`, and `StorageNode`, and every field
+      carrying a cluster's name by `MaxLength` (§19.4).
 - [ ] The truncate-and-hash helper is extracted from `nodeprobe.ObjectName` into
       `atlas-lib/kube`, and no call site rolls its own.
-- [ ] §19.8's uniqueness rules are enforced at admission, and a collision that
-      races admission is terminal with an event.
+- [x] §19.8's uniqueness rules are enforced where a write can still break one.
+      The target model leaves the default `StorageClass` as the only case, and
+      the pool's reconcile is where it is terminal with an event (§19.7); the
+      remaining routes are an upgrade's and stay the preflight's.
 
 **The tool**
 

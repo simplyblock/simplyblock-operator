@@ -109,6 +109,10 @@ spec:
                               creates. It is copied to the draft's own clusterRef, so that re-running
                               discovery after an expansion produces a growth document naming the same
                               cluster.
+
+                              Bounded at what a StorageCluster name may be, since a longer value names
+                              nothing that can exist (design-api-upgrade.md §19.4).
+                            maxLength: 63
                             type: string
                           configName:
                             description: |-
@@ -200,6 +204,24 @@ spec:
                                 block devices and require enableLogicalBlockDevices
                               rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
                                 || !(has(self.blockAllowList) || has(self.blockDenyList))
+                          enableControlPlaneNodes:
+                            description: |-
+                              EnableControlPlaneNodes lets the run consider machines that run the API
+                              server and etcd.
+
+                              It is off by default because a storage node is a data path, and putting one
+                              on an etcd host is a placement almost nobody intends. The approval gate is a
+                              poor place to catch it: a fifty-worker draft is not a document anybody reads
+                              closely enough to spot three control-plane nodes in it. A combined three-node
+                              or single-node deployment is the case that wants it, and those are set up
+                              deliberately.
+
+                              There is no field beside it for infrastructure nodes, because those are used
+                              without asking: an OpenShift infra node is the tier a cluster's own
+                              infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+                              with disks in its infra nodes meant those disks to be the storage, so a draft
+                              proposes them ahead of the workers rather than leaving them out.
+                            type: boolean
                           nodeSelector:
                             additionalProperties:
                               type: string
@@ -244,8 +266,12 @@ spec:
                         - message: field is immutable
                           rule: self == oldSelf
                       clusterRef:
-                        description: ClusterRef names the StorageCluster the operation
-                          runs against.
+                        description: |-
+                          ClusterRef names the StorageCluster the operation runs against.
+
+                          Bounded at what a StorageCluster name may be, since a longer value names
+                          nothing that can exist (design-api-upgrade.md §19.4).
+                        maxLength: 63
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
@@ -313,8 +339,14 @@ spec:
                   storageClusterOps:
                     description: StorageClusterOps runs a cluster-level operation.
                     properties:
+                      abort:
+                        description: |-
+                          Abort asks a running operation to stop at its next step and unwind.
+                          Whether an abort is expressible from the current step is declared by that
+                          action's graph rather than checked here.
+                        type: boolean
                       action:
-                        description: Action is the operation to perform. Immutable.
+                        description: Action is the operation to perform.
                         enum:
                         - Activate
                         - Expand
@@ -322,27 +354,50 @@ spec:
                         - Start
                         - Restart
                         - RollingRestart
+                        - CancelTask
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
+                      cancelTask:
+                        description: CancelTask parameterizes action CancelTask and
+                          is ignored by the others.
+                        properties:
+                          taskID:
+                            description: |-
+                              TaskID names the entry of StorageCluster.status.tasks to cancel, by the
+                              control plane's identifier for it rather than by its position in the
+                              list.
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                        required:
+                        - taskID
+                        type: object
                       clusterRef:
-                        description: ClusterRef is the name of the target StorageCluster.
-                          Immutable.
+                        description: |-
+                          ClusterRef names the StorageCluster this operation acts on. The operation
+                          never owns its target, because deleting the record of an operation must
+                          not delete the cluster it operated on.
+
+                          Bounded at what a StorageCluster name may be, since a longer value names
+                          nothing that can exist (design-api-upgrade.md §19.4).
+                        maxLength: 63
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
                       rollingRestart:
                         description: |-
-                          RollingRestart configures behavior specific to the RollingRestart action.
-                          Ignored for all other actions.
+                          RollingRestart parameterizes action RollingRestart and is ignored by the
+                          others.
                         properties:
                           refreshSNodeAPI:
                             description: |-
-                              RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                              after the backend node is shut down and before it is restarted, ensuring
-                              the latest image is running before the node comes back online.
+                              RefreshSNodeAPI restarts each node's storage-node DaemonSet pod between
+                              its shutdown and its restart, so the latest image is running when the
+                              node returns.
                             type: boolean
                         type: object
                     required:
@@ -352,8 +407,16 @@ spec:
                   storageNodeOps:
                     description: StorageNodeOps runs a node-level operation.
                     properties:
+                      abort:
+                        description: |-
+                          Abort asks a running operation to stop at its next step and unwind. It is
+                          the only mutable field on this spec, because it is the only thing about an
+                          operation that can legitimately be decided after it started. Whether an
+                          abort is expressible from the current step is declared by that action's
+                          graph rather than checked here.
+                        type: boolean
                       action:
-                        description: Action is the operation to perform. Immutable.
+                        description: Action is the operation to perform.
                         enum:
                         - Shutdown
                         - Restart
@@ -361,13 +424,16 @@ spec:
                         - Resume
                         - Remove
                         - Migrate
+                        - HostMaintenance
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
                       force:
-                        description: Force enables forced execution where the backend
-                          supports it.
+                        description: |-
+                          Force passes the control plane's force flag where the action supports it.
+                          Migrate defaults it to true, because the control plane rejects a non-forced
+                          restart of a node that is not already offline.
                         type: boolean
                       migrate:
                         description: Migrate parameterizes action Migrate and is ignored
@@ -375,16 +441,15 @@ spec:
                         properties:
                           newSsdPcie:
                             description: |-
-                              NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-                              during a migration. Passed through to the control-plane restart as
-                              new_ssd_pcie.
+                              NewSsdPcie lists additional NVMe PCI addresses to bind on the target host,
+                              passed through to the control-plane restart as new_ssd_pcie and merged into
+                              the node's effective allow list so they survive a later rebuild.
                             items:
                               type: string
                             type: array
                           targetWorkerNode:
-                            description: |-
-                              TargetWorkerNode is the Kubernetes worker hostname the storage node is
-                              relocated onto.
+                            description: TargetWorkerNode is the Kubernetes worker
+                              the node is relocated onto.
                             type: string
                             x-kubernetes-validations:
                             - message: field is immutable
@@ -393,27 +458,29 @@ spec:
                         - targetWorkerNode
                         type: object
                       nodeRef:
-                        description: NodeRef is the name of the target StorageNode.
-                          Immutable.
+                        description: |-
+                          NodeRef names the StorageNode this operation acts on. The operation never
+                          owns its target, because deleting the record of an operation must not delete
+                          the node it operated on.
                         type: string
                         x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
                       reattachVolume:
                         description: |-
-                          ReattachVolume reattaches volumes during the node restart.
-                          Applicable when action=Restart or action=Migrate.
+                          ReattachVolume asks the control plane to reattach this node's volumes as
+                          part of a restart. Applies to Restart, Migrate, and HostMaintenance.
                         type: boolean
                       remove:
                         description: Remove parameterizes action Remove and is ignored
                           by the others.
                         properties:
                           systemVolumeFilterRegex:
+                            default: ^sb-fio-baseline-.*
                             description: |-
-                              SystemVolumeFilterRegex is a Go regular expression matched against backend
-                              volume names. Matching volumes are treated as system volumes: excluded from
-                              drain migration and deleted inline during the Verifying phase.
-                              Defaults to `^sb-fio-baseline-.*`.
+                              SystemVolumeFilterRegex matches backend volume names that are system
+                              volumes: excluded from the drain's migration and deleted during
+                              verification rather than blocking it.
                             type: string
                         type: object
                     required:

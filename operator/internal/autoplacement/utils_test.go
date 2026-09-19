@@ -19,13 +19,13 @@ func TestResolveAutoPlacementConfig_BaselineDefaults(t *testing.T) {
 	}
 
 	if cfg.BaselineStrategy != string(simplyblockv1alpha2.BaselineStrategyRollingWindow) {
-		t.Errorf("BaselineStrategy = %q, want rollingWindow (default)", cfg.BaselineStrategy)
+		t.Errorf("BaselineStrategy = %q, want RollingWindow (default)", cfg.BaselineStrategy)
 	}
 	if cfg.BaselineWindow != 6*time.Hour {
 		t.Errorf("BaselineWindow = %v, want 6h", cfg.BaselineWindow)
 	}
 	if cfg.BaselineColdStart != string(simplyblockv1alpha2.BaselineColdStartPartialWindow) {
-		t.Errorf("BaselineColdStart = %q, want partialWindow", cfg.BaselineColdStart)
+		t.Errorf("BaselineColdStart = %q, want PartialWindow", cfg.BaselineColdStart)
 	}
 	if cfg.BaselineMinSamples != 6 {
 		t.Errorf("BaselineMinSamples = %d, want 6", cfg.BaselineMinSamples)
@@ -54,13 +54,13 @@ func TestResolveAutoPlacementConfig_BaselineOverrides(t *testing.T) {
 	}
 
 	if cfg.BaselineStrategy != string(simplyblockv1alpha2.BaselineStrategyBenchmark) {
-		t.Errorf("BaselineStrategy = %q, want benchmark", cfg.BaselineStrategy)
+		t.Errorf("BaselineStrategy = %q, want Benchmark", cfg.BaselineStrategy)
 	}
 	if cfg.BaselineWindow != 12*time.Hour {
 		t.Errorf("BaselineWindow = %v, want 12h", cfg.BaselineWindow)
 	}
 	if cfg.BaselineColdStart != string(simplyblockv1alpha2.BaselineColdStartDefer) {
-		t.Errorf("BaselineColdStart = %q, want defer", cfg.BaselineColdStart)
+		t.Errorf("BaselineColdStart = %q, want Defer", cfg.BaselineColdStart)
 	}
 	if cfg.BaselineMinSamples != 12 {
 		t.Errorf("BaselineMinSamples = %d, want 12", cfg.BaselineMinSamples)

@@ -1,10 +1,17 @@
 // Whether anything is actually driving a device a userspace driver owns.
 //
 // Bound and in use are different states, and the difference decides whether a
-// controller can be taken back. A controller SPDK is running on is bound and
-// held; one a previous deployment left behind is bound and idle. Handing the
-// first back to the kernel takes a storage node's disks out from under it, and
-// handing the second back costs nothing.
+// controller can be taken back. A controller something is running on is bound
+// and held; one a previous deployment left behind is bound and idle. Handing
+// the first back to the kernel takes its disks out from under whatever is
+// driving them, and handing the second back costs nothing.
+//
+// What holds it is not assumed to be this product. A userspace binding is also
+// how a hypervisor passes a disk through to a guest and how a DPDK application
+// takes a device, and a machine that is doing either looks from sysfs exactly
+// like one holding leftovers. That is the case this file exists to tell apart,
+// and it is why the answer is about whether anything holds the device rather
+// than about whether the holder is recognized.
 //
 // sysfs will not answer it. The uio driver exports name, version, and event,
 // and none of them changes while a process holds the character device: this was
@@ -19,6 +26,7 @@
 package pci
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +66,42 @@ func HeldBy(cfg Config, device Device) ([]Holder, error) {
 		return nil, nil
 	}
 	return holdersOf(cfg, device.UIODevices)
+}
+
+// CheckHolders fills in InUse for every device given, and returns what it could
+// not determine alongside the devices it could.
+//
+// The failures are returned as well as left on the device, because the two
+// answers are not the same. A device nothing holds and a device that could not
+// be checked are a set InUse and a nil one, and only the first is safe to
+// reclaim: a caller reading the field gets the distinction whether or not it
+// reads the error. The devices come back either way, since a machine whose
+// process table could not be read still has controllers worth reporting.
+func CheckHolders(cfg Config, devices []Device) ([]Device, error) {
+	out := make([]Device, 0, len(devices))
+	var errs []error
+
+	for _, device := range devices {
+		if !device.BoundToUserspace() {
+			// The kernel is driving it, so its namespaces are block devices and
+			// nothing about the process table changes that.
+			out = append(out, device)
+			continue
+		}
+
+		holders, err := HeldBy(cfg, device)
+		if err != nil {
+			errs = append(errs, fmt.Errorf(
+				"pci: %s could not be checked for holders, so whether it is free is unknown: %w",
+				device.Address, err))
+			out = append(out, device)
+			continue
+		}
+		held := len(holders) > 0
+		device.InUse = &held
+		out = append(out, device)
+	}
+	return out, errors.Join(errs...)
 }
 
 // holdersOf walks the process table for anything holding one of the paths.
