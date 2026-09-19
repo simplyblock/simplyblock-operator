@@ -315,6 +315,77 @@ func TestDownSkipsAbsentLayers(t *testing.T) {
 	}
 }
 
+// Regression: a teardown is not abandoned because a layer cannot be observed.
+//
+// Total path loss is the ordinary way this happens rather than an exotic one:
+// the device goes, the mount above it answers EIO, and the filesystem layer's
+// Observe reports that as an error rather than as a state. The survey ran before
+// any Release, so one unobservable layer refused the whole teardown, leaving the
+// dead mount in place and the fabric beneath it connected — the one situation
+// every layer's force path was written for.
+func TestDownReleasesWhatItCannotObserve(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	filesystem := &fakeLayer{name: "filesystem", log: &log, state: StateReady}
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		filesystem,
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	// The device went away under the stack after it was staged.
+	filesystem.observeErr = errors.New("the mount is dead, because the device behind it is gone")
+
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down refused a teardown it could not survey: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	if !strings.Contains(joined, "filesystem:release") {
+		t.Errorf("the dead mount was left in place:\n%s", joined)
+	}
+	if !strings.Contains(joined, "fabric:release") {
+		t.Errorf("the layer under the dead mount was never released:\n%s", joined)
+	}
+	if indexOf(log, "filesystem:release") > indexOf(log, "fabric:release") {
+		t.Errorf("Down released bottom-up:\n%s", joined)
+	}
+	if _, err := store.Load(testHandle); !errors.Is(err, ErrNoRecord) {
+		t.Errorf("the record survived a completed teardown: %v", err)
+	}
+}
+
+// The same teardown still reports a release that fails, because a stack that is
+// still up is not one whose record may go.
+func TestDownReportsAFailedReleaseAfterASurveyItCouldNotFinish(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	filesystem := &fakeLayer{name: "filesystem", log: &log, state: StateReady}
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		filesystem,
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	filesystem.observeErr = errors.New("the mount is dead")
+	filesystem.releaseErr = errors.New("umount: target is busy")
+
+	if err := r.Down(context.Background(), testHandle, plan); err == nil {
+		t.Fatal("Down reported success while the mount it could not release is still there")
+	}
+	if _, err := store.Load(testHandle); err != nil {
+		t.Errorf("the record was removed although the stack is still up: %v", err)
+	}
+}
+
 // Heal asks each Healer whether it is serving and repairs only what is not. A
 // layer that implements no Healer is skipped rather than special-cased.
 func TestHealRepairsOnlyUnhealthyLayers(t *testing.T) {
@@ -573,5 +644,48 @@ func TestCompositeSubPlanIsRecordedInOrder(t *testing.T) {
 	}
 	if len(rec.Plan[1].Members) != 0 {
 		t.Errorf("a layer that is not a composite recorded members: %+v", rec.Plan[1].Members)
+	}
+}
+
+// Observe walks a live stack without converging any of it, and reports what the
+// topmost layer currently exposes. A raw block volume's publish needs the device
+// under a stack it must not bring up, and deriving it with Up would attach a
+// fabric a publish has no business attaching.
+func TestObserveReadsTheStackWithoutBuildingIt(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, state: StateReady},
+	}
+
+	r := newRunner(t)
+	top, err := r.Observe(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	want := "fabric:observe filesystem:observe"
+	if got := strings.Join(log, " "); got != want {
+		t.Errorf("call order:\n got %s\nwant %s", got, want)
+	}
+	dev, ok := top.Device()
+	if !ok || dev.Name != "nvme0n1" {
+		t.Fatalf("Observe reported %+v, want the device the stack exposes", top.Devices)
+	}
+}
+
+// A layer that cannot be read stops the walk and names itself, because a caller
+// acting on a partial reading acts on a stack it cannot see.
+func TestObserveReportsTheLayerItCouldNotRead(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, observeErr: errors.New("blkid: no such device")},
+	}
+
+	if _, err := newRunner(t).Observe(context.Background(), plan); err == nil {
+		t.Fatal("Observe reported a stack it could not read")
+	} else if !strings.Contains(err.Error(), "filesystem") {
+		t.Errorf("the error does not name the layer that failed: %v", err)
 	}
 }
