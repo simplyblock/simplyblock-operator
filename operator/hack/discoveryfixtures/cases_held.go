@@ -28,7 +28,7 @@ import (
 func idleControllers(n int, driver string) []nodeprobe.Controller {
 	out := make([]nodeprobe.Controller, 0, n)
 	for i := 0; i < n; i++ {
-		out = append(out, controller(fmt.Sprintf("0000:%02x:00.0", 0x5e+i), driver, 0))
+		out = append(out, controller(fmt.Sprintf("0000:%02x:00.0", 0x5e+i), driver))
 	}
 	return out
 }
@@ -69,7 +69,7 @@ func heldCases() map[string]Case {
 
 	loopbacks := make([]nodeprobe.Device, 0, 16)
 	for i := 0; i < 16; i++ {
-		loopbacks = append(loopbacks, blk(fmt.Sprintf("loop%d", i), 0, 64*gb, looped()))
+		loopbacks = append(loopbacks, blk(fmt.Sprintf("loop%d", i), 64*gb, looped()))
 	}
 
 	cases := map[string]Case{
@@ -84,20 +84,20 @@ func heldCases() map[string]Case {
 				nvme("nvme1n1", "0000:b0:00.0", 0, 3*tb),
 			),
 			controllers(
-				controller("0000:5e:00.0", pci.DriverUIOGeneric, 0),
-				controller("0000:5f:00.0", pci.DriverUIOGeneric, 0),
-				controller("0000:af:00.0", "nvme", 0),
-				controller("0000:b0:00.0", "nvme", 0),
+				controller("0000:5e:00.0", pci.DriverUIOGeneric),
+				controller("0000:5f:00.0", pci.DriverUIOGeneric),
+				controller("0000:af:00.0", "nvme"),
+				controller("0000:b0:00.0", "nvme"),
 			))),
 		"HELD-06": one(host("worker-01", cpu(1, 16, 2),
 			controllers(idleControllers(4, pci.DriverVFIO)...))),
 		"HELD-07": one(host("worker-01", cpu(1, 16, 2),
 			disks(layoutA.disks(3*tb)...),
 			controllers(
-				controller("0000:5e:00.0", "nvme", 0),
-				controller("0000:5f:00.0", "nvme", 0),
-				controller("0000:af:00.0", "nvme", 0),
-				controller("0000:b0:00.0", "nvme", 0),
+				controller("0000:5e:00.0", "nvme"),
+				controller("0000:5f:00.0", "nvme"),
+				controller("0000:af:00.0", "nvme"),
+				controller("0000:b0:00.0", "nvme"),
 			))),
 		"HELD-09": one(host("worker-01", cpu(1, 16, 2),
 			disks(append(loopbacks, layoutA.disks(3*tb)...)...))),

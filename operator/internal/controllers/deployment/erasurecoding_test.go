@@ -22,14 +22,15 @@ import (
 )
 
 // aNode is a storage node the cluster already has, which is what a growth
-// document adds to.
-func aNode(name, worker string, slot int32) client.Object {
+// document adds to. Every case puts its node in the first slot, because what
+// the cases differ in is how many nodes there are rather than where they sit.
+func aNode(name, worker string) client.Object {
 	return &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: theNamespace},
 		Spec: simplyblockv1alpha2.StorageNodeSpec{
 			ClusterRef: theCluster,
 			WorkerNode: worker,
-			Slot:       ptr.To(slot),
+			Slot:       ptr.To(int32(0)),
 		},
 	}
 }
@@ -159,7 +160,7 @@ func TestAGrowthDocumentCountsTheNodesTheClusterHas(t *testing.T) {
 		}
 	})
 	objects := append(workers("worker-1", "worker-2", "worker-3", "worker-4"),
-		cluster, aNode("node-1", "worker-1", 0), aNode("node-2", "worker-2", 0))
+		cluster, aNode("node-1", "worker-1"), aNode("node-2", "worker-2"))
 
 	if findings := findingsOf(t, config, objects...); len(findings) != 0 {
 		t.Errorf("a growth document reaching the minimum reported %+v", findings)
@@ -182,7 +183,7 @@ func TestAGrowthDocumentThatStaysBelowTheMinimumIsReported(t *testing.T) {
 		}
 	})
 	objects := append(workers("worker-1", "worker-3"),
-		cluster, aNode("node-1", "worker-1", 0))
+		cluster, aNode("node-1", "worker-1"))
 
 	found := only(t, findingsOf(t, config, objects...), StripeBelowMinimumNodes)
 	for _, want := range []string{"2+1", "4", "2"} {
@@ -209,7 +210,7 @@ func TestAGrowthDocumentDoesNotCountASlotTwice(t *testing.T) {
 		}
 	})
 	objects := append(workers("worker-1", "worker-2"),
-		cluster, aNode("node-1", "worker-1", 0), aNode("node-2", "worker-2", 0))
+		cluster, aNode("node-1", "worker-1"), aNode("node-2", "worker-2"))
 
 	found := only(t, findingsOf(t, config, objects...), StripeBelowMinimumNodes)
 	if !strings.Contains(found.message, "2") {

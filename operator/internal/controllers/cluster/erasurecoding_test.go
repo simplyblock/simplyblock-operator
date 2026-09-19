@@ -19,11 +19,15 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
+// statusSuspended is the control plane's own spelling of a cluster that is not
+// serving, which is the reading every case here is written against.
+const statusSuspended = "suspended"
+
 // suspendedCluster is a control-plane reading of a cluster that is not active,
 // which is the only state an activation is asked for from.
 func suspendedCluster() webapi.ClusterResponse {
 	reading := activeCluster()
-	reading.Status = "suspended"
+	reading.Status = statusSuspended
 	return reading
 }
 
@@ -45,7 +49,7 @@ func withStripe(data, parity int32) func(*simplyblockv1alpha2.StorageCluster) {
 		c.Spec.Stripe = &simplyblockv1alpha2.StripeSpec{
 			DataChunks: ptr.To(data), ParityChunks: ptr.To(parity),
 		}
-		c.Status.Status = "suspended"
+		c.Status.Status = statusSuspended
 		c.Status.Phase = simplyblockv1alpha2.StorageClusterPhasePending
 	}
 }

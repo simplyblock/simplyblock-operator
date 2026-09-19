@@ -31,11 +31,11 @@ func stacked(addressed map[string][]string) []nodeprobe.Interface {
 		lower []string
 		upper []string
 	}{
-		{name: "bond0", kind: inventory.LinkBond, lower: []string{"eth0", "eth1"}, upper: []string{"bond0.100"}},
-		{name: "bond0.100", kind: inventory.LinkVLAN, lower: []string{"bond0"}},
+		{name: bond0, kind: inventory.LinkBond, lower: []string{eth0, eth1}, upper: []string{"bond0.100"}},
+		{name: "bond0.100", kind: inventory.LinkVLAN, lower: []string{bond0}},
 		{name: "br0", kind: inventory.LinkBridge, lower: []string{"eth2"}},
-		{name: "eth0", kind: inventory.LinkPhysical, speed: 25000, upper: []string{"bond0"}},
-		{name: "eth1", kind: inventory.LinkPhysical, speed: 25000, upper: []string{"bond0"}},
+		{name: eth0, kind: inventory.LinkPhysical, speed: 25000, upper: []string{bond0}},
+		{name: eth1, kind: inventory.LinkPhysical, speed: 25000, upper: []string{bond0}},
 		{name: "eth2", kind: inventory.LinkPhysical, speed: 10000, upper: []string{"br0"}},
 		{name: "flannel.1", kind: inventory.LinkVXLAN},
 		{name: "lo", kind: inventory.LinkLoopback},
@@ -72,9 +72,9 @@ func stackedReport(addressed map[string][]string) nodeprobe.Report {
 func TestABondHoldingTheNodeAddressIsNamed(t *testing.T) {
 	// The bond is what an address is bound to on a bonded host. Its members hold
 	// none, so the earlier rule found no candidate at all and named nothing.
-	r := stackedReport(map[string][]string{"bond0": {"10.10.10.113"}})
+	r := stackedReport(map[string][]string{bond0: {"10.10.10.113"}})
 
-	if got := ManagementInterface(r, "10.10.10.113"); got != "bond0" {
+	if got := ManagementInterface(r, "10.10.10.113"); got != bond0 {
 		t.Errorf("named %q, want the bond holding the node's address", got)
 	}
 }
@@ -138,11 +138,11 @@ func TestTheEffectiveSpeedOfAnAggregateIsItsMembers(t *testing.T) {
 	// A bond reports no speed of its own, so ranking it on what it reports puts
 	// it behind every physical NIC. What it can carry is what its members can.
 	r := stackedReport(map[string][]string{
-		"bond0": {"10.10.10.113"},
-		"eth2":  {"192.168.1.10"},
+		bond0:  {"10.10.10.113"},
+		"eth2": {"192.168.1.10"},
 	})
 
-	if got := ManagementInterface(r, ""); got != "bond0" {
+	if got := ManagementInterface(r, ""); got != bond0 {
 		t.Errorf("named %q, want the bond: 2x25G carries more than one 10G NIC", got)
 	}
 }
@@ -164,16 +164,16 @@ func TestAPhysicalInterfaceWinsATieWithADerivedOne(t *testing.T) {
 	r := report("worker-1")
 	r.Interfaces = []nodeprobe.Interface{
 		{
-			Name: "eth0", Kind: string(inventory.LinkPhysical), SpeedMbps: 25000,
+			Name: eth0, Kind: string(inventory.LinkPhysical), SpeedMbps: 25000,
 			State: "up", Addresses: []string{"192.168.1.10"}, Upper: []string{"eth0.100"},
 		},
 		{
 			Name: "eth0.100", Kind: string(inventory.LinkVLAN), SpeedMbps: 25000, Virtual: true,
-			State: "up", Addresses: []string{"10.10.10.113"}, Lower: []string{"eth0"},
+			State: "up", Addresses: []string{"10.10.10.113"}, Lower: []string{eth0},
 		},
 	}
 
-	if got := ManagementInterface(r, ""); got != "eth0" {
+	if got := ManagementInterface(r, ""); got != eth0 {
 		t.Errorf("named %q, want the physical interface", got)
 	}
 }
@@ -181,13 +181,13 @@ func TestAPhysicalInterfaceWinsATieWithADerivedOne(t *testing.T) {
 func TestTheHardwareUnderTheChosenInterfaceIsReported(t *testing.T) {
 	// What a bond amounts to is not readable from the bond: it carries no slot,
 	// no driver, and no memory node. The members are the only route to all three.
-	r := stackedReport(map[string][]string{"bond0": {"10.10.10.113"}})
+	r := stackedReport(map[string][]string{bond0: {"10.10.10.113"}})
 
 	mgmt := ManagementOf(r, "10.10.10.113")
-	if mgmt.Name != "bond0" || mgmt.Kind != string(inventory.LinkBond) {
+	if mgmt.Name != bond0 || mgmt.Kind != string(inventory.LinkBond) {
 		t.Fatalf("chose %+v", mgmt)
 	}
-	if !slices.Equal(mgmt.Members, []string{"eth0", "eth1"}) {
+	if !slices.Equal(mgmt.Members, []string{eth0, eth1}) {
 		t.Errorf("reported members %v, want both NICs", mgmt.Members)
 	}
 	if mgmt.SpeedMbps != 50000 {
@@ -205,7 +205,7 @@ func TestTheHardwareUnderADerivedInterfaceResolvesThroughItsParent(t *testing.T)
 	r := stackedReport(map[string][]string{"bond0.100": {"10.10.10.113"}})
 
 	mgmt := ManagementOf(r, "10.10.10.113")
-	if !slices.Equal(mgmt.Members, []string{"eth0", "eth1"}) {
+	if !slices.Equal(mgmt.Members, []string{eth0, eth1}) {
 		t.Errorf("the VLAN reports members %v, want the bond's NICs", mgmt.Members)
 	}
 }
@@ -213,9 +213,9 @@ func TestTheHardwareUnderADerivedInterfaceResolvesThroughItsParent(t *testing.T)
 func TestMembersOnDifferentMemoryNodesReportNone(t *testing.T) {
 	// A bond across two sockets has no memory node, and reporting one of them
 	// would claim an affinity the interface does not have.
-	r := stackedReport(map[string][]string{"bond0": {"10.10.10.113"}})
+	r := stackedReport(map[string][]string{bond0: {"10.10.10.113"}})
 	for i := range r.Interfaces {
-		if r.Interfaces[i].Name == "eth1" {
+		if r.Interfaces[i].Name == eth1 {
 			r.Interfaces[i].NUMANode = 1
 		}
 	}
@@ -231,12 +231,12 @@ func TestAnInterfaceThatNamesNoKindFallsBackToWhatElseWasReported(t *testing.T) 
 	// it was before: physical unless something said otherwise.
 	r := report("worker-1")
 	r.Interfaces = []nodeprobe.Interface{
-		{Name: "eth0", State: "up", Addresses: []string{"192.168.1.10"}, SpeedMbps: 10000},
+		{Name: eth0, State: "up", Addresses: []string{"192.168.1.10"}, SpeedMbps: 10000},
 		{Name: "cni0", State: "up", Addresses: []string{"10.42.2.1"}, Virtual: true, Bridge: true},
 		{Name: "flannel.1", State: "up", Addresses: []string{"10.42.2.0"}, Virtual: true},
 	}
 
-	if got := ManagementInterface(r, ""); got != "eth0" {
+	if got := ManagementInterface(r, ""); got != eth0 {
 		t.Errorf("named %q, want the one interface nothing marked virtual", got)
 	}
 }
@@ -247,16 +247,16 @@ func TestAStackThatPointsAtItselfTerminates(t *testing.T) {
 	r := report("worker-1")
 	r.Interfaces = []nodeprobe.Interface{
 		{
-			Name: "bond0", Kind: string(inventory.LinkBond), State: "up", Virtual: true,
+			Name: bond0, Kind: string(inventory.LinkBond), State: "up", Virtual: true,
 			Addresses: []string{"10.10.10.113"}, Lower: []string{"bond1"},
 		},
 		{
 			Name: "bond1", Kind: string(inventory.LinkBond), State: "up", Virtual: true,
-			Lower: []string{"bond0"},
+			Lower: []string{bond0},
 		},
 	}
 
-	if got := ManagementOf(r, "10.10.10.113").Name; got != "bond0" {
+	if got := ManagementOf(r, "10.10.10.113").Name; got != bond0 {
 		t.Errorf("chose %q", got)
 	}
 }

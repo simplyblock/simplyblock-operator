@@ -23,7 +23,7 @@ import (
 // attached is a simplyblock volume as a worker that has connected it sees: a
 // namespace on a fabric, carrying the NQN the product builds.
 func attached(name, clusterID, volumeID string) nodeprobe.Device {
-	device := blockDisk(name, 0, tb)
+	device := blockDisk(name, tb)
 	device.Transport = string(blockdev.TransportNVMeFabric)
 	device.SubsystemNQN = nqn.Make(clusterID, volumeID)
 	return device
@@ -45,7 +45,7 @@ func TestASimplyblockVolumeIsNeverProposed(t *testing.T) {
 func TestADiskThatIsNotAVolumeIsUntouchedByTheRule(t *testing.T) {
 	for _, device := range []nodeprobe.Device{
 		disk("nvme0n1", "0000:5e:00.0", 0, tb),
-		blockDisk("vdb", 0, tb),
+		blockDisk("vdb", tb),
 	} {
 		if ok, why := admit(SimplyblockVolumeRule{}, device); !ok {
 			t.Errorf("%s was refused as a simplyblock volume: %s", device.Name, why)
@@ -55,7 +55,7 @@ func TestADiskThatIsNotAVolumeIsUntouchedByTheRule(t *testing.T) {
 	// A fabric namespace some other product exported is refused for being on a
 	// fabric, by the class rule, and not by this one: what this rule says is
 	// that the disk is ours, and it is not.
-	foreign := blockDisk("nvme4n1", 0, tb)
+	foreign := blockDisk("nvme4n1", tb)
 	foreign.Transport = string(blockdev.TransportNVMeFabric)
 	foreign.SubsystemNQN = "nqn.2019-08.org.ceph:rbd.pool.image"
 	if ok, _ := admit(SimplyblockVolumeRule{}, foreign); !ok {
