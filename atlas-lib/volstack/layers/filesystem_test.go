@@ -29,10 +29,11 @@ type fakeFS struct {
 
 	grown [][]string
 
-	formatErr  error
-	mountErr   error
-	unmountErr error
-	growErr    error
+	formatErr     error
+	mountErr      error
+	unmountErr    error
+	growErr       error
+	mountPointErr error
 }
 
 type formatCall struct {
@@ -83,6 +84,11 @@ func (f *fakeFS) Grow(_ context.Context, command []string) error {
 }
 
 func (f *fakeFS) IsMountPoint(_ context.Context, path string) (bool, error) {
+	if f.mountPointErr != nil {
+		// What a dead mount answers: the real implementation reports the mount
+		// it cannot interrogate as an error rather than as a false.
+		return false, f.mountPointErr
+	}
 	return f.mountPoints[path], nil
 }
 
@@ -420,6 +426,24 @@ func TestHealForcesWhenAPlainUnmountRefuses(t *testing.T) {
 	}
 	if len(fs.forceUnmounted) == 0 {
 		t.Fatal("a plain unmount refused and the heal did not fall back to its force path")
+	}
+}
+
+// A mount point that cannot be interrogated is how a dead mount presents, and
+// the release detaches it rather than reading the failure as an empty path.
+// Reading it the other way is how total path loss leaves a staging path mounted
+// over a device that is gone, with nothing that will ever take it down.
+func TestReleaseDetachesAMountItCannotInterrogate(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPointErr = errors.New("the mount is dead, because the device behind it is gone")
+	fs.unmountErr = errors.New("transport endpoint is not connected")
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+
+	if err := l.Release(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if len(fs.forceUnmounted) == 0 {
+		t.Fatal("the dead mount was read as absent and left in place")
 	}
 }
 
