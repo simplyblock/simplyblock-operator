@@ -232,8 +232,8 @@ func TestPlanScansTheBlockClassWhenAskedTo(t *testing.T) {
 	// The block class names devices by path, and a virtio disk has no PCI
 	// address at all, so the same fleet yields a block draft or nothing.
 	fleet := []nodeprobe.Report{report("worker-1",
-		blockDisk("vdb", 0, 2*tb),
-		blockDisk("vdc", 0, 2*tb),
+		blockDisk("vdb", 2*tb),
+		blockDisk("vdc", 2*tb),
 	)}
 
 	filter := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
@@ -407,8 +407,8 @@ func TestAKernelBoundControllerIsNotCountedTwice(t *testing.T) {
 // because there is only one place the class is written down.
 func TestTheFilterDecidesTheClassWithoutBeingToldTwice(t *testing.T) {
 	fleet := []nodeprobe.Report{report("worker-1",
-		blockDisk("vdb", 0, 2*tb),
-		blockDisk("vdc", 0, 2*tb),
+		blockDisk("vdb", 2*tb),
+		blockDisk("vdc", 2*tb),
 	)}
 	filter := &simplyblockv1alpha2.DeviceFilter{
 		EnableLogicalBlockDevices: ptr.To(true),

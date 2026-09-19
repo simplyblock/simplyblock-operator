@@ -20,7 +20,7 @@ import (
 
 // attachedLUN is an iSCSI disk as the probe reports one.
 func attachedLUN(name string, size uint64) nodeprobe.Device {
-	device := blockDisk(name, 0, size)
+	device := blockDisk(name, size)
 	device.Transport = string(blockdev.TransportISCSI)
 	return device
 }
@@ -57,7 +57,7 @@ func TestTheRuleLeavesEveryOtherBusAlone(t *testing.T) {
 		blockdev.TransportSATA, blockdev.TransportSAS,
 		blockdev.TransportSCSI, blockdev.TransportVirtio,
 	} {
-		device := blockDisk("sda", 0, tb)
+		device := blockDisk("sda", tb)
 		device.Transport = string(transport)
 		if ok, why := admit(ISCSIRule{Class: ClassBlock}, device); !ok {
 			t.Errorf("a %s disk was refused by the iSCSI rule: %s", transport, why)
@@ -67,7 +67,7 @@ func TestTheRuleLeavesEveryOtherBusAlone(t *testing.T) {
 
 func TestAnISCSILUNIsRefusedByAWholeRunUnlessNamed(t *testing.T) {
 	report := report("worker-1")
-	report.Devices = []nodeprobe.Device{attachedLUN("sdb", 2*tb), blockDisk("vdb", 0, 2*tb)}
+	report.Devices = []nodeprobe.Device{attachedLUN("sdb", 2*tb), blockDisk("vdb", 2*tb)}
 
 	block := &simplyblockv1alpha2.DeviceFilter{EnableLogicalBlockDevices: ptr.To(true)}
 	plan := Planner{}.Plan([]nodeprobe.Report{report},

@@ -13,6 +13,16 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
+// The interface names the cases in this package are written in terms of. They
+// are constants because one fixture's name and the assertion against it have to
+// be the same string, and a case that disagreed with its own fixture by a
+// character would pass while asserting nothing.
+const (
+	eth0  = "eth0"
+	eth1  = "eth1"
+	bond0 = "bond0"
+)
+
 func iface(name string, edit func(*nodeprobe.Interface)) nodeprobe.Interface {
 	out := nodeprobe.Interface{Name: name, State: "up", NUMANode: 0}
 	if edit != nil {
@@ -30,16 +40,16 @@ func iface(name string, edit func(*nodeprobe.Interface)) nodeprobe.Interface {
 func TestTheInterfaceHoldingTheNodeAddressWins(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth1", func(i *nodeprobe.Interface) {
+		iface(eth1, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"10.10.10.113"}
 			i.SpeedMbps = 40000
 		}),
-		iface("eth0", func(i *nodeprobe.Interface) {
+		iface(eth0, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"192.168.10.113"}
 		}),
 	}
 
-	if got := ManagementInterface(report, "192.168.10.113"); got != "eth0" {
+	if got := ManagementInterface(report, "192.168.10.113"); got != eth0 {
 		t.Errorf("named %q, want the interface holding the node's address", got)
 	}
 }
@@ -49,17 +59,17 @@ func TestTheInterfaceHoldingTheNodeAddressWins(t *testing.T) {
 func TestTheFastestAddressedPhysicalInterfaceIsNamed(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth0", func(i *nodeprobe.Interface) {
+		iface(eth0, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"192.168.10.113"}
 			i.SpeedMbps = 1000
 		}),
-		iface("eth1", func(i *nodeprobe.Interface) {
+		iface(eth1, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"10.10.10.113"}
 			i.SpeedMbps = 40000
 		}),
 	}
 
-	if got := ManagementInterface(report, ""); got != "eth1" {
+	if got := ManagementInterface(report, ""); got != eth1 {
 		t.Errorf("named %q, want the fastest addressed interface", got)
 	}
 }
@@ -100,7 +110,7 @@ func TestTheClustersOwnInterfacesAreNeverNamed(t *testing.T) {
 func TestAnInterfaceWithNoAddressIsNotNamed(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth0", func(i *nodeprobe.Interface) { i.SpeedMbps = 40000 }),
+		iface(eth0, func(i *nodeprobe.Interface) { i.SpeedMbps = 40000 }),
 	}
 
 	if got := ManagementInterface(report, ""); got != "" {
@@ -113,18 +123,18 @@ func TestAnInterfaceWithNoAddressIsNotNamed(t *testing.T) {
 func TestALinkThatIsDownIsPassedOver(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth0", func(i *nodeprobe.Interface) {
+		iface(eth0, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"192.168.10.113"}
 			i.SpeedMbps = 40000
 			i.State = "down"
 		}),
-		iface("eth1", func(i *nodeprobe.Interface) {
+		iface(eth1, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"10.10.10.113"}
 			i.SpeedMbps = 1000
 		}),
 	}
 
-	if got := ManagementInterface(report, ""); got != "eth1" {
+	if got := ManagementInterface(report, ""); got != eth1 {
 		t.Errorf("named %q, want the interface that is up", got)
 	}
 }
@@ -133,7 +143,7 @@ func TestALinkThatIsDownIsPassedOver(t *testing.T) {
 func TestALinkLocalAddressDoesNotCount(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth0", func(i *nodeprobe.Interface) {
+		iface(eth0, func(i *nodeprobe.Interface) {
 			i.Addresses = []string{"169.254.1.1", "fe80::1"}
 		}),
 	}
@@ -148,8 +158,8 @@ func TestALinkLocalAddressDoesNotCount(t *testing.T) {
 func TestTheChoiceIsStableAcrossRuns(t *testing.T) {
 	report := report("worker-1")
 	report.Interfaces = []nodeprobe.Interface{
-		iface("eth1", func(i *nodeprobe.Interface) { i.Addresses = []string{"10.10.10.113"} }),
-		iface("eth0", func(i *nodeprobe.Interface) { i.Addresses = []string{"192.168.10.113"} }),
+		iface(eth1, func(i *nodeprobe.Interface) { i.Addresses = []string{"10.10.10.113"} }),
+		iface(eth0, func(i *nodeprobe.Interface) { i.Addresses = []string{"192.168.10.113"} }),
 	}
 
 	first := ManagementInterface(report, "")
@@ -157,7 +167,7 @@ func TestTheChoiceIsStableAcrossRuns(t *testing.T) {
 	if second := ManagementInterface(report, ""); second != first {
 		t.Errorf("the reading order changed the answer: %q then %q", first, second)
 	}
-	if first != "eth0" {
+	if first != eth0 {
 		t.Errorf("named %q, want the first by name", first)
 	}
 }

@@ -422,15 +422,16 @@ func nvme(name, address string, node int, size uint64, opts ...devOpt) nodeprobe
 }
 
 // blk is one free disk of the other class: a virtio disk with a path and no PCI
-// address a draft could name it by.
-func blk(name string, node int, size uint64, opts ...devOpt) nodeprobe.Device {
+// address a draft could name it by. It sits on the first memory node, which is
+// where every case that reaches for this class of disk puts it.
+func blk(name string, size uint64, opts ...devOpt) nodeprobe.Device {
 	return device(nodeprobe.Device{
 		Name:      name,
 		Path:      "/dev/" + name,
 		SizeBytes: size,
 		Kind:      string(blockdev.KindDisk),
 		Transport: string(blockdev.TransportVirtio),
-		NUMANode:  node,
+		NUMANode:  0,
 		Available: true,
 		Content:   "Blank",
 	}, opts...)
@@ -487,30 +488,18 @@ func transported(transport blockdev.Transport) devOpt {
 	return func(d *nodeprobe.Device) { d.Transport = string(transport) }
 }
 
-// controller is one NVMe controller on the PCI bus, bound to the driver given.
-func controller(address, driver string, node int, opts ...func(*nodeprobe.Controller)) nodeprobe.Controller {
-	c := nodeprobe.Controller{
-		Address: address, Driver: driver, NUMANode: node,
+// controller is one NVMe controller on the PCI bus, bound to the driver given,
+// on the first memory node. Which node a controller sits on is the subject of
+// the NUMA cases, and those build their controllers rather than calling this.
+func controller(address, driver string) nodeprobe.Controller {
+	return nodeprobe.Controller{
+		Address: address, Driver: driver, NUMANode: 0,
 		Vendor: "0x144d", Product: "0xa80a",
-		// Checked and found free, which is the state a draft may claim.
+		// Checked and found free, which is the state a draft may claim. A
+		// controller in any other state is the subject of the cases that build
+		// one directly.
 		InUse: ptr.To(false),
 	}
-	for _, opt := range opts {
-		opt(&c)
-	}
-	return c
-}
-
-// held marks a controller something is driving, which is a disk in service
-// rather than one to reclaim.
-func held() func(*nodeprobe.Controller) {
-	return func(c *nodeprobe.Controller) { c.InUse = ptr.To(true) }
-}
-
-// unchecked is a controller the probe could not ask about, which is neither
-// held nor free.
-func unchecked() func(*nodeprobe.Controller) {
-	return func(c *nodeprobe.Controller) { c.InUse = nil }
 }
 
 // --- Kubernetes nodes ------------------------------------------------------
@@ -544,11 +533,6 @@ func kubeNode(name string, opts ...nodeOpt) corev1.Node {
 // role labels the node with what it is for, in Kubernetes' own convention.
 func role(name string) nodeOpt {
 	return func(n *corev1.Node) { n.Labels["node-role.kubernetes.io/"+name] = "" }
-}
-
-// labeled puts one label on the node.
-func labeled(key, value string) nodeOpt {
-	return func(n *corev1.Node) { n.Labels[key] = value }
 }
 
 // reachableAt is the address the cluster reaches the machine on.
@@ -609,11 +593,10 @@ func fleet(n int, build func(index int, name string) nodeprobe.Report) []nodepro
 
 // kubeFleet is the node objects for a fleet, with each worker reachable on its
 // own address.
-func kubeFleet(reports []nodeprobe.Report, opts ...nodeOpt) []corev1.Node {
+func kubeFleet(reports []nodeprobe.Report) []corev1.Node {
 	nodes := make([]corev1.Node, 0, len(reports))
 	for _, report := range reports {
-		all := append([]nodeOpt{reachableAt(managementAddress(report.Node))}, opts...)
-		nodes = append(nodes, kubeNode(report.Node, all...))
+		nodes = append(nodes, kubeNode(report.Node, reachableAt(managementAddress(report.Node))))
 	}
 	return nodes
 }

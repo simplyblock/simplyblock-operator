@@ -62,7 +62,7 @@ func TestAvailableRuleWaivesOnlyAPartitionTable(t *testing.T) {
 
 func TestClassRuleRefusesADeviceItCannotName(t *testing.T) {
 	nvme := disk("nvme0n1", "0000:5e:00.0", 0, tb)
-	virtio := blockDisk("vda", 0, tb)
+	virtio := blockDisk("vda", tb)
 
 	if ok, _ := admit(ClassRule{Class: ClassNVMe}, nvme); !ok {
 		t.Error("an NVMe run declined an NVMe disk")
@@ -372,7 +372,7 @@ func TestClassRuleRefusesTheOtherClassOnABlockRun(t *testing.T) {
 	// A fabric namespace is a volume something else exported, and it is the
 	// other class read the other way: the probe refuses it first, and this is
 	// the rule that keeps it out of a block draft on its own terms.
-	fabric := blockDisk("nvme1n1", 0, tb)
+	fabric := blockDisk("nvme1n1", tb)
 	fabric.Transport = string(blockdev.TransportNVMeFabric)
 	if ok, why := admit(ClassRule{Class: ClassBlock}, fabric); ok {
 		t.Error("a block run admitted a fabric namespace")
@@ -385,7 +385,7 @@ func TestClassRuleRefusesTheOtherClassOnABlockRun(t *testing.T) {
 		blockdev.TransportVirtio, blockdev.TransportSATA,
 		blockdev.TransportSAS, blockdev.TransportSCSI,
 	} {
-		device := blockDisk("sda", 0, tb)
+		device := blockDisk("sda", tb)
 		device.Transport = string(transport)
 		if ok, why := admit(ClassRule{Class: ClassBlock}, device); !ok {
 			t.Errorf("a block run declined a %s disk: %s", transport, why)

@@ -64,10 +64,17 @@ func bonded(addresses map[string][]string) []nodeprobe.Interface {
 func netCases() map[string]Case {
 	// The cluster's own plumbing, which every worker of every Kubernetes fleet
 	// carries and none of it is a management interface.
-	plumbing := []nodeprobe.Interface{
-		nic("cni0", inventory.LinkBridge, holding("10.42.2.1")),
-		nic("flannel.1", inventory.LinkVXLAN, holding("10.42.2.0")),
-		nic("lo", inventory.LinkLoopback, holding("127.0.0.1")),
+	//
+	// It builds a list rather than being one, because the case that puts a NIC
+	// beside it would otherwise append into the slice every other case shares.
+	plumbing := func(beside ...nodeprobe.Interface) []nodeprobe.Interface {
+		out := make([]nodeprobe.Interface, 0, 3+len(beside))
+		out = append(out,
+			nic("cni0", inventory.LinkBridge, holding("10.42.2.1")),
+			nic("flannel.1", inventory.LinkVXLAN, holding("10.42.2.0")),
+			nic("lo", inventory.LinkLoopback, holding("127.0.0.1")),
+		)
+		return append(out, beside...)
 	}
 
 	veths := func(n int) []nodeprobe.Interface {
@@ -255,7 +262,7 @@ func netCases() map[string]Case {
 
 	// The cluster's own plumbing beside nothing else, which is the worker a
 	// draft has to leave without an interface.
-	cases["NET-19"] = unknown(netHost("worker-01", append(plumbing,
+	cases["NET-19"] = unknown(netHost("worker-01", plumbing(
 		nic("eth0", inventory.LinkPhysical, at(10000), slotted("0000:3b:00.0")))...))
 
 	// The seam case: a stack that points at itself cannot be written by the

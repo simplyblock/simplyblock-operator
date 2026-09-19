@@ -25,17 +25,6 @@ func blockClass() *simplyblockv1alpha2.DiscoverSpec {
 	}
 }
 
-// fourNVMe is the disk set a case inherits when it is about something else: two
-// disks on each memory node, all the same size.
-func fourNVMe() []nodeprobe.Device {
-	return []nodeprobe.Device{
-		nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
-		nvme("nvme1n1", "0000:5f:00.0", 0, 3*tb),
-		nvme("nvme2n1", "0000:af:00.0", 1, 3*tb),
-		nvme("nvme3n1", "0000:b0:00.0", 1, 3*tb),
-	}
-}
-
 // oneNodeFourNVMe is the same four disks with every one of them on memory node
 // 0, for a case that is about the disks rather than about the placement.
 func oneNodeFourNVMe() []nodeprobe.Device {
@@ -51,7 +40,7 @@ func oneNodeFourNVMe() []nodeprobe.Device {
 func virtioDisks(n int) []nodeprobe.Device {
 	out := make([]nodeprobe.Device, 0, n)
 	for i := 0; i < n; i++ {
-		out = append(out, blk(fmt.Sprintf("vd%c", 'b'+rune(i)), 0, 2*tb))
+		out = append(out, blk(fmt.Sprintf("vd%c", 'b'+rune(i)), 2*tb))
 	}
 	return out
 }
@@ -88,8 +77,8 @@ func devCases() map[string]Case {
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
 				nvme("nvme1n1", "0000:5f:00.0", 0, 3*tb),
-				blk("vdb", 0, 2*tb),
-				blk("vdc", 0, 2*tb),
+				blk("vdb", 2*tb),
+				blk("vdc", 2*tb),
 			))},
 		},
 		"DEV-05": {
@@ -98,8 +87,8 @@ func devCases() map[string]Case {
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
 				nvme("nvme1n1", "0000:5f:00.0", 0, 3*tb),
-				blk("vdb", 0, 2*tb),
-				blk("vdc", 0, 2*tb),
+				blk("vdb", 2*tb),
+				blk("vdc", 2*tb),
 			))},
 		},
 		"DEV-06": {
@@ -115,7 +104,7 @@ func devCases() map[string]Case {
 			Discover: blockClass(),
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
-				blk("sda", 0, 4*tb, transported(blockdev.TransportSATA)),
+				blk("sda", 4*tb, transported(blockdev.TransportSATA)),
 			))},
 		},
 		"DEV-08": {
@@ -134,8 +123,8 @@ func devCases() map[string]Case {
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(append(
 				oneNodeFourNVMe(),
 				nvme("nvme0n1p1", "0000:5e:00.0", 0, 512*gb, partOf()),
-				blk("loop0", 0, 64*gb, looped()),
-				blk("loop1", 0, 64*gb, looped()),
+				blk("loop0", 64*gb, looped()),
+				blk("loop1", 64*gb, looped()),
 			)...))},
 		},
 		"DEV-11": {
@@ -153,7 +142,7 @@ func devCases() map[string]Case {
 		"DEV-13": {
 			Family: "dev", Slug: "an-attached-simplyblock-volume",
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
-				attachedVolume("nvme3n1", ourCluster, "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
+				attachedVolume("nvme3n1", "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),
 			))},
 		},
@@ -161,16 +150,16 @@ func devCases() map[string]Case {
 			Family: "dev", Slug: "an-attached-volume-on-a-block-run",
 			Discover: blockClass(),
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
-				attachedVolume("nvme3n1", ourCluster, "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
-				blk("vdb", 0, 2*tb),
+				attachedVolume("nvme3n1", "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
+				blk("vdb", 2*tb),
 			))},
 		},
 		"DEV-15": {
 			Family: "dev", Slug: "every-disk-is-an-attached-volume",
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
-				attachedVolume("nvme3n1", ourCluster, "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
-				attachedVolume("nvme4n1", ourCluster, "8a3f0b12-3c4d-5e6f-7081-92a3b4c5d6e7"),
-				attachedVolume("nvme5n1", ourCluster, "b1c2d3e4-f506-1728-394a-5b6c7d8e9f01"),
+				attachedVolume("nvme3n1", "792e184c-0a1b-2c3d-4e5f-60718293a4b5"),
+				attachedVolume("nvme4n1", "8a3f0b12-3c4d-5e6f-7081-92a3b4c5d6e7"),
+				attachedVolume("nvme5n1", "b1c2d3e4-f506-1728-394a-5b6c7d8e9f01"),
 			))},
 		},
 		"DEV-17": {
@@ -178,7 +167,7 @@ func devCases() map[string]Case {
 			Discover: blockClass(),
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				iscsiLUN("sdb", 2*tb),
-				blk("vdb", 0, 2*tb),
+				blk("vdb", 2*tb),
 			))},
 		},
 		"DEV-18": {
@@ -191,7 +180,7 @@ func devCases() map[string]Case {
 			},
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				iscsiLUN("sdb", 2*tb),
-				blk("vdb", 0, 2*tb),
+				blk("vdb", 2*tb),
 			))},
 		},
 		"DEV-19": {
@@ -230,17 +219,17 @@ const ourCluster = "c30a691a-1d2e-4f3a-9b8c-5d6e7f809a1b"
 // The probe refuses it for being on a fabric, which is what a real report
 // carries, and the rule that names it as this fleet's own reads the NQN rather
 // than the refusal.
-func attachedVolume(name, clusterID, volumeID string) nodeprobe.Device {
-	device := blk(name, 0, tb, refused(blockdev.ReasonFabricNamespace))
+func attachedVolume(name, volumeID string) nodeprobe.Device {
+	device := blk(name, tb, refused(blockdev.ReasonFabricNamespace))
 	device.Transport = string(blockdev.TransportNVMeFabric)
-	device.SubsystemNQN = nqn.Make(clusterID, volumeID)
+	device.SubsystemNQN = nqn.Make(ourCluster, volumeID)
 	return device
 }
 
 // iscsiLUN is a disk on the other side of a network, which the kernel presents
 // through the SCSI stack like any local disk.
 func iscsiLUN(name string, size uint64) nodeprobe.Device {
-	device := blk(name, 0, size)
+	device := blk(name, size)
 	device.Transport = string(blockdev.TransportISCSI)
 	return device
 }
@@ -248,7 +237,7 @@ func iscsiLUN(name string, size uint64) nodeprobe.Device {
 // foreignVolume is a namespace something else exported, which is on a fabric
 // and is nobody's simplyblock volume.
 func foreignVolume(name string) nodeprobe.Device {
-	device := blk(name, 0, tb, refused(blockdev.ReasonFabricNamespace))
+	device := blk(name, tb, refused(blockdev.ReasonFabricNamespace))
 	device.Transport = string(blockdev.TransportNVMeFabric)
 	device.SubsystemNQN = "nqn.2019-08.org.ceph:rbd.pool.image"
 	return device

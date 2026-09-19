@@ -149,12 +149,12 @@ func filterCases() map[string]Case {
 	}
 	blockWorker := func() []nodeprobe.Report {
 		return []nodeprobe.Report{host("worker-01", cpu(1, 16, 2), disks(
-			blk("sda", 0, 512*gb),
-			blk("sdb", 0, 2*tb),
-			blk("sdc", 0, 2*tb),
-			blk("vdb", 0, 4*tb),
-			blk("vdc", 0, 4*tb),
-			blk("vdd", 0, 4*tb),
+			blk("sda", 512*gb),
+			blk("sdb", 2*tb),
+			blk("sdc", 2*tb),
+			blk("vdb", 4*tb),
+			blk("vdc", 4*tb),
+			blk("vdd", 4*tb),
 		))}
 	}
 
