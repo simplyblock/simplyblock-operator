@@ -192,7 +192,7 @@ func (ns *Server) bringUp(
 	if err == nil || ns.repairFabric == nil {
 		return artifact, err
 	}
-	if !ns.repairFabric(ctx, vc["nqn"], int(namespaceID(vc))) {
+	if !ns.repairFabric(ctx, vc["nqn"], namespaceID(vc)) {
 		return artifact, err
 	}
 	klog.Infof("volume %s: retrying the bring-up after a fabric repair", volumeID)

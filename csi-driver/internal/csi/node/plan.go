@@ -20,6 +20,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/plans"
@@ -117,7 +118,7 @@ type csiEndpoint struct {
 func connectionFromContext(vc map[string]string) lvol.Connection {
 	connection := lvol.Connection{
 		NQN:  vc["nqn"],
-		NSID: namespaceID(vc),
+		NSID: uint32(namespaceID(vc)),
 		UUID: deviceLvolID(vc),
 	}
 
@@ -226,12 +227,18 @@ func deviceLvolID(vc map[string]string) string {
 // namespaceID is the namespace the volume occupies within its subsystem. Zero
 // means the context names none, which the fabric layer reads as the
 // subsystem's only namespace.
-func namespaceID(vc map[string]string) uint32 {
+//
+// It answers in the type a namespace id is rather than in a machine-width int
+// that a caller would have to convert back. An NSID is 32 bits wide by the NVMe
+// specification, and on a 32-bit host the round trip through int turns the top
+// half of that range negative, which would point a repair at a namespace the
+// volume does not own.
+func namespaceID(vc map[string]string) nvme.NamespaceID {
 	nsID, err := strconv.ParseUint(strings.TrimSpace(vc["nsId"]), 10, 32)
 	if err != nil {
 		return 0
 	}
-	return uint32(nsID)
+	return nvme.NamespaceID(nsID)
 }
 
 // intFromContext reads a tunable the context carries as text, answering zero

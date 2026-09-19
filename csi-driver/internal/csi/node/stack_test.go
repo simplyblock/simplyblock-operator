@@ -22,6 +22,7 @@ import (
 	k8smount "k8s.io/mount-utils"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/layers"
 
@@ -579,8 +580,10 @@ func TestStageRetriesTheBringUpAfterAFabricRepair(t *testing.T) {
 	ns, _ := newStackedServer(t, runner)
 
 	repaired := false
-	ns.repairFabric = func(context.Context, string, int) bool {
+	var diagnosed nvme.NamespaceID
+	ns.repairFabric = func(_ context.Context, _ string, nsID nvme.NamespaceID) bool {
 		repaired = true
+		diagnosed = nsID
 		runner.upErr = nil // the torn-down subsystem lets the next attach through
 		return true
 	}
@@ -600,6 +603,12 @@ func TestStageRetriesTheBringUpAfterAFabricRepair(t *testing.T) {
 	if got := strings.Count(strings.Join(runner.calls, " "), "up"); got != 2 {
 		t.Errorf("the stack was brought up %d times, want one attempt and one retry after the repair", got)
 	}
+	// The repair acts on the namespace the plan named. A namespace id that
+	// arrives here as anything else diagnoses a co-tenant of the subsystem, and
+	// what it tears down then belongs to another volume.
+	if want := namespaceID(stagedContext()); diagnosed != want {
+		t.Errorf("the repair was pointed at namespace %d, want %d", diagnosed, want)
+	}
 }
 
 // A repair that tore nothing down changes nothing, so the stage fails on the
@@ -608,7 +617,7 @@ func TestStageDoesNotRetryWhenNothingWasRepaired(t *testing.T) {
 	runner := newRecordingRunner()
 	runner.upErr = errors.New("fabric: attach refused")
 	ns, _ := newStackedServer(t, runner)
-	ns.repairFabric = func(context.Context, string, int) bool { return false }
+	ns.repairFabric = func(context.Context, string, nvme.NamespaceID) bool { return false }
 
 	_, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
 		VolumeId:          pvcTestHandle,
