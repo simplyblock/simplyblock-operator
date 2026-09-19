@@ -89,19 +89,29 @@ func (r *Runner) unwind(ctx context.Context, brought Plan) {
 // layer legitimately leaves its device present when the subsystem is shared. So
 // this asserts nothing about the state a released layer is in, and removes the
 // record either way.
+//
+// A survey that cannot complete is no reason to leave the stack up, which is the
+// reasoning unwind already carries and the case this one meets more often.
+// Total path loss takes the device out from under a live stack: the mount above
+// it answers EIO, and the filesystem layer reports that as an error rather than
+// as a state, so the survey fails on the very teardown every layer's force path
+// was written for. What the failed survey costs is the input each layer sits on
+// and the knowledge of which layers are already gone — neither of which a
+// release needs, since a layer resolves the object it owns from its own
+// parameters and Release on an absent one is a no-op.
 func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 	attempted := r.attempted(handle, len(plan))
 
 	inputs, states, err := r.survey(ctx, plan)
 	if err != nil {
-		return err
+		inputs, states = make([]Artifact, len(plan)), nil
 	}
 
 	for i := len(plan) - 1; i >= 0; i-- {
 		if attempted != nil && !attempted[i] {
 			continue
 		}
-		if states[i] == StateAbsent {
+		if states != nil && states[i] == StateAbsent {
 			continue
 		}
 		if err := plan[i].Release(ctx, inputs[i]); err != nil {
