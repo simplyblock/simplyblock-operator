@@ -575,3 +575,46 @@ func TestCompositeSubPlanIsRecordedInOrder(t *testing.T) {
 		t.Errorf("a layer that is not a composite recorded members: %+v", rec.Plan[1].Members)
 	}
 }
+
+// Observe walks a live stack without converging any of it, and reports what the
+// topmost layer currently exposes. A raw block volume's publish needs the device
+// under a stack it must not bring up, and deriving it with Up would attach a
+// fabric a publish has no business attaching.
+func TestObserveReadsTheStackWithoutBuildingIt(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, state: StateReady},
+	}
+
+	r := newRunner(t)
+	top, err := r.Observe(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	want := "fabric:observe filesystem:observe"
+	if got := strings.Join(log, " "); got != want {
+		t.Errorf("call order:\n got %s\nwant %s", got, want)
+	}
+	dev, ok := top.Device()
+	if !ok || dev.Name != "nvme0n1" {
+		t.Fatalf("Observe reported %+v, want the device the stack exposes", top.Devices)
+	}
+}
+
+// A layer that cannot be read stops the walk and names itself, because a caller
+// acting on a partial reading acts on a stack it cannot see.
+func TestObserveReportsTheLayerItCouldNotRead(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, observeErr: errors.New("blkid: no such device")},
+	}
+
+	if _, err := newRunner(t).Observe(context.Background(), plan); err == nil {
+		t.Fatal("Observe reported a stack it could not read")
+	} else if !strings.Contains(err.Error(), "filesystem") {
+		t.Errorf("the error does not name the layer that failed: %v", err)
+	}
+}

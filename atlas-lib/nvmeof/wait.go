@@ -79,8 +79,10 @@ func ConnectMultipathDevice(
 // live, so a caller that connected and immediately looked it up would race the
 // kernel. The wait ends on ctx (deadline or cancellation), and the first probe
 // happens before any waiting, so an already-expired ctx still gets one attempt.
-// sel must name at least the NQN, because waiting for "any device" is
-// meaningless.
+// sel must name something, because waiting for "any device" is meaningless. The
+// NQN is the usual key and is not required: a namespace UUID names one volume
+// wherever it is being served from, which is what a lookup falls back to once a
+// failover has moved it to a clone under another subsystem.
 //
 // Several devices can match at once, which is why this goes through
 // nvme.DeviceResolver.ListWithSelector rather than a By* lookup: those return
@@ -95,8 +97,9 @@ func ConnectMultipathDevice(
 // single subsystem where sel needs an NSID or UUID, fails immediately
 // instead.
 func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.DeviceSelector) (nvme.Device, error) {
-	if sel.NQN == "" {
-		return nvme.Device{}, fmt.Errorf("wait for device %s: selector must set the NQN", sel)
+	if sel.IsZero() {
+		return nvme.Device{}, fmt.Errorf("wait for device %s: the selector names nothing, "+
+			"and waiting for any device at all is meaningless", sel)
 	}
 	ticker := time.NewTicker(defaultPoll)
 	defer ticker.Stop()

@@ -298,6 +298,27 @@ func TestWaitForDevice_EmptyNQN(t *testing.T) {
 	}
 }
 
+// A namespace UUID names one volume wherever it is being served from, which is
+// what a lookup falls back to after a failover moves the volume to a clone
+// under another subsystem. It is a wait like any other: the device it names
+// appears when the kernel publishes it and not before, so refusing to wait on
+// it leaves the caller resolving a device that has not shown up yet.
+func TestWaitForDevice_UUIDAloneIsWaitedOn(t *testing.T) {
+	d := dev("nvme-subsys0", "nqn.x", "nvme0n1", "259:1", 1)
+	devs := &fakeDevs{snapshots: [][]nvme.Device{
+		{},  // the controller is live and the namespace is not published yet
+		{d}, // and now it is
+	}}
+
+	got, err := WaitForDevice(waitCtx(t), devs, nvme.DeviceSelector{UUID: d.Namespace.UUID})
+	if err != nil {
+		t.Fatalf("a wait on a namespace UUID was refused: %v", err)
+	}
+	if got.Namespace.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
+	}
+}
+
 func TestConnectDevice(t *testing.T) {
 	d := dev("nvme-subsys0", "nqn.x", "nvme0n1", "259:1", 1)
 
