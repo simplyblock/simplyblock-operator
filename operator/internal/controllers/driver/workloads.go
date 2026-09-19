@@ -155,6 +155,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
+			{Name: "stack-records", MountPath: "/var/run/simplyblock/stacks"},
 		}, slices.Concat(tlsVolumeMount(d), linkVolumeMounts())...),
 	}
 }
@@ -183,6 +184,11 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 		hostPathVolume("host-sys", "/sys", nil),
 		hostPathVolume("host-modules", "/lib/modules", nil),
 		hostPathVolume("guardian-state", "/var/lib/simplyblock/guardian", &dirOrCreate),
+		// What each volume's node-side stack was built from. It is a host path
+		// because a plugin restart is an ordinary event, and the record is the
+		// only thing that tells the restarted process what the previous one
+		// built.
+		hostPathVolume("stack-records", "/var/lib/simplyblock/stacks", &dirOrCreate),
 		configMapVolume("csi-nodeserver-config", n.nodeServerConfigMap, true),
 		configMapVolume("csi-config", n.configMap, false),
 		secretVolume("csi-secret", n.secretV2),

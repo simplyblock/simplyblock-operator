@@ -1226,13 +1226,16 @@ Building a plan reaches nothing. It resolves no device, runs no command, and
 reads no sysfs, so a consumer can unit-test the selection it makes and only the
 runner needs a host.
 
-_Today:_ nothing in the operator or the CSI driver imports `volstack` yet. The
-on-node integration suite (`test/integration/onnode`) is the only caller, and it
+_Today:_ the CSI node service is the consumer. `csi-driver/internal/csi/node`
+builds the seams once in `stack.go`, selects `RawBlock` or `Plain` per volume in
+`plan.go`, and every node RPC on the data path is one runner call against the
+result: `NodeStageVolume` is `Up`, `NodeUnstageVolume` is `Down`,
+`NodePublishVolume` and a restage are `Heal`, `NodeExpandVolume` is `Grow`, and
+an unstage of a volume that is being deleted is the one caller of `Destroy`. The
+on-node integration suite (`test/integration/onnode`) is the other caller, and it
 fills the seams with the implementations that ship: nvme-cli, the sysfs
-resolvers, `lvm.Manager`, and `blockdev.Prober`. `NodeStageVolume` still
-assembles its own fabric connect, `mkfs`, and mount in
-`csi-driver/internal/csi/node`, which is the call site the `Plain` and `LVM`
-shapes are meant to replace.
+resolvers, `lvm.Manager`, and `blockdev.Prober`. The `LVM` and `Striped` shapes
+have no consumer yet.
 
 ### Operator ↔ CSI link
 

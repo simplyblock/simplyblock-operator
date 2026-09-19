@@ -169,6 +169,25 @@ func (r *Runner) Grow(ctx context.Context, plan Plan) error {
 	return nil
 }
 
+// Observe walks a live stack bottom to top without changing any of it, and
+// returns what the topmost layer currently exposes.
+//
+// It is the read behind an operation that acts on a staged volume rather than
+// building one: a raw block volume is bind-mounted from the device its fabric
+// layer exposes, and a publish may not converge the stack on the way to finding
+// it. Up would, and on a volume whose paths are gone it would block doing so.
+func (r *Runner) Observe(ctx context.Context, plan Plan) (Artifact, error) {
+	below := Artifact{}
+	for _, layer := range plan {
+		_, own, err := layer.Observe(ctx, below)
+		if err != nil {
+			return Artifact{}, fmt.Errorf("volstack: observe %s: %w", layer.Name(), err)
+		}
+		below = own
+	}
+	return below, nil
+}
+
 // Destroy removes the plan's durable objects, top to bottom, so a layer goes
 // before what it sits on. Only a deletion path calls it, never an unstage.
 func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {

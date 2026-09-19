@@ -1,13 +1,11 @@
-// Tests for what a device is read to carry, and for the mkfs and mount options
-// that follow from it. They run without a kernel, a device, or a CSI request:
-// the point of this package having its own boundary is that the never-format
-// contract can be asserted against scripted commands alone.
+// Tests for the mkfs options a filesystem is created with, and for which
+// filesystems this driver creates at all. They run without a kernel, a device,
+// or a CSI request, which is the point of this package having its own
+// boundary.
 
 package mount
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -41,78 +39,6 @@ func scriptedExec(script []scriptedResult) (*testingexec.FakeExec, *[][]string) 
 		})
 	}
 	return fe, calls
-}
-
-func proberFor(t *testing.T, result scriptedResult) *Mounter {
-	t.Helper()
-	fe, _ := scriptedExec([]scriptedResult{result})
-	return NewWith(nil, fe)
-}
-
-func TestProbe(t *testing.T) {
-	cases := []struct {
-		name      string
-		result    scriptedResult
-		want      string
-		wantError bool
-	}{
-		{name: "blank device", result: scriptedResult{err: &testingexec.FakeExitError{Status: 2}}, want: ""},
-		{name: "already formatted", result: scriptedResult{out: "TYPE=ext4\n"}, want: "ext4"},
-		{name: "unreadable device", result: scriptedResult{err: errors.New("blkid: broken pipe")}, wantError: true},
-		{name: "partition table, no filesystem", result: scriptedResult{out: "PTTYPE=dos\n"}, wantError: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := proberFor(t, tc.result).Probe(context.Background(), "/dev/nvme9n1")
-			if tc.wantError {
-				if err == nil {
-					t.Fatalf("Probe(%s) = %q, nil, want an error", tc.name, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Probe(%s): unexpected error %v", tc.name, err)
-			}
-			if got != tc.want {
-				t.Fatalf("Probe(%s) = %q, want %q", tc.name, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestProbeRefusalNamesThePartitionTable. A device carrying a partition table is
-// refused rather than formatted, and which table it is decides what an operator
-// does next: a GPT disk handed to the driver by mistake is a different problem
-// from a stale DOS label on a volume that was reused. The prober knows, since
-// blkid reports PTTYPE, so the refusal has to carry it rather than saying only
-// that something was there.
-func TestProbeRefusalNamesThePartitionTable(t *testing.T) {
-	for _, table := range []string{"gpt", "dos"} {
-		t.Run(table, func(t *testing.T) {
-			_, err := proberFor(t, scriptedResult{out: "PTTYPE=" + table + "\n"}).
-				Probe(context.Background(), "/dev/fake-lvol")
-			if err == nil {
-				t.Fatal("probed a device carrying a partition table without refusing it")
-			}
-			if !strings.Contains(err.Error(), table) {
-				t.Errorf("the refusal does not say which table it found: %v", err)
-			}
-		})
-	}
-}
-
-// TestFlagsForXFSCarriesNouuid. Two XFS filesystems with the same UUID cannot be
-// mounted on one node, which is exactly what a volume and its clone are, so the
-// option is a property of the filesystem rather than of what the volume asked
-// for.
-func TestFlagsForXFSCarriesNouuid(t *testing.T) {
-	if got := FlagsFor("xfs"); len(got) != 1 || got[0] != "nouuid" {
-		t.Errorf(`FlagsFor("xfs") = %v, want ["nouuid"]`, got)
-	}
-	if got := FlagsFor("ext4"); len(got) != 0 {
-		t.Errorf(`FlagsFor("ext4") = %v, want none`, got)
-	}
 }
 
 func TestFormatOptions(t *testing.T) {
