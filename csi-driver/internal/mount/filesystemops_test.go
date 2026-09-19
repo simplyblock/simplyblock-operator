@@ -15,10 +15,8 @@ import (
 	k8smount "k8s.io/mount-utils"
 )
 
-// A reservation the volume asked for has to survive the -m0 that every ext
-// filesystem is otherwise created with. mke2fs takes the last -m it is given,
-// so the default has to be passed before the volume's options and not after.
-func TestFormatLetsARequestedReservationOverrideTheDefault(t *testing.T) {
+// A reservation the volume asked for is passed as it was asked for.
+func TestFormatPassesARequestedReservation(t *testing.T) {
 	fe, calls := scriptedExec([]scriptedResult{{out: ""}})
 	ops := NewWith(nil, fe).FilesystemOps()
 
@@ -27,7 +25,30 @@ func TestFormatLetsARequestedReservationOverrideTheDefault(t *testing.T) {
 	}
 
 	got := strings.Join((*calls)[0], " ")
-	want := "mkfs.ext4 -F -m0 -m 5 /dev/fake"
+	want := "mkfs.ext4 -F -m 5 /dev/fake"
+	if got != want {
+		t.Fatalf("format command:\n got %s\nwant %s", got, want)
+	}
+}
+
+// A volume that asked for no reservation is formatted with none of this
+// package's choosing, which leaves mke2fs at its own default.
+//
+// Asking for nothing and asking for zero are different requests, which is what
+// the filesystem layer's own FormatParameters says of the field this comes from:
+// a class that sets tune2fs_reserved_blocks to "0" gets -m 0, and a class that
+// omits it gets what it got before the volume stack existed, when an unset value
+// meant tune2fs was never run at all.
+func TestFormatLeavesTheReservationAloneWhenTheVolumeAsksForNone(t *testing.T) {
+	fe, calls := scriptedExec([]scriptedResult{{out: ""}})
+	ops := NewWith(nil, fe).FilesystemOps()
+
+	if err := ops.Format(context.Background(), "/dev/fake", "ext4", nil); err != nil {
+		t.Fatalf("Format: %v", err)
+	}
+
+	got := strings.Join((*calls)[0], " ")
+	want := "mkfs.ext4 -F /dev/fake"
 	if got != want {
 		t.Fatalf("format command:\n got %s\nwant %s", got, want)
 	}
