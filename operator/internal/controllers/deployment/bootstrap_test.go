@@ -9,12 +9,16 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
@@ -27,6 +31,32 @@ func discoveryFor(t *testing.T, objects ...client.Object) *InitialDiscovery {
 		Client:    fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(),
 		Namespace: theNamespace,
 	}
+}
+
+// discoveryRefusingCreates builds the check against a client that answers the
+// first refusals writes get while an admission webhook is unreachable, and
+// admits the write after that. It is how the startup window is reproduced
+// without an apiserver: what the API server returns in that window is an
+// Internal error naming the webhook it could not call.
+func discoveryRefusingCreates(t *testing.T, refusals int, objects ...client.Object) (*InitialDiscovery, *int) {
+	t.Helper()
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
+	attempts := 0
+	inner := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	refusing := interceptor.NewClient(inner, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			attempts++
+			if attempts <= refusals {
+				return apierrors.NewInternalError(fmt.Errorf(
+					`failed calling webhook "voperatorops.simplyblock.io": failed to call webhook: ` +
+						`Post "https://simplyblock-operator-webhook-service.simplyblock.svc:443/` +
+						`validate-storage-simplyblock-io-v1alpha2-operatorops?timeout=10s": ` +
+						`dial tcp 10.130.2.137:9443: connect: connection refused`))
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+	return &InitialDiscovery{Client: refusing, Namespace: theNamespace}, &attempts
 }
 
 // raised reports whether the run exists, which is what every case here asserts.
@@ -263,5 +293,53 @@ func TestTheInitialRunWaivesAPartitionTable(t *testing.T) {
 	}
 	if !*filter.EnablePartitionedDevices {
 		t.Error("the initial run refuses a disk for carrying a partition table")
+	}
+}
+
+// TestTheRunOutlastsAWebhookThatIsNotServingYet covers the one write in the
+// operator whose admission depends on the operator.
+//
+// Regression: 2026-09-20-initial-discovery-lost-to-its-own-webhook — on a fresh
+// install the run was never raised, and the operator log carried
+// `the initial discovery run could not be created ... failed calling webhook
+// "voperatorops.simplyblock.io": ... connect: connection refused`. The create
+// raced the webhook server this same process was still starting, Start is not a
+// loop, and the single attempt lost the draft for the lifetime of the
+// installation: an administrator found an empty namespace where the fleet's
+// disks should have been listed, with nothing to re-raise it.
+func TestTheRunOutlastsAWebhookThatIsNotServingYet(t *testing.T) {
+	d, attempts := discoveryRefusingCreates(t, 3, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !raised(t, d) {
+		t.Fatalf("the run was lost to a webhook that was not serving yet, after %d attempt(s)", *attempts)
+	}
+}
+
+// A webhook that answers is an answer, and a rejected run is not retried until
+// the deadline: the spec is what it is, and waiting cannot change it.
+func TestARejectedRunIsNotRetried(t *testing.T) {
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
+	attempts := 0
+	inner := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}}).Build()
+	denying := interceptor.NewClient(inner, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			attempts++
+			return apierrors.NewForbidden(
+				schema.GroupResource{Group: "storage.simplyblock.io", Resource: "operatorops"},
+				InitialDiscoveryName,
+				fmt.Errorf(`admission webhook "voperatorops.simplyblock.io" denied the request`))
+		},
+	})
+	d := &InitialDiscovery{Client: denying, Namespace: theNamespace}
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("a denial was retried %d times; a rejected spec is an answer", attempts)
 	}
 }

@@ -839,6 +839,33 @@ re-run. A second discovery writes a second document rather than editing the
 first, because the first may have been reviewed and edited, and overwriting a
 reviewer's corrections with a fresh guess is the worst behavior available.
 
+### 8.4 The first run raises itself
+
+**An install that has nothing raises one `Discover` run by itself**, so that an
+administrator finds a draft of what the fleet has rather than an empty namespace.
+It is raised by a `Runnable` in the operator rather than by a reconciler, because
+there is no object whose desired state it converges toward and the question has
+one answer per installation. It is declined the moment anything already exists:
+an `OperatorOps` of any kind, a `ClusterDeploymentConfig`, a `StorageCluster`, or
+a fleet with no worker that holds storage without being asked to. The guard is
+most of the behavior, because probing puts a Job on every worker, and against a
+deployed fleet that cost falls on every worker of it once per operator upgrade.
+
+**The run is named rather than generated**, so the create is idempotent on top of
+that guard, and so an administrator who does not want it can say so by writing an
+object under that name.
+
+**It is the one write in the operator whose admission depends on the operator.**
+An `OperatorOps` is validated by `voperatorops.simplyblock.io`, which this same
+process serves, so the create races the webhook server the manager is still
+starting and the API server answers `failed calling webhook ... connection
+refused` until it is listening. The create therefore waits that window out rather
+than attempting once: a `Runnable` that is not a loop turns a few seconds of
+unavailability into an installation that never gets its draft, with nothing left
+to raise it. Only an unreachable webhook is waited out, and a webhook that
+answered and refused the spec has given an answer that repeating the write cannot
+change.
+
 ---
 
 ## 9. Observability

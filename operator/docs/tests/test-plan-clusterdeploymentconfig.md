@@ -127,6 +127,36 @@ File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-61     | `configName` unset: a generated name that cannot collide with the first run                                  | Boundary | —    |
 | U-62     | Discovery changes nothing: no cluster, no node, no control-plane write                                       | Negative | —    |
 
+### The Automatic First Run (design §8.4)
+
+File: `operator/internal/controllers/deployment/bootstrap_test.go`
+
+The run these rows cover is the one nobody asks for. Probing puts a Job on every
+worker, so the guard is most of the behavior: `U-168` to `U-172` are the states
+that decline, and each of them is enough on its own.
+
+| #     | Scenario                                                                              | Type       | Test                                            |
+|-------|---------------------------------------------------------------------------------------|------------|-------------------------------------------------|
+| U-167 | An install with nothing in it: one `Discover` run, narrowing nothing                  | Positive   | `TestAFreshInstallRaisesOneDiscoveryRun`        |
+| U-168 | A previous result of any of the three kinds: declined, and it says which              | Negative   | `TestAPreviousResultDeclinesTheRun`             |
+| U-169 | A restart after the first run: nothing further is raised                              | Negative   | `TestARestartRaisesNothingFurther`              |
+| U-170 | An object already carrying that name: left as it is, not replaced                     | Boundary   | `TestAnObjectByThatNameIsNotReplaced`           |
+| U-171 | A cluster with no node to inspect: no run                                             | Negative   | `TestAClusterWithNothingToInspectRaisesNoRun`   |
+| U-172 | A fleet whose every worker is cordoned: no run                                        | Negative   | `TestACordonedFleetRaisesNoRun`                 |
+| U-173 | One usable worker: enough to raise it                                                 | Boundary   | `TestAWorkerIsEnoughToRaiseTheRun`              |
+| U-174 | The run waives a partition table, so a fleet that has held data is not reported empty | Positive   | `TestTheInitialRunWaivesAPartitionTable`        |
+| U-175 | One replica asks, because the three reads are not idempotent                          | Positive   | `TestTheCheckIsLeaderElected`                   |
+| U-176 | The operator's own webhook not serving yet: the create is waited out, not lost        | Regression | `TestTheRunOutlastsAWebhookThatIsNotServingYet` |
+| U-177 | A webhook that answered and refused: not retried, because waiting changes nothing     | Negative   | `TestARejectedRunIsNotRetried`                  |
+
+`U-176` is the row a fresh install turns on. An `OperatorOps` is validated by a
+webhook this same operator serves, so the create races the webhook server the
+manager is still starting, and `Start` is not a loop: the single attempt lost the
+draft for the lifetime of the installation, and an administrator found an empty
+namespace where the fleet's disks should have been (2026-09-20). `U-177` is what
+keeps the remedy from becoming a write repeated until the deadline against a
+webhook that already gave its answer.
+
 ### OperatorOps Lifecycle (design §7)
 
 File: `operator/internal/controllers/deployment/operatorops_controller_unit_test.go`
