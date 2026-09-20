@@ -273,6 +273,17 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 		c.reject(ReasonNotBlank, reading.Detail)
 	case ContentFilesystem, ContentStackLayer:
 		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentSimplyblock:
+		// Not a rejection, and the reading is what says so: a device a storage
+		// node is driving is bound to a userspace driver, which takes the block
+		// device away, so a device whose superblock can be read here is one no
+		// node currently holds. What is left on it is a previous deployment's,
+		// and the reading carries that to the caller, which decides whether to
+		// take it back.
+		//
+		// It is written out rather than left to fall through the switch, because
+		// a content this package adds later must not become available by
+		// default the way this one would have.
 	case ContentUnknown:
 		// Read never returns it, and a reading that carries it anyway is one
 		// nothing established. Refusing is the only safe reading of that.
