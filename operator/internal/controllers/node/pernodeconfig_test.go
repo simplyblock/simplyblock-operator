@@ -20,6 +20,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // aRenderedEntry is one worker's entry as the ordinary pass writes it.
@@ -145,5 +147,96 @@ func TestAListIsReadBackTheWayItWasWritten(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// renderedFor is the entry the ordinary pass writes for one node's device list.
+func renderedFor(t *testing.T, class simplyblockv1alpha2.StorageClusterDeviceClass, names ...string) map[string]string {
+	t.Helper()
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{DeviceClass: class},
+	}
+	node := &simplyblockv1alpha2.StorageNode{
+		Spec: simplyblockv1alpha2.StorageNodeSpec{
+			Config: simplyblockv1alpha2.StorageNodeConfig{DeviceNames: names},
+		},
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(renderNodeConfig(cluster, node), "\n") {
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			out[key] = strings.Trim(value, "'")
+		}
+	}
+	return out
+}
+
+// TestAPCIAddressReachesTheAllowList covers the device list of an NVMe cluster.
+//
+// Regression: 2026-09-20-pci-addresses-written-to-the-namespace-name-variable —
+// every entry of spec.config.deviceNames went to NVME_DEVICES, which the storage
+// node's init container passes as --nvme-devices, whose argparse destination is
+// nvme_names and which the backend resolves with
+// query_nvme_ssd_by_namespace_names against `nvme list` namespace names such as
+// nvme0n1. A PCI address never matches one, so the configure selected no device
+// and failed with `There are no enough SSD devices on system`. Its return value
+// is discarded by node_configure.py, so the init container still exited 0, the
+// pod started on whatever configuration the host already had, and the node_add
+// that read it was refused for carrying the wrong device class. PCI addresses
+// are what --pci-allowed takes.
+func TestAPCIAddressReachesTheAllowList(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassNVMe, "0000:01:00.0", "0000:0b:00.0")
+
+	if allowed := got["PCI_ALLOWED"]; allowed != "0000:01:00.0,0000:0b:00.0" {
+		t.Errorf("PCI_ALLOWED = %q, and a PCI address is what the allow list takes", allowed)
+	}
+	if devices := got["NVME_DEVICES"]; devices != "" {
+		t.Errorf("NVME_DEVICES = %q, which the backend matches against namespace names", devices)
+	}
+}
+
+// A bare name is a namespace name, which is exactly what NVME_DEVICES is
+// resolved against, so it stays there.
+func TestABareNameStaysANamespaceName(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassNVMe, "nvme0n1", "nvme2n1")
+
+	if devices := got["NVME_DEVICES"]; devices != "nvme0n1,nvme2n1" {
+		t.Errorf("NVME_DEVICES = %q, and a bare name is a namespace name", devices)
+	}
+	if allowed := got["PCI_ALLOWED"]; allowed != "" {
+		t.Errorf("PCI_ALLOWED = %q, and a namespace name is not a PCI address", allowed)
+	}
+}
+
+// One list carries both spellings, and each goes where the backend reads it.
+func TestBothSpellingsGoWhereTheyAreRead(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassNVMe, "0000:01:00.0", "nvme2n1")
+
+	if allowed := got["PCI_ALLOWED"]; allowed != "0000:01:00.0" {
+		t.Errorf("PCI_ALLOWED = %q", allowed)
+	}
+	if devices := got["NVME_DEVICES"]; devices != "nvme2n1" {
+		t.Errorf("NVME_DEVICES = %q", devices)
+	}
+}
+
+// An explicit allow list and PCI addresses in the device list are one allow
+// list, not two, and neither silently drops the other.
+func TestTheAllowListAndTheDeviceListAreMerged(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{DeviceClass: simplyblockv1alpha2.StorageClusterDeviceClassNVMe},
+	}
+	node := &simplyblockv1alpha2.StorageNode{
+		Spec: simplyblockv1alpha2.StorageNodeSpec{
+			Config: simplyblockv1alpha2.StorageNodeConfig{
+				PcieAllowList: []string{"0000:02:00.0"},
+				DeviceNames:   []string{"0000:01:00.0"},
+			},
+		},
+	}
+	entry := renderNodeConfig(cluster, node)
+	if !strings.Contains(entry, "PCI_ALLOWED='0000:01:00.0,0000:02:00.0'") &&
+		!strings.Contains(entry, "PCI_ALLOWED='0000:02:00.0,0000:01:00.0'") {
+		t.Errorf("the allow list and the device list did not merge:\n%s", entry)
 	}
 }
