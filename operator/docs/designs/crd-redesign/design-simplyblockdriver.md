@@ -290,8 +290,14 @@ no object name reaches.
 
 **Enforcement is a validating webhook**, `SimplyblockDriverValidator` in
 `operator/internal/webhook/simplyblockdriver_validator.go`, which denies a
-`CREATE` where a `SimplyblockDriver` already exists in any namespace and carries
-`failurePolicy=fail` like every other validator the operator serves. The
+`CREATE` where a `SimplyblockDriver` already exists in any namespace. It carries
+`failurePolicy=ignore` rather than the `fail` most of the operator's validators
+carry, and the install is what decides that: the chart renders this object beside
+the `Deployment` that serves the webhook (§8), so on a first install the `CREATE`
+arrives while the operator is still coming up, and under `fail` the release stops
+on it and leaves a cluster holding an operator, a control plane, and no driver.
+The singleton survives the difference because the webhook is the message rather
+than the enforcement, and the controller below refuses the same object. The
 `ControlPlane` singleton is enforced by convention instead
 ([`design-controlplane.md`](design-controlplane.md) §3.1), and what separates the
 two is what a second object does: a `ControlPlane` under another name is ignored

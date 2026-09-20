@@ -21,7 +21,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=create,versions=v1alpha2,name=vsimplyblockdriver.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-simplyblockdriver,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=create,versions=v1alpha2,name=vsimplyblockdriver.simplyblock.io,admissionReviewVersions=v1
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=simplyblockdrivers,verbs=get;list;watch
 
@@ -38,10 +38,19 @@ import (
 // plugin per driver name, so two node plugins on one worker contend for a path
 // no object name reaches.
 //
-// failurePolicy=Fail, like every other validator here. What it blocks while
-// unavailable is the creation of a driver, which is a deployment-time action
-// rather than a data-path one, and the object written in that window is caught
-// by the controller instead.
+// failurePolicy=Ignore, unlike most validators here, and the install is what
+// decides it. The chart renders a SimplyblockDriver beside the Deployment that
+// serves this webhook, so the one CREATE a first install performs arrives
+// seconds after the webhook configuration is registered and about a minute
+// before the operator answers on the service. Under Fail the release stops
+// there, on a cluster left holding an operator, a control plane, and no CSI
+// driver, and the only way out is to run the install a second time.
+//
+// Nothing is given up by ignoring it, because this webhook was never the
+// enforcement of record: a driver admitted while it was unavailable is refused
+// by the controller, which holds the object at Installing, applies nothing, and
+// emits DuplicateDriver (§3.4). What Fail bought was a clearer message at the
+// moment of typing, and it cost every first install.
 //
 // The rule is CREATE and not UPDATE, because an edit to the object that already
 // exists is not a second one, and a rule over every operation would lock the

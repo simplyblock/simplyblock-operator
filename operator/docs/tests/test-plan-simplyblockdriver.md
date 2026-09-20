@@ -270,36 +270,44 @@ control-plane upgrade is the surprise the design declines to build.
 Full reconcile loop against a real API server via `envtest`. The immutability and
 defaulting rules are admission and cannot be exercised any other way.
 
-| #        | Scenario                                                                     | Type         | Test               |
-|----------|------------------------------------------------------------------------------|--------------|--------------------|
-| I-01     | `spec.driverName` changed after creation: rejected as immutable              | Negative     | —                  |
-| I-02     | `spec.driverName` unset: defaulted to `csi.simplyblock.io`                   | Boundary     | —                  |
-| I-03     | `spec.image` outside the trusted registries: rejected by the pattern         | Negative     | —                  |
-| I-04     | `spec.image` omitted: rejected as `Required`                                 | Negative     | —                  |
-| I-05     | `spec.controllerReplicas` of 0: rejected by the minimum                      | Boundary     | —                  |
-| I-06     | `spec.controllerReplicas` unset: defaulted to 1                              | Boundary     | —                  |
-| I-07     | `spec.imagePullPolicy` outside the enum: rejected                            | Negative     | —                  |
-| I-08     | The short name `sbd` resolves to the same list as the full kind              | Positive     | —                  |
-| I-09     | A full apply against a real API server: every object exists afterward        | Positive     | —                  |
-| I-10     | Deleting the object: garbage collection removes every applied child          | Positive     | —                  |
-| I-11     | The controller's role covers every object the apply creates                  | Positive     | —                  |
-| ~~I-12~~ | ~~Two drivers with two `driverName` values in one namespace: both accepted~~ | ~~Boundary~~ | Superseded by I-18 |
-| I-13     | `spec.enableVolumeSnapshots` unset: defaulted to true                        | Boundary     | —                  |
-| I-14     | Field ownership is taken from a manager that already holds the fields        | Positive     | —                  |
-| I-15     | An adopted object keeps its UID across the reconcile that adopts it          | Positive     | —                  |
-| I-16     | The finalizer deletes the cluster-scoped objects the label marks             | Positive     | —                  |
-| I-17     | A cluster-scoped object carrying another controller's label is left          | Negative     | —                  |
-| I-18     | A second `SimplyblockDriver` in the same namespace: denied at admission      | Negative     | —                  |
-| I-19     | A second one in another namespace: denied, whatever its `driverName`         | Negative     | —                  |
-| I-20     | The first `SimplyblockDriver` in an empty cluster: admitted                  | Positive     | —                  |
-| I-21     | The only object updated, not created: admitted, since the rule is CREATE     | Boundary     | —                  |
-| I-22     | The only object deleted and another created: admitted                        | Boundary     | —                  |
-| I-23     | A `spec.sidecarImages` entry outside the trusted registries: rejected        | Negative     | —                  |
-| I-24     | `spec.image` of the empty string: rejected, since Required admits it         | Negative     | —                  |
+| #        | Scenario                                                                     | Type         | Test                                                        |
+|----------|------------------------------------------------------------------------------|--------------|-------------------------------------------------------------|
+| I-01     | `spec.driverName` changed after creation: rejected as immutable              | Negative     | —                                                           |
+| I-02     | `spec.driverName` unset: defaulted to `csi.simplyblock.io`                   | Boundary     | —                                                           |
+| I-03     | `spec.image` outside the trusted registries: rejected by the pattern         | Negative     | —                                                           |
+| I-04     | `spec.image` omitted: rejected as `Required`                                 | Negative     | —                                                           |
+| I-05     | `spec.controllerReplicas` of 0: rejected by the minimum                      | Boundary     | —                                                           |
+| I-06     | `spec.controllerReplicas` unset: defaulted to 1                              | Boundary     | —                                                           |
+| I-07     | `spec.imagePullPolicy` outside the enum: rejected                            | Negative     | —                                                           |
+| I-08     | The short name `sbd` resolves to the same list as the full kind              | Positive     | —                                                           |
+| I-09     | A full apply against a real API server: every object exists afterward        | Positive     | —                                                           |
+| I-10     | Deleting the object: garbage collection removes every applied child          | Positive     | —                                                           |
+| I-11     | The controller's role covers every object the apply creates                  | Positive     | —                                                           |
+| ~~I-12~~ | ~~Two drivers with two `driverName` values in one namespace: both accepted~~ | ~~Boundary~~ | Superseded by I-18                                          |
+| I-13     | `spec.enableVolumeSnapshots` unset: defaulted to true                        | Boundary     | —                                                           |
+| I-14     | Field ownership is taken from a manager that already holds the fields        | Positive     | —                                                           |
+| I-15     | An adopted object keeps its UID across the reconcile that adopts it          | Positive     | —                                                           |
+| I-16     | The finalizer deletes the cluster-scoped objects the label marks             | Positive     | —                                                           |
+| I-17     | A cluster-scoped object carrying another controller's label is left          | Negative     | —                                                           |
+| I-18     | A second `SimplyblockDriver` in the same namespace: denied at admission      | Negative     | —                                                           |
+| I-19     | A second one in another namespace: denied, whatever its `driverName`         | Negative     | —                                                           |
+| I-20     | The first `SimplyblockDriver` in an empty cluster: admitted                  | Positive     | —                                                           |
+| I-21     | The only object updated, not created: admitted, since the rule is CREATE     | Boundary     | —                                                           |
+| I-22     | The only object deleted and another created: admitted                        | Boundary     | —                                                           |
+| I-23     | A `spec.sidecarImages` entry outside the trusted registries: rejected        | Negative     | —                                                           |
+| I-24     | `spec.image` of the empty string: rejected, since Required admits it         | Negative     | —                                                           |
+| I-25     | The chart's object admitted while the operator is not yet serving            | Regression   | `TestBootstrapDriverIsAdmittedWhileTheOperatorIsNotServing` |
 
 `I-12` asserted that two drivers in one namespace were accepted, which design
 §3.4 now rejects. The row keeps its ID struck through, and `I-18` is what replaced
 it.
+
+`I-25` is the row a first install turns on. The chart writes its
+`SimplyblockDriver` beside the `Deployment` that serves this webhook, so the
+object arrives while nothing answers on the service, and under `failurePolicy:
+Fail` the release stopped there and left a cluster with no CSI driver
+(2026-09-20). It reads the generated webhook configuration rather than a copy, so
+a marker edit that puts the policy back is what makes it fail.
 
 `I-18` to `I-22` are design §3.4's webhook, and the last three are the boundary
 the rule is written against. It denies a `CREATE` where an object already exists,
