@@ -95,6 +95,7 @@ data:
           "state": "up",
           "numaNode": -1,
           "virtual": true,
+          "peered": true,
           "kind": "virtual",
           "addresses": [
             "10.10.10.1"

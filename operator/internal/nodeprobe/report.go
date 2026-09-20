@@ -207,7 +207,13 @@ type Interface struct {
 	// NUMANode is the memory node the interface hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
-	Virtual  bool `json:"virtual,omitempty"`
+	Virtual bool `json:"virtual,omitempty"`
+
+	// Peered reports whether the interface is one end of a pair, which is what
+	// a pod's link into the host is. It is read from iflink and is the one
+	// reading that tells such a link from the machine's own virtual devices:
+	// sysfs describes them identically otherwise.
+	Peered   bool `json:"peered,omitempty"`
 	Loopback bool `json:"loopback,omitempty"`
 
 	// Bridge reports whether the interface is a software bridge, which a
