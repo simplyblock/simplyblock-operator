@@ -13,6 +13,15 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
+// The machine's own vocabulary: the states the kernel reported, the kinds the
+// probe read, and the bridge the node is reached on.
+const (
+	stateUnknown = "unknown"
+	stateDown    = "down"
+	kindPhysical = "physical"
+	nodeBridge   = "br-ex"
+)
+
 // okdWorker is that machine's interface list. The names are the machine's own.
 func okdWorker() nodeprobe.Report {
 	iface := func(name string, edit func(*nodeprobe.Interface)) nodeprobe.Interface {
@@ -36,22 +45,22 @@ func okdWorker() nodeprobe.Report {
 		pod("feb8ae72b6d20d4"),
 		// The node's own bridge: undeclared, standing alone, and holding the
 		// address the cluster reaches the machine on.
-		iface("br-ex", func(i *nodeprobe.Interface) {
-			i.State = "unknown"
+		iface(nodeBridge, func(i *nodeprobe.Interface) {
+			i.State = stateUnknown
 			i.Addresses = []string{"10.0.0.15", "169.254.0.2"}
 		}),
-		iface("br-int", func(i *nodeprobe.Interface) { i.State = "down" }),
-		iface("ovs-system", func(i *nodeprobe.Interface) { i.State = "down" }),
+		iface("br-int", func(i *nodeprobe.Interface) { i.State = stateDown }),
+		iface("ovs-system", func(i *nodeprobe.Interface) { i.State = stateDown }),
 		iface("genev_sys_6081", func(i *nodeprobe.Interface) {
-			i.State = "unknown"
+			i.State = stateUnknown
 			i.Kind = "geneve"
 		}),
 		iface("ovn-k8s-mp0", func(i *nodeprobe.Interface) {
-			i.State = "unknown"
+			i.State = stateUnknown
 			i.Addresses = []string{"10.130.2.2"}
 		}),
 		iface("lo", func(i *nodeprobe.Interface) {
-			i.State = "unknown"
+			i.State = stateUnknown
 			i.Kind = "loopback"
 			i.Loopback = true
 			i.Addresses = []string{"127.0.0.1"}
@@ -59,15 +68,15 @@ func okdWorker() nodeprobe.Report {
 		// The storage plane: the fastest physical NICs, and the ones the old
 		// rule named.
 		iface("enp2s0f0", func(i *nodeprobe.Interface) {
-			i.Virtual, i.Kind, i.SpeedMbps = false, "physical", 10000
+			i.Virtual, i.Kind, i.SpeedMbps = false, kindPhysical, 10000
 			i.Addresses = []string{"192.168.10.15"}
 		}),
 		iface("enp2s0f1", func(i *nodeprobe.Interface) {
-			i.Virtual, i.Kind, i.SpeedMbps = false, "physical", 10000
+			i.Virtual, i.Kind, i.SpeedMbps = false, kindPhysical, 10000
 			i.Addresses = []string{"192.168.20.15"}
 		}),
 		iface("enp8s0", func(i *nodeprobe.Interface) {
-			i.Virtual, i.Kind, i.SpeedMbps = false, "physical", 1000
+			i.Virtual, i.Kind, i.SpeedMbps = false, kindPhysical, 1000
 		}),
 		iface("enp8s0.4000", func(i *nodeprobe.Interface) {
 			i.Kind, i.SpeedMbps, i.Peered = "vlan", 1000, true
@@ -88,7 +97,7 @@ func okdWorker() nodeprobe.Report {
 // node came up online and healthy and no StorageNode could ever be matched to
 // it.
 func TestTheOKDWorkerNamesTheBridgeItsNodeAddressIsOn(t *testing.T) {
-	if got := ManagementInterface(okdWorker(), "10.0.0.15"); got != "br-ex" {
+	if got := ManagementInterface(okdWorker(), "10.0.0.15"); got != nodeBridge {
 		t.Errorf("named %q, want br-ex: it holds the address the operator matches by", got)
 	}
 }
@@ -98,7 +107,7 @@ func TestTheOKDWorkerNamesTheBridgeItsNodeAddressIsOn(t *testing.T) {
 // cluster is on, which is why the node address is passed at all.
 func TestTheOKDWorkerFallsBackToAPhysicalNIC(t *testing.T) {
 	got := ManagementInterface(okdWorker(), "")
-	if got == "br-ex" {
+	if got == nodeBridge {
 		t.Error("named br-ex with no address to match, which nothing in the reading justifies")
 	}
 	if got != "enp2s0f0" {

@@ -10728,6 +10728,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - clusterdeploymentconfigs/finalizers
   - controlplaneops/finalizers
   - controlplanes/finalizers
   - operatorops/finalizers
