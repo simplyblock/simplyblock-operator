@@ -1,1 +1,1 @@
-no worker has a device this run would use: worker-01: no device of it survived the device rules (4 devices declined by available: the probe refused it: Mounted)
+no worker has a device this run would use: 4 device(s) across 1 worker(s), none usable: 4 declined by available: the probe refused it: Mounted

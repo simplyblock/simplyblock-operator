@@ -29,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -560,14 +559,18 @@ func (r *OperatorOpsReconciler) write(
 		for _, refusal := range plan.RefusalLines() {
 			r.event(ops, corev1.EventTypeNormal, DeviceDeclined, refusal)
 		}
-		why := plan.Explain()
-		if len(why) == 0 {
+		if len(plan.Explain()) == 0 {
 			// No machine was refused by name, so the run had no worker to refuse.
 			return false, refusef(OperationFailed,
 				"no worker has a device this run would use: %s", plan.Summary())
 		}
+		// Counted rather than listed per worker, because this message is carried
+		// by an event and an event is refused past 1024 characters. The
+		// per-worker detail is not lost: every device refusal above went out as
+		// its own DeviceDeclined event.
 		return false, refusef(OperationFailed,
-			"no worker has a device this run would use: %s", strings.Join(why, "; "))
+			"no worker has a device this run would use: %s",
+			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
 	config, notes := r.draftFor(ops, spec, plan)
@@ -865,7 +868,7 @@ func (r *OperatorOpsReconciler) event(
 	if action == "" {
 		action = string(ops.Spec.Action)
 	}
-	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", message)
+	r.Recorder.Eventf(ops, nil, eventType, reason, action, "%s", boundEventMessage(message))
 }
 
 // schedulable reports whether a node is one work can be placed on.
@@ -957,4 +960,28 @@ func (r *OperatorOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Named("operatorops").
 		Complete(r)
+}
+
+// refusalPreamble is what every refusal of this kind opens with, and what the
+// explanation has to fit inside the event alongside.
+const refusalPreamble = "no worker has a device this run would use: "
+
+// maxEventMessage is what the Kubernetes event API takes. A longer message is
+// not truncated by the API server, it is refused, and the recorder does not
+// retry, so the bound is this side's to keep.
+const maxEventMessage = 1024
+
+// boundEventMessage cuts a message to what an event carries.
+//
+// It is the last guard rather than the design: a message built from a list is
+// written to stay within the bound, and this is what keeps the one that was not
+// from being dropped in silence. The cut says it happened, because a reader who
+// cannot see that the text ends early will read a truncated list as the whole
+// list.
+func boundEventMessage(message string) string {
+	if len(message) <= maxEventMessage {
+		return message
+	}
+	const ellipsis = " […]"
+	return message[:maxEventMessage-len(ellipsis)] + ellipsis
 }
