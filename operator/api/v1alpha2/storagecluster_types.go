@@ -773,6 +773,25 @@ type StorageClusterSpec struct {
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
+// ProvisioningSlot is one worker's hold on the cluster's node-add concurrency,
+// held from the moment its add is posted until the node has a backend UUID or
+// has given up.
+type ProvisioningSlot struct {
+	// Worker is the Kubernetes node the add was posted for, and it is what the
+	// cap counts.
+	Worker string `json:"worker"`
+
+	// Node is the StorageNode object that took the slot. A release removes only
+	// the entry naming its own object, which is what keeps a node from freeing
+	// somebody else's slot, and a slot whose object is gone is reaped.
+	Node string `json:"node"`
+
+	// TakenAt is when the slot was taken, so a hold that outlives its node's
+	// deadlines is visible in the object rather than only in the events.
+	// +optional
+	TakenAt metav1.Time `json:"takenAt,omitempty"`
+}
+
 type StorageClusterStatus struct {
 	// Phase is the operator's own view of this cluster.
 	// +optional
@@ -857,6 +876,23 @@ type StorageClusterStatus struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
+
+	// ProvisioningSlots are the workers whose node add is outstanding. The list
+	// is the metadata of the Provisioning phase, and it is also the mutex that
+	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+	//
+	// It is one list on one object because that is what makes taking a slot
+	// atomic. A node takes one with an optimistic-locked patch of this field, so
+	// exactly one node wins a given resourceVersion and every other is told to
+	// count again. A slot recorded per node could not do that: six objects carry
+	// six resourceVersions, and two nodes reading a cold cache would both see the
+	// same one free and both take it.
+	//
+	// A worker rather than an object is what holds a slot, because one POST adds
+	// every socket of a worker and a two-socket host must consume one slot.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.

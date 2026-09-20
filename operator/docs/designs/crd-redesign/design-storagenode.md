@@ -810,14 +810,48 @@ posted must not be read that way. The steps before the claim wait where they are
 and `AwaitingSlot` declines to take a slot at all while its worker is away, which
 is what stops an add being posted against a machine that cannot answer it.
 
+**Adoption is checked at every gate before the add, the queue included.** A
+backend node the worker already has is what `CheckingHost` and `CheckingConfig`
+divert on, and an object passes each of them once. One that reached the queue
+before its backend node existed — a previous operator's add, a `POST` whose
+response was lost after the control plane committed, a rebuilt object — has no
+add to ask for, and checking again where it waits is what recognizes that. It is
+checked before the worker is, for the reason `CheckingHost` checks it first: an
+adopted node is already running, and the machine being reachable is not this
+operator's precondition to establish.
+
 **`AwaitingSlot` is where two independent serialization rules live.**
 `maxParallelNodeAdds` caps how many workers may be in flight at once, counted by
 distinct worker rather than by object so that a two-socket host consumes one slot.
 Workers hosting a FoundationDB pod are always sequential regardless of that cap,
 because a node add reboots the host and two simultaneous FDB reboots reduce the
-control plane's own fault tolerance. Both are predicates over the current state of
-the cluster's other nodes, so the step re-evaluates them on every pass and holds
-rather than failing.
+control plane's own fault tolerance. The step re-evaluates both on every pass and
+holds rather than failing.
+
+**A slot is taken, and the holders are the Provisioning phase's metadata on the
+cluster.** `StorageCluster.status.provisioningSlots` is the list of workers whose
+add is outstanding, each entry naming the worker, the `StorageNode` that took it,
+and when. Taking one is an optimistic-locked patch of that single list, which is
+what makes the cap hold: exactly one node wins a given `resourceVersion` and every
+other is refused and counts again. A cap derived instead from the siblings' steps
+holds only while every node reads the same set, and reconciles are served from an
+informer cache — a cache filled moments ago, after a restart or a lease change,
+gives each node a different set and every one of them is alone in its own.
+
+The list is on the cluster rather than a field per node for the same reason. Six
+node objects carry six `resourceVersion`s, so a claim written to each is six
+separate agreements and no mutual exclusion between them.
+
+A holder releases its own entry and no other, on each of the three ends of an add:
+the UUID arriving, the step outliving its deadline, and the object being deleted.
+A slot whose holder is gone, has a UUID already, or has failed is reaped by the
+next node to ask for one, so a cap cannot be left closed by an object that will
+never reconcile again.
+
+The ordering of the waiting workers stays, as a tie-break rather than as the cap.
+It settles who tries first among nodes that can see each other, so a node told to
+wait is not overtaken by one told to wait beside it, and it is computed net of the
+workers already holding a slot.
 
 **`CheckingConfig` is a gate rather than a validation.** A cluster with
 `enableFailureDomains` set requires every node to declare a fault group, and a

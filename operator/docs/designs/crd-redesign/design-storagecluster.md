@@ -2150,6 +2150,15 @@ type StorageClusterStatus struct {
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
 
+	// ProvisioningSlots are the workers whose node add is outstanding. The list
+	// is the metadata of the Provisioning phase, and it is also the mutex that
+	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds: taking a
+	// slot is an optimistic-locked patch of this one field, so exactly one node
+	// wins a given resourceVersion (design-storagenode.md §4.2).
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
+
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.
 	// +optional
