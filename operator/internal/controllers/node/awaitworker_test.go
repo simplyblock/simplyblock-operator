@@ -251,3 +251,34 @@ func TestASiblingWaitsWhileAnotherWorkerIsHeld(t *testing.T) {
 		t.Errorf("the sibling posted %d add(s) while another worker was rebooting", adds)
 	}
 }
+
+// TestAnAddThatGaveUpIsActuallyReposted covers the retry the resolve step asks
+// for, through the transition that performs it.
+//
+// Regression: 2026-09-20-resolving-could-not-reach-posting — resolve returns
+// Posting when the add it was waiting on left the task window without producing
+// a node, and the graph gave Resolving no exit, so the transition was refused:
+//
+//	enter step Posting: statemachine: illegal transition Resolving -> Posting
+//
+// The reconcile errored before re-posting and backed off, so the node emitted
+// NodeAddGaveUp once a second for its whole deadline while exactly one add was
+// ever sent. The step that exists to ask again could not.
+//
+// TestResolvingAsksAgainWhenTheAddIsOver covers the same decision one level
+// down, and passed throughout: it reads the step resolve returns and never
+// performs the transition, which is the only place the graph is consulted.
+func TestAnAddThatGaveUpIsActuallyReposted(t *testing.T) {
+	node := aProvisioningNode(stepResolving, time.Hour)
+	r, cluster, apiClient, _ := aProvisioner(t, aWorkerIn(true, false), node)
+	cluster.Status.Tasks = []simplyblockv1alpha2.ClusterTask{
+		{ID: "task-1", Type: "node_add", Status: "done"},
+	}
+
+	if _, err := r.provision(context.Background(), node, cluster); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if got := stepOf(t, apiClient, node); got != stepPosting {
+		t.Errorf("the step is %q, want Posting so the add is actually asked for again", got)
+	}
+}

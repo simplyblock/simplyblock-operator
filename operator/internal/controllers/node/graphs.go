@@ -289,7 +289,12 @@ func provisioningGraph() statemachine.Config[nodeStep] {
 				OnEnter: deadline[nodeStep](postingDeadline),
 			},
 			stepResolving: {
-				To:      []nodeStep{stepAwaitingWorker},
+				// Posting is an exit because an add that left the control
+				// plane's task window without producing a node is one to ask for
+				// again, and asking is re-entering the step that posts. Without
+				// the edge the transition is refused and the retry the step
+				// exists for never happens.
+				To:      []nodeStep{stepPosting, stepAwaitingWorker},
 				OnEnter: deadline[nodeStep](resolvingDeadline),
 			},
 			stepAwaitingWorker: {
