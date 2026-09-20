@@ -8076,7 +8076,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: unknown step
-                  rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'']'
+                  rule: '!has(self.state) || self.state in [''CheckingHost'',''CheckingConfig'',''AwaitingSlot'',''Posting'',''Resolving'',''Adopting'',''AwaitingWorker'']'
               uptime:
                 description: Uptime is the node uptime as the control plane reports
                   it.

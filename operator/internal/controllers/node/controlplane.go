@@ -37,9 +37,17 @@ import (
 // condition in the package is a predicate over it and the fields it needs are the
 // ones named here.
 type NodeReading struct {
-	UUID               string `json:"id"`
-	Status             string `json:"status"`
-	ManagementIP       string `json:"mgmt_ip"`
+	UUID         string `json:"id"`
+	Status       string `json:"status"`
+	ManagementIP string `json:"mgmt_ip"`
+
+	// SystemUUID is the host's firmware identity, which Kubernetes reports for
+	// the same machine as Node.status.nodeInfo.systemUUID. It is what says which
+	// worker a reading is on: mgmt_ip is an address on the storage plane, and a
+	// deployment whose storage traffic has its own network reports one the
+	// Kubernetes node object never carries.
+	SystemUUID string `json:"system_uuid"`
+
 	Health             bool   `json:"health_check"`
 	Hostname           string `json:"hostname"`
 	Uptime             string `json:"uptime"`

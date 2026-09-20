@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -317,6 +318,38 @@ func (r *StorageNodeReconciler) provision(
 	}
 
 	current := machine.CurrentState()
+
+	// A worker that is not there is checked before the deadline, because a step
+	// waiting on it cannot make progress and spending its budget on a machine
+	// that is rebooting would fail the node for the reboot.
+	//
+	// Only the two steps that have claimed the worker divert. The claim is what
+	// AwaitingWorker has to carry: it counts as claimed (claimedWorker), so the
+	// cluster's node-add cap keeps holding while the machine is away and no
+	// second worker is handed a configuration change on top of a reboot already
+	// running. A step that had not claimed anything cannot be held the same way,
+	// because a claimed sibling on the same worker is read as an add that already
+	// happened and a reason to skip Posting, and a node diverted out of
+	// AwaitingSlot never posted. Those steps wait where they are instead: AwaitingSlot declines to
+	// take a slot while the worker is away, and the host check simply does not
+	// answer.
+	if current == stepPosting || current == stepResolving {
+		away, reason, err := r.workerAway(ctx, node.Spec.WorkerNode)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: nodeRetry}, err
+		}
+		if away {
+			r.emit(node, corev1.EventTypeWarning, WorkerAway, fmt.Sprintf(
+				"Worker %s %s, so %s is held until it is back", node.Spec.WorkerNode, reason, current))
+			if err := machine.TransitionTo(ctx, stepAwaitingWorker); err != nil {
+				return ctrl.Result{}, fmt.Errorf("enter step %s: %w", stepAwaitingWorker, err)
+			}
+			snapshot := statemachine.ToKube(machine.Snapshot())
+			return ctrl.Result{RequeueAfter: nodeRetry},
+				r.recordStep(ctx, node, stepAwaitingWorker, snapshot.Deadline)
+		}
+	}
+
 	if machine.TimeoutReached() {
 		return ctrl.Result{}, r.fail(ctx, node,
 			fmt.Sprintf("step %s outlived its deadline", current))
@@ -338,10 +371,15 @@ func (r *StorageNodeReconciler) provision(
 			fmt.Sprintf("waiting on %s", current))
 	}
 
-	if machine.IsTerminal() {
+	if next == current {
 		// Resolving and Adopting both end with a UUID on the object, which the
-		// step that reached them has already written. The next pass is steady
-		// state.
+		// step that reached them has already written, and both report themselves
+		// as their own successor. The next pass is steady state.
+		//
+		// The test is the step rather than machine.IsTerminal, which answers
+		// whether the graph gives the state an exit: Resolving has one now, to
+		// the step that holds while the worker is away, and a finished Resolving
+		// is still the end of the path.
 		return ctrl.Result{RequeueAfter: nodeAdvance}, nil
 	}
 
@@ -377,11 +415,67 @@ func (r *StorageNodeReconciler) performNodeStep(
 		return stepResolving, true, r.postNode(ctx, node, cluster)
 	case stepResolving:
 		return r.resolve(ctx, node, cluster)
+	case stepAwaitingWorker:
+		return r.awaitWorker(ctx, node)
 	case stepAdopting:
 		done, err := r.resolveUUID(ctx, node, cluster)
 		return stepAdopting, done, err
 	default:
 		return current, false, fmt.Errorf("step %s belongs to no provisioning path", current)
+	}
+}
+
+// awaitWorker holds while the worker is away and starts the path again when it
+// is back.
+//
+// It returns to CheckingHost rather than to the step it was diverted from,
+// because what a reboot interrupts is not resumable in the middle: a Posting
+// resumed after the fact would ask for a second node, and the add it was waiting
+// on may well have landed. CheckingHost is where a backend node that already
+// exists is found, and its Adopting edge is what takes the node over instead of
+// adding it twice.
+func (r *StorageNodeReconciler) awaitWorker(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) (nodeStep, bool, error) {
+	away, reason, err := r.workerAway(ctx, node.Spec.WorkerNode)
+	if err != nil {
+		return stepAwaitingWorker, false, err
+	}
+	if away {
+		return stepAwaitingWorker, false, blockedf(WorkerAway,
+			"worker %s %s", node.Spec.WorkerNode, reason)
+	}
+	r.emit(node, corev1.EventTypeNormal, WorkerReturned, fmt.Sprintf(
+		"Worker %s is back, and provisioning starts again from the host check",
+		node.Spec.WorkerNode))
+	return stepCheckingHost, true, nil
+}
+
+// workerAway reports whether the machine is unavailable, and says which of the
+// two conditions it is so the event names the cause rather than the outcome.
+//
+// The cordon counts as well as the readiness, because a drain begins with one:
+// catching it there is what stops an add being asked for against a machine that
+// is about to go down.
+//
+// A worker the API server does not have is not reported away. It is a different
+// condition with its own handling, and answering it here would make every step
+// of this path depend on a Node object that a node being torn down no longer
+// has.
+func (r *StorageNodeReconciler) workerAway(
+	ctx context.Context, worker string,
+) (bool, string, error) {
+	var object corev1.Node
+	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
+		return false, "", client.IgnoreNotFound(err)
+	}
+	switch {
+	case !workerReady(&object):
+		return true, "is not Ready", nil
+	case object.Spec.Unschedulable:
+		return true, "is cordoned", nil
+	default:
+		return false, "", nil
 	}
 }
 
@@ -463,6 +557,19 @@ func (r *StorageNodeReconciler) awaitSlot(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) (nodeStep, bool, error) {
+	// A slot taken for a machine that is not there is an add posted against a
+	// worker that cannot answer it. The wait costs nothing, because the slot is
+	// still free when the machine comes back, and taking it would put a second
+	// worker's configuration change alongside a reboot already under way.
+	away, reason, err := r.workerAway(ctx, node.Spec.WorkerNode)
+	if err != nil {
+		return stepAwaitingSlot, false, err
+	}
+	if away {
+		return stepAwaitingSlot, false, blockedf(WorkerAway,
+			"worker %s %s, so no node-add slot is taken for it", node.Spec.WorkerNode, reason)
+	}
+
 	siblings, err := r.clusterNodeObjects(ctx, node)
 	if err != nil {
 		return stepAwaitingSlot, false, err
@@ -554,7 +661,11 @@ func (r *StorageNodeReconciler) awaitSlot(
 // transition into Posting or anything past it.
 func claimedWorker(node *simplyblockv1alpha2.StorageNode) bool {
 	switch nodeStep(node.Status.Step.State) {
-	case stepPosting, stepResolving, stepAdopting:
+	case stepPosting, stepResolving, stepAdopting, stepAwaitingWorker:
+		// AwaitingWorker is only reachable from Posting and Resolving, so a node
+		// in it has claimed its worker and its add is still outstanding. Holding
+		// the claim across the wait is what keeps the cluster's node-add cap
+		// closed while a machine reboots.
 		return true
 	default:
 		return node.Status.UUID != ""
@@ -684,8 +795,8 @@ func (r *StorageNodeReconciler) matchBackendNode(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) (NodeReading, bool, error) {
-	address, err := r.workerAddress(ctx, node.Spec.WorkerNode)
-	if err != nil || address == "" {
+	worker, err := r.workerIdentity(ctx, node.Spec.WorkerNode)
+	if err != nil || (worker.address == "" && worker.systemUUID == "") {
 		return NodeReading{}, false, err
 	}
 
@@ -696,7 +807,7 @@ func (r *StorageNodeReconciler) matchBackendNode(
 
 	var onWorker []NodeReading
 	for _, reading := range readings {
-		if reading.ManagementIP == address && reading.UUID != "" {
+		if reading.UUID != "" && worker.owns(reading) {
 			onWorker = append(onWorker, reading)
 		}
 	}
@@ -1118,21 +1229,52 @@ func (r *StorageNodeReconciler) clusterNodeObjects(
 	return nodes.Items, nil
 }
 
-// workerAddress is the worker's internal IP, which is what the control plane
-// reports as a backend node's management address.
-func (r *StorageNodeReconciler) workerAddress(
+// workerIdentity is what the two sides of a node both know about one machine.
+//
+// The firmware UUID is the identity: Kubernetes reads it from the host and
+// reports it as Node.status.nodeInfo.systemUUID, and the control plane reads it
+// from the same place and reports it as a node's system_uuid. Neither invents
+// it and no network carries it.
+//
+// The address is kept for the control plane that reports no UUID. It was the
+// only match there was, and it works wherever the storage plane and Kubernetes
+// share a network, which is every deployment that has been matched this way so
+// far.
+type workerIdentity struct {
+	address    string
+	systemUUID string
+}
+
+// owns reports whether a reading is a node of this worker.
+//
+// The UUID decides it whenever both sides have one, because it is the answer
+// that does not depend on which network the reading's address is on. Falling
+// back to the address where the reading carries no UUID keeps the older control
+// plane working; falling back where it carries a different one would undo the
+// whole point, so a UUID that disagrees is a node of another machine.
+func (w workerIdentity) owns(reading NodeReading) bool {
+	if reading.SystemUUID != "" && w.systemUUID != "" {
+		return strings.EqualFold(reading.SystemUUID, w.systemUUID)
+	}
+	return w.address != "" && reading.ManagementIP == w.address
+}
+
+// workerIdentity reads both from the worker's Node object.
+func (r *StorageNodeReconciler) workerIdentity(
 	ctx context.Context, worker string,
-) (string, error) {
+) (workerIdentity, error) {
 	var object corev1.Node
 	if err := r.Get(ctx, types.NamespacedName{Name: worker}, &object); err != nil {
-		return "", client.IgnoreNotFound(err)
+		return workerIdentity{}, client.IgnoreNotFound(err)
 	}
+	identity := workerIdentity{systemUUID: object.Status.NodeInfo.SystemUUID}
 	for _, address := range object.Status.Addresses {
 		if address.Type == corev1.NodeInternalIP {
-			return address.Address, nil
+			identity.address = address.Address
+			break
 		}
 	}
-	return "", nil
+	return identity, nil
 }
 
 // hostsFoundationDB reports whether a worker runs a FoundationDB pod, which is

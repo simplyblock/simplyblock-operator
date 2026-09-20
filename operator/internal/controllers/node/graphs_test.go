@@ -70,7 +70,8 @@ func TestTheCELRuleCoversEveryDeclaredState(t *testing.T) {
 func TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph(t *testing.T) {
 	declared := statemachine.DeclaredStates(provisioningGraph())
 	want := []string{
-		"Adopting", "AwaitingSlot", "CheckingConfig", "CheckingHost", "Posting", "Resolving",
+		"Adopting", "AwaitingSlot", "AwaitingWorker", "CheckingConfig", "CheckingHost",
+		"Posting", "Resolving",
 	}
 	if diff := cmp.Diff(want, declared); diff != "" {
 		t.Errorf("the provisioning graph and the Enum marker disagree (-marker +graph):\n%s", diff)
@@ -107,7 +108,8 @@ const opsStepCELRule = "!has(self.state) || self.state in " +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
 const nodeStepCELRule = "!has(self.state) || self.state in " +
-	"['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting']"
+	"['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting'," +
+	"'AwaitingWorker']"
 
 // Every action the API accepts needs a graph, or an operation of that action fails
 // at its first pass with ErrUnknownAction rather than doing anything.
