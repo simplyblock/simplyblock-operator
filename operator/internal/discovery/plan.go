@@ -118,6 +118,71 @@ func (p Plan) DeviceCount() int {
 // sixteen network block devices and four disks, and a line saying the sixteen
 // were not whole disks is true, longer than the rest of the message, and not
 // the answer to anything.
+// ExplainWithin is what Explain says, written to fit a budget.
+//
+// Explain writes a clause per worker, which is the detail a reviewer wants and a
+// length that grows with the fleet. A Kubernetes event carries 1024 characters
+// and is refused rather than truncated past it, so the run that fails on a large
+// fleet is exactly the run whose reason never reaches anybody.
+//
+// The two halves of the answer do not compress the same way. A device refusal
+// repeats: every worker of a uniform fleet declines its disks for the same
+// reason, and the counts are the finding, since a fleet with no disks and a
+// fleet whose disks are all held are different answers. A worker refusal does
+// not: it names the controllers it found and where they are, and one worker's
+// addresses are not another's. So the devices are counted and the workers are
+// listed, and it is the list that gives way when the budget runs out.
+func (p Plan) ExplainWithin(budget int) string {
+	declined := 0
+	workers := map[string]bool{}
+	var deviceOrder []string
+	byDevice := map[string]int{}
+	workerLines := p.Explain()
+
+	for _, refusal := range p.Refusals {
+		if refusal.Device == "" || refusal.PreFilter {
+			continue
+		}
+		workers[refusal.Worker] = true
+		declined++
+		key := refusal.Rule + ": " + refusal.Reason
+		if _, counted := byDevice[key]; !counted {
+			deviceOrder = append(deviceOrder, key)
+		}
+		byDevice[key]++
+	}
+
+	// A fleet whose every refusal is about a device is the case the per-worker
+	// list says nothing extra about, so the counts replace it outright.
+	if declined > 0 && len(deviceOrder) > 0 {
+		counts := make([]string, 0, len(deviceOrder))
+		for _, key := range deviceOrder {
+			counts = append(counts, fmt.Sprintf("%d declined by %s", byDevice[key], key))
+		}
+		return fmt.Sprintf("%d device(s) across %d worker(s), none usable: %s",
+			declined, len(workers), strings.Join(counts, "; "))
+	}
+
+	// Otherwise, the refusals are about the machines, and what they name cannot
+	// be counted away. As many as the budget holds are written, and the rest are
+	// reported as a number so that the reader knows the list is not the whole of
+	// it.
+	kept, used := 0, 0
+	for _, line := range workerLines {
+		cost := len(line) + len("; ")
+		if kept > 0 && used+cost > budget-len(fmt.Sprintf("; and %d more worker(s)", len(workerLines))) {
+			break
+		}
+		used += cost
+		kept++
+	}
+	if kept >= len(workerLines) {
+		return strings.Join(workerLines, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more worker(s)",
+		strings.Join(workerLines[:kept], "; "), len(workerLines)-kept)
+}
+
 func (p Plan) Explain() []string {
 	type byRule struct {
 		rule    string
