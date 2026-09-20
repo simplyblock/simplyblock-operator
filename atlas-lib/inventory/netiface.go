@@ -74,6 +74,19 @@ type Interface struct {
 	// a veth, a bond, a VLAN, or loopback.
 	Virtual bool
 
+	// Peered reports whether the interface names another device as its link,
+	// which is read from iflink: an interface that points at itself stands
+	// alone, and one whose iflink is another index is derived from or paired
+	// with that device.
+	//
+	// It does not say which of those. A VLAN points at the parent it tags and a
+	// veth points at the peer on the other side, and both read the same here.
+	// What separates them is that a VLAN is identified — the kernel declares
+	// DEVTYPE=vlan and exports a lower link — while a veth's peer is in another
+	// namespace and nothing declares it at all. So a caller keeping pod links
+	// out wants this together with the kind, not instead of it.
+	Peered bool
+
 	// Loopback reports whether this is the loopback interface, decided by its
 	// ARPHRD type rather than by its name.
 	Loopback bool
@@ -224,6 +237,9 @@ func readInterface(dir, name string) Interface {
 		Duplex:     sysfs.String(dir, "duplex"),
 		Loopback:   sysfs.String(dir, "type") == loopbackARPHRD,
 		NUMANode:   NUMANodeUnknown,
+	}
+	if index, link := sysfs.Int(0, dir, "ifindex"), sysfs.Int(0, dir, "iflink"); index != 0 && link != 0 {
+		iface.Peered = index != link
 	}
 	if iface.OperState == "" {
 		iface.OperState = LinkUnknown

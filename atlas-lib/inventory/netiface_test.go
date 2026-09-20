@@ -314,3 +314,101 @@ func TestAFixtureTakesNoAddressesFromTheRunningHost(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOpenShiftWorkerReadsItsNodeBridgeAsVirtual is the reading a real
+// OVN-Kubernetes host produces, and the reason a caller cannot decide what an
+// interface is for from its kind.
+//
+// br-ex carries the address the cluster reaches the machine on. It resolves
+// under devices/virtual and exports no bridge directory, so it reads as virtual,
+// exactly as an unnamed veth does. A caller that refused a virtual device named
+// the fastest physical NIC instead and handed the control plane an address
+// nothing else on the machine answers to (2026-09-20).
+func TestAnOpenShiftWorkerReadsItsNodeBridgeAsVirtual(t *testing.T) {
+	root := hostFixture(t, "okd-worker")
+
+	ifaces, err := ReadInterfaces(syntheticHost(root))
+	if err != nil {
+		t.Fatalf("ReadInterfaces: %v", err)
+	}
+
+	byName := make(map[string]Interface, len(ifaces))
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+
+	brex, ok := byName["br-ex"]
+	if !ok {
+		t.Fatal("br-ex is missing from the reading")
+	}
+	if !brex.Virtual {
+		t.Error("br-ex reads as backed by hardware, and it resolves under devices/virtual")
+	}
+	if brex.Bridge {
+		t.Error("br-ex reads as a bridge, and it exports no bridge directory")
+	}
+	if brex.Kind == LinkBridge {
+		t.Errorf("br-ex is kind %q; nothing in sysfs says bridge, so nothing may conclude it", brex.Kind)
+	}
+
+	// The physical NIC the old rule preferred, for the contrast that makes the
+	// point: it is the one with a device link and a speed, and it is not the one
+	// the node is reached on.
+	nic, ok := byName["enp2s0f0"]
+	if !ok {
+		t.Fatal("enp2s0f0 is missing from the reading")
+	}
+	if nic.Virtual {
+		t.Error("enp2s0f0 reads as virtual, and it resolves under a PCI device")
+	}
+	if nic.SpeedMbps == 0 {
+		t.Error("enp2s0f0 reports no speed, and the capture has one")
+	}
+}
+
+// TestAPeerDeviceIsToldFromAnOtherwiseIdenticalVirtualOne is the reading that
+// separates the two devices sysfs otherwise describes the same way.
+//
+// br-ex and a pod's veth both resolve under devices/virtual, export no bridge
+// directory and carry no driver link, so nothing about what they are separates
+// them. What does is iflink: a veth is one half of a pair and names its peer, so
+// its iflink is the peer's index and not its own. Everything else points at
+// itself.
+//
+// The distinction is load-bearing for anything choosing an interface to bind: a
+// caller that refused every virtual device to keep pod links out also refused
+// the bridge the node's own address lives on (2026-09-20).
+func TestAPeerDeviceIsToldFromAnOtherwiseIdenticalVirtualOne(t *testing.T) {
+	root := hostFixture(t, "okd-worker")
+
+	ifaces, err := ReadInterfaces(syntheticHost(root))
+	if err != nil {
+		t.Fatalf("ReadInterfaces: %v", err)
+	}
+	byName := make(map[string]Interface, len(ifaces))
+	for _, iface := range ifaces {
+		byName[iface.Name] = iface
+	}
+
+	// The captured host's OVN pod links: ifindex 14, iflink 2.
+	veth, ok := byName["3070a31ea98cce0"]
+	if !ok {
+		t.Fatal("the captured host's veth is missing from the reading")
+	}
+	if !veth.Peered {
+		t.Error("a veth does not read as peered, so nothing tells it from the node's own bridge")
+	}
+
+	brex, ok := byName["br-ex"]
+	if !ok {
+		t.Fatal("br-ex is missing from the reading")
+	}
+	if brex.Peered {
+		t.Error("br-ex reads as peered, and its iflink is its own index")
+	}
+	for _, name := range []string{"enp2s0f0", "lo", "genev_sys_6081"} {
+		if iface, ok := byName[name]; ok && iface.Peered {
+			t.Errorf("%s reads as peered, and its iflink is its own index", name)
+		}
+	}
+}
