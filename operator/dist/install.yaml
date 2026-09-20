@@ -11514,7 +11514,7 @@ webhooks:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-simplyblockdriver
-  failurePolicy: Fail
+  failurePolicy: Ignore
   name: vsimplyblockdriver.simplyblock.io
   rules:
   - apiGroups:
