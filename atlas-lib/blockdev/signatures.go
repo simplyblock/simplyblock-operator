@@ -94,7 +94,14 @@ func detect(r regions) []find {
 var detectors = []func(regions) (find, bool){
 	detectExt, detectXFS, detectLVM2, detectLUKS, detectGPT, detectMBR,
 	detectExFAT, detectFAT, detectBtrfs, detectSwap, detectMDRaid, detectZFS,
+	detectAlceml,
 }
+
+// The storage superblock a storage node writes, at the very start of a device
+// it has taken. The magic is a fixed sixteen bytes and the fields after it are
+// not read here: what this answers is whose the device is, and the layout
+// behind the magic is the storage node's to change.
+var alcemlMagic = []byte("ALCEML_STORAGE\x00\x00")
 
 // The ext superblock sits at 1024, so its magic is at 1080 and its three
 // feature words follow at 1116, 1120, and 1124.
@@ -111,6 +118,26 @@ const (
 	ext4RoCompat  = 0x0008 | 0x0010 | 0x0020 | 0x0040 // huge_file, gdt_csum, dir_nlink, extra_isize
 	ext4RoCompat2 = 0x0100 | 0x0200 | 0x0400          // quota, bigalloc, metadata_csum
 )
+
+// detectAlceml names a device this product already took.
+//
+// It is the one signature here that no external tool writes, and the one whose
+// absence was a real cost rather than a wording problem: blkid does not know it
+// and neither does wipefs, so a device carrying it reads as bytes matching
+// nothing, and a discovery run over a fleet that had held a simplyblock cluster
+// reported that the fleet had no disks at all. Naming it is what lets a caller
+// tell its own deployment's leftovers from somebody else's data.
+//
+// The magic is at offset 0 whatever the logical block size, so it is read as an
+// absolute offset rather than against LBA 0. The captured image is 4Kn, and an
+// offset counted in blocks would have been read against the wrong one.
+func detectAlceml(r regions) (find, bool) {
+	if !r.eq(0, alcemlMagic) {
+		return find{}, false
+	}
+	return find{ContentSimplyblock, "simplyblock_alceml", 0,
+		"a simplyblock storage superblock at 0"}, true
+}
 
 // detectExt names the exact member of the ext family. The distinction is worth
 // making because a reading that rounded every ext filesystem up to ext4 would
