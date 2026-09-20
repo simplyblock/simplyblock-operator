@@ -63,6 +63,8 @@ const (
 	stepPosting        = simplyblockv1alpha2.StorageNodeStepPosting
 	stepResolving      = simplyblockv1alpha2.StorageNodeStepResolving
 	stepAdopting       = simplyblockv1alpha2.StorageNodeStepAdopting
+
+	stepAwaitingWorker = simplyblockv1alpha2.StorageNodeStepAwaitingWorker
 )
 
 // How long each operation step may take before it is reported as stuck.
@@ -113,6 +115,12 @@ const (
 	postingDeadline        = 10 * time.Minute
 	resolvingDeadline      = 45 * time.Minute
 	adoptingDeadline       = 10 * time.Minute
+
+	// A worker comes back from a MachineConfig reboot in minutes: the cordon,
+	// the drain, the reboot itself and the uncordon took eleven of them on the
+	// cluster this was written for. The budget is the one that says a machine is
+	// not coming back rather than the one that says it is slow, so it is an hour.
+	awaitingWorkerDeadline = time.Hour
 )
 
 // deadline is the entry hook every state here carries: it sets the step's budget
@@ -277,11 +285,18 @@ func provisioningGraph() statemachine.Config[nodeStep] {
 				OnEnter: deadline[nodeStep](awaitingSlotDeadline),
 			},
 			stepPosting: {
-				To:      []nodeStep{stepResolving},
+				To:      []nodeStep{stepResolving, stepAwaitingWorker},
 				OnEnter: deadline[nodeStep](postingDeadline),
 			},
-			stepResolving: {OnEnter: deadline[nodeStep](resolvingDeadline)},
-			stepAdopting:  {OnEnter: deadline[nodeStep](adoptingDeadline)},
+			stepResolving: {
+				To:      []nodeStep{stepAwaitingWorker},
+				OnEnter: deadline[nodeStep](resolvingDeadline),
+			},
+			stepAwaitingWorker: {
+				To:      []nodeStep{stepCheckingHost},
+				OnEnter: deadline[nodeStep](awaitingWorkerDeadline),
+			},
+			stepAdopting: {OnEnter: deadline[nodeStep](adoptingDeadline)},
 		},
 	}
 }

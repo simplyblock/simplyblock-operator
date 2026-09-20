@@ -29,6 +29,14 @@ const (
 	HostUnreachable      = "HostUnreachable"
 	AwaitingSlot         = "AwaitingSlot"
 
+	// WorkerAway is the machine this node is being added to being not Ready or
+	// cordoned, which is every MachineConfig reboot and every drain.
+	WorkerAway = "WorkerAway"
+
+	// WorkerReturned is that machine coming back, and the path being walked
+	// again from its first step.
+	WorkerReturned = "WorkerReturned"
+
 	// NodeAddGaveUp is the add this node was waiting on leaving the control
 	// plane's task window without having produced a node.
 	NodeAddGaveUp = "NodeAddGaveUp"

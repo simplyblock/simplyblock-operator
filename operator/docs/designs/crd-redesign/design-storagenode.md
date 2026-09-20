@@ -760,11 +760,12 @@ transition of the node's own machine:
     │  a slot is free
     ▼
   Posting         ← Status().Patch with MergeFromWithOptimisticLock, then
-    │               POST /storage-nodes
-    ▼
-  Resolving       ← match this slot against the cluster's node list
-    │  UUID found
-    ▼
+    │               POST /storage-nodes        │ worker away → AwaitingWorker
+    ▼                                          │
+  Resolving       ← match this slot against    │ worker away → AwaitingWorker
+    │               the cluster's node list    │
+    │  UUID found                              ▼
+    ▼                                   AwaitingWorker  ← back? → CheckingHost
   phase: Online
 ```
 
@@ -781,6 +782,33 @@ socket of the worker, so the second socket's object must not post again. It read
 its sibling's step rather than its `postedAt`: a sibling at `Posting` or beyond
 means the worker has been claimed, and the second object enters `Resolving`
 directly.
+
+**A worker that goes away mid-add is waited for, not counted against.** The
+storage pool's MachineConfig is applied by rebooting the machine, so the first
+node of a fresh cluster is cordoned, drained, rebooted, and uncordoned in the
+middle of being added. Every step of this path waits on something the worker
+does, so none of them can progress meanwhile, and a step that kept its deadline
+through the reboot would fail the node for the reboot. `AwaitingWorker` is that
+wait written down: `Posting` and `Resolving` enter it when the worker stops being
+`Ready` or is cordoned, it carries its own hour-long budget, and it leaves for
+`CheckingHost` when the machine is back.
+
+**It returns to the first step rather than to the step it left**, because what a
+reboot interrupts is not resumable in the middle: a `Posting` resumed after the
+fact would ask for a second node, and the add it was waiting on may well have
+landed while the machine was away. `CheckingHost` is where a backend node that
+already exists is found, and its `Adopting` edge takes that node over instead of
+adding it twice.
+
+**It holds the claim while it waits.** A node in `AwaitingWorker` still counts as
+having claimed its worker, so `maxParallelNodeAdds` stays closed and no second
+worker is handed a configuration change on top of a reboot already running — the
+same reason the cap exists at all. That is also why only the two steps that have
+claimed the worker divert into it: a claimed sibling on the same worker is read as
+an add that already happened and a reason to skip `Posting`, and a node that never
+posted must not be read that way. The steps before the claim wait where they are,
+and `AwaitingSlot` declines to take a slot at all while its worker is away, which
+is what stops an add being posted against a machine that cannot answer it.
 
 **`AwaitingSlot` is where two independent serialization rules live.**
 `maxParallelNodeAdds` caps how many workers may be in flight at once, counted by
@@ -808,7 +836,7 @@ type StorageNodePhase string
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 ```
 
@@ -1788,6 +1816,8 @@ starts and the operation's name is not something they know yet.
 | Provisioning is held because no fault group is declared         | `Warning` | `FailureDomainMissing` | `StorageNode`    |
 | Provisioning is held because the worker's API does not answer   | `Warning` | `HostUnreachable`      | `StorageNode`    |
 | Provisioning is held because no node-add slot is free           | `Normal`  | `AwaitingSlot`         | `StorageNode`    |
+| The worker is not Ready or is cordoned, so the step is held     | `Warning` | `WorkerAway`           | `StorageNode`    |
+| The worker came back and provisioning starts again              | `Normal`  | `WorkerReturned`       | `StorageNode`    |
 | The node was adopted rather than added                          | `Normal`  | `NodeAdopted`          | `StorageNode`    |
 | The node came online                                            | `Normal`  | `NodeOnline`           | `StorageNode`    |
 | The node's pod reported a scheduling failure                    | `Warning` | `PodSchedulingFailed`  | `StorageNode`    |
@@ -2093,7 +2123,7 @@ const (
 
 // StorageNodeStep is one step of the provisioning path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 
 const (

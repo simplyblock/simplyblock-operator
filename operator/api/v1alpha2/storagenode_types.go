@@ -61,7 +61,7 @@ const (
 
 // StorageNodeStep is one step of the provisioning path. There is one graph rather
 // than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting
+// +kubebuilder:validation:Enum=CheckingHost;CheckingConfig;AwaitingSlot;Posting;Resolving;Adopting;AwaitingWorker
 type StorageNodeStep string
 
 const (
@@ -89,6 +89,18 @@ const (
 
 	// StorageNodeStepAdopting takes over a backend node the operator did not add.
 	StorageNodeStepAdopting StorageNodeStep = "Adopting"
+
+	// StorageNodeStepAwaitingWorker holds while the machine the node is being
+	// added to is not there: not Ready, or cordoned ahead of a drain.
+	//
+	// A worker is rebooted whenever a MachineConfig reaches it, and the storage
+	// pool's own config is one, so the first node of a fresh cluster is rebooted
+	// in the middle of being added. Every other step is waiting on something the
+	// worker does, so none of them can make progress meanwhile, and the step's
+	// deadline would be spent on a machine that is coming back. This is the wait
+	// written down: it carries its own budget, and it leaves for CheckingHost so
+	// the path is walked again rather than resumed in the middle of a claim.
+	StorageNodeStepAwaitingWorker StorageNodeStep = "AwaitingWorker"
 )
 
 // JournalManagerSpec tunes the journal managers on one storage node.
@@ -428,7 +440,7 @@ type StorageNodeStatus struct {
 	// Step is the position of the provisioning machine, as the shared
 	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
 	// marker could reach a field of a shared type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

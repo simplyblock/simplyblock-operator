@@ -566,38 +566,54 @@ machine is declared beside them. The three lists that have to agree are the
 graph's states, the `Enum` marker on `status.step.state`, and the CEL rule the
 CRD carries.
 
-| #     | Scenario                                                                           | Type     | Test                                                  |
-|-------|------------------------------------------------------------------------------------|----------|-------------------------------------------------------|
-| U-217 | Every declared graph builds, including the ones the action under test does not use | Positive | `TestEveryActionDeclaresAGraph`                       |
-| U-218 | An action with no declared graph: refused rather than stalled                      | Negative | `TestAStepThatBelongsToNoActionEndsTheOperation`      |
-| U-219 | `Remove` transitioning to `Promoting`: rejected as an illegal transition           | Negative | `TestAStepOfAnotherActionIsRejected`                  |
-| U-220 | `Migrate` transitioning to `Removing`: rejected as an illegal transition           | Negative | `TestAStepOfAnotherActionIsRejected`                  |
-| U-221 | `HostMaintenance` transitioning to `Suspending`: rejected                          | Negative | `TestAStepOfAnotherActionIsRejected`                  |
-| U-222 | An empty `status.step`: restores to the action's declared initial state            | Boundary | `TestTheFirstPassArmsTheStepAMachineIsBornIn`         |
-| U-223 | A step value that belongs to a different action: restoration fails informatively   | Negative | `TestAStepOfAnotherActionIsRejected`                  |
-| U-224 | A step value outside the enum: restoration fails rather than stalling              | Negative | `TestAStepThisOperatorCannotResumeEndsTheOperation`   |
-| U-225 | The snapshot round-trips through `Snapshot` and `FromSnapshot` unchanged           | Positive | —                                                     |
-| U-226 | A deadline persisted and restored is the same absolute instant                     | Positive | —                                                     |
-| U-227 | A deadline that passed while the operator was down: restores as expired            | Boundary | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`   |
-| U-228 | A step with no deadline: restores with none rather than with a zero instant        | Boundary | —                                                     |
-| U-229 | A terminal step: `IsTerminal` is true and no transition is attempted               | Boundary | `TestTheLastStepFinishingEndsTheOperation`            |
-| U-230 | The outer phase machine is separate from the step machine                          | Positive | —                                                     |
-| U-231 | Every state each graph declares appears in the step `Enum` marker                  | Boundary | `TestTheStepEnumCoversEveryDeclaredState`             |
-| U-232 | Every state each graph declares appears in the `status.step` CEL rule              | Boundary | `TestTheCELRuleCoversEveryDeclaredState`              |
-| U-233 | The CEL rule names no value the graphs do not declare                              | Negative | `TestTheCELRuleCoversEveryDeclaredState`              |
-| U-234 | A stored step from another action: refused, naming the declared set                | Negative | `TestAStepOfAnotherActionIsRejected`                  |
-| U-235 | A restore that fails: the operation is `Failed` with the error, not requeued       | Negative | `TestAStepThisOperatorCannotResumeEndsTheOperation`   |
-| U-365 | The provisioning graph's states cover its own `Enum` and CEL rule                  | Boundary | `TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph` |
-| U-366 | No step past the point of no return declares an abort edge                         | Negative | `TestNoStepPastThePointOfNoReturnIsAbortable`         |
-| U-367 | The steps an abort stops from are the ones that unwind cleanly                     | Positive | `TestTheStepsAnAbortStopsCleanly`                     |
-| U-368 | Every drain step past the suspend owes the resume                                  | Boundary | `TestTheDrainStepsPastTheSuspendUnwind`               |
-| U-369 | Every step carries a budget, so none is the step that cannot time out              | Boundary | `TestEveryStepHasABudget`                             |
-| U-370 | The remove graph validates before it suspends                                      | Positive | `TestTheRemoveGraphValidatesBeforeItSuspends`         |
-| U-371 | The migrate graph splits the restart from the wait                                 | Positive | `TestTheMigrateGraphSplitsTheRestartFromTheWait`      |
-| U-372 | The host maintenance graph is the six-step window                                  | Positive | `TestTheHostMaintenanceGraphIsTheSixStepWindow`       |
-| U-373 | The four single-step actions share one line                                        | Positive | `TestTheSingleStepActionsShareOneLine`                |
-| U-374 | Adoption is reachable from both provisioning gates                                 | Boundary | `TestAdoptionIsReachableFromBothGates`                |
-| U-375 | `AwaitingSlot` may go straight to `Resolving` when a sibling claimed the worker    | Boundary | `TestAwaitingSlotMayGoStraightToResolving`            |
+| #     | Scenario                                                                           | Type       | Test                                                     |
+|-------|------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-217 | Every declared graph builds, including the ones the action under test does not use | Positive   | `TestEveryActionDeclaresAGraph`                          |
+| U-218 | An action with no declared graph: refused rather than stalled                      | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`         |
+| U-219 | `Remove` transitioning to `Promoting`: rejected as an illegal transition           | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-220 | `Migrate` transitioning to `Removing`: rejected as an illegal transition           | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-221 | `HostMaintenance` transitioning to `Suspending`: rejected                          | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-222 | An empty `status.step`: restores to the action's declared initial state            | Boundary   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`            |
+| U-223 | A step value that belongs to a different action: restoration fails informatively   | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-224 | A step value outside the enum: restoration fails rather than stalling              | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
+| U-225 | The snapshot round-trips through `Snapshot` and `FromSnapshot` unchanged           | Positive   | —                                                        |
+| U-226 | A deadline persisted and restored is the same absolute instant                     | Positive   | —                                                        |
+| U-227 | A deadline that passed while the operator was down: restores as expired            | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
+| U-228 | A step with no deadline: restores with none rather than with a zero instant        | Boundary   | —                                                        |
+| U-229 | A terminal step: `IsTerminal` is true and no transition is attempted               | Boundary   | `TestTheLastStepFinishingEndsTheOperation`               |
+| U-230 | The outer phase machine is separate from the step machine                          | Positive   | —                                                        |
+| U-231 | Every state each graph declares appears in the step `Enum` marker                  | Boundary   | `TestTheStepEnumCoversEveryDeclaredState`                |
+| U-232 | Every state each graph declares appears in the `status.step` CEL rule              | Boundary   | `TestTheCELRuleCoversEveryDeclaredState`                 |
+| U-233 | The CEL rule names no value the graphs do not declare                              | Negative   | `TestTheCELRuleCoversEveryDeclaredState`                 |
+| U-234 | A stored step from another action: refused, naming the declared set                | Negative   | `TestAStepOfAnotherActionIsRejected`                     |
+| U-235 | A restore that fails: the operation is `Failed` with the error, not requeued       | Negative   | `TestAStepThisOperatorCannotResumeEndsTheOperation`      |
+| U-365 | The provisioning graph's states cover its own `Enum` and CEL rule                  | Boundary   | `TestTheNodeStepEnumAndRuleCoverTheProvisioningGraph`    |
+| U-366 | No step past the point of no return declares an abort edge                         | Negative   | `TestNoStepPastThePointOfNoReturnIsAbortable`            |
+| U-367 | The steps an abort stops from are the ones that unwind cleanly                     | Positive   | `TestTheStepsAnAbortStopsCleanly`                        |
+| U-368 | Every drain step past the suspend owes the resume                                  | Boundary   | `TestTheDrainStepsPastTheSuspendUnwind`                  |
+| U-369 | Every step carries a budget, so none is the step that cannot time out              | Boundary   | `TestEveryStepHasABudget`                                |
+| U-370 | The remove graph validates before it suspends                                      | Positive   | `TestTheRemoveGraphValidatesBeforeItSuspends`            |
+| U-371 | The migrate graph splits the restart from the wait                                 | Positive   | `TestTheMigrateGraphSplitsTheRestartFromTheWait`         |
+| U-372 | The host maintenance graph is the six-step window                                  | Positive   | `TestTheHostMaintenanceGraphIsTheSixStepWindow`          |
+| U-373 | The four single-step actions share one line                                        | Positive   | `TestTheSingleStepActionsShareOneLine`                   |
+| U-374 | Adoption is reachable from both provisioning gates                                 | Boundary   | `TestAdoptionIsReachableFromBothGates`                   |
+| U-375 | `AwaitingSlot` may go straight to `Resolving` when a sibling claimed the worker    | Boundary   | `TestAwaitingSlotMayGoStraightToResolving`               |
+| U-384 | A worker that is not Ready or is cordoned holds `Posting` at `AwaitingWorker`      | Regression | `TestAWorkerThatWentAwayHoldsTheNodeRatherThanFailingIt` |
+| U-385 | The held step carries its own budget rather than the one it was diverted from      | Regression | `TestTheHeldNodeGetsAFreshBudget`                        |
+| U-386 | The worker coming back starts the path again at `CheckingHost`                     | Positive   | `TestAWorkerThatCameBackRestartsThePath`                 |
+| U-387 | A held node emits `WorkerAway` rather than holding silently                        | Positive   | `TestTheHeldNodeStaysAndSaysSo`                          |
+| U-388 | A node that never claimed its worker takes no slot while the worker is away        | Negative   | `TestAnUnclaimedNodeTakesNoSlotWhileItsWorkerIsAway`     |
+| U-389 | A held node keeps its claim, so the node-add cap stays closed                      | Regression | `TestAHeldNodeKeepsItsClaim`                             |
+| U-390 | A sibling posts no add while another worker is held at `AwaitingWorker`            | Negative   | `TestASiblingWaitsWhileAnotherWorkerIsHeld`              |
+
+`U-384` to `U-390` are the reboot. The storage pool's MachineConfig is applied by
+rebooting the machine, so the first node of a fresh cluster is cordoned, drained
+and rebooted in the middle of being added (2026-09-20). `U-389` and `U-390` are
+the pair that matter most: a held node keeps its claim, so the node-add cap stays
+closed and no second worker is given a configuration change while the first is
+still coming back. `U-388` is the other direction, and it is why only the two
+steps that have claimed the worker divert — a node that never posted must not be
+read by its sibling as an add that already happened.
 
 ### Entity: Pod Placement (design §13.1)
 
