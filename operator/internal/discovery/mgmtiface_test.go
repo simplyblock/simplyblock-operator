@@ -21,6 +21,9 @@ const (
 	eth0  = "eth0"
 	eth1  = "eth1"
 	bond0 = "bond0"
+	// vlan100 is the tagged interface on bond0, which names its parent as its
+	// link exactly as a veth names its peer.
+	vlan100 = "bond0.100"
 )
 
 func iface(name string, edit func(*nodeprobe.Interface)) nodeprobe.Interface {
@@ -51,6 +54,42 @@ func TestTheInterfaceHoldingTheNodeAddressWins(t *testing.T) {
 
 	if got := ManagementInterface(report, "192.168.10.113"); got != eth0 {
 		t.Errorf("named %q, want the interface holding the node's address", got)
+	}
+}
+
+// TestTheInterfaceHoldingTheNodeAddressWinsWhateverItsKind is the same rule on
+// the machines it was failing on.
+//
+// Regression: 2026-09-20-management-interface-chosen-off-the-cluster-network —
+// on OpenShift with OVN-Kubernetes a node's InternalIP lives on br-ex, which the
+// probe reports as kind `virtual`. LinkVirtual is not Bindable, so
+// servesManagement discarded it before the bridge exemption could apply, and the
+// fastest physical NIC was named instead. The control plane then recorded that
+// NIC's address as the node's mgmt_ip, and the operator — which matches a
+// backend node by the worker's InternalIP, in main and now — could never match
+// it: 192.168.10.15 against 10.0.0.15. The node came up online and healthy and
+// was invisible to the operator that asked for it.
+func TestTheInterfaceHoldingTheNodeAddressWinsWhateverItsKind(t *testing.T) {
+	for _, kind := range []string{"virtual", "bridge", "", "physical"} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			report := report("worker-1")
+			report.Interfaces = []nodeprobe.Interface{
+				iface("enp2s0f0", func(i *nodeprobe.Interface) {
+					i.Addresses = []string{"192.168.10.15"}
+					i.SpeedMbps = 10000
+					i.Kind = "physical"
+				}),
+				iface("br-ex", func(i *nodeprobe.Interface) {
+					i.Addresses = []string{"10.0.0.15", "169.254.0.2"}
+					i.Kind = kind
+				}),
+			}
+
+			if got := ManagementInterface(report, "10.0.0.15"); got != "br-ex" {
+				t.Errorf("named %q, want br-ex: it holds the address the operator "+
+					"matches the backend node by", got)
+			}
+		})
 	}
 }
 

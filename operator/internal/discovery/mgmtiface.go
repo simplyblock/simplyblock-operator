@@ -173,13 +173,43 @@ func describeKind(kind string, members []string) string {
 // except which address is on them, so that is what separates them here.
 func servesManagement(iface nodeprobe.Interface, holdsNodeAddress bool) bool {
 	kind := interfaceKind(iface)
-	if !kind.Bindable() {
-		return false
-	}
 	if iface.State != "" && iface.State != "up" && iface.State != "unknown" {
 		return false
 	}
-	if (kind == inventory.LinkBridge || kind == inventory.LinkVXLAN) && !holdsNodeAddress {
+
+	// The interface holding the address the cluster reaches this machine on is
+	// the management interface, whatever kind the probe called it. It is not a
+	// preference among candidates: the operator addresses the worker by that
+	// address everywhere else, and it matches the backend node the control plane
+	// reports against it, so naming any other interface hands the control plane
+	// an address the operator cannot recognize the node by.
+	//
+	// The kind cannot be trusted to decide this. On OpenShift with
+	// OVN-Kubernetes the node's own address lives on br-ex, which the probe
+	// reports as virtual rather than as a bridge, so the bridge exemption below
+	// never reached it and Bindable discarded it first.
+	//
+	// Two are still refused. Loopback reaches nothing off the machine. And an
+	// interface that nothing identified, which also names another device as its
+	// link, is one end of a veth pair whose other end is in a pod: admitting it
+	// would admit every link the cluster's CNI leaves on the host, which is what
+	// the kind test was reaching for and missing.
+	//
+	// Both halves of that are needed. A VLAN names its parent the same way, and
+	// refusing on the link alone would refuse a tagged interface a fleet is
+	// perfectly entitled to be reached on — the kernel declares that one, so it
+	// is not unidentified.
+	if holdsNodeAddress {
+		unidentifiedPeer := kind == inventory.LinkVirtual && iface.Peered
+		return kind != inventory.LinkLoopback && !unidentifiedPeer
+	}
+
+	if !kind.Bindable() {
+		return false
+	}
+	// A bridge or an overlay that does not hold that address is somebody else's
+	// network — the cluster's own fabric, most often — and is never named.
+	if kind == inventory.LinkBridge || kind == inventory.LinkVXLAN {
 		return false
 	}
 	return slices.ContainsFunc(iface.Addresses, reachable)

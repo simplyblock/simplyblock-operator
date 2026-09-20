@@ -31,8 +31,8 @@ func stacked(addressed map[string][]string) []nodeprobe.Interface {
 		lower []string
 		upper []string
 	}{
-		{name: bond0, kind: inventory.LinkBond, lower: []string{eth0, eth1}, upper: []string{"bond0.100"}},
-		{name: "bond0.100", kind: inventory.LinkVLAN, lower: []string{bond0}},
+		{name: bond0, kind: inventory.LinkBond, lower: []string{eth0, eth1}, upper: []string{vlan100}},
+		{name: vlan100, kind: inventory.LinkVLAN, lower: []string{bond0}},
 		{name: "br0", kind: inventory.LinkBridge, lower: []string{"eth2"}},
 		{name: eth0, kind: inventory.LinkPhysical, speed: 25000, upper: []string{bond0}},
 		{name: eth1, kind: inventory.LinkPhysical, speed: 25000, upper: []string{bond0}},
@@ -63,6 +63,19 @@ func stacked(addressed map[string][]string) []nodeprobe.Interface {
 
 // stackedReport is that host as a report, with the management address where the
 // case wants it.
+// peeredReport is stackedReport with the named interfaces marked as naming
+// another device as their link, which is what iflink reports for a veth's peer
+// and for a VLAN's parent alike.
+func peeredReport(addressed map[string][]string, peered ...string) nodeprobe.Report {
+	out := stackedReport(addressed)
+	for i := range out.Interfaces {
+		if slices.Contains(peered, out.Interfaces[i].Name) {
+			out.Interfaces[i].Peered = true
+		}
+	}
+	return out
+}
+
 func stackedReport(addressed map[string][]string) nodeprobe.Report {
 	out := report("worker-1")
 	out.Interfaces = stacked(addressed)
@@ -80,9 +93,9 @@ func TestABondHoldingTheNodeAddressIsNamed(t *testing.T) {
 }
 
 func TestATaggedVLANHoldingTheNodeAddressIsNamed(t *testing.T) {
-	r := stackedReport(map[string][]string{"bond0.100": {"10.10.10.113"}})
+	r := stackedReport(map[string][]string{vlan100: {"10.10.10.113"}})
 
-	if got := ManagementInterface(r, "10.10.10.113"); got != "bond0.100" {
+	if got := ManagementInterface(r, "10.10.10.113"); got != vlan100 {
 		t.Errorf("named %q, want the VLAN holding the node's address", got)
 	}
 }
@@ -122,15 +135,56 @@ func TestAnOverlayIsNamedOnlyWhenTheClusterItselfUsesIt(t *testing.T) {
 }
 
 func TestAnUnidentifiedVirtualDeviceIsNeverNamed(t *testing.T) {
-	// A veth reports no kind of its own, and admitting a device nothing
-	// identified would admit every pod link on the machine.
-	r := stackedReport(map[string][]string{"veth7a1c": {"10.42.2.7"}})
+	// A veth reports no kind of its own and names its peer as its link, and
+	// admitting a device nothing identified would admit every pod link on the
+	// machine. What it holds is a pod's address, and the node is reached on a
+	// different one.
+	r := peeredReport(map[string][]string{"veth7a1c": {"10.42.2.7"}}, "veth7a1c")
 
-	if got := ManagementInterface(r, "10.42.2.7"); got != "" {
+	if got := ManagementInterface(r, "10.0.0.15"); got != "" {
 		t.Errorf("named %q, want nothing: nothing identified the device", got)
+	}
+	if got := ManagementInterface(r, ""); got != "" {
+		t.Errorf("named %q with no address to match, want nothing", got)
 	}
 	if got := ManagementInterface(stackedReport(map[string][]string{"lo": {"127.0.0.1"}}), ""); got != "" {
 		t.Errorf("named %q, want nothing for loopback", got)
+	}
+}
+
+// The exception, and the reason the rule above is about what a device holds
+// rather than about what it is.
+//
+// An interface holding the address the cluster reaches the machine on is the
+// management interface whatever the probe called it, which is the same answer
+// TestABondHoldingTheNodeAddressIsNamed and the overlay case give. Only loopback
+// is still refused, since an address on it reaches nothing off the machine.
+// On OpenShift that address is on br-ex, which sysfs describes no better than it
+// describes a veth: same type, no bridge directory, no device link.
+func TestADeviceHoldingTheNodeAddressIsNamedEvenUnidentified(t *testing.T) {
+	// The machine's own virtual device: nothing identifies it either, and it
+	// stands alone rather than naming a peer. This is br-ex on an OVN host.
+	r := stackedReport(map[string][]string{"veth7a1c": {"10.0.0.15"}})
+
+	if got := ManagementInterface(r, "10.0.0.15"); got != "veth7a1c" {
+		t.Errorf("named %q, want the device holding the address the node is reached on", got)
+	}
+
+	// The same device, now one end of a pair: that is a pod's link, and it is
+	// refused however the address got onto it.
+	peered := peeredReport(map[string][]string{"veth7a1c": {"10.0.0.15"}}, "veth7a1c")
+	if got := ManagementInterface(peered, "10.0.0.15"); got != "" {
+		t.Errorf("named %q, want nothing: a device naming a peer is a pod's link", got)
+	}
+
+	// A VLAN names its parent the same way and is identified, so it stays
+	// eligible: refusing on the link alone would refuse a tagged interface.
+	tagged := peeredReport(map[string][]string{vlan100: {"10.0.0.15"}}, vlan100)
+	if got := ManagementInterface(tagged, "10.0.0.15"); got != vlan100 {
+		t.Errorf("named %q, want the VLAN: its link is its parent, and it is declared", got)
+	}
+	if got := ManagementInterface(stackedReport(map[string][]string{"lo": {"127.0.0.1"}}), "127.0.0.1"); got != "" {
+		t.Errorf("named %q, want nothing: loopback reaches nothing off the machine", got)
 	}
 }
 
@@ -149,11 +203,11 @@ func TestTheEffectiveSpeedOfAnAggregateIsItsMembers(t *testing.T) {
 
 func TestADerivedInterfaceInheritsTheSpeedOfWhatItIsBuiltOn(t *testing.T) {
 	r := stackedReport(map[string][]string{
-		"bond0.100": {"10.10.10.113"},
-		"eth2":      {"192.168.1.10"},
+		vlan100: {"10.10.10.113"},
+		"eth2":  {"192.168.1.10"},
 	})
 
-	if got := ManagementInterface(r, ""); got != "bond0.100" {
+	if got := ManagementInterface(r, ""); got != vlan100 {
 		t.Errorf("named %q, want the VLAN over the bond", got)
 	}
 }
@@ -202,7 +256,7 @@ func TestTheHardwareUnderTheChosenInterfaceIsReported(t *testing.T) {
 }
 
 func TestTheHardwareUnderADerivedInterfaceResolvesThroughItsParent(t *testing.T) {
-	r := stackedReport(map[string][]string{"bond0.100": {"10.10.10.113"}})
+	r := stackedReport(map[string][]string{vlan100: {"10.10.10.113"}})
 
 	mgmt := ManagementOf(r, "10.10.10.113")
 	if !slices.Equal(mgmt.Members, []string{eth0, eth1}) {

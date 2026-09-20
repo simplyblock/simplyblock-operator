@@ -104,6 +104,7 @@ func interfacesOf(ifaces []inventory.Interface) []Interface {
 			PCIAddress: iface.PCIAddress,
 			NUMANode:   iface.NUMANode,
 			Virtual:    iface.Virtual,
+			Peered:     iface.Peered,
 			Loopback:   iface.Loopback,
 			Bridge:     iface.Bridge,
 			Kind:       string(iface.Kind),
