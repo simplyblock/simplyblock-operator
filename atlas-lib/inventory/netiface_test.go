@@ -11,6 +11,7 @@
 package inventory
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -409,6 +410,58 @@ func TestAPeerDeviceIsToldFromAnOtherwiseIdenticalVirtualOne(t *testing.T) {
 	for _, name := range []string{"enp2s0f0", "lo", "genev_sys_6081"} {
 		if iface, ok := byName[name]; ok && iface.Peered {
 			t.Errorf("%s reads as peered, and its iflink is its own index", name)
+		}
+	}
+}
+
+// TestAControllerNothingOwnsIsStillFound is the machine a failed deployment
+// walks away from.
+//
+// Binding an NVMe controller to a userspace driver takes its namespaces from the
+// kernel, and rebinding it to the kernel's own driver is how they come back. A run that unbinds and
+// then fails leaves the controller owned by nothing at all: no kernel driver, no
+// userspace driver, no block device, nothing under /dev. The disk is gone from
+// everything that looks for disks, and stays gone until somebody binds it by
+// hand.
+//
+// The PCI class is what keeps it findable, because the bus says what a device is
+// whoever is driving it. Captured from worker-0 of the lab fleet on 2026-09-20,
+// where two of three controllers had been left that way by the day's failed
+// adds.
+func TestAControllerNothingOwnsIsStillFound(t *testing.T) {
+	root := hostFixture(t, "okd-worker-unbound-nvme")
+
+	// Collect reports what it could not read rather than failing: this host's
+	// process table is not in the transcript, so the holder check has nothing to
+	// answer from. What the controllers are is read from sysfs regardless, and
+	// that is what this is about.
+	inv, err := Collect(context.Background(), syntheticHost(root))
+	if err != nil {
+		t.Logf("the reading reported: %v", err)
+	}
+
+	byAddress := make(map[string]string, len(inv.NVMeControllers))
+	for _, controller := range inv.NVMeControllers {
+		byAddress[controller.Address] = controller.Driver
+	}
+	if len(byAddress) != 3 {
+		t.Fatalf("found %d NVMe controllers, want the machine's 3: %v", len(byAddress), byAddress)
+	}
+
+	if driver := byAddress["0000:02:00.0"]; driver != "nvme" {
+		t.Errorf("the boot controller reads as driver %q, want nvme", driver)
+	}
+	// The two a failed add unbound. Nothing owns them, which is a different
+	// state from a userspace driver owning them and is the one that was
+	// invisible to everything downstream.
+	for _, address := range []string{"0000:01:00.0", "0000:0b:00.0"} {
+		driver, found := byAddress[address]
+		if !found {
+			t.Errorf("the controller at %s is missing, so the disk is gone from the inventory", address)
+			continue
+		}
+		if driver != "" {
+			t.Errorf("%s reads as driven by %q, and the capture has no driver link for it", address, driver)
 		}
 	}
 }
