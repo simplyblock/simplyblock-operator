@@ -12,10 +12,10 @@
 // holds once and then means nothing, which is the shape a cap fails in when it
 // is a count of other people's writes.
 //
-// The answer is to decide from what is observed rather than from what has been
-// written: the waiting nodes are ordered, and a node takes a slot only if its
-// own place in that order is within the number free. Two nodes reading the same
-// set reach the same answer without either having written anything.
+// A slot is now taken rather than counted: the holders are a list on the cluster
+// and the taking is an optimistic-locked patch of it. These cases are the cap's
+// arithmetic — one free slot admits one, two admit two, a slot already held
+// admits nobody — and provisioningslots_test.go is the mutual exclusion itself.
 
 package node
 
@@ -63,16 +63,22 @@ func slotCluster(limit int32) *simplyblockv1alpha2.StorageCluster {
 	return cluster
 }
 
-func slotReconciler(t *testing.T, nodes ...*simplyblockv1alpha2.StorageNode) *StorageNodeReconciler {
+func slotReconciler(
+	t *testing.T,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	nodes ...*simplyblockv1alpha2.StorageNode,
+) *StorageNodeReconciler {
 	t.Helper()
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 
-	objects := make([]client.Object, 0, len(nodes))
+	objects := make([]client.Object, 0, 1+len(nodes))
+	objects = append(objects, cluster)
 	for _, n := range nodes {
 		objects = append(objects, n)
 	}
 	apiClient := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(objects...).
+		WithStatusSubresource(&simplyblockv1alpha2.StorageCluster{}).
 		WithIndex(&simplyblockv1alpha2.StorageNode{}, clusterRefField,
 			func(o client.Object) []string {
 				return []string{o.(*simplyblockv1alpha2.StorageNode).Spec.ClusterRef}
@@ -82,17 +88,34 @@ func slotReconciler(t *testing.T, nodes ...*simplyblockv1alpha2.StorageNode) *St
 	return &StorageNodeReconciler{Client: apiClient, Scheme: scheme}
 }
 
+// heldBy is a cluster whose slots are already taken by the workers given, as a
+// node that has posted its add and is waiting for the UUID leaves it.
+func heldBy(
+	cluster *simplyblockv1alpha2.StorageCluster, nodes ...*simplyblockv1alpha2.StorageNode,
+) *simplyblockv1alpha2.StorageCluster {
+	for _, node := range nodes {
+		cluster.Status.ProvisioningSlots = append(
+			cluster.Status.ProvisioningSlots, simplyblockv1alpha2.ProvisioningSlot{
+				Worker: node.Spec.WorkerNode, Node: node.Name, TakenAt: metav1.Now(),
+			})
+	}
+	return cluster
+}
+
 // admitted is how many of the waiting nodes would advance on one pass, each
-// deciding for itself as it does in a real reconcile.
+// reading the cluster and deciding for itself as it does in a real reconcile.
 func admitted(
-	t *testing.T, r *StorageNodeReconciler,
-	cluster *simplyblockv1alpha2.StorageCluster,
-	nodes ...*simplyblockv1alpha2.StorageNode,
+	t *testing.T, r *StorageNodeReconciler, nodes ...*simplyblockv1alpha2.StorageNode,
 ) int {
 	t.Helper()
 	count := 0
 	for _, node := range nodes {
-		next, _, err := r.awaitSlot(context.Background(), node, cluster)
+		var cluster simplyblockv1alpha2.StorageCluster
+		key := client.ObjectKey{Name: "c", Namespace: "simplyblock"}
+		if err := r.Get(context.Background(), key, &cluster); err != nil {
+			t.Fatalf("read the cluster: %v", err)
+		}
+		next, _, err := r.awaitSlot(context.Background(), node, &cluster)
 		if err != nil {
 			continue
 		}
@@ -107,9 +130,9 @@ func admitted(
 // takes the slot.
 func TestOnlyOneNodeTakesAFreeSlot(t *testing.T) {
 	a, b, c := waitingNode("w1"), waitingNode("w2"), waitingNode("w3")
-	r := slotReconciler(t, a, b, c)
+	r := slotReconciler(t, slotCluster(1), a, b, c)
 
-	if got := admitted(t, r, slotCluster(1), a, b, c); got != 1 {
+	if got := admitted(t, r, a, b, c); got != 1 {
 		t.Errorf("%d nodes took a single free slot", got)
 	}
 }
@@ -117,9 +140,9 @@ func TestOnlyOneNodeTakesAFreeSlot(t *testing.T) {
 // The cap is honored above one too: two free slots admit two of three.
 func TestACapOfTwoAdmitsTwo(t *testing.T) {
 	a, b, c := waitingNode("w1"), waitingNode("w2"), waitingNode("w3")
-	r := slotReconciler(t, a, b, c)
+	r := slotReconciler(t, slotCluster(2), a, b, c)
 
-	if got := admitted(t, r, slotCluster(2), a, b, c); got != 2 {
+	if got := admitted(t, r, a, b, c); got != 2 {
 		t.Errorf("%d nodes took two free slots", got)
 	}
 }
@@ -128,14 +151,21 @@ func TestACapOfTwoAdmitsTwo(t *testing.T) {
 // does not overtake one that was told to go on the next pass.
 func TestTheChoiceIsStable(t *testing.T) {
 	a, b, c := waitingNode("w1"), waitingNode("w2"), waitingNode("w3")
-	r := slotReconciler(t, a, b, c)
-	cluster := slotCluster(1)
+	r := slotReconciler(t, slotCluster(1), a, b, c)
 
-	first, _, err := r.awaitSlot(context.Background(), a, cluster)
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Name: "c", Namespace: "simplyblock"}
+	if err := r.Get(context.Background(), key, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := r.awaitSlot(context.Background(), a, &cluster)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := r.awaitSlot(context.Background(), a, cluster)
+	if err := r.Get(context.Background(), key, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := r.awaitSlot(context.Background(), a, &cluster)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,9 +179,9 @@ func TestANodeInFlightFillsTheCap(t *testing.T) {
 	inflight := waitingNode("w1")
 	inflight.Status.Step.State = string(stepPosting)
 	b, c := waitingNode("w2"), waitingNode("w3")
-	r := slotReconciler(t, inflight, b, c)
+	r := slotReconciler(t, heldBy(slotCluster(1), inflight), inflight, b, c)
 
-	if got := admitted(t, r, slotCluster(1), b, c); got != 0 {
+	if got := admitted(t, r, b, c); got != 0 {
 		t.Errorf("%d nodes advanced past a full cap", got)
 	}
 }

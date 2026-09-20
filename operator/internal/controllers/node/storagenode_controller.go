@@ -126,6 +126,8 @@ type NodeCapacitySource interface {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // SetupWithManager registers the controller.
@@ -380,7 +382,11 @@ func (r *StorageNodeReconciler) provision(
 		// whether the graph gives the state an exit: Resolving has one now, to
 		// the step that holds while the worker is away, and a finished Resolving
 		// is still the end of the path.
-		return ctrl.Result{RequeueAfter: nodeAdvance}, nil
+		//
+		// The add is over, so the slot it was taken for goes back. This is the
+		// successful one of the three ends, and the other two are the deadline in
+		// fail and the object going away in teardown.
+		return ctrl.Result{RequeueAfter: nodeAdvance}, r.releaseSlot(ctx, node)
 	}
 
 	if err := machine.TransitionTo(ctx, next); err != nil {
@@ -539,7 +545,8 @@ func (r *StorageNodeReconciler) checkConfig(
 	return stepAwaitingSlot, true, nil
 }
 
-// awaitSlot is where two independent serialization rules live.
+// awaitSlot is where two independent serialization rules live, and the last place
+// a node that needs no add at all is recognized.
 //
 // maxParallelNodeAdds caps how many workers may be in flight at once, counted by
 // distinct worker rather than by object so that a two-socket host consumes one
@@ -557,6 +564,24 @@ func (r *StorageNodeReconciler) awaitSlot(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) (nodeStep, bool, error) {
+	// A backend node the worker already has is the answer to the question this
+	// queue exists to ask, so it is asked before the queue rather than only in
+	// front of it. The two gates before this one check the same thing and a node
+	// passes them once: one that reached the queue before its backend node
+	// existed — a previous operator's add, a POST whose response was lost after
+	// the control plane committed, a rebuilt object — would otherwise wait for a
+	// slot it has no use for, and hold the cap against the rest of the fleet
+	// while it did.
+	//
+	// It is checked before the worker is, for the reason CheckingHost checks it
+	// first: an adopted node is already running, and the machine being reachable
+	// is not this operator's precondition to establish.
+	if _, found, err := r.matchBackendNode(ctx, node, cluster); err != nil {
+		return stepAwaitingSlot, false, err
+	} else if found {
+		return stepAdopting, true, nil
+	}
+
 	// A slot taken for a machine that is not there is an add posted against a
 	// worker that cannot answer it. The wait costs nothing, because the slot is
 	// still free when the machine comes back, and taking it would put a second
@@ -592,36 +617,50 @@ func (r *StorageNodeReconciler) awaitSlot(
 		limit = *spec.MaxParallelNodeAdds
 	}
 
-	inFlight := map[string]struct{}{}
-	for i := range siblings {
-		sibling := &siblings[i]
-		if sibling.Name == node.Name || sibling.Spec.WorkerNode == node.Spec.WorkerNode {
-			continue
-		}
-		if claimedWorker(sibling) && sibling.Status.UUID == "" {
-			inFlight[sibling.Spec.WorkerNode] = struct{}{}
-		}
+	// Who is in flight is read from the cluster's own record rather than counted
+	// off the siblings, because the siblings are read from a cache and the record
+	// is read from the object this node is about to patch. A cache that has just
+	// been filled holds some of the nodes and a cap counted from it is a cap each
+	// node applies to a different cluster.
+	held, err := r.heldSlots(ctx, cluster)
+	if err != nil {
+		return stepAwaitingSlot, false, err
 	}
-	available := limit - int32(len(inFlight))
-	if available <= 0 {
-		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
-			"waiting for a node-add slot, %d of %d in flight", len(inFlight), limit)
+	// A slot held for this worker settles this node's answer, whichever object
+	// took it. Its own slot means it may post, and a slot its other socket took
+	// means the add has been asked for and this object resolves against it
+	// instead of asking again.
+	//
+	// The sibling check above answers the second case a pass later than this
+	// does, because a node that has taken a slot is still recorded at
+	// AwaitingSlot until its transition is written. With more than one slot free
+	// that pass is long enough for the second socket to post an add of its own.
+	if i := slices.IndexFunc(held, func(slot simplyblockv1alpha2.ProvisioningSlot) bool {
+		return slot.Worker == node.Spec.WorkerNode
+	}); i >= 0 {
+		if held[i].Node == node.Name {
+			return stepPosting, true, nil
+		}
+		return stepResolving, true, nil
 	}
 
-	// Which of the waiting workers may take the free slots is decided from the
-	// set that is waiting, not from who has already written a claim.
+	if int32(len(held)) >= limit {
+		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
+			"waiting for a node-add slot, %d of %d in flight: %s",
+			len(held), limit, describeSlots(held))
+	}
+	available := limit - int32(len(held))
+
+	// Which of the waiting workers should try for the free slots is decided from
+	// the set that is waiting, and it is a tie-break rather than the cap.
 	//
-	// The difference is the whole of the cap. Reconciles are serialized per
-	// object and not across objects, so every node waiting for a slot reads the
-	// in-flight count before any of them has recorded taking one: the first add
-	// is correctly alone, and the instant it finishes every remaining node sees
-	// the same free slot and takes it. A cap that counts other people's writes
-	// holds exactly once.
-	//
-	// Ordering the contenders and admitting the first few needs nobody to have
-	// written anything. Two nodes reading one set reach one answer, and the
-	// answer does not change between passes, so a node told to wait is not
-	// overtaken by one told to wait beside it.
+	// It settles who goes first among nodes that can see each other, so a node
+	// told to wait is not overtaken by one told to wait beside it, and it needs
+	// nobody to have written anything: two nodes reading one set reach one
+	// answer. What it cannot do is hold the cap, because nodes reading a cold
+	// cache read different sets and each is alone in its own. The patch below is
+	// what holds the cap.
+	holders := slotHolders(held)
 	contenders := []string{node.Spec.WorkerNode}
 	for i := range siblings {
 		sibling := &siblings[i]
@@ -632,6 +671,13 @@ func (r *StorageNodeReconciler) awaitSlot(
 			// Not waiting for a slot yet, so not competing for this one.
 			continue
 		}
+		if slices.Contains(holders, sibling.Spec.WorkerNode) {
+			// Already holding one, and the free slots are counted net of it, so
+			// ranking against it would charge this node for the same add twice.
+			// A worker is still at this step for the pass between taking its slot
+			// and the transition out being written.
+			continue
+		}
 		contenders = append(contenders, sibling.Spec.WorkerNode)
 	}
 	slices.Sort(contenders)
@@ -640,13 +686,13 @@ func (r *StorageNodeReconciler) awaitSlot(
 	if rank := slices.Index(contenders, node.Spec.WorkerNode); int32(rank) >= available {
 		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
 			"waiting for a node-add slot, %d of %d in flight and %d worker(s) ahead",
-			len(inFlight), limit, rank)
+			len(held), limit, rank)
 	}
 
 	// A FoundationDB worker waits for every other FoundationDB worker, whatever
 	// the cap says.
 	if r.hostsFoundationDB(ctx, node.Namespace, node.Spec.WorkerNode) {
-		for worker := range inFlight {
+		for _, worker := range holders {
 			if r.hostsFoundationDB(ctx, node.Namespace, worker) {
 				return stepAwaitingSlot, false, blockedf(AwaitingSlot,
 					"worker %s hosts FoundationDB and worker %s is already being added",
@@ -654,10 +700,19 @@ func (r *StorageNodeReconciler) awaitSlot(
 			}
 		}
 	}
+
+	took, err := r.takeSlot(ctx, node, cluster, held, limit)
+	if err != nil {
+		return stepAwaitingSlot, false, err
+	}
+	if !took {
+		return stepAwaitingSlot, false, blockedf(AwaitingSlot,
+			"another node took the last free node-add slot first")
+	}
 	return stepPosting, true, nil
 }
 
-// claimedWorker reports whether an object has claimed its worker, which is the
+// claimedWorker reports// claimedWorker reports whether an object has claimed its worker, which is the
 // transition into Posting or anything past it.
 func claimedWorker(node *simplyblockv1alpha2.StorageNode) bool {
 	switch nodeStep(node.Status.Step.State) {
@@ -1047,6 +1102,12 @@ func (r *StorageNodeReconciler) teardown(
 
 	if node.Status.UUID == "" {
 		r.unregister(node)
+		// A node deleted while its add was outstanding is the one case where
+		// nothing is left to release the slot afterward, and a slot no reconcile
+		// will ever give back is a cap that never reopens.
+		if err := r.releaseSlot(ctx, node); err != nil {
+			return ctrl.Result{}, err
+		}
 		controllerutil.RemoveFinalizer(node, NodeFinalizer)
 		return ctrl.Result{}, r.Update(ctx, node)
 	}
@@ -1442,10 +1503,15 @@ func (r *StorageNodeReconciler) fail(
 	ctx context.Context, node *simplyblockv1alpha2.StorageNode, message string,
 ) error {
 	r.emit(node, corev1.EventTypeWarning, HostUnreachable, message)
-	return r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
-		status.Phase = simplyblockv1alpha2.StorageNodePhaseFailed
-		status.Message = message
-	})
+	// A node that has given up holds nothing. Releasing here rather than leaving
+	// it to the next node to reap is what keeps a cap from reading as full for as
+	// long as nobody happens to ask for a slot.
+	return errors.Join(
+		r.releaseSlot(ctx, node),
+		r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
+			status.Phase = simplyblockv1alpha2.StorageNodePhaseFailed
+			status.Message = message
+		}))
 }
 
 // writeStatus applies the mutation and patches only when something changed, which

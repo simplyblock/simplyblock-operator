@@ -287,12 +287,16 @@ func assertLine(t *testing.T, a simplyblockv1alpha2.StorageNodeOpsAction, want [
 }
 
 // The provisioning machine branches rather than running in a line: adoption
-// diverts from the host check and from the configuration gate alike, which is what
-// lets an upgrade Secret and a backend node found at the worker's address reach the
-// same step.
-func TestAdoptionIsReachableFromBothGates(t *testing.T) {
+// diverts from the host check, from the configuration gate, and from the queue for
+// a node-add slot alike, which is what lets an upgrade Secret and a backend node
+// found at the worker's address reach the same step from anywhere before the add.
+//
+// The queue is the one that matters after a restart. A backend node can appear
+// while an object waits there, and without the edge the only answer to one that
+// has is a second add.
+func TestAdoptionIsReachableFromEveryGateBeforeTheAdd(t *testing.T) {
 	ctx := context.Background()
-	for _, from := range []nodeStep{stepCheckingHost, stepCheckingConfig} {
+	for _, from := range []nodeStep{stepCheckingHost, stepCheckingConfig, stepAwaitingSlot} {
 		config := provisioningGraph()
 		machine, err := statemachine.NewFromSnapshot(ctx, config,
 			statemachine.Snapshot[nodeStep]{State: from})

@@ -281,7 +281,10 @@ func provisioningGraph() statemachine.Config[nodeStep] {
 				OnEnter: deadline[nodeStep](checkingConfigDeadline),
 			},
 			stepAwaitingSlot: {
-				To:      []nodeStep{stepPosting, stepResolving},
+				// Adopting is an exit because the backend node a queuing node
+				// would have added can appear while it queues, and a node that
+				// has one to take over must not ask for a second.
+				To:      []nodeStep{stepPosting, stepResolving, stepAdopting},
 				OnEnter: deadline[nodeStep](awaitingSlotDeadline),
 			},
 			stepPosting: {
