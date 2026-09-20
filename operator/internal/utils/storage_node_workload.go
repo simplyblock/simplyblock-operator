@@ -170,6 +170,22 @@ fi`
 			},
 		},
 		{
+			// The node configuration the init container generates and the
+			// storage node reads, at one path per worker rather than per
+			// cluster: the backend's own constant is
+			// /etc/simplyblock/sn_config_file, which this directory backs.
+			//
+			// TODO: it is therefore shared by every storage node on the worker,
+			// and a second cluster's node regenerates the whole document rather
+			// than taking a slot in it, so two clusters on one worker replace
+			// each other's configuration. Nothing here or in the backend keys a
+			// slot by cluster, and the operator does not see across clusters
+			// either: awaitSlot reads this cluster's nodes alone. Whether one
+			// worker may carry nodes of two clusters at all is the question to
+			// settle first — if it may, this path and the backend's constant
+			// have to carry the cluster; if it may not, a StorageNode whose
+			// worker already holds another cluster's node belongs in the
+			// validating webhook rather than in a file both of them overwrite.
 			Name: "etc-simplyblock",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{

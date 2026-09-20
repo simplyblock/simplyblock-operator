@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/pci"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -200,9 +201,11 @@ func renderNodeConfig(
 	fmt.Fprintf(&entry, "MAX_SUBSYS_COUNT=%s\n", ptr.StringOrDefault(cluster.Spec.MaxSubsystemCount, ""))
 	fmt.Fprintf(&entry, "MAX_HUGE_PAGES_SIZE=%s\n", utils.ShellQuote(config.Sizing.MinHugePagesSize))
 	fmt.Fprintf(&entry, "VCPU_COUNT=%s\n", ptr.StringOrDefault(config.Sizing.VCPUCount, ""))
-	fmt.Fprintf(&entry, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(config.PcieAllowList, ",")))
+	addresses, names := splitDeviceNames(config.DeviceNames)
+	fmt.Fprintf(&entry, "PCI_ALLOWED=%s\n",
+		utils.ShellQuote(strings.Join(mergePCIAddresses(config.PcieAllowList, addresses), ",")))
 	fmt.Fprintf(&entry, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(config.PcieDenyList, ",")))
-	fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(config.DeviceNames, ",")))
+	fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
 	if jm := config.JournalManager; jm != nil {
@@ -213,6 +216,34 @@ func renderNodeConfig(
 		entry.WriteString("HA_JM_COUNT=\n")
 	}
 	return entry.String()
+}
+
+// splitDeviceNames sorts one device list into the two variables the storage
+// node's configuration script reads it through.
+//
+// spec.config.deviceNames carries both spellings a device is named by, and the
+// backend resolves them by different means: --pci-allowed takes PCI addresses
+// and matches them against the controllers sysfs enumerates, while
+// --nvme-devices is the namespace-name channel, whose argparse destination is
+// nvme_names and whose lookup compares each entry against the NameSpace values
+// of `nvme list` — nvme0n1 and its siblings. A PCI address sent through the
+// second matches nothing, and matching nothing is not an error there: the
+// configure selects no device, fails with `There are no enough SSD devices on
+// system`, and its return value is discarded, so the pod starts on whatever
+// configuration the host already had.
+//
+// So the spelling decides the variable, which is what the API says it does:
+// design-storagenode.md's deviceNames admits an address, a path, or a bare
+// name, and the class it belongs to is the cluster's to declare.
+func splitDeviceNames(devices []string) (addresses, names []string) {
+	for _, device := range devices {
+		if address, err := pci.ParseAddress(device); err == nil {
+			addresses = append(addresses, address)
+			continue
+		}
+		names = append(names, device)
+	}
+	return addresses, names
 }
 
 // mergeAllowedIntoEntry rewrites one entry's PCI_ALLOWED to include the addresses
