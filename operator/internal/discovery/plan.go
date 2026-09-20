@@ -322,10 +322,7 @@ func claimableControllers(report nodeprobe.Report, class DeviceClass) []nodeprob
 
 	var out []nodeprobe.Device
 	for _, controller := range report.NVMeControllers {
-		if !controller.BoundToUserspace() || !controller.Free() {
-			// Free rather than "not held": a controller the probe could not
-			// check is not one this may offer. Reading the unchecked state as
-			// free is how a disk something is driving reaches a draft.
+		if !claimable(controller) {
 			continue
 		}
 		if _, already := presented[controller.Address]; already {
@@ -343,6 +340,32 @@ func claimableControllers(report nodeprobe.Report, class DeviceClass) []nodeprob
 		})
 	}
 	return out
+}
+
+// claimable reports whether a controller the kernel presents no block device for
+// is one a run may offer anyway.
+//
+// Two of the four states qualify, for different reasons.
+//
+// A controller bound to a userspace driver qualifies only when nothing is
+// driving it. Free rather than "not held": a controller the probe could not
+// check is not one this may offer, and reading the unchecked state as free is
+// how a disk something is driving reaches a draft. The holder need not be this
+// product — vfio-pci is also how a disk is passed through to a guest.
+//
+// A controller bound to nothing at all qualifies outright, and asking who holds
+// it would be asking about a character device that does not exist: a driver is
+// what exposes one. This is the state a failed run leaves behind, because
+// claiming an NVMe controller unbinds it from the kernel first, and an add that
+// fails after that leaves it owned by nobody — no namespaces, no block device,
+// and nothing in the device reading either. Five workers of a six-worker fleet
+// were reported as having no disks at all that way, and the cluster came up on
+// the one machine whose add had finished (2026-09-20).
+func claimable(controller nodeprobe.Controller) bool {
+	if !controller.HasDriver() {
+		return true
+	}
+	return controller.BoundToUserspace() && controller.Free()
 }
 
 // BasicDeviceRules is the default device pipeline for a filter.

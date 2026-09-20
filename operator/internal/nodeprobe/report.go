@@ -361,6 +361,15 @@ func (c Controller) Free() bool { return c.InUse != nil && !*c.InUse }
 // It reads the driver and says nothing about who bound it or whether anything
 // is still driving it. InUse answers the second, and nothing answers the first,
 // because a binding carries no record of what made it.
+// HasDriver reports whether anything at all is bound to the controller.
+//
+// The state it distinguishes is the one a failed claim leaves: taking an NVMe
+// controller for a userspace driver unbinds it from the kernel first, so a run
+// that stops in between leaves a controller with no driver, no namespaces and no
+// block device. It is neither the kernel's nor a userspace driver's, and asking
+// who holds it is asking about a character device no driver has created.
+func (c Controller) HasDriver() bool { return c.Driver != "" }
+
 func (c Controller) BoundToUserspace() bool {
 	return c.Driver == pci.DriverUIOGeneric || c.Driver == pci.DriverVFIO
 }
