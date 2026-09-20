@@ -45,10 +45,12 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -62,6 +64,19 @@ import (
 // and so that an administrator who does not want it can say so by writing an
 // object with that name and deleting nothing.
 const InitialDiscoveryName = "initial-discovery"
+
+// How long the create waits for the operator's own webhook to begin serving, and
+// how often it asks.
+//
+// The budget covers a cold start rather than an outage: the webhook server is
+// listening within seconds of the manager starting, and the operator restarts
+// once more when its cert rotator refreshes the serving material, so the window
+// this crosses is a cold start plus one restart. Past the budget the run is not
+// raised, which is the behavior an administrator already has a remedy for.
+const (
+	createRetryInterval = 500 * time.Millisecond
+	createRetryDeadline = 2 * time.Minute
+)
 
 // InitialDiscovery raises one Discover run on an install that has nothing.
 //
@@ -129,10 +144,7 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 			},
 		},
 	}
-	if err := d.Create(ctx, run); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
+	if err := d.createRun(ctx, run); err != nil {
 		// Failing here would crash the manager over a convenience. The operator
 		// works without the run; what is lost is the draft an administrator would
 		// otherwise have found waiting.
@@ -143,6 +155,52 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 	log.Info("raised the initial discovery run; its draft is what to review",
 		"operatorOps", InitialDiscoveryName, "namespace", d.Namespace)
 	return nil
+}
+
+// createRun writes the run, waiting out a webhook that is not serving yet.
+//
+// This is the one write in the operator whose admission depends on the operator:
+// an OperatorOps is validated by voperatorops.simplyblock.io, which this same
+// process serves, so the create races the webhook server the manager is still
+// starting and the API server answers `failed calling webhook ... connection
+// refused` until it is listening. Start is not a loop, so a single attempt lost
+// the run for the lifetime of the installation rather than for a few seconds.
+//
+// Only an unreachable webhook is waited out. A webhook that answered and refused
+// the spec has given an answer, and repeating the same write until the deadline
+// would not change it.
+func (d *InitialDiscovery) createRun(ctx context.Context, run *simplyblockv1alpha2.OperatorOps) error {
+	lastErr := error(nil)
+	err := wait.PollUntilContextTimeout(ctx, createRetryInterval, createRetryDeadline, true,
+		func(ctx context.Context) (bool, error) {
+			switch err := d.Create(ctx, run); {
+			case err == nil, apierrors.IsAlreadyExists(err):
+				return true, nil
+			case webhookUnreachable(err):
+				lastErr = err
+				return false, nil
+			default:
+				return false, err
+			}
+		})
+	if wait.Interrupted(err) && lastErr != nil {
+		// The deadline says how long it waited, and the refusal says what it
+		// waited for. The second is the one worth reading in a log.
+		return lastErr
+	}
+	return err
+}
+
+// webhookUnreachable reports whether the API server refused the write because it
+// could not call an admission webhook, rather than because a webhook rejected
+// what was written.
+//
+// An unreachable webhook surfaces as an Internal error naming it, and a refusal
+// surfaces as Forbidden or Invalid, which this deliberately does not cover.
+func webhookUnreachable(err error) bool {
+	return apierrors.IsInternalError(err) ||
+		apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsTimeout(err)
 }
 
 // declineReason answers whether anything already exists, and says which thing. An
