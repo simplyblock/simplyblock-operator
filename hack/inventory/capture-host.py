@@ -87,7 +87,9 @@ for seed in SEEDS:
 # The readers take one root for both trees, so the few procfs files they read
 # are carried in the same transcript: the memory reading and the affinity mask
 # come from there rather than from sysfs.
-for rel, path in (("meminfo", "/proc/meminfo"), ("self/status", "/proc/self/status")):
+for rel, path in (("meminfo", "/proc/meminfo"), ("swaps", "/proc/swaps"),
+                  ("self/status", "/proc/self/status"),
+                  ("self/mountinfo", "/proc/self/mountinfo")):
     try:
         with open(path) as handle:
             files[rel] = handle.read()
