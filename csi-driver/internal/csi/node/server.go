@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -34,10 +35,15 @@ type Server struct {
 	// drive the retry without a kernel, and because the repair reaches sysfs
 	// directly rather than through the stack.
 	repairFabric func(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceID) bool
-	volumeLocks  *csicommon.VolumeLocks
-	kubeClient   kubernetes.Interface
-	manager      *sbkube.Manager
-	guardian     *guardian.Guardian
+	// identifyStaged names the namespace behind a staging path by reading the
+	// host, for a volume whose stashed context and stack record both fall short.
+	// It is a field for the reason repairFabric is one: it reaches sysfs and the
+	// mount table directly, and a test has neither.
+	identifyStaged func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error)
+	volumeLocks    *csicommon.VolumeLocks
+	kubeClient     kubernetes.Interface
+	manager        *sbkube.Manager
+	guardian       *guardian.Guardian
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
@@ -53,6 +59,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		mounter:           mounter,
 		stack:             newStack(mounter, stackRecordDir),
 		repairFabric:      fabric.RepairAttach,
+		identifyStaged:    stagedIdentity(mounter),
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 		manager:           manager,

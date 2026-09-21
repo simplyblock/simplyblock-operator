@@ -270,6 +270,20 @@ func (m *Mounter) ForceUnmount(stagingPath string) error {
 }
 
 // isStaged if stagingPath is a mount point, it means it is already staged, and vice versa
+// DeviceAtMount is the device backing the mount at path, and the empty string
+// where the path is not a mount point.
+//
+// It is what answers for a volume that names itself nowhere else: the mount
+// table is written by the kernel rather than by this driver, so it survives
+// every window in which the driver's own records were not written yet.
+func (m *Mounter) DeviceAtMount(path string) (string, error) {
+	device, _, err := k8smount.GetDeviceNameFromMount(m.mounter, path)
+	if err != nil {
+		return "", fmt.Errorf("read the device mounted at %s: %w", path, err)
+	}
+	return device, nil
+}
+
 func (m *Mounter) IsMounted(stagingPath string) (bool, error) {
 	isMount, err := m.mounter.IsMountPoint(stagingPath)
 	if err != nil {
