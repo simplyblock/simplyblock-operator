@@ -420,6 +420,7 @@ func TestAnUpgradeWritesTheImageOntoTheEntity(t *testing.T) {
 // was asked for, which is what separates an upgrade that completed from a
 // rollout that failed back.
 func TestVerifyingFailsOnAVersionThatDisagrees(t *testing.T) {
+	mountedCA(t)
 	cp := localControlPlane()
 	cp.Status.Endpoint = "http://simplyblock-webappapi.simplyblock.svc.cluster.local:5000"
 
@@ -452,6 +453,7 @@ func TestVerifyingFailsOnAVersionThatDisagrees(t *testing.T) {
 
 // Verifying passes when the reported version is the one asked for.
 func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
+	mountedCA(t)
 	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)
 	ops.Spec.Upgrade = &simplyblockv1alpha2.UpgradeSpec{
@@ -478,6 +480,7 @@ func TestVerifyingPassesOnTheVersionThatWasAskedFor(t *testing.T) {
 // cannot answer would make the action unusable, and the record of the operation
 // has to carry what was and was not verified.
 func TestVerifyingPassesAndSaysSoWhenNoVersionIsServed(t *testing.T) {
+	mountedCA(t)
 	ctx := context.Background()
 	cp := localControlPlane()
 	ops := opsFor(simplyblockv1alpha2.ControlPlaneOpsActionUpgrade)

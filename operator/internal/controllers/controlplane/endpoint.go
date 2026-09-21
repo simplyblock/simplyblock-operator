@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
 
 // The keys a credentials Secret may carry. Two are accepted because the two
@@ -56,6 +57,48 @@ func localEndpoint(cp *simplyblockv1alpha2.ControlPlane) string {
 	}
 	return fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d",
 		scheme, ComponentWebAPI, cp.Namespace, webAPIPort)
+}
+
+// localAccess is where an installed control plane answers and what to reach it
+// with.
+//
+// The second half is the part that is easy to leave out. A control plane serving
+// TLS presents a certificate signed by the deployment's own CA, which is in no
+// system trust store, so a probe given the address alone fails the handshake and
+// reports it as the control plane not being ready -- a sentence about the wrong
+// component, on a control plane that is up and answering every other caller.
+//
+// The material is the one this pod already mounts, and the same files
+// webapi.NewClient reads. Reading the Secrets through the API server instead
+// would be a second way to answer a question the deployment has already
+// answered, and the two would drift.
+func localAccess(cp *simplyblockv1alpha2.ControlPlane) (managedAccess, error) {
+	access := managedAccess{endpoint: localEndpoint(cp)}
+
+	local := cp.Spec.Source.Local
+	if !local.ServesTLS() {
+		return access, nil
+	}
+
+	// The client certificate only where the control plane asks for one: a
+	// deployment serving TLS anonymously mounts no certificate to present, and
+	// naming the paths anyway fails on the files not being there.
+	certPath, keyPath := "", ""
+	if local.RequiresClientCertificate() {
+		certPath = tlsutil.ServiceClientCertificatePath
+		keyPath = tlsutil.ServiceClientKeyPath
+	}
+
+	verified, err := tlsutil.BuildWebAPIClient(
+		cp.Namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
+	if err != nil {
+		return managedAccess{}, &credentialsError{message: fmt.Sprintf(
+			"this control plane serves TLS and the material to verify it with could not be "+
+				"read from this pod: %v; a deployment whose operator mounts none sets "+
+				"spec.source.local.tls.enableTLS to false", err)}
+	}
+	access.client = verified
+	return access, nil
 }
 
 // credentialsError is what a Secret that is missing or unusable produces. It is
