@@ -107,6 +107,9 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-402 | A slot is held while the control plane still reports the node in_creation            | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
 | U-403 | The slot goes back once the node leaves in_creation                                  | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
 | U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass    | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
+| U-405 | A node stating no journal count leaves ha_jm_count to the control plane              | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
+| U-406 | An unstated count is absent from the request rather than sent as zero                | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
+| U-407 | A stated journal count is sent as it stands                                          | Positive   | `TestAStatedJournalCountIsSent`                     |
 
 ### Entity: The Provisioning Claim (design §4.2)
 

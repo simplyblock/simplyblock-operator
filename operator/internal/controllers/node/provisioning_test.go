@@ -170,16 +170,25 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 	}
 }
 
-// A node that declares no journal settings is added with the defaults the
-// control plane was always given, rather than with zeros.
-func TestAnUnstatedJournalIsTheDefaultRatherThanNothing(t *testing.T) {
+// A node that declares no journal share is added with the default the control
+// plane was always given. The count beside it is not defaulted here any more.
+//
+// It used to be, as the three this case asserted, and three is the control
+// plane's answer for one parity chunk with failure domains off rather than an
+// answer for every cluster. Sending it made a 2+2 deployment refuse every node
+// add. The count is now left out of the request, which is what makes the control
+// plane compute the one its own rule requires.
+func TestAnUnstatedJournalShareIsTheDefaultAndTheCountIsNot(t *testing.T) {
 	r, _ := aSteadyNode(t, aControlPlane())
 
 	params := r.addParams(anUnprovisionedNode(stepPosting), anOpsCluster())
 
-	if params.JMPercent != 3 || params.HaJMCount != 3 {
-		t.Errorf("journal = %d%% over %d, want the defaults 3 and 3",
-			params.JMPercent, params.HaJMCount)
+	if params.JMPercent != 3 {
+		t.Errorf("the journal share is %d%%, want the default 3", params.JMPercent)
+	}
+	if params.HaJMCount != 0 {
+		t.Errorf("the add states ha_jm_count=%d for a node that states none, "+
+			"which answers a question the control plane answers", params.HaJMCount)
 	}
 }
 
