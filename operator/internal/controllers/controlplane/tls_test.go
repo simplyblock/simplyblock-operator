@@ -194,6 +194,9 @@ func TestTheOpenShiftIssuerProjectsItsBundle(t *testing.T) {
 	}
 }
 
+// certificateKind is what an applied cert-manager object reports itself as.
+const certificateKind = "Certificate"
+
 // nestedAny reads a path out of the FoundationDBCluster's unstructured spec.
 func nestedAny(t *testing.T, obj map[string]any, path ...string) any {
 	t.Helper()
@@ -291,5 +294,56 @@ func TestTheDatabaseOperatorCarriesThePeerCertificate(t *testing.T) {
 		return v.Secret != nil && v.Secret.SecretName == FDBPeerCertSecret
 	}) {
 		t.Error("the database operator's pod carries no peer certificate volume")
+	}
+}
+
+// The peer certificate is issued once, by whoever installs the database.
+//
+// Regression: 2026-09-21-two-certificates-one-secret — the install applied a
+// second Certificate for simplyblock-foundationdb-tls beside the chart's, under
+// a different name and with only the usages a server needs. Two controllers
+// issuing into one Secret is a certificate that changes whenever either of them
+// writes, and the narrower one takes client auth away from a database whose
+// processes are each other's clients.
+func TestThePeerCertificateIsIssuedOnceAndForBothRoles(t *testing.T) {
+	objects := foundationDBObjects(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+
+	var issued []*unstructured.Unstructured
+	for _, obj := range objects {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok || u.GetKind() != certificateKind {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(u.Object, "spec", "secretName")
+		if name == FDBPeerCertSecret {
+			issued = append(issued, u)
+		}
+	}
+
+	if len(issued) != 1 {
+		t.Fatalf("%d certificates issue %s", len(issued), FDBPeerCertSecret)
+	}
+	if got := issued[0].GetName(); got != fdbPeerCertificateName {
+		t.Errorf("the peer certificate is named %q, and the chart's Secret is claimed by %q",
+			got, fdbPeerCertificateName)
+	}
+
+	usages, _, _ := unstructured.NestedStringSlice(issued[0].Object, "spec", "usages")
+	for _, want := range []string{"server auth", "client auth"} {
+		if !slices.Contains(usages, want) {
+			t.Errorf("the peer certificate is missing %q, and every process is both", want)
+		}
+	}
+}
+
+// A deployment with no peer TLS issues nothing for it.
+func TestNoPeerCertificateWithoutPeerTLS(t *testing.T) {
+	objects := foundationDBObjects(aLocalControlPlane(
+		simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}))
+
+	for _, obj := range objects {
+		if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == certificateKind {
+			t.Errorf("a deployment with no peer TLS issues %s", u.GetName())
+		}
 	}
 }

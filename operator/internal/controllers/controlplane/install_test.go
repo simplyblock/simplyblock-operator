@@ -273,6 +273,9 @@ func TestReadingAnAbsentFoundationDBClusterIsNotAnError(t *testing.T) {
 // AwaitingAPI holds on the probe rather than on the pod counts, because the
 // question it answers is whether the control plane can be reached at all.
 func TestAwaitingAPIHoldsUntilTheProbePasses(t *testing.T) {
+	// The fixture serves TLS, as an install does, so the process has to hold what
+	// the pod mounts before the probe is reached at all.
+	mountedCA(t)
 	cp := localControlPlane()
 	prober := &stubProber{ready: false, readyMessage: "connection refused"}
 	r := &ControlPlaneReconciler{

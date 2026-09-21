@@ -539,14 +539,21 @@ func (r *ControlPlaneOpsReconciler) verify(
 	ops *simplyblockv1alpha2.ControlPlaneOps,
 	target *simplyblockv1alpha2.ControlPlane,
 ) (bool, string, error) {
+	// The published endpoint is the address alone, so the material to verify it
+	// with is resolved either way: a TLS control plane reached over a client that
+	// trusts only the system store fails the handshake, not the request.
+	access, err := localAccess(target)
+	if err != nil {
+		return false, err.Error(), nil
+	}
 	endpoint := target.Status.Endpoint
 	if endpoint == "" {
-		endpoint = localEndpoint(target)
+		endpoint = access.endpoint
 	}
 
 	prober := r.Prober
 	if prober == nil {
-		prober = &HTTPProber{}
+		prober = &HTTPProber{Client: access.client}
 	}
 	if ok, reason := prober.Ready(ctx, endpoint); !ok {
 		return false, fmt.Sprintf("the control plane is not answering yet: %s", reason), nil

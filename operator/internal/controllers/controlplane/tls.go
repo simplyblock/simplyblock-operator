@@ -18,7 +18,10 @@
 package controlplane
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -170,6 +173,13 @@ const (
 	// each other. It carries both usages, because every process is a server to
 	// its peers and a client of them.
 	FDBPeerCertSecret = "simplyblock-foundationdb-tls"
+
+	// fdbPeerCertificateName is the Certificate that issues it, under the name
+	// the chart used. Keeping the name is what makes this a handover rather than
+	// a second issuer for one Secret: two Certificates naming one secretName are
+	// two controllers writing to one place, and the narrower of them wins
+	// whenever it happens to write last.
+	fdbPeerCertificateName = "simplyblock-foundationdb"
 )
 
 // fdbPeerTLS reports whether the database's own connections are encrypted.
@@ -233,15 +243,48 @@ func fdbOperatorPeerMount() []corev1.VolumeMount {
 	}}
 }
 
-// fdbPeerCertificate is the Certificate that issues it, and nothing where the
-// deployment does not use peer TLS or signs through the OpenShift service CA --
-// that CA signs from a Service annotation, and these processes have no Service.
+// fdbPeerCertificate issues the material, and carries both usages.
+//
+// Every database process is a server to its peers and a client of them, so a
+// certificate with only server auth fails the half of the handshake where it is
+// the client. That is why this is its own builder rather than the serving one
+// above: BuildServiceServingCertificate names a server and nothing else.
+//
+// Nothing is issued under the OpenShift service CA, which signs from an
+// annotation on a Service, and these processes have none.
 func fdbPeerCertificate(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	if !fdbPeerTLS(cp) ||
 		cp.Spec.Source.Local.TLSProvider() != simplyblockv1alpha2.ControlPlaneTLSCertManager {
 		return nil
 	}
-	return []client.Object{
-		utils.BuildServiceServingCertificate(cp.Namespace, ComponentFDBCluster, FDBPeerCertSecret),
+
+	names := []any{
+		ComponentFDBCluster,
+		fmt.Sprintf("%s.%s", ComponentFDBCluster, cp.Namespace),
+		fmt.Sprintf("%s.%s.svc", ComponentFDBCluster, cp.Namespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", ComponentFDBCluster, cp.Namespace),
+		fmt.Sprintf("*.%s.%s.svc.cluster.local", ComponentFDBCluster, cp.Namespace),
 	}
+
+	certificate := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      fdbPeerCertificateName,
+			"namespace": cp.Namespace,
+		},
+		"spec": map[string]any{
+			"commonName": fdbPeerCertificateName,
+			"secretName": FDBPeerCertSecret,
+			"issuerRef": map[string]any{
+				"kind": "ClusterIssuer",
+				"name": utils.CertManagerClusterIssuerName,
+			},
+			"usages": []any{
+				"digital signature", "key encipherment", "server auth", "client auth",
+			},
+			"dnsNames": names,
+		},
+	}}
+	return []client.Object{certificate}
 }
