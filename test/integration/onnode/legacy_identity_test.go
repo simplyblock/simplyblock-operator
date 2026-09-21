@@ -83,6 +83,13 @@ func TestALegacyStackIsReleasedByAReconstructedPlan(t *testing.T) {
 
 	// What the teardown reconstructs from the stashed context: the same
 	// connection, and a filesystem layer pointed at the staging path.
+	//
+	// Built here rather than derived from a stash, because this suite is a
+	// module of its own and the derivation lives in the node service's internal
+	// packages. What it can drive is the plan those packages hand to the
+	// runner, so the derivation itself is pinned by
+	// TestALegacyStashIsDerivedIntoATeardownPlan beside it, against a context
+	// recorded from a volume that service staged.
 	volume := h.volume
 	volume.StagingPath = staging
 	release := h.node.Plain(target.Connection(), volume)

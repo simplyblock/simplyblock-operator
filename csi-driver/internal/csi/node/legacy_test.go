@@ -18,6 +18,8 @@ import (
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/layers"
 )
 
 // legacyContext is what a volume staged before the stack has when the stash
@@ -211,4 +213,121 @@ func writeNamespaceFixture(t *testing.T, nqn, uuid, nsid, deviceNumber string) s
 		}
 	}
 	return root
+}
+
+// legacyStashedContext is the volume context the previous node service wrote,
+// recorded from a cluster rather than invented: every key below appeared in the
+// stash of a volume staged by that service, including the ones it left empty.
+//
+// devicePath is a /dev/disk/by-id link because that is what its initiator
+// returned and therefore what it stashed, and there is no key naming the
+// filesystem because nothing recorded one until the volume stack did.
+func legacyStashedContext() map[string]string {
+	const (
+		cluster = "53a636db-8c9f-4cc2-952b-ea9207d8c048"
+		lvol    = "d6d0fda8-4d78-4f3d-856c-1193546b337f"
+	)
+	return map[string]string{
+		"cluster_id":                       cluster,
+		"connections":                      `[{"ip":"10.0.2.3","port":4426},{"ip":"10.0.2.4","port":4426}]`,
+		"csi.storage.k8s.io/pv/name":       "pvc-d17cf115-b1e7-40ba-b840-859e3a97515a",
+		"csi.storage.k8s.io/pvc/name":      "guardian-pvc",
+		"csi.storage.k8s.io/pvc/namespace": "spdkcsi-7383",
+		"ctrlLossTmo":                      "3600",
+		"devicePath":                       "/dev/disk/by-id/nvme-SPDK_Controller1_SPDK00000000000001",
+		"hostIface":                        "",
+		"max_namespace_per_subsys":         "1",
+		"model":                            lvol,
+		"name":                             lvol,
+		"nqn":                              "nqn.2023-02.io.simplyblock:" + cluster + ":lvol:" + lvol,
+		"nrIoQueues":                       "3",
+		"nsId":                             "1",
+		"pool_name":                        "pool1",
+		"qos_r_mbytes":                     "",
+		"qos_rw_iops":                      "",
+		"qos_rw_mbytes":                    "",
+		"qos_w_mbytes":                     "",
+		"reconnectDelay":                   "2",
+		"targetType":                       "tcp",
+		"uuid":                             lvol,
+	}
+}
+
+// The path every upgraded volume takes: the stash the previous node service
+// wrote, no stack record, and the plan a teardown rebuilds out of the two.
+//
+// The hand-made fixture beside this one states the four keys the derivation
+// reads. This one states everything that service actually wrote, which is what
+// says the derivation still finds them among twenty-two keys, reads the
+// namespace id from the camel-cased nsId that service chose, and is untroubled
+// by the by-id device path it stashed and by the values it left empty.
+func TestALegacyStashIsDerivedIntoATeardownPlan(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	ns.identifyStaged = func(context.Context, string) (lvol.Connection, error) {
+		t.Error("the host was read for a volume whose stash names it")
+		return lvol.Connection{}, errors.New("not reached")
+	}
+
+	vc := legacyStashedContext()
+	plan, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", vc)
+	if err != nil {
+		t.Fatalf("teardownPlan over a legacy stash: %v", err)
+	}
+	if got := strings.Join(plan.Names(), " → "); got != plainShape {
+		t.Errorf("the volume is released as %s, want the legacy plan", got)
+	}
+
+	// The shape alone would pass on a derivation that read none of the keys:
+	// the UUID is enough to build a plan, so a namespace id fetched from a
+	// misspelled key leaves a selector matching every namespace of the
+	// subsystem and a plan that looks perfectly well formed. What the release
+	// acts on is these three values.
+	fabric := fabricOf(t, plan)
+	if fabric.NQN != vc["nqn"] {
+		t.Errorf("the plan releases subsystem %q, want %q", fabric.NQN, vc["nqn"])
+	}
+	if fabric.NSID != 1 {
+		t.Errorf("the plan releases namespace %d, want the 1 the stash names in nsId", fabric.NSID)
+	}
+}
+
+// fabricOf is what the plan's fabric layer would be rebuilt from, which is the
+// only place a plan states which namespace it acts on.
+func fabricOf(t *testing.T, plan volstack.Plan) layers.FabricParams {
+	t.Helper()
+	for _, layer := range plan {
+		if layer.Name() != "fabric" {
+			continue
+		}
+		recorder, ok := layer.(volstack.Recorder)
+		if !ok {
+			t.Fatal("the fabric layer records no parameters")
+		}
+		params, ok := recorder.Params().(layers.FabricParams)
+		if !ok {
+			t.Fatalf("the fabric layer records %T, want FabricParams", recorder.Params())
+		}
+		return params
+	}
+	t.Fatal("the plan has no fabric layer")
+	return layers.FabricParams{}
+}
+
+// The same stash with no filesystem key, which is every volume of that era:
+// nothing recorded one until the stack did. The release unmounts whatever is at
+// the staging path, so a plan that cannot name the filesystem is still a plan
+// that takes it down, and the teardown must not refuse for the want of a name
+// it was never going to have.
+func TestALegacyStashWithoutAFilesystemStillReleases(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+
+	vc := legacyStashedContext()
+	if _, stated := vc[stagedFsTypeKey]; stated {
+		t.Fatalf("the fixture states %s, and the volumes it stands for did not", stagedFsTypeKey)
+	}
+
+	if _, err := ns.teardownPlan(
+		context.Background(), pvcTestHandle, "/staging", vc); err != nil {
+		t.Fatalf("teardownPlan over a stash naming no filesystem: %v", err)
+	}
 }

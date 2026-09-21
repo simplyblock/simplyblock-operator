@@ -147,15 +147,17 @@ stashed volume context, because the previous node service wrote one as the last
 step of every stage it finished; the rest are what a service that died in that
 window left, and they name themselves nowhere at all.
 
-| #    | Scenario                                                                                                         | Type       | Test                                                     |
-|------|------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
-| U-86 | No record and no stashed context: the namespace is read off the host and the legacy plan is built                | Positive   | `TestTeardownNamesALegacyVolumeFromTheHost`              |
-| U-87 | The host cannot name it either: the refusal stands, and says what is missing                                     | Negative   | `TestTeardownRefusesAVolumeTheHostCannotName`            |
-| U-88 | A stashed context that names the volume is used, and the host is never read                                      | Boundary   | `TestTeardownPrefersTheStashOverTheHost`                 |
-| U-89 | A host reading naming a subsystem and no namespace is refused, because a zero NSID selects every namespace in it | Regression | `TestTeardownRefusesAHostReadingWithNoNamespace`         |
-| U-90 | A UUID alone, or an NQN beside a namespace id, each name one namespace and are accepted                          | Positive   | `TestTeardownAcceptsEitherWayOfNamingOneNamespace`       |
-| U-91 | The adapter reads the namespace off sysfs by device number and copies NQN, NSID, and UUID from what it found     | Regression | `TestStagedIdentityReadsTheNamespaceOffSysfs`            |
-| U-92 | A staging path no namespace backs is an error rather than an empty connection                                    | Negative   | `TestStagedIdentityFailsWhenNoNamespaceCarriesTheNumber` |
+| #    | Scenario                                                                                                                                | Type       | Test                                                     |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-86 | No record and no stashed context: the namespace is read off the host and the legacy plan is built                                       | Positive   | `TestTeardownNamesALegacyVolumeFromTheHost`              |
+| U-87 | The host cannot name it either: the refusal stands, and says what is missing                                                            | Negative   | `TestTeardownRefusesAVolumeTheHostCannotName`            |
+| U-88 | A stashed context that names the volume is used, and the host is never read                                                             | Boundary   | `TestTeardownPrefersTheStashOverTheHost`                 |
+| U-89 | A host reading naming a subsystem and no namespace is refused, because a zero NSID selects every namespace in it                        | Regression | `TestTeardownRefusesAHostReadingWithNoNamespace`         |
+| U-90 | A UUID alone, or an NQN beside a namespace id, each name one namespace and are accepted                                                 | Positive   | `TestTeardownAcceptsEitherWayOfNamingOneNamespace`       |
+| U-91 | The adapter reads the namespace off sysfs by device number and copies NQN, NSID, and UUID from what it found                            | Regression | `TestStagedIdentityReadsTheNamespaceOffSysfs`            |
+| U-92 | A staging path no namespace backs is an error rather than an empty connection                                                           | Negative   | `TestStagedIdentityFailsWhenNoNamespaceCarriesTheNumber` |
+| U-93 | A stash as the previous node service wrote it, with no record: the plan is derived from it, and releases the namespace its `nsId` names | Positive   | `TestALegacyStashIsDerivedIntoATeardownPlan`             |
+| U-94 | The same stash naming no filesystem, which is every volume of that era, still yields a plan that releases                               | Boundary   | `TestALegacyStashWithoutAFilesystemStillReleases`        |
 
 `U-89` and `U-91` are marked `Regression` for defects this work introduced and
 review caught: an identity resolved by comparing device paths, which finds
