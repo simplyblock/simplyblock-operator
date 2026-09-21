@@ -15,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -241,30 +242,67 @@ func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
 // Nothing the install applies names a Secret that the install does not also
 // create, because a workload waiting on a Secret nobody writes never starts and
 // reports the wait as a pod event rather than on the ControlPlane.
+//
+// "Creates" includes producing it indirectly. A cert-manager Certificate is not
+// a Secret and writes one, so a workload mounting what a Certificate in the same
+// install issues is waiting on something this install does produce. The set is
+// read off the applied objects rather than listed here, so a certificate that
+// stops being applied takes its exemption with it.
 func TestNoWorkloadWaitsOnASecretTheInstallDoesNotCreate(t *testing.T) {
 	cp := localControlPlane()
 
-	for _, obj := range append(foundationDBObjects(cp),
-		append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
+	objects := append(foundationDBObjects(cp),
+		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
+	issued := secretsTheInstallIssues(objects)
+
+	for _, obj := range objects {
 		spec := podSpecOf(obj)
 		if spec == nil {
 			continue
 		}
 		for _, volume := range spec.Volumes {
-			if volume.Secret != nil {
+			if volume.Secret != nil && !issued[volume.Secret.SecretName] {
 				t.Errorf("%s mounts Secret %q, which no step of the install creates",
 					obj.GetName(), volume.Secret.SecretName)
+			}
+			if volume.Projected == nil {
+				continue
+			}
+			for _, source := range volume.Projected.Sources {
+				if source.Secret != nil && !issued[source.Secret.Name] {
+					t.Errorf("%s projects Secret %q, which no step of the install creates",
+						obj.GetName(), source.Secret.Name)
+				}
 			}
 		}
 		for _, container := range spec.Containers {
 			for _, env := range container.Env {
-				if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+				if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+					continue
+				}
+				if !issued[env.ValueFrom.SecretKeyRef.Name] {
 					t.Errorf("%s/%s reads Secret %q, which no step of the install creates",
 						obj.GetName(), container.Name, env.ValueFrom.SecretKeyRef.Name)
 				}
 			}
 		}
 	}
+}
+
+// secretsTheInstallIssues is the Secrets the applied objects produce without
+// being one: today, what each cert-manager Certificate writes into.
+func secretsTheInstallIssues(objects []client.Object) map[string]bool {
+	issued := map[string]bool{}
+	for _, obj := range objects {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok || u.GetKind() != "Certificate" {
+			continue
+		}
+		if name, found, _ := unstructured.NestedString(u.Object, "spec", "secretName"); found {
+			issued[name] = true
+		}
+	}
+	return issued
 }
 
 // podSpecOf is the pod template of whatever workload kind an object is, or nil

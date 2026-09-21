@@ -299,7 +299,7 @@ func (r *ControlPlaneReconciler) performInstallStep(
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, managementAPIObjects(cp))
 
 	case stepAwaitingAPI:
-		ok, message := r.probe(ctx, cp.Namespace, managedAccess{endpoint: localEndpoint(cp.Namespace)})
+		ok, message := r.probe(ctx, cp.Namespace, managedAccess{endpoint: localEndpoint(cp)})
 		if !ok {
 			return false, fmt.Sprintf("the management API is not answering yet: %s", message), nil
 		}
@@ -324,7 +324,7 @@ func (r *ControlPlaneReconciler) steadyState(
 
 	// A managed control plane is reached on the Service this install created, so
 	// there is no token to present and no CA beyond the cluster's own.
-	access := managedAccess{endpoint: localEndpoint(cp.Namespace)}
+	access := managedAccess{endpoint: localEndpoint(cp)}
 	ok, message := r.probe(ctx, cp.Namespace, access)
 
 	components, err := observe(ctx, r.Client, cp.Namespace)

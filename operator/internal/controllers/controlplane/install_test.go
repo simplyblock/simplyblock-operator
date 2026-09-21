@@ -125,7 +125,7 @@ func TestReApplyingAStepCorrectsWhatWasChangedUnderIt(t *testing.T) {
 	if err := c.Update(ctx, &api); err != nil {
 		t.Fatalf("scale the management API down: %v", err)
 	}
-	if err := c.Delete(ctx, webAPIService(testNamespace)); err != nil {
+	if err := c.Delete(ctx, webAPIService(cp)); err != nil {
 		t.Fatalf("delete the Service: %v", err)
 	}
 

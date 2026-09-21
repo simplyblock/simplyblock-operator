@@ -531,7 +531,7 @@ than by one detection rule.
 | `FoundationDBCluster` CRDs | A prerequisite. `Installing` holds and names it where `apps.foundationdb.org/v1beta2` is not served |
 | FoundationDB controller    | Always applied, under the name the chart gave it, in the `ControlPlane`'s namespace                 |
 | Document store             | None. A base deployment runs no MongoDB, and the object store takes the step's place                |
-| Certificate issuer         | Not expressible. §12 Q2 records that TLS stays with the chart                                       |
+| Certificate issuer         | `spec.source.local.tls.provider`, declared rather than detected, and defaulting to cert-manager     |
 | `StorageClass`             | Not detected. An unset class falls to the cluster's default (§12 Q7)                                |
 
 **The CRDs and the controller are split because the API server cannot tell them
@@ -991,11 +991,47 @@ and the log collector stay with the chart: none appears in a step of §4.2's
 machine, every one is non-essential in §4.3's table, and they are gated behind one
 chart value this kind has no field for.
 
-**TLS is the one configuration the install cannot express.** The chart serves the
-control plane over TLS behind `tls.enabled`, and `LocalControlPlane` has no field
-for it. The chart therefore refuses `tls.enabled` together with the `standalone`
-profile rather than installing a control plane in plaintext, and closing that gap
-is a field on this kind together with the issuer detection §5.1 does not perform.
+**TLS is `spec.source.local.tls`, and it is on by default.** The block is
+`DriverTLS`'s three fields under `DriverTLS`'s names — `enableTLS`,
+`enableMutualTLS`, and `provider` — because they are the same three decisions
+about the same connection seen from its two ends. What differs is the default:
+the CSI driver's fields describe deployments that already existed and default
+off, and these default on. An installed control plane holds every cluster
+definition, node registration, and volume record, and is reached over the pod
+network by the operator, the CSI driver, and the metrics scrape alike, so
+plaintext is a decision to state rather than the one a deployment reaches by
+leaving the block out.
+
+The install turns it into the environment the control-plane image has always
+spoken — `SB_TLS_SERVE`, `SB_TLS_PROVIDER`, `SB_TLS_CONNECT`,
+`SB_TLS_CLIENT_AUTH`, and FoundationDB's `FDB_TLS_*` — on every pod of the
+install rather than only the one that serves. The task and monitoring pools are
+clients of the management API, and a plaintext pool cannot reach an API that
+requires a certificate.
+
+The serving certificate is the install's too. It was rendered beside the Service
+it certifies, and the install that replaced the chart took the Service and left
+the certificate, so every pod mounted a Secret nothing produced. The two issuers
+produce it differently and neither is a choice this makes: cert-manager takes a
+`Certificate` naming the Service's DNS names, and the OpenShift service CA takes
+an annotation on the Service.
+
+The chart renders the block from `tls.enabled` and `tls.mutual_enabled` rather
+than leaving it out, so a release gets the answer its values state rather than
+this kind's default. Both of those values are on as well, which makes TLS what a
+plain `helm install` produces. It has a prerequisite: cert-manager issues the
+certificates, and the chart refuses to render where `cert-manager.io/v1` is not
+served rather than installing something quieter than what the values say. The
+refusal names both ways out, because a deployment reaching it did not ask for the
+thing it is being refused.
+
+FoundationDB's own connections are the second listener, and they follow the
+client-certificate decision rather than the serving one: peer TLS between
+database processes has no anonymous mode, so every process authenticates to every
+other or none of them do. `mainContainer.enableTls` is what turns those listeners
+over, and it is a field on the cluster rather than an environment variable --
+processes carrying a current certificate, key, and CA and no `enableTls` talk to
+each other in the clear while every mount looks right.
 
 **Q3: Whether backup belongs to the action or to the spec.**
 `FoundationDBBackup` describes a continuous backup, carrying a `backupState` and a

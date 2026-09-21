@@ -145,10 +145,17 @@ type service struct {
 }
 
 // container builds one service container from the shared shape.
-func (s service) container(image string, pullPolicy corev1.PullPolicy) corev1.Container {
+func (s service) container(
+	local *simplyblockv1alpha2.LocalControlPlane, image string, pullPolicy corev1.PullPolicy,
+) corev1.Container {
 	env := append([]corev1.EnvVar{}, s.extraEnv...)
 	env = append(env, prometheusEnv()...)
 	env = append(env, logLevelEnv())
+	// These processes are clients of the management API rather than servers, and
+	// SB_TLS_CONNECT is what tells them so: a pool left plaintext while the API
+	// it calls requires a certificate is a control plane that cannot run its own
+	// tasks.
+	env = append(env, tlsEnv(local)...)
 
 	return corev1.Container{
 		Name:            s.name,
@@ -156,7 +163,7 @@ func (s service) container(image string, pullPolicy corev1.PullPolicy) corev1.Co
 		ImagePullPolicy: pullPolicy,
 		Command:         []string{"python3", s.module},
 		Env:             env,
-		VolumeMounts:    []corev1.VolumeMount{clusterFileMount()},
+		VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(local)...),
 		Resources:       serviceResources(),
 	}
 }
@@ -164,10 +171,15 @@ func (s service) container(image string, pullPolicy corev1.PullPolicy) corev1.Co
 // containers builds every service of a pool, in the order they are declared, so
 // that the apply produces a stable list rather than one that reorders between
 // passes and rolls the Deployment for nothing.
-func containers(services []service, image string, pullPolicy corev1.PullPolicy) []corev1.Container {
+func containers(
+	services []service,
+	local *simplyblockv1alpha2.LocalControlPlane,
+	image string,
+	pullPolicy corev1.PullPolicy,
+) []corev1.Container {
 	out := make([]corev1.Container, 0, len(services))
 	for _, s := range services {
-		out = append(out, s.container(image, pullPolicy))
+		out = append(out, s.container(local, image, pullPolicy))
 	}
 	return out
 }

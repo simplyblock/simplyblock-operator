@@ -42,8 +42,20 @@ var credentialKeys = []string{"token", "secret"}
 var caBundleKeys = []string{"ca.crt", "tls.crt"}
 
 // localEndpoint is where the management API this install created answers.
-func localEndpoint(namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ComponentWebAPI, namespace, webAPIPort)
+//
+// The scheme follows the install rather than being fixed, which is the whole of
+// the defect this replaces: the address was the plaintext scheme whatever the
+// deployment asked for, so an install that served TLS was one this operator could
+// no longer reach. Every control-plane call in the operator resolves through
+// status.endpoint, which this is published as, so the scheme reaches all of them
+// at once.
+func localEndpoint(cp *simplyblockv1alpha2.ControlPlane) string {
+	scheme := "http"
+	if cp.Spec.Source.Local.ServesTLS() {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d",
+		scheme, ComponentWebAPI, cp.Namespace, webAPIPort)
 }
 
 // credentialsError is what a Secret that is missing or unusable produces. It is
