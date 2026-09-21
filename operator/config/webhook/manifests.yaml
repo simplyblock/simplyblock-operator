@@ -229,6 +229,25 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-replication-storage-openshift-io-v1alpha1-volumegroupreplication
+  failurePolicy: Fail
+  name: vvolumegroupreplication.simplyblock.io
+  rules:
+  - apiGroups:
+    - replication.storage.openshift.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - volumegroupreplications
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot
   failurePolicy: Fail
   name: vvolumegroupsnapshot.simplyblock.io

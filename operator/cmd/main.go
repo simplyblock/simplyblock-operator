@@ -742,6 +742,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)
 	}
+	if err := (&controller.VolumeGroupReplicationReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("volumegroupreplication-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeGroupReplication")
+		os.Exit(1)
+	}
 	if err := (&controller.ReplicationSlotReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -850,6 +858,13 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered volumegroupsnapshot validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-replication-storage-openshift-io-v1alpha1-volumegroupreplication",
+			&webhook.Admission{Handler: &internalwebhook.VolumeGroupReplicationValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
+		setupLog.Info("registered volumegroupreplication validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops",
 			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotOpsValidator{Client: mgr.GetClient()}})

@@ -1,37 +1,25 @@
 # Test Plan: Ramen Integration
 
 Related design: [`designs/design-ramen-integration.md`](../designs/design-ramen-integration.md)
-Harness: two classes. The peerClasses preflight and `VolumeGroupReplicationReconciler` (design §3, §4) are unit-tested against fake-client harnesses (`replicationpair_controller_unit_test.go` and its `VolumeGroupReplicationReconciler` sibling). Everything else needs a live two-cluster simplyblock deployment (`regression_test/21/`), plus an OCM hub with Ramen installed on the hub and both managed clusters (design §6.1).
+Harness: two classes. `VolumeGroupReplicationReconciler` (design §4) is unit-tested against a fake-client harness, the same shape `replicationpair_controller_unit_test.go` already uses elsewhere in this package. Everything else needs a live two-cluster simplyblock deployment (`regression_test/21/`), plus an OCM hub with Ramen installed on the hub and both managed clusters (design §6.1).
 
-Scope: three things this document specifies. First, whether the peerClasses preflight (design §3) correctly distinguishes a complete `StorageClass`/`VolumeReplicationClass` pairing from one missing a label or a parameter, as unit scenarios (`U-01` … `U-05`). Second, whether `VolumeGroupReplicationReconciler` (design §4) correctly fans a group's replication state out to its members and their status back in, and correctly validates group membership at admission, as unit scenarios (`U-06` … `U-10`). Third, whether a real Ramen `VolumeReplicationGroup`, driven through a real OCM hub, correctly drives the csi-addons adapter `design-csi-addons-replication.md` implements, for both a single volume and a consistency-group of them, as manual E2E scenarios (`M-`), since no smaller harness substitutes for a real Ramen reconcile loop against a real OCM-registered cluster pair. The manual scenarios close two rows already carried in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md): E-06 and E-07, both `—` in that plan's `Test` column since they were written.
+Scope: two things this document specifies. First, whether `VolumeGroupReplicationReconciler` (design §4) correctly fans a group's replication state out to its members and their status back in, and correctly validates group membership at admission, as unit scenarios (`U-01` … `U-05`). Second, whether a real Ramen `VolumeReplicationGroup`, driven through a real OCM hub, correctly drives the csi-addons adapter `design-csi-addons-replication.md` implements, for both a single volume and a consistency-group of them, as manual E2E scenarios (`M-`), since no smaller harness substitutes for a real Ramen reconcile loop against a real OCM-registered cluster pair. The manual scenarios close two rows already carried in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md): E-06 and E-07, both `—` in that plan's `Test` column since they were written. Design §3 (peerClasses) adds no scenarios of its own: it confirms that no operator-side code exists to test.
 
 ---
 
 ## 1. Unit Scenarios
 
-### ReplicationPairReconciler peerClasses preflight (design §3)
-
-Not yet implemented. The `Test` column is `—` throughout until `replicationpair_controller.go` carries the preflight and `replicationpair_controller_unit_test.go` carries these cases.
-
-| #    | Scenario                                                                                                   | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------|----------|------|
-| U-01 | Enrolled `StorageClass`, matching `VolumeReplicationClass` carries both the label and `schedulingInterval` | Positive | —    |
-| U-02 | Enrolled `StorageClass`, matching `VolumeReplicationClass` missing `ramendr.openshift.io/replicationid`    | Negative | —    |
-| U-03 | Enrolled `StorageClass`, matching `VolumeReplicationClass` missing `spec.parameters.schedulingInterval`    | Negative | —    |
-| U-04 | Enrolled `StorageClass`, no `VolumeReplicationClass` with a matching `spec.provisioner` exists             | Negative | —    |
-| U-05 | No `StorageClass` carries `ramendr.openshift.io/storageid` (nothing enrolled)                              | Boundary | —    |
-
 ### VolumeGroupReplicationReconciler and its admission webhook (design §4)
 
-Not yet implemented. The `Test` column is `—` throughout until `VolumeGroupReplicationReconciler` and its webhook exist.
+Implemented in `volumegroupreplication_controller.go` and `volumegroupreplication_validator.go`, covered by `volumegroupreplication_controller_unit_test.go` and `volumegroupreplication_validator_test.go`.
 
-| #    | Scenario                                                                                                          | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-06 | Every member's `VolumeReplication` reports `Completed=True, Degraded=False`, and the group reports the same       | Positive | —    |
-| U-07 | One member's `VolumeReplication` reports `Degraded=True`, and the group reports `Degraded=True`                   | Negative | —    |
-| U-08 | Members report differing `lastSyncTime`, and `status.lastGroupSyncTime` is the oldest, not the newest             | Boundary | —    |
-| U-09 | `spec.source.selector` resolves to exactly one `ConsistencyGroup`'s current membership, and is admitted           | Positive | —    |
-| U-10 | `spec.source.selector` resolves to a subset of a group, or spans two groups, and is rejected, naming the mismatch | Negative | —    |
+| #    | Scenario                                                                                                          | Type     | Test                                                              |
+|------|-------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
+| U-01 | Every member's `VolumeReplication` reports `Completed=True, Degraded=False`, and the group reports the same       | Positive | `TestVolumeGroupReplication_AllMembersHealthyYieldsGroupHealthy`  |
+| U-02 | One member's `VolumeReplication` reports `Degraded=True`, and the group reports `Degraded=True`                   | Negative | `TestVolumeGroupReplication_OneMemberDegradedYieldsGroupDegraded` |
+| U-03 | Members report differing `lastSyncTime`, and `status.lastSyncTime` is the oldest, not the newest                  | Boundary | `TestVolumeGroupReplication_LastSyncTimeIsTheOldestMember`        |
+| U-04 | `spec.source.selector` resolves to exactly one `ConsistencyGroup`'s current membership, and is admitted           | Positive | `TestVolumeGroupReplicationValidator`                             |
+| U-05 | `spec.source.selector` resolves to a subset of a group, or spans two groups, and is rejected, naming the mismatch | Negative | `TestVolumeGroupReplicationValidator`                             |
 
 ---
 
@@ -96,29 +84,28 @@ Not yet implemented. The `Test` column is `—` throughout until `VolumeGroupRep
 1. Extend M-01's topology: a workload with three PVCs sharing one `storage.simplyblock.io/consistency-group` value, protected by one VRG under a `VolumeGroupReplicationClass` naming that group's `ReplicationPolicy`.
 2. Confirm exactly one `VolumeGroupReplication` exists and exactly three member `VolumeReplication` objects exist, each owned by it.
 3. Trigger Ramen's `Relocate` action, as in M-02.
-4. Assert: all three members reach `Secondary` on cluster A and `Primary` on cluster B together, not staggered. The group's own `status.lastGroupSyncTime` reflects the oldest member's `lastSyncTime` throughout (U-08). No member is left behind mid-relocate.
+4. Assert: all three members reach `Secondary` on cluster A and `Primary` on cluster B together, not staggered. The group's own `status.lastSyncTime` reflects the oldest member's throughout (U-03). No member is left behind mid-relocate.
 
 ---
 
 ## 3. Axis Coverage
 
-| Axis                          | Values covered                                                                  | IDs                    | Not covered                                                                                                                                                                           |
-|-------------------------------|---------------------------------------------------------------------------------|------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| peerClasses object state      | complete, missing label, missing parameter, no matching class, nothing enrolled | U-01 … U-05            | a `VolumeReplicationClass` whose provisioner does not match (not a gap: design §3.1 step 4 skips it by design, so there is nothing to assert)                                         |
-| Group replication aggregation | all members healthy, one member degraded, differing `lastSyncTime`              | U-06 … U-08            | more than one degraded member simultaneously (not a gap: the aggregation is a plain disjunction, one member already exercises it)                                                     |
-| Group membership validation   | selector equals membership, selector is a subset or spans two groups            | U-09, U-10             | membership changing between admission and reconcile (the fail-open backend-unreachable case `design-consistency-groups.md` §9.4's sibling check already covers for the snapshot path) |
-| Orchestrator                  | Ramen VRG async, hub-driven                                                     | M-01 … M-05            | direct `kubectl` lifecycle (already covered in `test-plan-csi-addons-replication.md`)                                                                                                 |
-| Cluster topology              | two managed clusters, one relationship, hub-mediated                            | M-01 … M-05            | three-cluster (cascaded) topologies. SiteMap-authored `DRPlacementControl` specifically (§8 Open Question 2 may leave this a hand-authored stand-in)                                  |
-| Failure mode                  | planned relocate, unplanned failover, post-recovery resync, group relocate      | M-02, M-03, M-04, M-05 | a demote that stalls mid-convergence while Ramen-driven (covered by hand in `test-plan-csi-addons-replication.md` M-01/M-02, not yet by Ramen)                                        |
+| Axis                          | Values covered                                                             | IDs                    | Not covered                                                                                                                                                                           |
+|-------------------------------|----------------------------------------------------------------------------|------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Group replication aggregation | all members healthy, one member degraded, differing `lastSyncTime`         | U-01 … U-03            | more than one degraded member simultaneously (not a gap: the aggregation is a plain disjunction, one member already exercises it)                                                     |
+| Group membership validation   | selector equals membership, selector is a subset or spans two groups       | U-04, U-05             | membership changing between admission and reconcile (the fail-open backend-unreachable case `design-consistency-groups.md` §9.4's sibling check already covers for the snapshot path) |
+| Orchestrator                  | Ramen VRG async, hub-driven                                                | M-01 … M-05            | direct `kubectl` lifecycle (already covered in `test-plan-csi-addons-replication.md`)                                                                                                 |
+| Cluster topology              | two managed clusters, one relationship, hub-mediated                       | M-01 … M-05            | three-cluster (cascaded) topologies. SiteMap-authored `DRPlacementControl` specifically (§8 Open Question 2 may leave this a hand-authored stand-in)                                  |
+| Failure mode                  | planned relocate, unplanned failover, post-recovery resync, group relocate | M-02, M-03, M-04, M-05 | a demote that stalls mid-convergence while Ramen-driven (covered by hand in `test-plan-csi-addons-replication.md` M-01/M-02, not yet by Ramen)                                        |
 
 ---
 
 ## 4. Coverage Summary
 
-| Class        | Scenarios | Covered | Not covered |
-|--------------|-----------|---------|-------------|
-| Unit         | 10        | 0       | U-01 … U-10 |
-| Manual (E2E) | 5         | 0       | M-01 … M-05 |
+| Class        | Scenarios | Covered         | Not covered |
+|--------------|-----------|-----------------|-------------|
+| Unit         | 5         | 5 (U-01 … U-05) | —           |
+| Manual (E2E) | 5         | 0               | M-01 … M-05 |
 
 ---
 
@@ -126,9 +113,7 @@ Not yet implemented. The `Test` column is `—` throughout until `VolumeGroupRep
 
 | #           | Gap                                                               | Reason                                                                                                                                                                                                                                                  |
 |-------------|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-01 … U-05 | The entire peerClasses preflight                                  | Not yet implemented: design §3 specifies the behavior, `replicationpair_controller.go` does not yet carry it                                                                                                                                            |
-| U-06 … U-10 | `VolumeGroupReplicationReconciler` and its admission webhook      | Not yet implemented: design §4 specifies the behavior, neither the reconciler nor the webhook exists yet                                                                                                                                                |
 | M-01 … M-05 | The entire Ramen-driven validation                                | Blocked on Phase 0 (design §Phase 0): a live OCM hub with Ramen installed across a registered two-cluster pair, not yet confirmed available (§8 Open Question 1). M-05 additionally needs the `VolumeGroupReplication` CRDs installed on both clusters. |
 | —           | Three-cluster / cascaded topologies                               | Out of scope for this document, and not part of the gap analysis's Appendix A either                                                                                                                                                                    |
 | —           | SiteMap-authored (rather than hand-authored) `DRPlacementControl` | Depends on SiteMap's own availability (§8 Open Question 2)                                                                                                                                                                                              |
-| —           | Global VGR (multi-VRG consensus)                                  | Out of scope for design §4.1, tracked as design §8 Open Question 5                                                                                                                                                                                      |
+| —           | Global VGR (multi-VRG consensus)                                  | Out of scope for design §4.1, tracked as design §8 Open Question 4                                                                                                                                                                                      |
