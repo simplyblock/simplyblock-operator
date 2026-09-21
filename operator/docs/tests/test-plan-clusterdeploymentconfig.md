@@ -97,6 +97,9 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 | U-179 | An `Available` control plane proceeds                                           | Positive   | `TestAnAvailableControlPlaneProceeds`               |
 | U-180 | An `Unavailable` control plane holds, with a reason                             | Negative   | `TestAnUnavailableControlPlaneHolds`                |
 | U-181 | A control plane still being installed, or reporting no phase, holds             | Boundary   | `TestAControlPlaneStillBeingBuiltHolds`             |
+| U-182 | A run naming workers inspects those and no others                               | Positive   | `TestOnlyTheNamedWorkersAreInspected`               |
+| U-183 | A named worker that does not exist is announced, not silently dropped           | Regression | `TestANamedWorkerThatDoesNotExistIsAnnounced`       |
+| U-184 | Naming no worker keeps nothing, and the caller skips the filter                 | Boundary   | `TestNamingNoWorkerKeepsNothing`                    |
 
 ### Deletion (design §4.3)
 
