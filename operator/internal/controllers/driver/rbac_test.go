@@ -192,7 +192,7 @@ func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
 func TestPluginRolesCarryTheExportRules(t *testing.T) {
 	wanted := map[string]map[string][]string{
 		controllerComponent: {
-			"nfsexports":        {"get", "list", "watch", "create", "delete"},
+			"nfsexports":        {"get", "list", "watch", "create", "update", "delete"},
 			"nfsexports/status": {"get", "update", "patch"},
 		},
 		nodeComponent: {
@@ -255,4 +255,27 @@ func TestControllerRoleCanDeleteExports(t *testing.T) {
 		}
 	}
 	t.Error("the controller role cannot delete nfsexports, so DeleteVolume can never converge")
+}
+
+// Regression: expanding a pNFS volume records the new size on the export,
+// which bumps its generation and is what tells the operator to re-assemble and
+// grow the filesystem. That is an update, and the controller could create,
+// list, and delete an NFSExport but not update one:
+//
+//	nfsexports.storage.simplyblock.io "nfsexp-030640ab-..." is forbidden:
+//	User "system:serviceaccount:simplyblock:simplyblock-csi-controller-sa"
+//	cannot update resource "nfsexports"
+//
+// Every ControllerExpandVolume failed, so no pNFS volume could grow at all.
+func TestControllerCanRecordANewSizeOnAnExport(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "update") {
+			return
+		}
+	}
+	t.Error("the controller cannot update nfsexports, so expanding a pNFS volume always fails")
 }

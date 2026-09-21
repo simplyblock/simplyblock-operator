@@ -53,7 +53,10 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 	controllerComponent: {
 		// delete, because DeleteVolume issues it: the record goes first and the
 		// operator's finalizer tears the host down before the backing volume.
-		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "delete"),
+		// update, because expanding a volume records the new size on its
+		// export: the write bumps the generation, which is what tells the
+		// operator to re-assemble and grow the filesystem on the host.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "update", "delete"),
 		// The status carries the backing volume's identity, which only this
 		// plugin knows, and the operator reads it back.
 		rule(simplyblock, []string{"nfsexports/status"}, "get", "update", "patch"),
