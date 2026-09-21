@@ -106,28 +106,23 @@ func helmMetadataRemovalPatch() []byte {
 	return []byte(b.String())
 }
 
-// inexpressible is the configuration a running plugin can carry that this
-// kind has no field for. Adoption reconciles toward the spec, so a plugin
-// carrying one of these would come out of the handover without it: the apply
-// lists env, volumes, and volumeMounts explicitly, and an entry the spec does
-// not name is an entry the apply removes.
+// inexpressible is the configuration a running plugin can carry that this kind
+// has no field for. Adoption reconciles toward the spec, so a plugin carrying
+// one of these would come out of the handover without it: the apply lists env,
+// volumes, and volumeMounts explicitly, and an entry the spec does not name is
+// an entry the apply removes. Refusing is the only safe answer.
 //
-// Refusing is the only safe answer. Dropping csi-link is an agent that stops
-// reaching the operator, which is not a change an administrator asked for by
-// writing a SimplyblockDriver.
+// It is empty. Both entries it ever held graduated: TLS, when spec.tls gave it
+// a field and tlsAdoptionMismatch replaced the outright refusal with a
+// comparison; and csi-link, which is now always on, so a deployment carrying
+// --link is what this operator deploys rather than something it cannot express.
 //
-// It is off by default, which is why the driver could move out of the chart at
-// all. It needs a spec surface before it can be adopted, which is the TODO in
-// workloads.go. TLS had the same shape here until spec.tls existed;
-// tlsAdoptionMismatch below is what replaced it, since TLS's refusal now
-// compares against what the spec asks for rather than refusing outright.
+// The table stays for the next one.
 var inexpressible = []struct {
 	what   string
 	envVar string
 	arg    string
-}{
-	{what: "csi-link", arg: "--link"},
-}
+}{}
 
 // unsupportedConfiguration reports the first thing a running node plugin
 // carries that the spec cannot express.
