@@ -1,19 +1,16 @@
-// Package mount reads what a block device carries, puts a filesystem on it
-// when it carries nothing, and owns the lifecycle of the directory or file it
-// gets mounted on.
+// Package mount formats and mounts a block device, and owns the lifecycle of
+// the directory or file it gets mounted on.
 //
 // It is the node-local half of staging a volume, separated from the CSI node
-// service because none of it needs a CSI request to answer: whether a device is
-// blank, which options mkfs takes for a filesystem, whether a mount has gone
-// dead, and whether a path is safe to mount over are all questions about the
-// node. The decisions layered on top of those answers, which filesystem a
-// volume is supposed to carry and what to do when the device disagrees, stay
-// in the node service, where the claim and the volume capability are.
+// service because none of it needs a CSI request to answer: which options mkfs
+// takes for a filesystem, whether a mount has gone dead, and whether a path is
+// safe to mount over are all questions about the node. The decisions layered on
+// top of those answers, what a device carries and whether it may be formatted,
+// belong to the volume stack's filesystem layer, and filesystemops.go is the
+// side of that seam this package fills in.
 package mount
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -28,7 +25,6 @@ import (
 	k8smount "k8s.io/mount-utils"
 	"k8s.io/utils/exec"
 
-	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/errs/deferrers"
 )
 
@@ -58,45 +54,14 @@ func (m *Mounter) Mount(devicePath, target, fsType string, flags []string) error
 	return m.mounter.Mount(devicePath, target, fsType, flags)
 }
 
-// FormatAndMount attaches devicePath at target, putting fsType on it first if
-// it reads blank. The caller is responsible for having established that
-// formatting is the right thing to do.
-func (m *Mounter) FormatAndMount(devicePath, target, fsType string, flags, formatOptions []string) error {
-	safe := k8smount.SafeFormatAndMount{Interface: m.mounter, Exec: m.execer}
-	return safe.FormatAndMountSensitiveWithFormatOptions(devicePath, target, fsType, flags, nil, formatOptions)
-}
-
 // Unmount detaches whatever is mounted at target.
 func (m *Mounter) Unmount(target string) error {
 	return m.mounter.Unmount(target)
 }
 
-// NeedsResize reports whether the filesystem on devicePath is smaller than the
-// device now is.
-func (m *Mounter) NeedsResize(devicePath, mountPath string) (bool, error) {
-	return k8smount.NewResizeFs(m.execer).NeedResize(devicePath, mountPath)
-}
-
-// Resize grows the filesystem on devicePath to fill the device, reporting
-// whether it needed resizing.
-func (m *Mounter) Resize(devicePath, mountPath string) (bool, error) {
-	return k8smount.NewResizeFs(m.execer).Resize(devicePath, mountPath)
-}
-
 // Supported reports whether this driver formats and mounts fsType.
 func Supported(fsType string) bool {
 	return supportedOnDiskFilesystems[fsType]
-}
-
-// FlagsFor returns the mount options a filesystem needs regardless of what the
-// volume asked for.
-func FlagsFor(fsType string) []string {
-	if fsType == "xfs" {
-		// XFS refuses to mount two filesystems with the same UUID, and nouuid lets a
-		// volume and its clone or restored snapshot mount on the same node.
-		return []string{"nouuid"}
-	}
-	return nil
 }
 
 // FormatOptions returns the mkfs options for fsType, given the provisioning
@@ -107,22 +72,6 @@ func FormatOptions(fsType string, volumeContext map[string]string) []string {
 	}
 	options := append([]string{}, xfsFeatureOptions()...)
 	return append(options, xfsStripeOptions(volumeContext)...)
-}
-
-// ApplyExt4Reserved sets the reserved-block percentage on an ext4 filesystem.
-// An empty reserved is not an error: it means the class did not ask for one.
-func ApplyExt4Reserved(devicePath, reserved string) error {
-	if reserved == "" {
-		klog.Infof("No tune2fs_reserved_blocks set; skipping tune2fs adjustment")
-		return nil
-	}
-	output, err := osexec.Command("tune2fs", "-m", reserved, devicePath).CombinedOutput()
-	if err != nil {
-		klog.Errorf("Failed to apply tune2fs -m %s on %s: %v\nOutput: %s", reserved, devicePath, err, string(output))
-		return fmt.Errorf("tune2fs failed: %w", err)
-	}
-	klog.Infof("Applied tune2fs -m %s on %s", reserved, devicePath)
-	return nil
 }
 
 // defaultXFSStripeUnit and defaultXFSStripeWidth are the fallback mkfs.xfs
@@ -224,52 +173,6 @@ func checkXFSFormatConfig() error {
 		return fmt.Errorf("not a regular file (mode %s)", info.Mode())
 	}
 	return nil
-}
-
-// probeDiskFormat reads the filesystem on devicePath through atlas's blockdev
-// prober, translating its refusals into this driver's staging language: a probe
-// that could not read the device and a partition table where a filesystem was
-// expected both leave open whether the device holds somebody's data, so staging
-// fails there instead of formatting through the doubt. The next attempt probes
-// the device again.
-func (m *Mounter) Probe(ctx context.Context, devicePath string) (string, error) {
-	fs, err := blockdev.NewBlkidProberWithRunner(execRunner(m.execer)).Format(ctx, devicePath)
-	switch {
-	case errors.Is(err, blockdev.ErrPartitionTable):
-		// Wrapped, because the prober names the table blkid reported and which
-		// one it is decides what to do about it: a GPT disk handed to the driver
-		// by mistake is a different problem from a stale DOS label on a volume
-		// that was reused.
-		return "", fmt.Errorf(
-			"refusing to stage %s, which carries a partition table rather than a filesystem: %w",
-			devicePath, err,
-		)
-	case err != nil:
-		return "", fmt.Errorf(
-			"cannot read the on-disk filesystem of %s, refusing to stage a device whose contents are unknown: %w",
-			devicePath, err,
-		)
-	}
-	return fs, nil
-}
-
-// execRunner adapts the node server's command runner to blockdev's Runner,
-// keeping blkid's exit code separate from a transport failure the way the
-// prober's contract requires. It runs without the context on purpose: the
-// underlying exec.Interface command carries no context, which preserves the
-// staging path's existing timeout behavior (none) rather than changing it here.
-func execRunner(execer exec.Interface) blockdev.Runner {
-	return func(_ context.Context, name string, args ...string) ([]byte, int, error) {
-		out, err := execer.Command(name, args...).CombinedOutput()
-		if err != nil {
-			var exit exec.ExitError
-			if errors.As(err, &exit) {
-				return out, exit.ExitStatus(), nil
-			}
-			return out, 0, err
-		}
-		return out, 0, nil
-	}
 }
 
 // supportedOnDiskFilesystems are the filesystems this driver formats and mounts.

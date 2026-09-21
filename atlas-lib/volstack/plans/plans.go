@@ -66,6 +66,13 @@ type Volume struct {
 	// it at that filesystem's own default, which is not what asking for zero
 	// means. How it is spelled is the filesystem's business, not the caller's.
 	ReservedBlocksPercent string
+
+	// Encrypted says the control plane encrypts this volume beneath the
+	// namespace it exports, which makes the bytes the host reads meaningless:
+	// an empty encrypted volume decrypts from zeros into pseudo-random
+	// plaintext. The filesystem layer needs it to know that an unrecognized
+	// reading is no evidence of anything.
+	Encrypted bool
 }
 
 // VolumeGroup is the name of the group this volume's LVM layers use.

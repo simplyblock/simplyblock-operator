@@ -136,6 +136,8 @@ spec:
           readOnly: true
         - name: guardian-state
           mountPath: /var/run/simplyblock/guardian
+        - name: stack-records
+          mountPath: /var/run/simplyblock/stacks
         {{- include "simplyblock.tlsVolumeMount" . | nindent 8 }}
       volumes:
       - name: socket-dir
@@ -170,6 +172,13 @@ spec:
       - name: guardian-state
         hostPath:
           path: /var/lib/simplyblock/guardian
+          type: DirectoryOrCreate
+      # What each volume's node-side stack was built from. It outlives the pod,
+      # because a plugin restart is an ordinary event and the record is the only
+      # thing that tells the restarted process what the previous one built.
+      - name: stack-records
+        hostPath:
+          path: /var/lib/simplyblock/stacks
           type: DirectoryOrCreate
       - name: csi-config
         configMap:
