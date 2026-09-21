@@ -383,10 +383,12 @@ func (r *StorageNodeReconciler) provision(
 		// the step that holds while the worker is away, and a finished Resolving
 		// is still the end of the path.
 		//
-		// The add is over, so the slot it was taken for goes back. This is the
-		// successful one of the three ends, and the other two are the deadline in
-		// fail and the object going away in teardown.
-		return ctrl.Result{RequeueAfter: nodeAdvance}, r.releaseSlot(ctx, node)
+		// The slot is not given back here. Reaching this step means the node has
+		// a UUID, and a UUID is the start of the add rather than the end of it:
+		// the control plane writes the node object when add_node begins, with
+		// status in_creation, and finishes minutes later. Steady state releases
+		// it once the control plane says the creation is done.
+		return ctrl.Result{RequeueAfter: nodeAdvance}, nil
 	}
 
 	if err := machine.TransitionTo(ctx, next); err != nil {
@@ -938,6 +940,16 @@ func (r *StorageNodeReconciler) syncStatus(
 			fmt.Sprintf("Node %s is online and carrying its share", node.Status.UUID))
 	}
 	r.observePhase(node)
+
+	// The node-add slot goes back here rather than when the UUID arrived. This
+	// is the first pass on which the control plane has said the creation is
+	// done, which is what the cluster's cap is counting: an add reboots its
+	// host, and the reboot is not over when the object appears.
+	if addFinished(node) {
+		if err := r.releaseSlot(ctx, node); err != nil {
+			return ctrl.Result{RequeueAfter: nodeRetry}, err
+		}
+	}
 	return ctrl.Result{RequeueAfter: nodeRetry}, nil
 }
 
