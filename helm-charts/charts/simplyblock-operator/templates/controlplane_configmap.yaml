@@ -132,7 +132,11 @@ data:
         {{- if .Values.tls.enabled }}
         scheme: https
         tls_config:
-          insecure_skip_verify: true
+          # The bundle the chart's ClusterIssuer writes, rather than
+          # insecure_skip_verify: an encrypted scrape that verifies nothing is
+          # answered by anything that can reach the Service name.
+          ca_file: /etc/prometheus/ca/ca.crt
+          server_name: simplyblock-webappapi
           {{- if .Values.tls.mutual_enabled }}
           cert_file: /etc/prometheus/certs/tls.crt
           key_file: /etc/prometheus/certs/tls.key

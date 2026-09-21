@@ -89,6 +89,85 @@ type FoundationDBSpec struct {
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// ControlPlaneTLSProvider is who issues the control plane's serving certificate.
+//
+// The two values are each product's own spelling rather than this group's
+// PascalCase, because they are not this group's words: they are what
+// internal/utils/tls.go already matches on and what the control-plane image
+// reads out of SB_TLS_PROVIDER.
+// +kubebuilder:validation:Enum=cert-manager;OpenShift
+type ControlPlaneTLSProvider string
+
+const (
+	// ControlPlaneTLSCertManager issues through cert-manager, from the CA the
+	// deployment's ClusterIssuer mints.
+	ControlPlaneTLSCertManager ControlPlaneTLSProvider = "cert-manager"
+
+	// ControlPlaneTLSOpenShift issues through the OpenShift service CA, which
+	// signs from a Service annotation rather than from an object of its own.
+	ControlPlaneTLSOpenShift ControlPlaneTLSProvider = "OpenShift"
+)
+
+// ControlPlaneTLS is how a control plane this operator installs serves, and what
+// it requires of the clients that reach it.
+//
+// The field names are DriverTLS's, because they are the same three decisions
+// about the same connection seen from its two ends, and a reader who knows one
+// should not have to learn the other. What differs is the default: the CSI
+// driver's fields were added to describe deployments that already existed and
+// default off, and these default on. An installed control plane holds every
+// cluster definition, node registration, and volume record, and is reached over
+// the pod network by the operator, the CSI driver, and the metrics scrape alike,
+// so plaintext is a decision to state rather than the state a deployment lands
+// in by leaving the block out.
+type ControlPlaneTLS struct {
+	// EnableTLS serves the management API over TLS. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	EnableTLS *bool `json:"enableTLS,omitempty"`
+
+	// EnableMutualTLS additionally requires a caller to present a certificate
+	// of its own, rather than reaching the control plane anonymously over the
+	// encrypted connection EnableTLS alone provides. Ignored when EnableTLS is
+	// false, the same as on DriverTLS. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	EnableMutualTLS *bool `json:"enableMutualTLS,omitempty"`
+
+	// Provider issues the serving certificate.
+	// +kubebuilder:default=cert-manager
+	// +optional
+	Provider ControlPlaneTLSProvider `json:"provider,omitempty"`
+}
+
+// ServesTLS reports whether the installed control plane serves over TLS.
+//
+// It answers from the unset value rather than from a defaulted field, because an
+// object built in a test or read through a cache never went past admission, and
+// a TLS decision that depends on the API server having run is one that reads as
+// plaintext exactly where it is not checked.
+func (l *LocalControlPlane) ServesTLS() bool {
+	return l == nil || l.TLS.EnableTLS == nil || *l.TLS.EnableTLS
+}
+
+// RequiresClientCertificate reports whether a caller has to present one. Mutual
+// TLS is meaningless without serving TLS, so disabling the serving disables this
+// too rather than leaving the two to contradict each other.
+func (l *LocalControlPlane) RequiresClientCertificate() bool {
+	if !l.ServesTLS() {
+		return false
+	}
+	return l == nil || l.TLS.EnableMutualTLS == nil || *l.TLS.EnableMutualTLS
+}
+
+// TLSProvider is the issuer to use, with the default applied.
+func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
+	if l == nil || l.TLS.Provider == "" {
+		return ControlPlaneTLSCertManager
+	}
+	return l.TLS.Provider
+}
+
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator. Its objects carry a controller reference to the ControlPlane,
 // so the ownership spine starts at a real edge rather than at a Helm release.
@@ -134,6 +213,15 @@ type LocalControlPlane struct {
 	// value already written down.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// TLS is how this control plane serves and what it asks of its callers.
+	//
+	// The block is defaulted to its own zero value rather than left absent, so
+	// that the field defaults inside it are applied to an object that does not
+	// mention TLS at all.
+	// +kubebuilder:default={}
+	// +optional
+	TLS ControlPlaneTLS `json:"tls,omitempty"`
 }
 
 // ManagedControlPlane is a control plane somewhere else, which this cluster's

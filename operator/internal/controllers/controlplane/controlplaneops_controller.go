@@ -541,7 +541,7 @@ func (r *ControlPlaneOpsReconciler) verify(
 ) (bool, string, error) {
 	endpoint := target.Status.Endpoint
 	if endpoint == "" {
-		endpoint = localEndpoint(target.Namespace)
+		endpoint = localEndpoint(target)
 	}
 
 	prober := r.Prober

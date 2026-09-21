@@ -597,11 +597,22 @@ prometheus:
         secret:
           secretName: simplyblock-prometheus-client-tls
           optional: true
+      # The CA the control plane's certificate is verified against. It is its
+      # own volume because the client certificate above is issued only for
+      # mutual TLS, and a scrape that encrypts without verifying is one an
+      # in-cluster impersonator answers.
+      - name: prometheus-ca-tls
+        secret:
+          secretName: simplyblock-ca-bundle-tls
+          optional: true
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
       - name: prometheus-client-tls
         mountPath: /etc/prometheus/certs
+        readOnly: true
+      - name: prometheus-ca-tls
+        mountPath: /etc/prometheus/ca
         readOnly: true
   alertmanager:
     enabled: false
@@ -628,7 +639,15 @@ prometheus:
       image: defaultbackend-amd64
       tag: "1.5"
 tls:
-  enabled: false
+  # On by default. Everything this chart deploys reaches the control plane over
+  # the pod network, and the control plane holds every cluster definition, node
+  # registration, and volume record, so plaintext is a deployment's decision to
+  # state rather than the one it reaches by leaving a value alone.
+  #
+  # It requires an issuer: with provider=cert-manager the chart refuses to render
+  # where cert-manager.io/v1 is not served, and with provider=openshift it
+  # refuses off OpenShift. A cluster that has neither sets this to false.
+  enabled: true
 
   # Provider responsible for issuing serving certificates. One of: openshift, cert-manager. Required if enabled.
   provider: cert-manager
@@ -645,5 +664,9 @@ tls:
     # secrets from the cert-manager controller namespace).
     namespace: cert-manager
 
-  # Mutual TLS (clients present and verify certificates). Only allowed when provider == cert-manager.
-  mutual_enabled: false
+  # Mutual TLS (clients present and verify certificates). Only allowed when
+  # provider == cert-manager. On by default, with tls.enabled: the chart issues a
+  # client certificate for each of the operator, the two CSI plugins, Prometheus,
+  # and FoundationDB's peers, so there is nothing left for a deployment to
+  # provision before it can be required.
+  mutual_enabled: true

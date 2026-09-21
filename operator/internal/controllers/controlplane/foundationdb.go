@@ -91,7 +91,8 @@ const fdbCoordinatorDisk = "10G"
 // the controller, then the cluster the controller reconciles.
 func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
-	return []client.Object{
+	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
+	objects := []client.Object{
 		serviceAccount(ns, fdbOperatorServiceAccount),
 		serviceAccount(ns, fdbPodServiceAccount),
 		fdbManagerRoleObject(),
@@ -103,6 +104,7 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 		fdbOperatorDeployment(cp),
 		foundationDBCluster(cp),
 	}
+	return append(objects, fdbPeerCertificate(cp)...)
 }
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
@@ -241,6 +243,7 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 		logsVolume     = "logs"
 	)
 	labels := map[string]string{appLabel: ComponentFDBOperator}
+	peerTLS := fdbPeerTLS(cp)
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: fdbOperatorServiceAccount,
@@ -249,11 +252,11 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			RunAsGroup: ptr.To(int64(4059)),
 			FSGroup:    ptr.To(int64(4059)),
 		},
-		Volumes: []corev1.Volume{
+		Volumes: append([]corev1.Volume{
 			{Name: tmpVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			{Name: logsVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			{Name: binariesVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		},
+		}, peerVolumeIf(peerTLS)...),
 		InitContainers: []corev1.Container{{
 			Name:  "foundationdb-kubernetes-init-7-3",
 			Image: fdbMonitorImage,
@@ -274,12 +277,14 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Image:   fdbOperatorImage,
 			Command: []string{"/manager"},
 			Args:    []string{"--health-probe-bind-address=:9443"},
-			Env: []corev1.EnvVar{{
+			// The operator reconciles the database, so it reaches it the way its
+			// processes reach each other and needs the same material.
+			Env: append([]corev1.EnvVar{{
 				Name: "WATCH_NAMESPACE",
 				ValueFrom: &corev1.EnvVarSource{
 					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 				},
-			}},
+			}}, peerEnvIf(peerTLS)...),
 			Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 8080}},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -296,11 +301,11 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 				AllowPrivilegeEscalation: ptr.To(false),
 				Privileged:               ptr.To(false),
 			},
-			VolumeMounts: []corev1.VolumeMount{
+			VolumeMounts: append([]corev1.VolumeMount{
 				{Name: tmpVolume, MountPath: "/tmp"},
 				{Name: logsVolume, MountPath: "/var/log/fdb"},
 				{Name: binariesVolume, MountPath: "/usr/bin/fdb"},
-			},
+			}, peerMountIf(peerTLS)...),
 		}},
 		TerminationGracePeriodSeconds: ptr.To(int64(10)),
 	}
@@ -337,12 +342,13 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	// The class templates are identical apart from their anti-affinity, and the
 	// FoundationDB operator replaces general.podTemplate wholesale when a class
 	// override exists, so each one repeats what general already said.
+	peerTLS := fdbPeerTLS(cp)
 	classTemplate := func(class string) map[string]any {
 		template := map[string]any{
 			"spec": map[string]any{
 				"serviceAccountName": fdbPodServiceAccount,
 				"containers": []any{
-					fdbContainer(fdb),
+					fdbContainer(fdb, peerTLS),
 				},
 				"affinity": map[string]any{
 					"podAntiAffinity": map[string]any{
@@ -364,6 +370,12 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 		if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
 			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(local.NodeSelector)
 		}
+		if peerTLS {
+			// The operator replaces general.podTemplate wholesale for a class
+			// that overrides it, so the volume is repeated here rather than
+			// inherited.
+			template["spec"].(map[string]any)["volumes"] = fdbPeerVolume()
+		}
 		return map[string]any{"podTemplate": template}
 	}
 
@@ -372,7 +384,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 		"podTemplate": map[string]any{
 			"spec": map[string]any{
 				"serviceAccountName": fdbPodServiceAccount,
-				"containers":         []any{fdbContainer(fdb)},
+				"containers":         []any{fdbContainer(fdb, peerTLS)},
 				"initContainers": []any{map[string]any{
 					"name": "foundationdb-kubernetes-init",
 					"resources": map[string]any{
@@ -390,6 +402,9 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 	if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] =
 			toAnyMap(local.NodeSelector)
+	}
+	if peerTLS {
+		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["volumes"] = fdbPeerVolume()
 	}
 
 	obj := &unstructured.Unstructured{Object: map[string]any{
@@ -425,8 +440,8 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				"log":     classTemplate("log"),
 			},
 			"routing":          map[string]any{"defineDNSLocalityFields": true},
-			"mainContainer":    map[string]any{"imageConfigs": []any{map[string]any{"baseImage": fdbMonitorImageRepository()}}},
-			"sidecarContainer": map[string]any{"enableLivenessProbe": true, "enableReadinessProbe": false},
+			"mainContainer":    mainContainerSpec(peerTLS),
+			"sidecarContainer": sidecarContainerSpec(peerTLS),
 		},
 	}}
 	obj.SetGroupVersionKind(fdbClusterGVK)
@@ -439,7 +454,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 // process. It runs as root because the FoundationDB image's data directory is
 // owned by it, which is the upstream image's arrangement rather than a choice
 // this install makes.
-func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
+func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec, peerTLS bool) map[string]any {
 	requests := map[string]any{"cpu": "100m", "memory": "1Gi"}
 	limits := map[string]any{"cpu": "500m", "memory": "4Gi"}
 	if fdb != nil {
@@ -456,11 +471,16 @@ func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
 			limits["memory"] = q.String()
 		}
 	}
-	return map[string]any{
+	container := map[string]any{
 		"name":            "foundationdb",
 		"resources":       map[string]any{"requests": requests, "limits": limits},
 		"securityContext": map[string]any{"runAsUser": int64(0)},
 	}
+	if peerTLS {
+		container["env"] = fdbPeerEnv()
+		container["volumeMounts"] = fdbPeerMount()
+	}
+	return container
 }
 
 // volumeClaimSpec is what each FoundationDB process claims. An unset storage
@@ -589,4 +609,53 @@ func (h fdbHealth) waitingOn() string {
 	default:
 		return ""
 	}
+}
+
+// mainContainerSpec and sidecarContainerSpec carry the switch that turns
+// FoundationDB's own listeners to TLS.
+//
+// It is a field on the cluster rather than an environment variable, and it is
+// the half that matters: the FDB_TLS_* the pod templates carry is only the
+// material, and processes with the material and no enableTls talk to each other
+// in the clear while every certificate is mounted and current.
+func mainContainerSpec(peerTLS bool) map[string]any {
+	spec := map[string]any{
+		"imageConfigs": []any{map[string]any{"baseImage": fdbMonitorImageRepository()}},
+	}
+	if peerTLS {
+		spec["enableTls"] = true
+	}
+	return spec
+}
+
+func sidecarContainerSpec(peerTLS bool) map[string]any {
+	spec := map[string]any{"enableLivenessProbe": true, "enableReadinessProbe": false}
+	if peerTLS {
+		spec["enableTls"] = true
+	}
+	return spec
+}
+
+// The three conditional halves of the FoundationDB operator's own peer TLS,
+// written as helpers so the Deployment reads as one literal rather than as four
+// branches around it.
+func peerEnvIf(peerTLS bool) []corev1.EnvVar {
+	if !peerTLS {
+		return nil
+	}
+	return fdbOperatorPeerEnv()
+}
+
+func peerVolumeIf(peerTLS bool) []corev1.Volume {
+	if !peerTLS {
+		return nil
+	}
+	return fdbOperatorPeerVolume()
+}
+
+func peerMountIf(peerTLS bool) []corev1.VolumeMount {
+	if !peerTLS {
+		return nil
+	}
+	return fdbOperatorPeerMount()
 }

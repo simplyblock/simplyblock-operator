@@ -1,28 +1,19 @@
 {{/*
-The two ways a control-plane profile can be asked for something it cannot do.
+The ways a control-plane profile can be asked for something it cannot do.
 
-Both fail at render time rather than at apply time, because each produces a
-deployment that comes up and is quietly wrong: one serving plaintext where TLS
-was asked for, and one pointed at no control plane at all.
+They fail at render time rather than at apply time, because each produces a
+deployment that comes up and is quietly wrong: one pointed at no control plane
+at all, and one whose upgrade would prune the database.
+
+A TLS standalone deployment used to be refused here. The ControlPlane spec now
+carries spec.source.local.tls, the operator's install honors it, and
+controlplane_cr.yaml renders it from tls.enabled, so the deployment that could
+only come up in plaintext is expressible and the refusal is gone.
 */}}
 
 
 {{- if not (has .Values.deployment.profile (list "standalone" "managed")) -}}
 {{- fail (printf "deployment.profile is %q: it is one of standalone (this cluster hosts its own control plane) or managed (a control plane elsewhere manages this cluster's storage)." .Values.deployment.profile) -}}
-{{- end -}}
-
-{{/*
-TLS has no field on the ControlPlane spec. design-controlplane.md §5.1 settles
-which certificate issuer is detected, not whether a deployment wants one, so an
-operator-installed control plane comes up in plaintext whatever tls.enabled says.
-
-That was survivable while the chart could still install the control plane
-itself. It cannot any more, so a TLS deployment has nowhere to go and the honest
-answer is to refuse rather than to install something quieter than what was asked
-for.
-*/}}
-{{- if and (eq .Values.deployment.profile "standalone") .Values.tls.enabled -}}
-{{- fail "deployment.profile=standalone cannot serve TLS: the ControlPlane spec has no field for it, so the operator's install would bring the control plane up in plaintext. Until the spec can express it, a TLS deployment needs a control plane this cluster does not host (deployment.profile=managed), or an operator release that carries the field." -}}
 {{- end -}}
 
 {{/*

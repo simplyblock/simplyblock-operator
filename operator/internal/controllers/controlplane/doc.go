@@ -44,14 +44,21 @@
 // operator where a cluster has none, and the answer this package reaches is that
 // a base control plane does not need one.
 //
-// # What is not here yet
+// # TLS
 //
-// TLS. The chart serves the control plane over TLS behind tls.enabled, which has
-// no field in the ControlPlane spec design-controlplane.md settles, and §5.1
-// says only that the issuer is detected rather than declared. The install this
-// package performs is the plaintext one, which is the chart's default and what
-// the reference deployment runs. The chart refuses to hand over a TLS-enabled
-// deployment rather than quietly installing it without TLS.
+// spec.source.local.tls is what the install reads, and it defaults to serving
+// TLS and requiring a client certificate. tls.go turns it into the environment
+// the control-plane image has always spoken -- SB_TLS_SERVE, SB_TLS_PROVIDER,
+// SB_TLS_CONNECT, SB_TLS_CLIENT_AUTH, and FoundationDB's FDB_TLS_* -- onto every
+// pod of the install rather than only the one that serves, because the task and
+// monitoring pools are clients of the management API and a plaintext pool cannot
+// reach an API that requires a certificate.
+//
+// The serving certificate is applied here as well. It was the chart's, rendered
+// beside the Service it certifies, and the install that replaced the chart took
+// the Service without it, so every pod mounted a Secret nothing produced.
+//
+// # What is not here yet
 //
 // Adoption. An install that meets objects a Helm release already created takes
 // them over by server-side apply under a stable field manager, which is the same

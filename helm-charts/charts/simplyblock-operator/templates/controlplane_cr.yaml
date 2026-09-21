@@ -44,6 +44,18 @@ spec:
         {{- if .Values.controlplane.storageclass.name }}
         storageClassName: {{ .Values.controlplane.storageclass.name }}
         {{- end }}
+      # The chart states both halves explicitly rather than leaving the CR's
+      # defaults to decide. The CR defaults to serving TLS, and the chart's
+      # tls.enabled defaults to off, and a release that said nothing would get
+      # the CR's answer instead of the one its values state -- which is a
+      # deployment that comes up over TLS because a field was omitted.
+      tls:
+        enableTLS: {{ .Values.tls.enabled }}
+        enableMutualTLS: {{ and .Values.tls.enabled .Values.tls.mutual_enabled }}
+        # The chart spells the providers in lower case and this API spells
+        # OpenShift as the product does, the same translation
+        # simplyblockdriver_cr.yaml performs.
+        provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
         {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}

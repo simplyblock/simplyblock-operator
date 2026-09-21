@@ -333,6 +333,35 @@ spec:
                                 More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                               type: object
                           type: object
+                        tls:
+                          default: {}
+                          description: |-
+                            TLS is how this control plane serves and what it asks of its callers.
+
+                            The block is defaulted to its own zero value rather than left absent, so
+                            that the field defaults inside it are applied to an object that does not
+                            mention TLS at all.
+                          properties:
+                            enableMutualTLS:
+                              default: true
+                              description: |-
+                                EnableMutualTLS additionally requires a caller to present a certificate
+                                of its own, rather than reaching the control plane anonymously over the
+                                encrypted connection EnableTLS alone provides. Ignored when EnableTLS is
+                                false, the same as on DriverTLS. Unset is on.
+                              type: boolean
+                            enableTLS:
+                              default: true
+                              description: EnableTLS serves the management API over TLS. Unset is on.
+                              type: boolean
+                            provider:
+                              default: cert-manager
+                              description: Provider issues the serving certificate.
+                              enum:
+                                - cert-manager
+                                - OpenShift
+                              type: string
+                          type: object
                         tolerations:
                           description: |-
                             Tolerations are applied to every pod the operator installs for the control

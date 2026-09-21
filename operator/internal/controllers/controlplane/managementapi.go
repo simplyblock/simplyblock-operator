@@ -52,7 +52,8 @@ var restartOnClusterFileChange = map[string]string{
 // of the one that serves.
 func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
-	return []client.Object{
+	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
+	objects := []client.Object{
 		serviceAccount(ns, serviceAccountName),
 		sharedConfigMap(ns),
 		controlPlaneClusterRole(),
@@ -60,13 +61,14 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		serviceReaderClusterRole(),
 		serviceReaderClusterRoleBinding(ns),
 		webAPIDeployment(cp),
-		webAPIService(ns),
+		webAPIService(cp),
 		tasksDeployment(cp),
 		monitoringDeployment(cp),
 		adminControlDeployment(cp),
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
+	return append(objects, servingCertificateObjects(cp)...)
 }
 
 // managementAPIClusterScoped is the half of that set the garbage collector will
@@ -231,6 +233,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
 	}
 	env = append(env, prometheusEnv()...)
+	env = append(env, tlsEnv(managed)...)
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
@@ -242,10 +245,11 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Command:         []string{"python3", "simplyblock_web/app.py"},
 			Ports:           []corev1.ContainerPort{{ContainerPort: webAPIPort}},
 			Env:             env,
-			VolumeMounts:    []corev1.VolumeMount{clusterFileMount()},
+			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources:       webAPIResources(managed),
 		}},
-		Volumes: []corev1.Volume{clusterFileVolumeSource()},
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed, ServingCertSecret)...),
 	}
 	scheduling(managed, &spec)
 
@@ -298,9 +302,13 @@ func webAPIResources(managed *simplyblockv1alpha2.LocalControlPlane) corev1.Reso
 
 // webAPIService is what status.endpoint resolves to, and the name the CSI
 // driver's configuration and the metrics scrape both carry.
-func webAPIService(namespace string) *corev1.Service {
+func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        ComponentWebAPI,
+			Namespace:   cp.Namespace,
+			Annotations: servingCertAnnotations(cp),
+		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{appLabel: ComponentWebAPI},
 			Ports: []corev1.ServicePort{
@@ -387,8 +395,9 @@ func servicePoolDeployment(
 		// directly, which are host addresses rather than Service names.
 		HostNetwork: true,
 		DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
-		Containers:  containers(services, localImage(cp), pullPolicyOf(managed)),
-		Volumes:     []corev1.Volume{clusterFileVolumeSource()},
+		Containers:  containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed, ServingCertSecret)...),
 	}
 	scheduling(managed, &spec)
 
@@ -427,6 +436,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 		logLevelEnv(),
 	}
 	env = append(env, prometheusEnv()...)
+	env = append(env, tlsEnv(managed)...)
 
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
@@ -442,7 +452,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 			// act on a signal while a foreground sleep is running.
 			Command:      []string{"/bin/bash", "-c", "trap : TERM INT; sleep infinity & wait"},
 			Env:          env,
-			VolumeMounts: []corev1.VolumeMount{clusterFileMount()},
+			VolumeMounts: append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("200m"),
@@ -454,7 +464,8 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 				},
 			},
 		}},
-		Volumes: []corev1.Volume{clusterFileVolumeSource()},
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed, ServingCertSecret)...),
 	}
 	scheduling(managed, &spec)
 

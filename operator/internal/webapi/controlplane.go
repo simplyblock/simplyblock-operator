@@ -12,6 +12,7 @@ package webapi
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/simplyblock/atlas/controlplane"
 	atlaskube "github.com/simplyblock/atlas/kube"
@@ -29,5 +30,26 @@ func ControlPlaneConfig() (controlplane.Config, error) {
 	if err != nil {
 		return controlplane.Config{}, fmt.Errorf("read the service-account token: %w", err)
 	}
-	return controlplane.Config{Endpoint: NewClient().BaseURL, Token: token}, nil
+	// The startup client already resolved both halves of how the control plane
+	// is reached: the base URL carries the scheme, and its transport carries the
+	// CA bundle and the client certificate this pod mounts. Carrying only the URL
+	// left the atlas-lib client to build its own connection, which is the system
+	// trust store and no certificate -- a client that cannot verify this
+	// deployment's CA and cannot authenticate to a control plane that asks.
+	startup := NewClient()
+	return controlplane.Config{
+		Endpoint:  startup.BaseURL,
+		Token:     token,
+		Transport: transportOf(startup),
+	}, nil
+}
+
+// transportOf is the connection a client was built with, and nil where it was
+// built with the default one. Nil is what controlplane.Config takes to mean the
+// same default, so the plaintext case stays the zero value.
+func transportOf(c *Client) http.RoundTripper {
+	if c == nil || c.HttpClient == nil {
+		return nil
+	}
+	return c.HttpClient.Transport
 }
