@@ -9,6 +9,7 @@
 package driver
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -126,28 +127,9 @@ func TestPNFSMountsTheHostNFSState(t *testing.T) {
 	pod := nodeDaemonSet(pnfsDriver(), testImage).Spec.Template.Spec
 	c := containerNamed(pod.Containers, "csi-node")
 
-	for _, path := range []string{nfsStateDir, procFSDir} {
+	for _, path := range []string{nfsStateDir} {
 		if mountAtPath(c.VolumeMounts, path) == nil {
 			t.Errorf("the node plugin does not mount %s, so exportfs would write a copy nothing reads", path)
-		}
-	}
-}
-
-// /proc/fs is the host's and always exists, so it is required rather than
-// created. /proc/fs/nfsd itself is deliberately NOT mounted: it appears only
-// once the nfsd module is loaded, and requiring it would stop the plugin
-// starting on exactly the nodes it is there to bring up.
-func TestPNFSRequiresProcFSRatherThanCreatingIt(t *testing.T) {
-	volumes := nodeDaemonSet(pnfsDriver(), testImage).Spec.Template.Spec.Volumes
-
-	for _, name := range []string{procFSVolumeName} {
-		v := volumeNamed(volumes, name)
-		if v == nil || v.HostPath == nil {
-			t.Fatalf("%s is not a host path", name)
-		}
-		if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathDirectory {
-			t.Errorf("%s is %v, want Directory so a host without nfsd fails visibly",
-				name, v.HostPath.Type)
 		}
 	}
 }
@@ -159,4 +141,37 @@ func mountAtPath(mounts []corev1.VolumeMount, path string) *corev1.VolumeMount {
 		}
 	}
 	return nil
+}
+
+// Regression: runc refuses any bind mount whose target is inside the
+// container's /proc, so a pod spec carrying one never starts at all.
+//
+//	error mounting "/proc/fs" to rootfs at "/proc/fs": create mountpoint for
+//	/proc/fs mount: check proc-safety of /proc/fs mount: ... cannot be mounted
+//	because it is inside /proc
+//
+// Nothing was lost with it. nfsd's control filesystem is keyed by network
+// namespace rather than by mount namespace, and the node plugin runs with
+// hostNetwork, so the /proc/fs/nfsd it mounts for itself already drives the
+// host's nfsd. Verified on a node: rpc.nfsd's thread count read from inside the
+// container is the host's.
+func TestPNFSMountsNothingInsideProc(t *testing.T) {
+	driver := pnfsDriver()
+
+	for _, volume := range pnfsVolumes(driver) {
+		if volume.HostPath == nil {
+			continue
+		}
+		if path := volume.HostPath.Path; path == "/proc" || strings.HasPrefix(path, "/proc/") {
+			t.Errorf("volume %s is the host's %s, which runc refuses to mount into a container",
+				volume.Name, path)
+		}
+	}
+
+	for _, mount := range pnfsVolumeMounts(driver) {
+		if mount.MountPath == "/proc" || strings.HasPrefix(mount.MountPath, "/proc/") {
+			t.Errorf("mount %s lands on %s, and runc refuses every target inside /proc",
+				mount.Name, mount.MountPath)
+		}
+	}
 }

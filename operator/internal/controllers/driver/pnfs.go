@@ -1,10 +1,16 @@
 // What spec.pnfs puts on the node plugin: the host directories an NFS metadata
 // server cannot do without.
 //
-// All four are about the container boundary rather than about NFS. Against this
-// container's own copies the drop-in reaches no nfsd and exportfs publishes an
-// empty directory, which is the worse failure: a client mounts it and sees a
-// volume that merely looks empty.
+// All three are about the container boundary rather than about NFS. Against
+// this container's own copies the drop-in reaches no nfsd and exportfs
+// publishes an empty directory, which is the worse failure: a client mounts it
+// and sees a volume that merely looks empty.
+//
+// nfsd's own control filesystem is not among them, and needs nothing here. It
+// is keyed by network namespace rather than by mount namespace, and the plugin
+// runs with hostNetwork, so the /proc/fs/nfsd it mounts for itself already
+// drives the host's nfsd. A hostPath would not work anyway: runc refuses every
+// bind mount whose target is inside the container's /proc.
 //
 // Deliberately no hostPID. The mount reaches the node through bidirectional
 // propagation and exportfs through the state directories, so the PID namespace
@@ -44,13 +50,6 @@ const (
 	// here one the host actually serves.
 	nfsStateDir        = "/var/lib/nfs"
 	nfsStateVolumeName = "host-nfs-state"
-
-	// The parent, not /proc/fs/nfsd itself: that directory appears only once
-	// the nfsd module is loaded, so requiring it would stop the plugin
-	// starting on exactly the nodes it is there to bring up. Mounted
-	// bidirectionally so the nfsd filesystem this plugin mounts is the host's.
-	procFSDir        = "/proc/fs"
-	procFSVolumeName = "host-proc-fs"
 )
 
 // pnfsEnabled applies the CRD's default.
@@ -58,23 +57,19 @@ func pnfsEnabled(d *simplyblockv1alpha2.SimplyblockDriver) bool {
 	return d.Spec.PNFS.EnablePNFS != nil && *d.Spec.PNFS.EnablePNFS
 }
 
-// pnfsVolumes are the two host directories, or none when pNFS is off.
+// pnfsVolumes are the three host directories, or none when pNFS is off.
+//
+// All DirectoryOrCreate: a host that has never served an export has none of
+// them, and nfs-utils makes its state directory on first use.
 func pnfsVolumes(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.Volume {
 	if !pnfsEnabled(d) {
 		return nil
 	}
 	dirOrCreate := corev1.HostPathDirectoryOrCreate
-	dir := corev1.HostPathDirectory
 	return []corev1.Volume{
-		// DirectoryOrCreate: a host that has never served an export has
-		// neither.
 		hostPathVolume(exportsVolumeName, exportsDir, &dirOrCreate),
 		hostPathVolume(exportRootVolumeName, exportRoot, &dirOrCreate),
-		// /proc/fs is Directory because it always exists and creating it would
-		// mean something is very wrong; /var/lib/nfs is DirectoryOrCreate
-		// because nfs-utils makes it on first use.
 		hostPathVolume(nfsStateVolumeName, nfsStateDir, &dirOrCreate),
-		hostPathVolume(procFSVolumeName, procFSDir, &dir),
 	}
 }
 
@@ -89,6 +84,5 @@ func pnfsVolumeMounts(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.VolumeM
 		{Name: exportsVolumeName, MountPath: exportsDir},
 		{Name: exportRootVolumeName, MountPath: exportRoot, MountPropagation: &bidirectional},
 		{Name: nfsStateVolumeName, MountPath: nfsStateDir},
-		{Name: procFSVolumeName, MountPath: procFSDir, MountPropagation: &bidirectional},
 	}
 }

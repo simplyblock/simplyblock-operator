@@ -60,7 +60,11 @@ func ensureNFSDModule(ctx context.Context, run runner) error {
 }
 
 // ensureNFSDFilesystem mounts the nfsd control filesystem if it is not there.
-// It lands on the host through the bidirectional propagation on /proc/fs.
+//
+// In this container's own mount namespace, which is enough: nfsd is keyed by
+// network namespace and the plugin runs with hostNetwork, so what this mount
+// exposes is the host's nfsd. A hostPath would not be an option in any case,
+// because runc refuses every bind mount whose target is inside /proc.
 func ensureNFSDFilesystem(ctx context.Context, run runner) error {
 	if _, err := os.Stat(nfsdControl); err == nil {
 		return nil
