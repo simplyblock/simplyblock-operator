@@ -17,7 +17,6 @@ import (
 	"context"
 
 	"github.com/simplyblock/atlas/blockdev"
-	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack"
@@ -108,15 +107,8 @@ type priorFormatFunc func(ctx context.Context, volume plans.Volume) (string, err
 func (s *stack) node(hostNQN string, priorFormat priorFormatFunc) *plans.Node {
 	cfg := s.seams
 	cfg.HostNQN = hostNQN
-	if hostNQN != "" {
-		// Derived from the NQN's own UUID rather than taken from the node's
-		// /etc/nvme/hostid, because the kernel keeps the pair strictly 1:1 and a
-		// node holding even one connection under the default identity would
-		// otherwise refuse every connect that names this one.
-		if hostID, ok := nqn.HostUUID(hostNQN); ok {
-			cfg.HostID = hostID
-		}
-	}
 	cfg.PriorFormat = priorFormat
+	// NewNode derives the host id from the NQN, which the kernel keeps 1:1 with
+	// it.
 	return plans.NewNode(cfg)
 }

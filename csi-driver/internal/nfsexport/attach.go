@@ -1,12 +1,10 @@
-// Attaching the backing namespace of a pNFS export to this host.
+// Attaching the backing namespace of a pNFS export to a client host.
 //
-// The metadata server is an NVMe-oF initiator like any client -- that is the
-// arrangement that lets the data path bypass it. What is different is that no
-// CSI call targets it: kubelet stages on the nodes running the pods. So unless
-// assembly attaches, nothing on that host will.
-//
-// This is the driver's ordinary connect path with a different caller, so
-// reconnect handling, fabric repair, and the device wait come with it.
+// A client is an NVMe-oF initiator for the same namespace the metadata server
+// made the filesystem on, which is the arrangement that lets the data path
+// bypass it. This is the driver's ordinary connect path with a different
+// caller, so reconnect handling, fabric repair, and the device wait come with
+// it.
 
 package nfsexport
 
@@ -123,9 +121,15 @@ func (a attacher) Detach(ctx context.Context, spec export.Spec) error {
 	return nil
 }
 
-// Attach and Detach as standalone calls, for the node plugin's staging path.
-// One implementation serves client and server, so the two cannot disagree about
-// how a namespace is connected or under which identity.
+// Attach and Detach as standalone calls, for the node plugin's pNFS staging
+// path: a client attaches the same namespace, because that is what lets it
+// address the layout directly.
+//
+// The metadata server no longer comes through here, because its assembly
+// attaches through the volume stack's fabric layer (plan.go), so this is one
+// implementation short of the two paths sharing one. Folding the client onto a
+// RawBlock plan is the follow-up, and it also collapses the separate sysfs
+// lookup stagePNFSVolume does for the NGUID.
 func Attach(ctx context.Context, spec export.Spec, hostNQN HostNQNFunc) error {
 	return attacher{hostNQN: hostNQN}.Attach(ctx, spec)
 }

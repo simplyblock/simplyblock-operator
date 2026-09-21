@@ -1,10 +1,9 @@
-// Package export assembles and tears down a pNFS export on its metadata-server
-// host.
+// Package export publishes a pNFS export on its metadata-server host.
 //
-// An export is a filesystem on one NVMe-oF namespace, mounted at a path and
-// published through the host's nfsd. Assembly is four steps; teardown is those
-// four reversed. The caller is a reconciler, so each step is skipped when
-// already satisfied.
+// An export is a volume stack (the namespace attached, formatted, and mounted)
+// with an exports(5) entry in front of it. The stack is the same one the block
+// path stages: the consumer builds the plan, volstack's runner walks it, and
+// what is left here is the publishing.
 package export
 
 import (
@@ -16,8 +15,7 @@ import (
 	"strings"
 
 	"github.com/simplyblock/atlas/blockdev"
-	"github.com/simplyblock/atlas/errs"
-	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/volstack"
 )
 
 // ErrInvalidSpec is a spec no host could assemble.
@@ -39,13 +37,12 @@ var exportOptions = []string{"rw", "sync", "no_subtree_check", "no_root_squash",
 // Spec is one export to assemble: which device, where it goes, and who may
 // mount it.
 type Spec struct {
-	// VolumeUUID identifies the backing namespace; for a simplyblock volume it
-	// is the logical volume's own id. Not a device path: the kernel assigns
-	// those in attach order, so they differ across hosts.
+	// VolumeUUID identifies the backing namespace, which for a simplyblock
+	// volume is the logical volume's own id. Not a device path: the kernel
+	// assigns those in attach order, so they differ across hosts.
 	VolumeUUID string
 
-	// ClusterID and PoolID let Attach ask the control plane where the namespace
-	// is served from. A Config with no Attach ignores them.
+	// ClusterID and PoolID are where the planner asks after the namespace.
 	ClusterID string
 	PoolID    string
 
@@ -57,8 +54,8 @@ type Spec struct {
 	FSID string
 
 	// Encrypted says the control plane stacks a crypto bdev under this
-	// namespace, which makes an unwritten block read as pseudo-random
-	// plaintext rather than as zeros. The blank check needs it, or an empty
+	// namespace, which makes an unwritten block read as pseudo-random plaintext
+	// rather than as zeros. The filesystem layer needs it, or an empty
 	// encrypted volume is mistaken for an occupied one and never formatted.
 	Encrypted bool
 
@@ -86,6 +83,11 @@ func (s Spec) Validate() error {
 // path contains separators.
 func (s Spec) dropInName() string { return "pnfs-" + strings.ReplaceAll(s.FSID, ":", "-") + ".exports" }
 
+// StackHandle is what this export's stack record is keyed by. Prefixed so it
+// cannot collide with a volume the node plugin staged, which records into the
+// same directory.
+func (s Spec) StackHandle() string { return "pnfs-" + s.FSID }
+
 // line is the exports(5) entry for this export.
 func (s Spec) line() string {
 	opts := append(append([]string{}, exportOptions...), "fsid="+s.FSID)
@@ -96,44 +98,32 @@ func (s Spec) line() string {
 	return s.Path + " " + strings.Join(clients, " ") + "\n"
 }
 
-// Filesystem is the subset of volstack's FilesystemOps an export needs.
-type Filesystem interface {
-	Format(ctx context.Context, device, fsType string, options []string) error
-	Mount(ctx context.Context, source, target, fsType string, options []string) error
-	Unmount(ctx context.Context, target string) error
-	IsMountPoint(ctx context.Context, path string) (bool, error)
+// Runner is the subset of volstack.Runner an export walks its stack with.
+type Runner interface {
+	Up(ctx context.Context, handle string, plan volstack.Plan) (volstack.Artifact, error)
+	Grow(ctx context.Context, plan volstack.Plan) error
+	Down(ctx context.Context, handle string, plan volstack.Plan) error
 }
 
 // Config is what an Assembler needs to reach the host.
 type Config struct {
-	// Devices resolves the backing namespace.
-	Devices nvme.DeviceResolver
+	// Plan is the stack this export sits on: the namespace attached and its
+	// filesystem mounted at spec.Path.
+	//
+	// Injected rather than built here, because resolving where a namespace is
+	// published means asking the control plane, and the consumer owns that
+	// client. It is called on the teardown path too, which is why it has to
+	// answer for a volume this host may no longer reach.
+	Plan func(ctx context.Context, spec Spec) (volstack.Plan, error)
 
-	// Filesystem formats, mounts, and unmounts.
-	Filesystem Filesystem
-
-	// Content reads what a device carries. Asked every time: formatting one
-	// that already has a filesystem destroys it.
-	Content ContentReader
+	// Stack walks that plan.
+	Stack Runner
 
 	// Run executes exportfs. Injected so a test does not need one.
 	Run blockdev.Runner
 
 	// ExportsDir is the drop-in directory, conventionally /etc/exports.d.
 	ExportsDir string
-
-	// Attach makes the namespace present on this host; Detach gives it up.
-	// Both optional: nil assembles against a device that is already there.
-	//
-	// The metadata server needs one because it is an initiator like any client,
-	// and no CSI call ever targets it -- kubelet stages on the nodes running
-	// the pods. So unless assembly attaches, nothing on that host will.
-	//
-	// Injected rather than implemented here: connecting a namespace means
-	// asking the control plane where it is served from and running an initiator
-	// with this host's identity, and the CSI driver already owns that path.
-	Attach func(ctx context.Context, spec Spec) error
-	Detach func(ctx context.Context, spec Spec) error
 }
 
 // Assembler builds and removes exports on the host it runs on.
@@ -144,12 +134,10 @@ type Assembler struct {
 // New returns an Assembler, or an error when the configuration cannot work.
 func New(cfg Config) (*Assembler, error) {
 	switch {
-	case cfg.Devices == nil:
-		return nil, fmt.Errorf("export: no device resolver: %w", ErrInvalidSpec)
-	case cfg.Filesystem == nil:
-		return nil, fmt.Errorf("export: no filesystem ops: %w", ErrInvalidSpec)
-	case cfg.Content == nil:
-		return nil, fmt.Errorf("export: no content reader: %w", ErrInvalidSpec)
+	case cfg.Plan == nil:
+		return nil, fmt.Errorf("export: no stack planner: %w", ErrInvalidSpec)
+	case cfg.Stack == nil:
+		return nil, fmt.Errorf("export: no stack runner: %w", ErrInvalidSpec)
 	case cfg.Run == nil:
 		return nil, fmt.Errorf("export: no command runner: %w", ErrInvalidSpec)
 	case cfg.ExportsDir == "":
@@ -158,70 +146,30 @@ func New(cfg Config) (*Assembler, error) {
 	return &Assembler{cfg: cfg}, nil
 }
 
-// Create assembles the export, skipping whatever is already done.
-//
-// The order is forced. Publishing last is what makes a half-assembled export
-// invisible to clients rather than briefly broken for them.
+// Create assembles the export. Every step converges, because the caller is a
+// reconciler that runs this on each pass.
 func (a *Assembler) Create(ctx context.Context, spec Spec) error {
 	if err := spec.Validate(); err != nil {
 		return err
 	}
 
-	// Attach first: everything below looks for a device that is not there until
-	// this has run, and a not-found would name the wrong problem.
-	if a.cfg.Attach != nil {
-		if err := a.cfg.Attach(ctx, spec); err != nil {
-			return fmt.Errorf("export %s: attaching the namespace: %w", spec.Path, err)
-		}
-	}
-
-	device, err := a.cfg.Devices.ByUUID(ctx, spec.VolumeUUID)
+	plan, err := a.cfg.Plan(ctx, spec)
 	if err != nil {
-		return fmt.Errorf("export %s: finding device uuid=%s: %w", spec.Path, spec.VolumeUUID, err)
+		return fmt.Errorf("export %s: planning the stack: %w", spec.Path, err)
 	}
-	devPath := device.Namespace.DevicePath
-	if devPath == "" {
-		return fmt.Errorf("export %s: device uuid=%s has no block node: %w",
-			spec.Path, spec.VolumeUUID, errs.ErrNotFound)
+	if _, err := a.cfg.Stack.Up(ctx, spec.StackHandle(), plan); err != nil {
+		return fmt.Errorf("export %s: bringing the stack up: %w", spec.Path, err)
 	}
 
-	// Format only a blank device. One that already holds a filesystem is this
-	// export re-entered, or somebody else's; formatting either destroys data.
-	blank, err := a.blank(ctx, spec, devPath)
-	if err != nil {
-		return err
-	}
-	if blank {
-		if err := a.cfg.Filesystem.Format(ctx, devPath, FSType, nil); err != nil {
-			return fmt.Errorf("export %s: mkfs.%s on %s: %w", spec.Path, FSType, devPath, err)
-		}
+	// The control plane can enlarge the volume under a live export, and no CSI
+	// call ever reaches this host to grow the filesystem after it: kubelet
+	// stages on the nodes running the pods. Assembly is the only thing here.
+	if err := a.cfg.Stack.Grow(ctx, plan); err != nil {
+		return fmt.Errorf("export %s: growing onto the volume: %w", spec.Path, err)
 	}
 
-	if err := os.MkdirAll(spec.Path, 0o755); err != nil {
-		return fmt.Errorf("export %s: creating the mount point: %w", spec.Path, err)
-	}
-	mounted, err := a.cfg.Filesystem.IsMountPoint(ctx, spec.Path)
-	if err != nil {
-		return fmt.Errorf("export %s: checking the mount point: %w", spec.Path, err)
-	}
-	if !mounted {
-		if err := a.cfg.Filesystem.Mount(ctx, devPath, spec.Path, FSType, nil); err != nil {
-			return fmt.Errorf("export %s: mounting %s: %w", spec.Path, devPath, err)
-		}
-	}
-
-	// Grow onto whatever the device now is. The control plane can enlarge the
-	// logical volume under a live export, and no CSI call ever reaches this
-	// host to grow the filesystem after it -- kubelet stages on the nodes
-	// running the pods. Assembly is the only thing here, and it is re-entered
-	// whenever the record changes.
-	//
-	// Unconditional: xfs_growfs on a filesystem already filling its device is
-	// a no-op, and a conditional would need a size this package cannot learn.
-	if err := a.grow(ctx, spec.Path); err != nil {
-		return err
-	}
-
+	// Published last, which is what makes a half-assembled export invisible to
+	// clients rather than briefly broken for them.
 	if err := a.writeDropIn(spec); err != nil {
 		return err
 	}
@@ -245,31 +193,21 @@ func (a *Assembler) Delete(ctx context.Context, spec Spec) error {
 		return err
 	}
 
-	mounted, err := a.cfg.Filesystem.IsMountPoint(ctx, spec.Path)
+	plan, err := a.cfg.Plan(ctx, spec)
 	if err != nil {
-		return fmt.Errorf("export %s: checking the mount point: %w", spec.Path, err)
+		return fmt.Errorf("export %s: planning the stack: %w", spec.Path, err)
 	}
-	if mounted {
-		if err := a.cfg.Filesystem.Unmount(ctx, spec.Path); err != nil {
-			return fmt.Errorf("export %s: unmounting: %w", spec.Path, err)
-		}
+	// Down and never Destroy: the volume is the control plane's, and this host
+	// only ever held it.
+	if err := a.cfg.Stack.Down(ctx, spec.StackHandle(), plan); err != nil {
+		return fmt.Errorf("export %s: taking the stack down: %w", spec.Path, err)
 	}
 
 	// A non-empty directory holds something this package did not put there.
-	if err := os.Remove(spec.Path); err != nil &&
-		!errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrExist) {
+	if err := os.Remove(spec.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		var pathErr *os.PathError
 		if !errors.As(err, &pathErr) {
 			return fmt.Errorf("export %s: removing the mount point: %w", spec.Path, err)
-		}
-	}
-
-	// Detach last. Giving up the namespace under a live mount leaves a
-	// filesystem over a device that is gone: an EIO every process in it has to
-	// be killed to clear.
-	if a.cfg.Detach != nil {
-		if err := a.cfg.Detach(ctx, spec); err != nil {
-			return fmt.Errorf("export %s: detaching the namespace: %w", spec.Path, err)
 		}
 	}
 	return nil
@@ -289,51 +227,6 @@ func (a *Assembler) writeDropIn(spec Spec) error {
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		return fmt.Errorf("export %s: renaming %s: %w", spec.Path, tmp, err)
-	}
-	return nil
-}
-
-// ContentReader is the probe that says what a device carries, which is the
-// seam the volstack filesystem layer takes too.
-type ContentReader interface {
-	Read(ctx context.Context, dev blockdev.Device) (blockdev.Reading, error)
-}
-
-// blank reports whether the device may be formatted.
-//
-// On an encrypted volume an unrecognized reading is no evidence of anything:
-// the control plane stacks a crypto bdev under the namespace, so a
-// never-written block arrives decrypted from zeros as pseudo-random plaintext,
-// which reads exactly like somebody else's data. A stack layer is still
-// refused, because a physical-volume or RAID label is a signature the probe
-// positively recognized, and finding one means the plan is wrong rather than
-// that the bytes were undecipherable.
-func (a *Assembler) blank(ctx context.Context, spec Spec, devPath string) (bool, error) {
-	reading, err := a.cfg.Content.Read(ctx, blockdev.Device{Path: devPath})
-	if err != nil {
-		return false, fmt.Errorf("export %s: probing %s: %w", spec.Path, devPath, err)
-	}
-	switch {
-	case reading.Content == blockdev.ContentBlank:
-		return true, nil
-	case reading.Content == blockdev.ContentFilesystem:
-		return false, nil
-	case spec.Encrypted && reading.Content != blockdev.ContentStackLayer:
-		return true, nil
-	}
-	return false, fmt.Errorf("export %s: refusing to format %s, which carries %s: %s: %w",
-		spec.Path, devPath, reading.Content, reading.Detail, ErrInvalidSpec)
-}
-
-// grow expands the filesystem to fill its device.
-func (a *Assembler) grow(ctx context.Context, path string) error {
-	out, code, err := a.cfg.Run(ctx, "xfs_growfs", path)
-	if err != nil {
-		return fmt.Errorf("export %s: xfs_growfs: %w", path, err)
-	}
-	if code != 0 {
-		return fmt.Errorf("export %s: xfs_growfs exited %d: %s",
-			path, code, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

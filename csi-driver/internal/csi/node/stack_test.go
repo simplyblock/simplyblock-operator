@@ -28,6 +28,7 @@ import (
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/initiator"
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
@@ -194,7 +195,7 @@ func TestConnectionFromResponsesCarriesEveryPathAndItsCredentials(t *testing.T) 
 		},
 	}
 
-	connection, hostNQN := connectionFromResponses(responses, pvcTestLvol)
+	connection, hostNQN := initiator.ConnectionFrom(responses, pvcTestLvol)
 
 	if len(connection.Endpoints) != 2 {
 		t.Fatalf("the connection carries %d endpoints, want both published paths", len(connection.Endpoints))

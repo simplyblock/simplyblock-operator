@@ -14,6 +14,10 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
+	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
+
 	csimount "github.com/simplyblock/csi-driver/internal/mount"
 )
 
@@ -26,23 +30,34 @@ const (
 	// same file, so it is mounted in: against this container's own copy the
 	// export would report success and be invisible to every client.
 	NFSStateDir = "/var/lib/nfs"
+
+	// stackRecordDir is where an export's stack record is kept, which is the
+	// host directory the node plugin already records into. The handles cannot
+	// collide: an export's is prefixed (export.Spec.StackHandle).
+	stackRecordDir = "/var/run/simplyblock/stacks"
 )
 
 // NewAssembler returns the node's export assembler.
 func NewAssembler(
 	devices nvme.DeviceResolver, mounter *csimount.Mounter, hostNQN HostNQNFunc,
 ) (*export.Assembler, error) {
-	attach := attacher{hostNQN: hostNQN}
+	store := volstack.NewStore(stackRecordDir)
+	build := planner{
+		seams: plans.NodeConfig{
+			Connector: nvmeof.NewCLIConnector(nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})),
+			Devices:   devices,
+			// The same probe the block path formats against: two answers to
+			// "does this device carry a filesystem" on one node is how a device
+			// is formatted twice, and the second time destroys data.
+			Content:    blockdev.NewProber(),
+			Filesystem: mounter.FilesystemOps(),
+		},
+		hostNQN: hostNQN,
+		store:   store,
+	}
 	return export.New(export.Config{
-		Devices:    devices,
-		Filesystem: pinnedFormat{mounter.FilesystemOps()},
-		// Nothing else attaches the MDS host's namespace (attach.go).
-		Attach: attach.Attach,
-		Detach: attach.Detach,
-		// The same probe the block path formats against: two answers to "does
-		// this device carry a filesystem" on one node is how a device is
-		// formatted twice, and the second time destroys data.
-		Content:    blockdev.NewProber(),
+		Plan:       build.Plan,
+		Stack:      volstack.NewRunner(store),
 		Run:        run,
 		ExportsDir: ExportsDir,
 	})

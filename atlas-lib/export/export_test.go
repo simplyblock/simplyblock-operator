@@ -1,12 +1,3 @@
-// Tests for the export assembler, weighted toward the two things that break
-// it: a step re-run after a partial assembly, and a device that already carries
-// a filesystem.
-//
-// The second is the dangerous one. The caller is a reconciler, so Create runs
-// again on every pass, and a Create that formats unconditionally destroys the
-// data it was asked to serve. TestCreateNeverFormatsANonBlankDevice is the test
-// that exists for that.
-
 package export
 
 import (
@@ -17,519 +8,330 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simplyblock/atlas/blockdev"
-	"github.com/simplyblock/atlas/errs"
-	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/volstack"
 )
 
-const (
-	testNGUID = "71714b79784f4b54756f65624e495374"
-	testUUID  = "cb2f293c-6d6f-4687-ad13-eb81fbec7314"
-	testFSID  = "3c81a0f4-1d2b-4e77-9a01-5f6c8b2d0e13"
-	testDev   = "/dev/nvme0n1"
-)
+// stubLayer is a layer that does nothing, so a plan can be built and compared
+// without a device under it.
+type stubLayer struct{ name string }
 
-// fakeDevices resolves one namespace by NGUID.
-type fakeDevices struct {
-	nvme.DeviceResolver
-	device nvme.Device
-	err    error
+func (s stubLayer) Name() string { return s.name }
+func (s stubLayer) Observe(context.Context, volstack.Artifact) (volstack.State, volstack.Artifact, error) {
+	return volstack.StateReady, volstack.Artifact{}, nil
+}
+func (s stubLayer) Ensure(context.Context, volstack.Artifact) (volstack.Artifact, error) {
+	return volstack.Artifact{}, nil
+}
+func (s stubLayer) Release(context.Context, volstack.Artifact) error { return nil }
+func (s stubLayer) Destroy(context.Context, volstack.Artifact) error { return nil }
+
+// fakeRunner records which verb an assembly chose, against which handle.
+type fakeRunner struct {
+	calls   []string
+	handles []string
+	plans   []volstack.Plan
+	upErr   error
+	growErr error
+	downErr error
 }
 
-func (f *fakeDevices) ByUUID(context.Context, string) (nvme.Device, error) {
-	return f.device, f.err
+func (f *fakeRunner) Up(_ context.Context, handle string, plan volstack.Plan) (volstack.Artifact, error) {
+	f.record("Up", handle, plan)
+	return volstack.Artifact{Path: "/mnt"}, f.upErr
 }
 
-// fakeFS records what it was asked to do and can pretend a mount already exists.
-type fakeFS struct {
-	formatted []string
-	mounted   []string
-	unmounted []string
-	isMounted bool
-	formatErr error
+func (f *fakeRunner) Grow(_ context.Context, plan volstack.Plan) error {
+	f.record("Grow", "", plan)
+	return f.growErr
 }
 
-func (f *fakeFS) Format(_ context.Context, device, _ string, _ []string) error {
-	if f.formatErr != nil {
-		return f.formatErr
-	}
-	f.formatted = append(f.formatted, device)
-	return nil
+func (f *fakeRunner) Down(_ context.Context, handle string, plan volstack.Plan) error {
+	f.record("Down", handle, plan)
+	return f.downErr
 }
 
-func (f *fakeFS) Mount(_ context.Context, source, target, _ string, _ []string) error {
-	f.mounted = append(f.mounted, source+"->"+target)
-	f.isMounted = true
-	return nil
+func (f *fakeRunner) record(verb, handle string, plan volstack.Plan) {
+	f.calls = append(f.calls, verb)
+	f.handles = append(f.handles, handle)
+	f.plans = append(f.plans, plan)
 }
 
-func (f *fakeFS) Unmount(_ context.Context, target string) error {
-	f.unmounted = append(f.unmounted, target)
-	f.isMounted = false
-	return nil
-}
-
-func (f *fakeFS) IsMountPoint(context.Context, string) (bool, error) { return f.isMounted, nil }
-
+// harness is one assembler over a temporary exports directory.
 type harness struct {
-	asm      *Assembler
-	fs       *fakeFS
-	spec     Spec
-	exportsD string
-	commands []string
+	t          *testing.T
+	assembler  *Assembler
+	runner     *fakeRunner
+	exportsDir string
+	commands   []string
+	exportfs   error
+	exportCode int
+	planned    int
+	planErr    error
 }
 
-type fakeContent struct{ reading blockdev.Reading }
-
-func (f *fakeContent) Read(context.Context, blockdev.Device) (blockdev.Reading, error) {
-	return f.reading, nil
-}
-
-func newHarness(t *testing.T, blank bool) *harness {
-	content := blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "xfs"}
-	if blank {
-		content = blockdev.Reading{Content: blockdev.ContentBlank}
-	}
-	return newHarnessWithContent(t, content)
-}
-
-// newHarnessWithContent builds one whose device reads as the caller says, which
-// is what the encryption cases turn on.
-func newHarnessWithContent(t *testing.T, reading blockdev.Reading) *harness {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
-	root := t.TempDir()
-	h := &harness{
-		fs:       &fakeFS{},
-		exportsD: filepath.Join(root, "exports.d"),
-	}
-	h.spec = Spec{
-		VolumeUUID: testUUID,
-		Path:       filepath.Join(root, "mnt", "team-a-shared-3c81"),
-		FSID:       testFSID,
-		Clients:    []string{"192.168.10.0/24"},
-	}
-	devices := &fakeDevices{device: nvme.Device{
-		Namespace: nvme.Namespace{DevicePath: testDev, NGUID: testNGUID},
-	}}
-	asm, err := New(Config{
-		Devices:    devices,
-		Filesystem: h.fs,
-		Content:    &fakeContent{reading: reading},
-		Run: func(_ context.Context, name string, args ...string) ([]byte, int, error) {
-			h.commands = append(h.commands, name+" "+strings.Join(args, " "))
-			return nil, 0, nil
+	h := &harness{t: t, runner: &fakeRunner{}, exportsDir: t.TempDir()}
+
+	assembler, err := New(Config{
+		Plan: func(context.Context, Spec) (volstack.Plan, error) {
+			h.planned++
+			if h.planErr != nil {
+				return nil, h.planErr
+			}
+			return volstack.Plan{stubLayer{name: "fabric"}, stubLayer{name: "filesystem"}}, nil
 		},
-		ExportsDir: h.exportsD,
+		Stack: h.runner,
+		Run: func(_ context.Context, name string, args ...string) ([]byte, int, error) {
+			h.commands = append(h.commands, strings.Join(append([]string{name}, args...), " "))
+			// Into the same log as the stack verbs, because the order between
+			// the two is what these tests are about.
+			h.runner.calls = append(h.runner.calls, name)
+			return nil, h.exportCode, h.exportfs
+		},
+		ExportsDir: h.exportsDir,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	h.asm = asm
+	h.assembler = assembler
 	return h
 }
 
-func (h *harness) dropIn() string {
-	return filepath.Join(h.exportsD, h.spec.dropInName())
+func (h *harness) spec() Spec {
+	return Spec{
+		VolumeUUID: "vol-1",
+		ClusterID:  "cluster-1",
+		PoolID:     "pool-1",
+		Path:       filepath.Join(h.t.TempDir(), "export"),
+		FSID:       "fsid-1",
+		Clients:    []string{"10.0.0.0/24"},
+	}
 }
 
-// The happy path: format, mount, publish, in that order.
-func TestCreateAssemblesInOrder(t *testing.T) {
-	h := newHarness(t, true)
-
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	if len(h.fs.formatted) != 1 || h.fs.formatted[0] != testDev {
-		t.Errorf("formatted = %v, want one mkfs on %s", h.fs.formatted, testDev)
-	}
-	if len(h.fs.mounted) != 1 {
-		t.Errorf("mounted = %v, want one mount", h.fs.mounted)
-	}
-	body, err := os.ReadFile(h.dropIn())
+func (h *harness) dropIn(spec Spec) string {
+	h.t.Helper()
+	content, err := os.ReadFile(filepath.Join(h.exportsDir, spec.dropInName()))
 	if err != nil {
-		t.Fatalf("reading the drop-in: %v", err)
+		return ""
 	}
-	for _, want := range []string{"pnfs", "fsid=" + testFSID, "192.168.10.0/24", h.spec.Path} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("drop-in is missing %q:\n%s", want, body)
-		}
-	}
-	// Publishing is last, after the grow: a half-assembled export is invisible
-	// to clients rather than briefly broken for them.
-	if len(h.commands) != 2 || !strings.HasPrefix(h.commands[1], "exportfs -ra") {
-		t.Errorf("commands = %v, want the grow and then exportfs -ra", h.commands)
-	}
+	return string(content)
 }
 
-// The one that matters. A reconciler calls Create on every pass, so a device
-// that already carries a filesystem must never be formatted again: doing so
-// destroys exactly the data the export exists to serve.
-func TestCreateNeverFormatsANonBlankDevice(t *testing.T) {
-	h := newHarness(t, false)
+func TestCreateBringsTheStackUpBeforePublishing(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
 
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if len(h.fs.formatted) != 0 {
-		t.Fatalf("formatted a device that was not blank: %v", h.fs.formatted)
+	// Published last, which is what makes a half-assembled export invisible to
+	// clients rather than briefly broken for them.
+	if got := strings.Join(h.runner.calls, ","); got != "Up,Grow,exportfs" {
+		t.Errorf("order = %q, want Up,Grow,exportfs", got)
 	}
-	if len(h.fs.mounted) != 1 {
-		t.Errorf("mounted = %v, want it still mounted", h.fs.mounted)
+	if h.dropIn(spec) == "" {
+		t.Error("the export was not published")
 	}
-}
-
-// Create is re-entrant: a second pass over a finished export changes nothing
-// on the host and still republishes, because the drop-in is the record and
-// rewriting it is how a changed client set takes effect.
-func TestCreateIsIdempotent(t *testing.T) {
-	h := newHarness(t, true)
-	ctx := context.Background()
-
-	if err := h.asm.Create(ctx, h.spec); err != nil {
-		t.Fatalf("first Create: %v", err)
-	}
-	// The device now carries a filesystem, which is what a second pass sees.
-	h.asm.cfg.Content = &fakeContent{reading: blockdev.Reading{
-		Content: blockdev.ContentFilesystem, Type: "xfs",
-	}}
-	if err := h.asm.Create(ctx, h.spec); err != nil {
-		t.Fatalf("second Create: %v", err)
-	}
-
-	if len(h.fs.formatted) != 1 {
-		t.Errorf("formatted %d times, want exactly 1", len(h.fs.formatted))
-	}
-	if len(h.fs.mounted) != 1 {
-		t.Errorf("mounted %d times, want exactly 1", len(h.fs.mounted))
-	}
-}
-
-// A partial assembly resumes. The mount landed but the drop-in never got
-// written, which is what a reconcile dying between the two leaves behind.
-func TestCreateResumesAfterAPartialAssembly(t *testing.T) {
-	h := newHarness(t, false)
-	h.fs.isMounted = true
-
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	if len(h.fs.mounted) != 0 {
-		t.Errorf("remounted an existing mount: %v", h.fs.mounted)
-	}
-	if _, err := os.Stat(h.dropIn()); err != nil {
-		t.Errorf("the drop-in was not written on the resuming pass: %v", err)
-	}
-}
-
-// Teardown unpublishes before it unmounts. The other order takes the filesystem
-// away from clients that still hold it.
-func TestDeleteUnpublishesBeforeUnmounting(t *testing.T) {
-	h := newHarness(t, true)
-	ctx := context.Background()
-	if err := h.asm.Create(ctx, h.spec); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	h.commands = nil
-
-	if err := h.asm.Delete(ctx, h.spec); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-
-	if _, err := os.Stat(h.dropIn()); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the drop-in survived teardown: %v", err)
-	}
-	if len(h.commands) != 1 || !strings.HasPrefix(h.commands[0], "exportfs -ra") {
+	if len(h.commands) != 1 || h.commands[0] != "exportfs -ra" {
 		t.Errorf("commands = %v, want one exportfs -ra", h.commands)
 	}
-	if len(h.fs.unmounted) != 1 {
-		t.Errorf("unmounted = %v, want one", h.fs.unmounted)
+}
+
+func TestCreateKeysTheRecordByAPrefixedHandle(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// A volume handle is what the node plugin records under, in the same
+	// directory. An export keyed by the same string would overwrite it.
+	if h.runner.handles[0] == spec.VolumeUUID || h.runner.handles[0] == spec.FSID {
+		t.Errorf("handle = %q, which a staged volume could also be keyed by", h.runner.handles[0])
+	}
+	if want := "pnfs-" + spec.FSID; h.runner.handles[0] != want {
+		t.Errorf("handle = %q, want %q", h.runner.handles[0], want)
 	}
 }
 
-// Delete converges on a host that has already lost the export. The caller is a
-// finalizer, so failing here would hold the record forever.
-func TestDeleteToleratesAnAlreadyGoneExport(t *testing.T) {
-	h := newHarness(t, true)
+func TestCreateGrowsOntoTheSamePlanItBroughtUp(t *testing.T) {
+	h := newHarness(t)
 
-	if err := h.asm.Delete(context.Background(), h.spec); err != nil {
-		t.Fatalf("Delete on a host with nothing to remove: %v", err)
+	if err := h.assembler.Create(context.Background(), h.spec()); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if len(h.fs.unmounted) != 0 {
-		t.Errorf("unmounted something that was not mounted: %v", h.fs.unmounted)
+
+	// The control plane can enlarge a volume under a live export, and nothing
+	// else on this host ever grows its filesystem.
+	if len(h.runner.plans) != 2 {
+		t.Fatalf("stack calls = %d, want 2", len(h.runner.plans))
+	}
+	if h.runner.plans[0].Names()[1] != h.runner.plans[1].Names()[1] {
+		t.Errorf("grew a different plan from the one brought up: %v then %v",
+			h.runner.plans[0].Names(), h.runner.plans[1].Names())
+	}
+	if h.planned != 1 {
+		t.Errorf("planned %d times, want 1: one resolution per assembly", h.planned)
 	}
 }
 
-// An empty client set is refused rather than widened to everyone, which is what
-// defaulting it would mean.
+func TestCreateDoesNotPublishAStackThatWouldNotComeUp(t *testing.T) {
+	h := newHarness(t)
+	h.runner.upErr = errors.New("no device")
+	spec := h.spec()
+
+	if err := h.assembler.Create(context.Background(), spec); err == nil {
+		t.Fatal("Create succeeded over a stack that did not come up")
+	}
+	if h.dropIn(spec) != "" {
+		t.Error("an export nothing is mounted behind was published")
+	}
+	if len(h.commands) != 0 {
+		t.Errorf("commands = %v, want none", h.commands)
+	}
+}
+
+func TestCreateDoesNotPublishWhatItCouldNotGrow(t *testing.T) {
+	h := newHarness(t)
+	h.runner.growErr = errors.New("xfs_growfs: not mounted")
+	spec := h.spec()
+
+	if err := h.assembler.Create(context.Background(), spec); err == nil {
+		t.Fatal("Create succeeded over a failed grow")
+	}
+	if h.dropIn(spec) != "" {
+		t.Error("the export was published anyway")
+	}
+}
+
+func TestCreateIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+
+	for range 2 {
+		if err := h.assembler.Create(context.Background(), spec); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	if got := strings.Join(h.runner.calls, ","); got != "Up,Grow,exportfs,Up,Grow,exportfs" {
+		t.Errorf("order = %q: a reconciler runs this on every pass", got)
+	}
+	if entries, err := os.ReadDir(h.exportsDir); err != nil || len(entries) != 1 {
+		t.Errorf("exports directory holds %v (err %v), want one entry", entries, err)
+	}
+}
+
 func TestCreateRefusesAnEmptyClientSet(t *testing.T) {
-	h := newHarness(t, true)
-	h.spec.Clients = nil
+	h := newHarness(t)
+	spec := h.spec()
+	spec.Clients = nil
 
-	err := h.asm.Create(context.Background(), h.spec)
+	err := h.assembler.Create(context.Background(), spec)
 	if !errors.Is(err, ErrInvalidSpec) {
-		t.Fatalf("err = %v, want ErrInvalidSpec", err)
+		t.Fatalf("Create error = %v, want ErrInvalidSpec: the widening is to everyone", err)
 	}
-	if len(h.fs.formatted) != 0 || len(h.fs.mounted) != 0 {
-		t.Error("touched the host despite refusing the spec")
-	}
-}
-
-// A failed mkfs stops the assembly rather than publishing an export over a
-// filesystem that was never made.
-func TestCreateStopsWhenFormatFails(t *testing.T) {
-	h := newHarness(t, true)
-	h.fs.formatErr = errors.New("mkfs.xfs: device busy")
-
-	if err := h.asm.Create(context.Background(), h.spec); err == nil {
-		t.Fatal("a failed mkfs returned no error")
-	}
-	if len(h.fs.mounted) != 0 {
-		t.Errorf("mounted after a failed mkfs: %v", h.fs.mounted)
-	}
-	if _, err := os.Stat(h.dropIn()); !errors.Is(err, os.ErrNotExist) {
-		t.Error("published an export after a failed mkfs")
+	if len(h.runner.calls) != 0 {
+		t.Errorf("stack verbs = %v, want none", h.runner.calls)
 	}
 }
 
-// Every export carries the option that makes the whole feature work. Losing it
-// would leave a working NFS export serving every byte through the metadata
-// server, correct and silently slow.
-func TestExportLineCarriesPNFS(t *testing.T) {
-	line := Spec{Path: "/mnt/x", FSID: testFSID, Clients: []string{"*"}}.line()
-	if !strings.Contains(line, ",pnfs,") && !strings.Contains(line, "(pnfs,") {
-		t.Errorf("the export line does not carry pnfs: %s", line)
-	}
-	if !strings.Contains(line, "fsid="+testFSID) {
-		t.Errorf("the export line does not carry the fsid: %s", line)
+func TestCreateReportsAPlanItCannotResolve(t *testing.T) {
+	h := newHarness(t)
+	h.planErr = errors.New("the control plane did not answer")
+
+	err := h.assembler.Create(context.Background(), h.spec())
+	if err == nil || !strings.Contains(err.Error(), "the control plane did not answer") {
+		t.Fatalf("Create error = %v, want the planner's own reason", err)
 	}
 }
 
-// attachRecorder stands in for the consumer that makes the namespace present.
-type attachRecorder struct {
-	attached []Spec
-	detached []Spec
-	err      error
-	// present is what the device resolver reports: false until Attach runs,
-	// which is the whole ordering this exercises.
-	present *bool
-}
-
-func (a *attachRecorder) attach(_ context.Context, spec Spec) error {
-	if a.err != nil {
-		return a.err
-	}
-	a.attached = append(a.attached, spec)
-	if a.present != nil {
-		*a.present = true
-	}
-	return nil
-}
-
-func (a *attachRecorder) detach(_ context.Context, spec Spec) error {
-	a.detached = append(a.detached, spec)
-	return nil
-}
-
-// newAttachHarness is newHarness with a device that is not there until Attach
-// puts it there.
-func newAttachHarness(t *testing.T) (*harness, *attachRecorder) {
-	t.Helper()
-	root := t.TempDir()
-	h := &harness{fs: &fakeFS{}, exportsD: filepath.Join(root, "exports.d")}
-	h.spec = Spec{
-		VolumeUUID: testUUID,
-		ClusterID:  "f0bb9077-78c4-4482-9ccf-a5693ce2df78",
-		PoolID:     "9d016dd4-34d7-42f0-b549-52a5af2f1399",
-		Path:       filepath.Join(root, "mnt", "team-a-shared-3c81"),
-		FSID:       testFSID,
-		Clients:    []string{"192.168.10.0/24"},
-	}
-	present := false
-	rec := &attachRecorder{present: &present}
-	asm, err := New(Config{
-		Devices:    &presenceDevices{present: &present},
-		Filesystem: h.fs,
-		Content:    &fakeContent{reading: blockdev.Reading{Content: blockdev.ContentBlank}},
-		Run: func(_ context.Context, name string, args ...string) ([]byte, int, error) {
-			h.commands = append(h.commands, name+" "+strings.Join(args, " "))
-			return nil, 0, nil
-		},
-		ExportsDir: h.exportsD,
-		Attach:     rec.attach,
-		Detach:     rec.detach,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	h.asm = asm
-	return h, rec
-}
-
-// presenceDevices reports the namespace only once something has attached it.
-type presenceDevices struct {
-	nvme.DeviceResolver
-	present *bool
-}
-
-func (d *presenceDevices) ByUUID(_ context.Context, _ string) (nvme.Device, error) {
-	if !*d.present {
-		return nvme.Device{}, errs.ErrNotFound
-	}
-	return nvme.Device{Namespace: nvme.Namespace{DevicePath: testDev, NGUID: testNGUID}}, nil
-}
-
-// The namespace has to be attached before anything looks for it. The MDS host
-// is an NVMe-oF initiator for the volume exactly like a client is, and nothing
-// else on that host has a reason to connect it: no CSI call targets the metadata
-// server, so if assembly does not attach it, the device is never there.
-func TestCreateAttachesBeforeLookingForTheDevice(t *testing.T) {
-	h, rec := newAttachHarness(t)
-
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+func TestDeleteUnpublishesBeforeTakingTheStackDown(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	h.runner.calls, h.commands = nil, nil
 
-	if len(rec.attached) != 1 {
-		t.Fatalf("Attach ran %d times, want once", len(rec.attached))
-	}
-	if got := rec.attached[0]; got.VolumeUUID != testUUID || got.ClusterID == "" || got.PoolID == "" {
-		t.Errorf("Attach got %+v, want the volume identified to the control plane", got)
-	}
-	if len(h.fs.mounted) != 1 {
-		t.Errorf("mounted = %v, want the export assembled on the attached device", h.fs.mounted)
-	}
-}
-
-// An attach that fails stops the assembly rather than falling through to a
-// device lookup that can only report not-found and blame the wrong thing.
-func TestCreateStopsWhenAttachFails(t *testing.T) {
-	h, rec := newAttachHarness(t)
-	rec.err = errors.New("the control plane refused the host")
-
-	err := h.asm.Create(context.Background(), h.spec)
-	if err == nil {
-		t.Fatal("Create succeeded with no namespace attached")
-	}
-	if !strings.Contains(err.Error(), "refused the host") {
-		t.Errorf("error = %v, want it to carry the attach failure", err)
-	}
-	if len(h.fs.formatted) != 0 || len(h.fs.mounted) != 0 {
-		t.Error("the assembly continued past a failed attach")
-	}
-}
-
-// Teardown detaches, and only after the filesystem is unmounted: detaching a
-// mounted device leaves the host with a mount over a namespace that is gone.
-func TestDeleteDetachesAfterUnmounting(t *testing.T) {
-	h, rec := newAttachHarness(t)
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	if err := h.asm.Delete(context.Background(), h.spec); err != nil {
+	if err := h.assembler.Delete(context.Background(), spec); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if len(rec.detached) != 1 {
-		t.Fatalf("Detach ran %d times, want once", len(rec.detached))
+	// exportfs runs while the filesystem is still mounted: no new client may
+	// arrive while it is being taken away underneath. Down and never Destroy,
+	// because the volume is the control plane's.
+	if got := strings.Join(h.runner.calls, ","); got != "exportfs,Down" {
+		t.Errorf("order = %q, want exportfs,Down", got)
 	}
-	if len(h.fs.unmounted) != 1 {
-		t.Fatalf("unmounted = %v, want one unmount", h.fs.unmounted)
-	}
-}
-
-// A configuration with no Attach is still valid, and assembles against a device
-// something else put there. That is how the package behaved before attaching
-// existed, and a host that manages its own fabric should not have to grow one.
-func TestAttachIsOptional(t *testing.T) {
-	h := newHarness(t, true)
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if len(h.fs.mounted) != 1 {
-		t.Errorf("mounted = %v, want one mount", h.fs.mounted)
+	if h.dropIn(spec) != "" {
+		t.Error("the drop-in survived the delete")
 	}
 }
 
-// Create grows the filesystem onto the device it sits on.
-//
-// Growing a pNFS volume is two steps on two machines: the control plane grows
-// the logical volume, and somebody has to grow the XFS on top of it. No CSI
-// call ever reaches the host serving the export -- kubelet stages on the nodes
-// running the pods -- so assembly is the only thing that can, and assembly is
-// re-entered whenever the record changes.
-//
-// Unconditional, because xfs_growfs on a filesystem already filling its device
-// is a no-op and a conditional would need a size this package cannot learn.
-func TestCreateGrowsTheFilesystemOntoTheDevice(t *testing.T) {
-	h := newHarness(t, true)
+func TestDeleteToleratesAnAlreadyGoneExport(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
 
-	if err := h.asm.Create(context.Background(), h.spec); err != nil {
+	// Never created: a finalizer has to converge on a host that never assembled
+	// this export, or on one that already tore it down.
+	if err := h.assembler.Delete(context.Background(), spec); err != nil {
+		t.Fatalf("Delete on an absent export: %v", err)
+	}
+	if got := strings.Join(h.runner.calls, ","); got != "exportfs,Down" {
+		t.Errorf("order = %q, want exportfs,Down", got)
+	}
+}
+
+func TestDeleteRefusesASpecThatNamesNoExport(t *testing.T) {
+	h := newHarness(t)
+
+	err := h.assembler.Delete(context.Background(), Spec{Path: "/var/lib/simplyblock/exports/x"})
+	if !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("Delete error = %v, want ErrInvalidSpec", err)
+	}
+}
+
+func TestExportLineCarriesPNFS(t *testing.T) {
+	h := newHarness(t)
+	spec := h.spec()
+	spec.Clients = []string{"10.0.0.1", "10.0.0.2"}
+
+	if err := h.assembler.Create(context.Background(), spec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	var grew bool
-	for _, cmd := range h.commands {
-		if strings.HasPrefix(cmd, "xfs_growfs ") {
-			grew = true
-			if !strings.HasSuffix(cmd, h.spec.Path) {
-				t.Errorf("xfs_growfs ran against %q, want the export's mount point", cmd)
-			}
+	line := h.dropIn(spec)
+	for _, want := range []string{"pnfs", "sync", "fsid=fsid-1", "10.0.0.1(", "10.0.0.2("} {
+		if !strings.Contains(line, want) {
+			t.Errorf("export line %q is missing %q", line, want)
 		}
 	}
-	if !grew {
-		t.Errorf("assembly never grew the filesystem (%v), so an expanded volume keeps its old size",
-			h.commands)
-	}
 }
 
-// An empty encrypted volume is formatted, not refused.
-//
-// The control plane stacks an AES-XTS bdev under the namespace, so a
-// never-written block arrives decrypted from zeros as pseudo-random plaintext.
-// The probe therefore reports content with no known signature -- exactly what
-// somebody else's data looks like -- and no read the host can make tells them
-// apart. Treating that as occupied leaves assembly skipping the mkfs and then
-// failing to mount a device with no filesystem on it.
-func TestCreateFormatsAnEmptyEncryptedVolume(t *testing.T) {
-	h := newHarnessWithContent(t, blockdev.Reading{Content: blockdev.ContentUnknown})
-	spec := h.spec
-	spec.Encrypted = true
-
-	if err := h.asm.Create(context.Background(), spec); err != nil {
-		t.Fatalf("Create: %v", err)
+func TestNewRefusesAConfigItCannotWorkWith(t *testing.T) {
+	full := Config{
+		Plan:       func(context.Context, Spec) (volstack.Plan, error) { return nil, nil },
+		Stack:      &fakeRunner{},
+		Run:        func(context.Context, string, ...string) ([]byte, int, error) { return nil, 0, nil },
+		ExportsDir: "/etc/exports.d",
 	}
-	if len(h.fs.formatted) != 1 {
-		t.Errorf("formatted = %v, want one mkfs: an encrypted volume that reads as "+
-			"garbage is unreadable by construction, not occupied", h.fs.formatted)
-	}
-}
 
-// The stricter guard still holds for a volume with no crypto bdev under it,
-// which is the one case where an unrecognized reading is evidence.
-func TestCreateStillRefusesUnrecognizedContentWhenNotEncrypted(t *testing.T) {
-	h := newHarnessWithContent(t, blockdev.Reading{Content: blockdev.ContentUnknown})
-
-	if err := h.asm.Create(context.Background(), h.spec); err == nil {
-		t.Fatal("assembly formatted a device carrying content it could not identify")
-	}
-	if len(h.fs.formatted) != 0 {
-		t.Errorf("formatted = %v, want none", h.fs.formatted)
-	}
-}
-
-// A stack layer is refused either way: a physical-volume or RAID label is a
-// signature the probe positively recognized, so finding one means the plan is
-// wrong rather than that the bytes were undecipherable.
-func TestCreateRefusesAStackLayerEvenWhenEncrypted(t *testing.T) {
-	h := newHarnessWithContent(t, blockdev.Reading{Content: blockdev.ContentStackLayer})
-	spec := h.spec
-	spec.Encrypted = true
-
-	if err := h.asm.Create(context.Background(), spec); err == nil {
-		t.Fatal("assembly formatted a device carrying a stack layer")
+	for name, strip := range map[string]func(*Config){
+		"no planner":     func(c *Config) { c.Plan = nil },
+		"no runner":      func(c *Config) { c.Stack = nil },
+		"no command run": func(c *Config) { c.Run = nil },
+		"no exports dir": func(c *Config) { c.ExportsDir = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := full
+			strip(&cfg)
+			if _, err := New(cfg); !errors.Is(err, ErrInvalidSpec) {
+				t.Fatalf("New error = %v, want ErrInvalidSpec", err)
+			}
+		})
 	}
 }

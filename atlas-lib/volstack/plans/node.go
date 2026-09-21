@@ -15,6 +15,7 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack"
@@ -69,13 +70,23 @@ type Node struct {
 	cfg NodeConfig
 }
 
-// NewNode holds the given seams, filling in the one that has a single shipped
-// implementation. It validates nothing: a missing seam is a programming error
-// that surfaces at the first call through it, and refusing to build a plan here
+// NewNode holds the given seams, filling in the two that derive from what it
+// was given. It validates nothing: a missing seam is a programming error that
+// surfaces at the first call through it, and refusing to build a plan here
 // would only move that failure earlier without making it clearer.
+//
+// The host id is taken from the host NQN's own UUID rather than from the node's
+// /etc/nvme/hostid, because the kernel keeps the pair strictly 1:1: a node
+// holding even one connection under the default identity would otherwise refuse
+// every connect naming this one. A caller that set both keeps what it set.
 func NewNode(cfg NodeConfig) *Node {
 	if cfg.Resolve == nil {
 		cfg.Resolve = blockdev.ResolveDevice
+	}
+	if cfg.HostID == "" && cfg.HostNQN != "" {
+		if hostID, ok := nqn.HostUUID(cfg.HostNQN); ok {
+			cfg.HostID = hostID
+		}
 	}
 	return &Node{cfg: cfg}
 }

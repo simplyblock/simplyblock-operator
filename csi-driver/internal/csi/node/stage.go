@@ -483,7 +483,7 @@ func (ns *Server) controlPlaneConnection(
 		return lvol.Connection{}, "", false
 	}
 
-	connection, hostNQN := connectionFromResponses(responses, deviceLvolID(vc))
+	connection, hostNQN := initiator.ConnectionFrom(responses, deviceLvolID(vc))
 	return connection, hostNQN, true
 }
 
