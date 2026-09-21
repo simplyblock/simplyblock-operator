@@ -20,6 +20,8 @@ import (
 	"errors"
 	"testing"
 
+	"sigs.k8s.io/controller-runtime/pkg/event"
+
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
@@ -212,3 +214,7 @@ func (d *deliveredNodes) Lookup(nodeID string) (cpinformer.Scope, subscriptions.
 func (d *deliveredNodes) List(cpinformer.Scope) []subscriptions.NodeDTO { return d.nodes }
 
 func (d *deliveredNodes) Synced(cpinformer.Scope) bool { return d.synced }
+
+// Triggers is nil here: these cases drive the reconcile themselves rather than
+// waiting to be woken by the stream.
+func (d *deliveredNodes) Triggers() <-chan event.GenericEvent { return nil }

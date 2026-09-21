@@ -42,6 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -115,6 +116,12 @@ type StorageNodeOpsReconciler struct {
 
 // NodeCache is the part of the storage-node subscription this package reads.
 type NodeCache interface {
+	// Triggers is the reconcile-trigger stream; each event names a StorageNode.
+	// Reading the cache without it makes the subscription a cache rather than a
+	// push: a node's status is read from the stream instead of the control plane
+	// and still waits out the requeue interval to be noticed.
+	Triggers() <-chan event.GenericEvent
+
 	// Lookup returns one node by its backend id, which is what every completion
 	// condition in this package is a predicate over. The scope it comes back with
 	// is the cluster the node was streamed under, which this package already knows

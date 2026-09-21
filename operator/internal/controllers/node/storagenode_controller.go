@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/simplyblock/atlas/prometheus"
 	"github.com/simplyblock/atlas/ptr"
@@ -151,14 +152,38 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index nodes by their cluster: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.StorageNode{}).
 		Named("storagenode").
 		Watches(&simplyblockv1alpha2.StorageCluster{},
 			handler.EnqueueRequestsFromMapFunc(r.nodesOf)).
 		Watches(&corev1.Node{},
-			handler.EnqueueRequestsFromMapFunc(r.nodesOn)).
-		Complete(r)
+			handler.EnqueueRequestsFromMapFunc(r.nodesOn))
+
+	if pushed := r.pushedNodeChanges(); pushed != nil {
+		builder = builder.WatchesRawSource(pushed)
+	}
+
+	return builder.Complete(r)
+}
+
+// pushedNodeChanges is the control-plane stream this controller is woken by, and
+// nil for a deployment running without the informer.
+//
+// A pushed change reconciles the node it named; the events already carry the
+// object's own name, so they need no map function.
+//
+// Without it the subscription is a cache rather than a push. Steady state still
+// reads a node's status out of it rather than asking the control plane, so
+// nothing looks broken -- and every change still waits out nodeRetry to be
+// noticed, which is the whole of what the informer was built to remove. It was
+// wired once and went out with the move to v1alpha2 (d3380539), and nothing
+// failed to say so.
+func (r *StorageNodeReconciler) pushedNodeChanges() source.Source {
+	if r.Nodes == nil {
+		return nil
+	}
+	return source.Channel(r.Nodes.Triggers(), &handler.EnqueueRequestForObject{})
 }
 
 // nodesOf enqueues every node of a cluster.

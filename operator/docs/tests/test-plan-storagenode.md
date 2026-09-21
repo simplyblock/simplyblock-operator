@@ -115,6 +115,8 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-410 | One slice per RPC port                                                               | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
 | U-411 | A pod with no address is left unpublished rather than published with none            | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
 | U-412 | Two workers sharing a first DNS label are refused, not merged                        | Negative   | `TestACollidingWorkerNameIsRefused`                 |
+| U-413 | A pushed control-plane change wakes the node controller                              | Regression | `TestAPushedNodeChangeWakesTheController`           |
+| U-414 | A deployment with no informer is given no stream source                              | Negative   | `TestNoInformerIsNoSource`                          |
 
 ### Entity: The Provisioning Claim (design §4.2)
 
