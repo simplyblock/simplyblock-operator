@@ -224,11 +224,11 @@ func writeNamespaceFixture(t *testing.T, nqn, uuid, nsid, deviceNumber string) s
 // filesystem because nothing recorded one until the volume stack did.
 func legacyStashedContext() map[string]string {
 	const (
-		cluster = "53a636db-8c9f-4cc2-952b-ea9207d8c048"
-		lvol    = "d6d0fda8-4d78-4f3d-856c-1193546b337f"
+		clusterID = "53a636db-8c9f-4cc2-952b-ea9207d8c048"
+		volumeID  = "d6d0fda8-4d78-4f3d-856c-1193546b337f"
 	)
 	return map[string]string{
-		"cluster_id":                       cluster,
+		"cluster_id":                       clusterID,
 		"connections":                      `[{"ip":"10.0.2.3","port":4426},{"ip":"10.0.2.4","port":4426}]`,
 		"csi.storage.k8s.io/pv/name":       "pvc-d17cf115-b1e7-40ba-b840-859e3a97515a",
 		"csi.storage.k8s.io/pvc/name":      "guardian-pvc",
@@ -237,9 +237,9 @@ func legacyStashedContext() map[string]string {
 		"devicePath":                       "/dev/disk/by-id/nvme-SPDK_Controller1_SPDK00000000000001",
 		"hostIface":                        "",
 		"max_namespace_per_subsys":         "1",
-		"model":                            lvol,
-		"name":                             lvol,
-		"nqn":                              "nqn.2023-02.io.simplyblock:" + cluster + ":lvol:" + lvol,
+		"model":                            volumeID,
+		"name":                             volumeID,
+		"nqn":                              "nqn.2023-02.io.simplyblock:" + clusterID + ":lvol:" + volumeID,
 		"nrIoQueues":                       "3",
 		"nsId":                             "1",
 		"pool_name":                        "pool1",
@@ -249,7 +249,7 @@ func legacyStashedContext() map[string]string {
 		"qos_w_mbytes":                     "",
 		"reconnectDelay":                   "2",
 		"targetType":                       "tcp",
-		"uuid":                             lvol,
+		"uuid":                             volumeID,
 	}
 }
 
@@ -296,7 +296,7 @@ func TestALegacyStashIsDerivedIntoATeardownPlan(t *testing.T) {
 func fabricOf(t *testing.T, plan volstack.Plan) layers.FabricParams {
 	t.Helper()
 	for _, layer := range plan {
-		if layer.Name() != "fabric" {
+		if layer.Name() != layerFabric {
 			continue
 		}
 		recorder, ok := layer.(volstack.Recorder)
