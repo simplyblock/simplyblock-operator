@@ -53,8 +53,6 @@ import (
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 
-	"github.com/simplyblock/atlas/link"
-
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
@@ -158,16 +156,12 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
-	flag.BoolVar(&csiLinkEnabled, "csi-link", false,
-		"Serve the CSI link: the CSI node and controller pods dial the operator and hold "+
-			"the connection, and the operator issues its RPCs back down it.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
-		"The directory that contains the CSI link serving certificate. Required with --csi-link: "+
-			"peers authenticate with bearer tokens, which must not travel in the clear.")
+		"The directory that contains the CSI link serving certificate. Unset serves the link "+
+			"without TLS, and peers' bearer tokens then travel in the clear.")
 	flag.StringVar(&csiLinkCertName, "csi-link-cert-name", "tls.crt",
 		"The name of the CSI link serving certificate file.")
 	flag.StringVar(&csiLinkCertKey, "csi-link-cert-key", "tls.key",
@@ -321,24 +315,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The CSI link, when enabled. csiPeers is the registry of linked node and
-	// controller plugins; a reconciler reaching a node goes through it, and
-	// treats link.ErrNoSession as a requeue rather than a failure.
-	var csiPeers *link.Registry
-	if csiLinkEnabled {
-		csiPeers, err = csilink.Setup(mgr, csilink.Config{
-			BindAddress:              csiLinkAddr,
-			CertFile:                 filepath.Join(csiLinkCertPath, csiLinkCertName),
-			KeyFile:                  filepath.Join(csiLinkCertPath, csiLinkCertKey),
-			Namespace:                operatorNamespace,
-			Audiences:                []string{csiLinkAudience},
-			NodeServiceAccount:       "simplyblock-csi-node-sa",
-			ControllerServiceAccount: "simplyblock-csi-controller-sa",
-		})
-		if err != nil {
-			setupLog.Error(err, "unable to set up the CSI link")
-			os.Exit(1)
-		}
+	// The CSI link. csiPeers is the registry of linked node and controller
+	// plugins; a reconciler reaching a node goes through it, and treats
+	// link.ErrNoSession as a requeue rather than a failure.
+	//
+	// Always served, because both plugins always dial it. TLS when a
+	// certificate is configured, plaintext when none is.
+	var certFile, keyFile string
+	if csiLinkCertPath != "" {
+		certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
+		keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+	}
+	csiPeers, err := csilink.Setup(mgr, csilink.Config{
+		BindAddress:              csiLinkAddr,
+		CertFile:                 certFile,
+		KeyFile:                  keyFile,
+		Namespace:                operatorNamespace,
+		Audiences:                []string{csiLinkAudience},
+		NodeServiceAccount:       "simplyblock-csi-node-sa",
+		ControllerServiceAccount: "simplyblock-csi-controller-sa",
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to set up the CSI link")
+		os.Exit(1)
 	}
 	_ = csiPeers // handed to reconcilers as they start using it
 

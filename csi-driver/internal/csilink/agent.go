@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 
@@ -31,9 +32,9 @@ type Config struct {
 	HubAddress string
 
 	// CAFile is the bundle that signs the operator's serving certificate.
-	// Empty falls back to the system roots, which is right for a publicly
-	// rooted certificate and wrong for the in-cluster CA that normally signs
-	// one.
+	// Empty, or naming a file that is not there, dials plaintext -- which is
+	// what a cluster with no certificate provisioned for the link gets, and is
+	// why the CA is mounted from an optional ConfigMap.
 	CAFile string
 
 	// ServerName overrides the name verified against that certificate. Needed
@@ -75,13 +76,13 @@ func Start(ctx context.Context, cfg Config) (*link.Agent, error) {
 		return nil, fmt.Errorf("csi link: no token file")
 	}
 
-	tlsConfig, err := clientTLS(cfg)
+	dial, err := dialer(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	agent, err := link.NewAgent(link.AgentConfig{
-		Dial:         link.TLSDialer(cfg.HubAddress, tlsConfig),
+		Dial:         dial,
 		ID:           cfg.ID,
 		InstanceUID:  cfg.InstanceUID,
 		Token:        link.TokenFile(cfg.TokenFile),
@@ -101,24 +102,34 @@ func Start(ctx context.Context, cfg Config) (*link.Agent, error) {
 	return agent, nil
 }
 
-// clientTLS builds the configuration used to verify the operator.
-func clientTLS(cfg Config) (*tls.Config, error) {
-	out := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		ServerName: cfg.ServerName,
-	}
+// dialer verifies the operator when a CA bundle is there, and dials plaintext
+// when there is none.
+//
+// Absent is the ordinary case rather than an error: the bundle comes from a
+// ConfigMap mounted optional, so a cluster that provisioned no certificate for
+// the link has no file here and the operator is serving plaintext to match. A
+// bundle that exists and cannot be parsed is an error, because somebody
+// provisioned one and it is broken.
+func dialer(cfg Config) (link.Dialer, error) {
 	if cfg.CAFile == "" {
-		return out, nil
+		return link.InsecureDialer(cfg.HubAddress), nil
 	}
-
 	pem, err := os.ReadFile(cfg.CAFile)
+	if errors.Is(err, os.ErrNotExist) {
+		klog.Infof("CSI link: no CA bundle at %s, dialing %s without TLS", cfg.CAFile, cfg.HubAddress)
+		return link.InsecureDialer(cfg.HubAddress), nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("csi link: reading CA bundle %s: %w", cfg.CAFile, err)
 	}
+
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pem) {
 		return nil, fmt.Errorf("csi link: CA bundle %s has no usable certificates", cfg.CAFile)
 	}
-	out.RootCAs = pool
-	return out, nil
+	return link.TLSDialer(cfg.HubAddress, &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: cfg.ServerName,
+		RootCAs:    pool,
+	}), nil
 }
