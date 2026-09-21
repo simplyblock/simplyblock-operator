@@ -314,8 +314,19 @@ func (r *ClusterDeploymentConfigReconciler) markReadyToDeploy(
 	return r.Patch(ctx, config, patch)
 }
 
-// controlPlaneReady reports whether the singleton is available, which is the
+// controlPlaneReady reports whether the singleton answers, which is the
 // precondition for creating a cluster at all.
+//
+// Answering is the test rather than being unimpaired. Degraded is a control
+// plane that answers -- a management API pod restarting behind a Service, a
+// FoundationDB pod recycled without losing quorum, a metrics exporter that is
+// not running at all -- and design-controlplane.md §4.3 says nothing holds on
+// it. Waiting for Available instead let one non-essential component, whose
+// absence loses no work and stops nothing, hold an entire expansion.
+//
+// Unavailable is the phase worth waiting for, because it is the one that means
+// the probe failed or an essential component is at zero, and every call this
+// expansion is about to make would fail.
 func (r *ClusterDeploymentConfigReconciler) controlPlaneReady(
 	ctx context.Context,
 ) (bool, string) {
@@ -325,11 +336,28 @@ func (r *ClusterDeploymentConfigReconciler) controlPlaneReady(
 		return false, fmt.Sprintf("ControlPlane %s cannot be read: %v",
 			singletonControlPlane, err)
 	}
-	if controlPlane.Status.Phase != controlPlaneAvailable {
-		return false, fmt.Sprintf("ControlPlane %s is %s rather than %s",
-			singletonControlPlane, controlPlane.Status.Phase, controlPlaneAvailable)
+
+	switch controlPlane.Status.Phase {
+	case simplyblockv1alpha2.ControlPlanePhaseAvailable:
+		return true, ""
+	case simplyblockv1alpha2.ControlPlanePhaseDegraded:
+		// Impaired and answering. The message it carries is the administrator's
+		// business and not this expansion's.
+		return true, ""
+	default:
+		return false, fmt.Sprintf("ControlPlane %s is %s, so it is not answering yet",
+			singletonControlPlane, phaseOrUnset(controlPlane.Status.Phase))
 	}
-	return true, ""
+}
+
+// phaseOrUnset names the phase an object carries, or says it has none. A
+// ControlPlane the operator has not reconciled yet has an empty phase, and a
+// message reporting it as "" reads as a bug in the message.
+func phaseOrUnset(phase simplyblockv1alpha2.ControlPlanePhase) string {
+	if phase == "" {
+		return "not reporting a phase yet"
+	}
+	return string(phase)
 }
 
 // everyUnfinishedDocument maps a Node event onto every document that has not
@@ -553,8 +581,7 @@ func refusef(reason, format string, args ...any) error {
 	return &refusedError{reason: reason, message: fmt.Sprintf(format, args...)}
 }
 
-// The ControlPlane the expansion waits on, and the phase it waits for.
-const (
-	singletonControlPlane = "simplyblock"
-	controlPlaneAvailable = "Available"
-)
+// The ControlPlane the expansion waits on. Which phases let it through is
+// controlPlaneReady's, because it is a decision about answering rather than a
+// single value to compare against.
+const singletonControlPlane = "simplyblock"

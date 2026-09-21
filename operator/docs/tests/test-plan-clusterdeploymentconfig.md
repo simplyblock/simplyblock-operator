@@ -84,15 +84,19 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 
 ### Approval (design §5)
 
-| #    | Scenario                                                                        | Type     | Test |
-|------|---------------------------------------------------------------------------------|----------|------|
-| U-35 | `spec.approved` false: expansion is never entered                               | Negative | —    |
-| U-36 | `spec.approved` set true: expansion begins on the next reconcile                | Positive | —    |
-| U-37 | The `ready-to-deploy` label is written on an approved config                    | Positive | —    |
-| U-38 | The `ready-to-deploy` label is read from nowhere: setting it alone does nothing | Negative | —    |
-| U-39 | Expansion is held while the `ControlPlane` is not `Ready`                       | Negative | —    |
-| U-40 | The `ControlPlane` becomes `Ready`: the held expansion proceeds unattended      | Positive | —    |
-| U-41 | No `ControlPlane` at all: held with a clear reason, not failed                  | Negative | —    |
+| #     | Scenario                                                                        | Type       | Test                                                |
+|-------|---------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-35  | `spec.approved` false: expansion is never entered                               | Negative   | —                                                   |
+| U-36  | `spec.approved` set true: expansion begins on the next reconcile                | Positive   | —                                                   |
+| U-37  | The `ready-to-deploy` label is written on an approved config                    | Positive   | —                                                   |
+| U-38  | The `ready-to-deploy` label is read from nowhere: setting it alone does nothing | Negative   | —                                                   |
+| U-39  | Expansion is held while the `ControlPlane` is not `Ready`                       | Negative   | —                                                   |
+| U-40  | The `ControlPlane` becomes `Ready`: the held expansion proceeds unattended      | Positive   | —                                                   |
+| U-41  | No `ControlPlane` at all: held with a clear reason, not failed                  | Negative   | —                                                   |
+| U-178 | A `Degraded` control plane answers, so the expansion proceeds                   | Regression | `TestADegradedControlPlaneDoesNotHoldTheDeployment` |
+| U-179 | An `Available` control plane proceeds                                           | Positive   | `TestAnAvailableControlPlaneProceeds`               |
+| U-180 | An `Unavailable` control plane holds, with a reason                             | Negative   | `TestAnUnavailableControlPlaneHolds`                |
+| U-181 | A control plane still being installed, or reporting no phase, holds             | Boundary   | `TestAControlPlaneStillBeingBuiltHolds`             |
 
 ### Deletion (design §4.3)
 
