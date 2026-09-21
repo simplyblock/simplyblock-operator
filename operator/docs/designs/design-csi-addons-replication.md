@@ -1,6 +1,6 @@
 # Design Document: csi-addons Volume Replication
 
-**Status:** Phase 3 Partially Implemented (§11)  
+**Status:** Phase 3 Implemented  
 **Author:** Israel Geoffrey (geoffrey1330)  
 **Date:** 2026-09-16 (last updated 2026-09-21)  
 **Test Plan:** [`tests/test-plan-csi-addons-replication.md`](../tests/test-plan-csi-addons-replication.md)
@@ -13,10 +13,9 @@
 |-------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
 | **Phase 1** | Implemented | The csi-addons machinery and the steady-state contract: CRDs, controller-manager, sidecar, the Replication and csi-addons Identity gRPC services with `EnableVolumeReplication`, `DisableVolumeReplication`, and `GetVolumeReplicationInfo`, backed by a typed backend status endpoint | §4, §5.1, §6 |
 | **Phase 2** | Implemented | The lifecycle verbs: `PromoteVolume` (planned and forced), `DemoteVolume`, and `ResyncVolume`. Validation end to end against a Ramen `VolumeReplicationGroup` in async mode is still outstanding (§12, E-06/E-07)                                                                      | §5.2, §9     |
-| **Phase 3** | Partially implemented | §11 (the Prometheus metrics) is implemented. §7.2 (peerClasses convention and preflight) is not started: it needs a design pass on cross-cluster Kubernetes API access first, since no mechanism for the operator to reach a peer Kubernetes cluster exists today | §7, §11      |
-| **Phase 4** | Planned     | Test failover: the latest-replicated-snapshot read, the `drtest-*` conventions, and the two drill modes (bubble and test cluster) composed from clone, replication, and the real failover                                                                                              | §14          |
+| **Phase 3** | Implemented | §11 (the Prometheus metrics). §7.2's peerClasses preflight is out of this design's scope entirely (it's Ramen's own `DRPolicy` mechanism) and is deferred to a future Ramen-integration design | §7.1, §11    |
 
-Phase 1 is independently useful: a `VolumeReplication` object per PVC whose status truthfully reports the relationship, which no surface provides today. Phase 2 makes the object drivable, which is what Ramen actually needs. Phase 3 makes the whole thing operable at fleet scale. Phase 4 turns the same primitives into a rehearsal: a failover that can be drilled, in a bubble or against a test cluster, without touching production replication.
+Phase 1 is independently useful: a `VolumeReplication` object per PVC whose status truthfully reports the relationship, which no surface provides today. Phase 2 makes the object drivable, which is what Ramen actually needs. Phase 3 makes the whole thing operable at fleet scale.
 
 The phase numbers above are this document's own, not the DR storage foundation gap analysis's (§1): its Phase 0 (shipping the csi-addons contract itself) is this design's Phase 1, and its Phase 1 (promote, demote, and resync end to end through Ramen) is this design's Phase 2.
 
@@ -31,7 +30,6 @@ The phase numbers above are this document's own, not the DR storage foundation g
 | P0-3 | A standalone demote verb: `POST .../volumes/{id}/replication/demote` that converges the peer while still serving (repeated snapshot-and-ship until the remaining delta is small), then quiesces, ships the final delta, confirms it landed on the peer, and fences the data path | Control plane (`sbcli`) | Phase 2 | Shipped: `POST .../volumes/{v}/replication/demote` → `lvol_controller.demote_lvol`                                                                                      |
 | P0-4 | An `rpo_target_seconds` field on `ReplicationPolicy`, so RPO compliance is computable against a declared target rather than the derived lag budget                                                                                                                               | Control plane (`sbcli`) | Phase 3 | Shipped: `ReplicationPolicy.rpo_target_seconds` (`simplyblock_core/models/replication.py:89`), wired through the API (`PolicyParams.rpo_target_seconds`) and CLI (`--rpo-target-sec`) |
 | P0-5 | csi-addons upstream: the `VolumeReplication` and `VolumeReplicationClass` CRDs (`replication.storage.openshift.io/v1alpha1`), the kubernetes-csi-addons controller-manager image, and the csi-addons sidecar image                                                               | Ecosystem               | Phase 1 | Vendored in the chart at v0.15.0 behind `csiaddons.create` (all twelve upstream CRDs, since the stock manager starts a controller per kind); sidecar wiring is Phase 1 |
-| P0-6 | A latest-replicated-snapshot read: per volume, and per consistency group as one complete generation, the newest fully replicated snapshot on the secondary addressed as a cloneable object                                                                                       | Control plane (`sbcli`) | Phase 4 | Shipped: `GET .../replication/relationships/{lvol}/latest-snapshot` and `GET .../replication/policies/{policy}/latest-generation`                                      |
 
 Everything else the adapter needs already exists: the attach and detach calls, failover, the failback and commit pair, the relationship read, and the backlog arithmetic inside `get_replication_info`. The adapter is thin precisely because the engine is complete. What is missing is the shape Ramen can drive.
 
@@ -52,8 +50,7 @@ Everything else the adapter needs already exists: the attach and detach calls, f
 11. [Observability](#11-observability)
 12. [Testing Strategy](#12-testing-strategy)
 13. [Migration Strategy](#13-migration-strategy)
-14. [Test Failover](#14-test-failover)
-15. [Open Questions](#15-open-questions)
+14. [Open Questions](#14-open-questions)
 
 ---
 
@@ -100,7 +97,7 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 - `status.lastSyncTime` is truthful for the volume's whole replicated life, sourced from a typed backend status read rather than the cutover-time relationship record.
 - Every verb is idempotent, because Ramen re-drives every reconcile.
 - The adapter reuses one shared control-plane client (`atlas-lib/controlplane`), ending the pattern where each consumer hand-rolls the same replication HTTP calls.
-- A `StorageClass` and `VolumeSnapshotClass` naming convention across paired clusters that Ramen's peerClasses can express, with a preflight that verifies it.
+- A `StorageClass` and `VolumeSnapshotClass` naming convention across paired clusters that Ramen's peerClasses can express (§7.2 documents what Ramen's own contract requires; verifying it is a future Ramen-integration design's concern, not this one's).
 - The RPO and backlog figures Ramen cannot carry (`bytesBehind`, throughput, RPO compliance) are exported as Prometheus metrics from the control plane.
 
 ### Non-Goals
@@ -137,8 +134,7 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 │  │  csi-addons Identity and Replication (this design)               │        │
 │  └──────────────────────────────┬───────────────────────────────────┘        │
 │                                                                              │
-│  operator: peerClasses preflight, events on the ReplicationPair (§7.2);      │
-│            PVCAnnotationWatcher skips csi-addons-managed volumes (§8);       │
+│  operator: PVCAnnotationWatcher skips csi-addons-managed volumes (§8);       │
 │            ReplicationPair/Policy author the backend target and policy       │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   │ HTTP, resolved per volume handle
@@ -153,7 +149,6 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 │                                                   quiesce, flush, fence)     │
 │  POST   .../volumes/{v}/replication/failback      (resync)                   │
 │  GET    .../replication/relationships/{lvol}      (cutover records)          │
-│  GET    .../relationships/{lvol}/latest-snapshot  (P0-6, test failover)      │
 │  exports simplyblock_replication_* metrics: lag, backlog, RPO (§11)          │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -162,9 +157,7 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 
 **The adapter holds no state.** csi-addons RPCs are stateless and idempotent by contract. Every answer the driver gives is derived on the spot from the backend status read and the relationship record. There is no driver-side cache, no persisted step, and no state machine. `PromoteVolumeResponse` and `DemoteVolumeResponse` carry no fields at all in `csi-addons/spec` v0.2.0 -- there is no response field to report partial progress in. A verb whose backend work outlives the call (a demote converging a busy peer) instead returns a retryable `ABORTED` error, and the vendored controller-manager's own reconcile requeue is the retry loop; only once the backend reports the target state reached does the call return success, which the controller then reflects as the CR's `Completed` condition.
 
-**The operator's part is small and off the data path.** The kinds that author the backend state (`ReplicationPair` for the target, `ReplicationPolicy` for cadence and retention) keep working unchanged, and the classes name what they author. On top of them the operator runs the peerClasses preflight (§7.2), surfacing convention drift as events on the pair, and teaches the `PVCAnnotationWatcher` the one-owner rule (§8) so the legacy annotation path and a `VolumeReplication` never fight over one volume. Everything imperative it used to own (`ReplicationOps`, the commit cutover, the cutover-proceed handshake) is off this contract and confined to the legacy path.
-
-**The drill rides the same surface.** Test failover (§14) adds no machinery to this picture: the bubble mode clones the latest replicated snapshot (the P0-6 read plus the ordinary CSI clone path), and the test-cluster mode composes clone, a `drtest-` policy toward the test cluster, and the real failover. The invariant audit that proves a drill disturbed nothing reads the same P0-1 status endpoint the conditions come from.
+**The operator's part is small and off the data path.** The kinds that author the backend state (`ReplicationPair` for the target, `ReplicationPolicy` for cadence and retention) keep working unchanged, and the classes name what they author. On top of them the operator teaches the `PVCAnnotationWatcher` the one-owner rule (§8) so the legacy annotation path and a `VolumeReplication` never fight over one volume. Everything imperative it used to own (`ReplicationOps`, the commit cutover, the cutover-proceed handshake) is off this contract and confined to the legacy path.
 
 ---
 
@@ -273,25 +266,25 @@ spec:
     schedulingInterval: 5m
 ```
 
-`replicationPolicy` names the backend `ReplicationPolicy` (resolved per cluster by name), which owns cadence, retention, mode, and the replication target. `schedulingInterval` restates the policy's interval for Ramen's `DRPolicy` matching, and the preflight (§7.2) checks the two agree. No secrets parameter is needed: the driver's credentials come from `secret.json`, as for every other RPC. The chart ships no default class. Classes are the user's to author, matching the `VolumeGroupSnapshotClass` decision.
+`replicationPolicy` names the backend `ReplicationPolicy` (resolved per cluster by name), which owns cadence, retention, mode, and the replication target. `schedulingInterval` restates the policy's interval for Ramen's `DRPolicy` matching. No secrets parameter is needed: the driver's credentials come from `secret.json`, as for every other RPC. The chart ships no default class. Classes are the user's to author, matching the `VolumeGroupSnapshotClass` decision.
 
 One class per (policy, cadence) is the authoring model: a `VolumeReplicationClass` names exactly one policy, and a volume needing a different cadence follows a different policy under a different class. Per-volume interval overrides are not provided.
 
-### 7.2 peerClasses convention and preflight
+### 7.2 peerClasses: Ramen's own mechanism, out of this design's scope
 
-Two of the requirements below are Ramen's contract, and the rest is this design's convention; the split matters because only the contract can fail a DRPolicy.
+`peerClasses` is Ramen's `DRPolicy` computation, not this design's: Ramen's hub-side controller pairs each managed cluster's `StorageClass`/`VolumeReplicationClass` objects itself, through the OCM hub-spoke visibility it already has, and a `DRPolicy` that cannot find a valid pairing already reports that failure on its own. Building any verification of that pairing into this operator -- a preflight, an admission check, or otherwise -- belongs to the future design that actually wires Ramen/OCM into this operator, not here: this design's own scope stops at §7.1, authoring one `VolumeReplicationClass` per policy, which is sufficient for the Phase 1/2 adapter to work whether or not Ramen, OCM, or peerClasses are ever in the picture.
+
+What Ramen's contract requires of a pairing, for whoever writes that future design:
 
 **Contract (Ramen requires this):**
 
 - **The `StorageClass` name exists on both clusters.** A failover restores the protected PVC with its original `spec.storageClassName`, a by-name reference, so an equivalent class of that exact name must exist on the peer. The peerClasses computation also joins classes across the two clusters by `StorageClass` name.
 - **The Ramen identity labels.** Each cluster's `StorageClass` carries `ramendr.openshift.io/storageid` (differing per cluster, since the backends differ), and the two `VolumeReplicationClass` objects representing one relationship carry an equal `ramendr.openshift.io/replicationid`. The `VolumeReplicationClass` is selected per cluster by `spec.replicationClassSelector` labels plus `provisioner` and a `schedulingInterval` equal to the `DRPolicy`'s, never by name.
 
-**Convention (this design chooses it for operability):**
+**Convention (this design's own authoring choice, independent of Ramen):**
 
 - **Same `StorageClass` parameters on both clusters** apart from `cluster_id` (necessarily) and pool when pools differ. The replication target's pool mapping already handles the pool difference at shipping time.
 - **Same `VolumeSnapshotClass` and `VolumeReplicationClass` names on both clusters**, each side's `replicationPolicy` naming that cluster's policy toward its peer. Ramen does not require the names to match, but one name per relationship is what keeps a fleet legible.
-
-The preflight is a check, not a controller: a validation that runs on demand (and on `ReplicationPair` reconciliation) confirming that for each replication-enabled `StorageClass` the peer cluster has a same-named class, and that the named backend policies exist and point at each other's clusters. Its findings surface as events on the `ReplicationPair`, which is the object that already models the cluster pairing.
 
 ---
 
@@ -320,8 +313,6 @@ Every endpoint is scoped as today: volume-scoped under `/api/v2/clusters/{c}/sto
 | `POST` | `.../volumes/{v}/replication/failback`                  | Existing. Resync (direction reversal, delta-seeded).                                                                                                                                                                        |
 | `POST` | `.../volumes/{v}/replication/commit`                    | Existing, unchanged, and NOT part of this contract: it stays behind the legacy `ReplicationOps` migration path only (§13).                                                                                                  |
 | `GET`  | `.../replication/relationships/{lvol}`                  | Existing, unchanged. Cutover records only; the node redirect depends on its survive-deletion semantics.                                                                                                                     |
-| `GET`  | `.../replication/relationships/{lvol}/latest-snapshot`  | **Shipped (P0-6).** The newest fully replicated snapshot for the volume, as a cloneable snapshot handle. Exposes what the failover path already computes internally.                                                        |
-| `GET`  | `.../replication/policies/{policy}/latest-generation`   | **Shipped (P0-6), group form.** One complete, fully replicated consistency-group generation, every member as a cloneable snapshot handle. Reuses the group fail-over's mixed-generation refusal instead of its side effect. |
 | `POST` | `.../volumes/{v}/replication/cutover-proceed`           | Existing, unchanged, legacy path only: the adapter never reaches it, because the commit cutover is off this contract.                                                                                                       |
 
 The unused backend verbs the operator never calls (`start`, `stop`, `trigger`, `tasks`) are unaffected, and `start` and `stop` remain the policy-less legacy path.
@@ -349,12 +340,7 @@ The unused backend verbs the operator never calls (`start`, `stop`, `trigger`, `
 
 ### Kubernetes Events
 
-The kubernetes-csi-addons controller-manager owns events on `VolumeReplication` (promote, demote, and resync outcomes), and this design adds none there. The operator emits preflight findings on the `ReplicationPair`:
-
-| Event                 | Type    | Emitted when                                                                                                                |
-|-----------------------|---------|-----------------------------------------------------------------------------------------------------------------------------|
-| `PeerClassesVerified` | Normal  | The preflight confirmed same-named classes and mutually pointing policies on both clusters                                  |
-| `PeerClassesMismatch` | Warning | A replication-enabled class has no same-named peer, or the named policies do not pair; the message names the class and side |
+The kubernetes-csi-addons controller-manager owns events on `VolumeReplication` (promote, demote, and resync outcomes), and this design adds none there. This design defines no events of its own on `ReplicationPair` either: the peerClasses preflight that would have emitted them is Ramen's own concern, out of scope here (§7.2).
 
 ### Prometheus Metrics (Implemented)
 
@@ -380,7 +366,7 @@ Values are computed by `lvol_controller.get_replication_info_bulk`, a bulk-frien
 Full scenario matrix and coverage status: [`tests/test-plan-csi-addons-replication.md`](../tests/test-plan-csi-addons-replication.md)
 
 - **Unit (driver):** each verb against a mock control plane: the idempotency table (repeat enable, repeat disable, repeat promote), the refusal paths (different-policy enable, lagging planned promote, disable during cutover), the condition derivation from every status-read state, and handle parsing failures.
-- **Unit (operator):** the peerClasses preflight against fake clients for both clusters, and the `PVCAnnotationWatcher` skip when a `VolumeReplication` exists.
+- **Unit (operator):** the `PVCAnnotationWatcher` skip when a `VolumeReplication` exists.
 - **Integration:** the csi-addons sidecar and controller-manager against the driver with a mock backend under envtest or kind: a `VolumeReplication` flipped `primary` to `secondary` and back walks the verbs in order and lands the conditions.
 - **E2E (two live clusters):** the Ramen-shaped lifecycle without Ramen: enable on the source, write data, and verify `lastSyncTime` advances; forced promote on the DR side, verifying the clone serves with the source fenced; and resync back with a planned swap (demote then promote), verifying zero loss with a hashed writer. Then the same driven by an actual Ramen VRG in async mode, which is Phase 2's acceptance gate.
 
@@ -399,53 +385,10 @@ Three replication control surfaces exist today: the operator's kinds, the stale 
 
 ---
 
-## 14. Test Failover
-
-A DR drill proves that failover works without disturbing production replication. Ramen cannot drive one: its two actions, `Failover` and `Relocate`, move the workload for real. The drill is therefore driven by a simplyblock-native kind (owned by the SiteMap and testing layer, and specified there, not here), and this section defines the storage contract that kind consumes. There are two modes over one substrate: a bubble on the secondary cluster, and a separate test cluster reached like the real failover.
-
-### 14.1 The substrate: replicated snapshots are cloneable test points
-
-The replicated snapshots on the secondary are first-class snapshot records on the secondary's own control plane, chained and complete, and for a consistency group they carry the `group_id` and `group_seq` provenance of their generation. The failover path already resolves the newest fully replicated snapshot per volume, and the group-wide resolution picks one complete generation across members. P0-6 exposes that resolution as a read (§9), so a drill can address its test point without reimplementing the selection logic.
-
-Every object a drill creates, on either side, carries a `drtest-` name prefix and a test-id label. Leftovers are then enumerable, and a teardown can prove completeness instead of assuming it.
-
-### 14.2 Bubble mode: same cluster, different namespace
-
-The drill namespace lives on the secondary Kubernetes cluster, whose driver already talks to the backend holding the replicated snapshots, so no data moves at all:
-
-1. Resolve the test point through P0-6: per volume the newest replicated snapshot, or for a group one complete `group_seq`, so the bubble starts from a single crash-consistent cut.
-2. Surface each snapshot as a pre-provisioned `VolumeSnapshotContent` (the handle is the secondary-side snapshot), bind a `VolumeSnapshot` in the drill namespace, and clone it into a PVC through the ordinary `dataSource` path.
-3. Deploy the application against the clones. The clones are thin, independent volumes, and writes to them never touch the replication stream.
-4. Tear down by deleting the namespace, then enumerate by the test-id label to prove nothing leaked.
-
-### 14.3 Test-cluster mode: the real failover, aimed at expendable volumes
-
-The second mode reaches a separate storage cluster, and it is deliberately composed from primitives this design already relies on rather than a new shipping capability:
-
-1. Clone the resolved test point into `drtest-` volumes on the secondary. For a group, clone one generation into a new `drtest-` consistency group, so the group failover path is exercised too.
-2. Attach the clones to a `drtest-` replication policy whose `ReplicationTarget` is the test cluster. The ordinary engine ships them (a full copy, since the test backend shares no ancestry).
-3. On the test cluster, run the real failover against the shipped volumes to materialize writable clones, and deploy the application there.
-
-The property this buys is fidelity: the drill exercises the actual failover machinery, target resolution, clone-from-replicated, identity preservation, and the driver redirect, against a third cluster, while the production relationship is never touched, because the `drtest-` policy is a separate policy with its own target.
-
-### 14.4 The non-disruption proof
-
-A drill that silently perturbed replication would be worse than no drill. Before the first clone and after the teardown, the driving kind captures and compares: every production `VolumeReplication`'s conditions, the `lastSyncTime` cadence, the lag and backlog from the typed status read (P0-1), and the count of production `VolumeReplication` objects. Any drift fails the drill as an invariant violation. The status endpoint built for Ramen's conditions is the same instrument this audit reads, which is why the drill contract belongs in this design.
-
-### 14.5 Costs and bounds
-
-- **A live clone pins its base snapshot.** Retention defers pruning a snapshot with a dependent clone, which is what keeps the drill safe, and also why a drill must carry a maximum lifetime: a long-lived bubble holds the secondary's replicated chain back.
-- **Test-cluster mode consumes real resources:** cross-cluster bandwidth for the full copy, and capacity on both the secondary (the `drtest-` clones) and the test cluster. The `drtest-` clones on the secondary exist only as replication sources and are never served, so they are created as internal volumes, the same treatment the shipping engine's own landing volumes already get: invisible to normal listings and exempt from the per-node subsystem cap. Storage capacity is unaffected either way; a drill's cleanup and audit go through the `drtest-` test-id enumeration (§14.1), not the ordinary volume listing.
-- **The group rules apply unchanged:** a `drtest-` consistency group observes the member cap and the placement pin like any other, so a drill of a large group is a capacity event on the secondary.
-
----
-
-## 15. Open Questions
+## 14. Open Questions
 
 | # | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owner                   |
 |---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
 | 1 | **Demote semantics for the application.** The P0-3 demote fences the volume (ANA inaccessible) after the final flush, and with convergence folded into the verb it is now the only place a planned swap can stall. This is also the one verb the planned promote's lossless guarantee entirely depends on (§5.2): a planned promote is refused unless a completed demote already fenced the source and confirmed the final delta landed, so an unresolved failure mode here is an unresolved gap in the whole "zero loss" claim. Ramen relocation unmounts the workload first, so the fence is ordinarily unopposed, but that is Ramen's choreography, not a guarantee the driver can rely on: a stuck termination, a stale mount that never released, or a demote invoked outside Ramen's normal flow can all leave writes still arriving when quiesce fires. Confirm the verb's behavior when writes are still in flight at quiesce (block versus fail), whether the converge phase has its own budget separate from the quiesced flush, and whether a timeout in either phase must abort back to serving primary or leave the volume fenced with no automatic recovery. | Backend team            |
-| 2 | **Where the preflight lives.** §7.2 attaches peerClasses validation to the `ReplicationPair` reconciler. If the redesign retires the pair kind, the preflight needs a new home (the `SimplyblockDriver`, or a standalone check job).                                                                                                                                                          | Operator team           |
-| 3 | **Per-volume policy granularity.** A `VolumeReplicationClass` names one policy, and today one policy implies one target and cadence for all its volumes. Confirm one class per (policy, cadence) is an acceptable authoring model for Ramen's `replicationClassSelector`, or whether per-volume interval overrides are needed. | Operator / Backend team |
-| 4 | **Visibility of `drtest-` clones.** The test-cluster mode's clones on the secondary are replication sources only, never served. Decide whether the backend creates them as internal volumes (hidden from listings, exempt from the per-node subsystem cap, like the shipping path's landing volumes) or as ordinary volumes under a naming convention.   | Backend team  |
-| 5 | ~~**Avoiding the clone on day-one protection.**~~ **Resolved:** `POST .../replication/failover?planned=true`'s no-demote branch now checks `lvol_controller.replication_source_online` (the source's own storage-node status) before falling through to `FAILED_PRECONDITION` -- an online source is a no-op (§5.2), so a healthy volume's first-ever `PromoteVolume` no longer materializes a clone. The remaining residual: a source that dies within the last health-check interval still briefly reads online, so one reconcile can treat a genuine disaster as a no-op before the node's status catches up and the controller retries -- bounded by the health-check detection window, not open-ended. | Backend team |
+| 2 | **Per-volume policy granularity.** A `VolumeReplicationClass` names one policy, and today one policy implies one target and cadence for all its volumes. Confirm one class per (policy, cadence) is an acceptable authoring model for Ramen's `replicationClassSelector`, or whether per-volume interval overrides are needed. | Operator / Backend team |
+| 3 | ~~**Avoiding the clone on day-one protection.**~~ **Resolved:** `POST .../replication/failover?planned=true`'s no-demote branch now checks `lvol_controller.replication_source_online` (the source's own storage-node status) before falling through to `FAILED_PRECONDITION` -- an online source is a no-op (§5.2), so a healthy volume's first-ever `PromoteVolume` no longer materializes a clone. The remaining residual: a source that dies within the last health-check interval still briefly reads online, so one reconcile can treat a genuine disaster as a no-op before the node's status catches up and the controller retries -- bounded by the health-check detection window, not open-ended. | Backend team |
