@@ -31,8 +31,14 @@ jobs:
       - name: Lint
         run: helm lint helm-charts/charts/simplyblock-operator
 
+      # --api-versions states a capability the render has no cluster to read.
+      # TLS is on by default and the chart refuses a cluster that does not serve
+      # cert-manager's API; a cluster-less render serves nothing, so the default
+      # values cannot be rendered at all without saying so here.
       - name: Template
-        run: helm template simplyblock-operator helm-charts/charts/simplyblock-operator
+        run: >
+          helm template simplyblock-operator helm-charts/charts/simplyblock-operator
+          --api-versions cert-manager.io/v1
 
       - name: Required objects
         run: helm-charts/scripts/check-rendered-objects.sh
