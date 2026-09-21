@@ -121,11 +121,19 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
-	// The ConfigMap is written before the DaemonSet on every pass. A pod that
-	// starts against a missing or empty entry reaches the node configuration
-	// script with --max-subsys-count=0 and fails there, which is a long way from
-	// the cause (§5.3).
-	if err := r.Workload.ReconcileConfig(ctx, &cluster); err != nil {
+	// One reading of the node set feeds both halves that depend on it. The
+	// ConfigMap is written before the workers are enrolled, and a worker is only
+	// schedulable once enrollment has labeled it, so a pod cannot start against
+	// an entry that is not there -- while the two halves are reading the same
+	// set. Taken separately, a node that appeared between the readings had its
+	// worker enrolled by a pass that never wrote its entry, and the pod then
+	// reached the node configuration script with no sizing and failed there,
+	// which is a long way from the cause (§5.3).
+	nodes, err := r.clusterNodes(ctx, &cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Workload.ReconcileConfig(ctx, &cluster, nodes); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -137,7 +145,11 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		{"the serving certificates", r.reconcileCertificates},
 		{"the headless service", r.reconcileService},
 		{"the endpoint slice", r.reconcileEndpointSlice},
-		{"the worker enrollment", r.enrollWorkers},
+		{"the worker enrollment", func(
+			ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+		) error {
+			return r.enrollWorkers(ctx, cluster, nodes)
+		}},
 		{"the daemon set", r.reconcileDaemonSet},
 	} {
 		if err := step.run(ctx, &cluster); err != nil {
@@ -145,6 +157,34 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// clusterNodes is the one reading of this cluster's storage nodes that the pass
+// uses wherever the answer has to be the same answer.
+//
+// The filtering is here rather than in each caller so that "this cluster's
+// nodes" means one thing: a node on its way out is not a reason to keep its
+// worker enrolled, and it is not a reason to write its entry either.
+func (r *StorageNodeWorkloadReconciler) clusterNodes(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) ([]simplyblockv1alpha2.StorageNode, error) {
+	var nodes simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &nodes, client.InNamespace(cluster.Namespace)); err != nil {
+		return nil, fmt.Errorf("list the storage nodes: %w", err)
+	}
+
+	kept := make([]simplyblockv1alpha2.StorageNode, 0, len(nodes.Items))
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if node.Spec.ClusterRef != cluster.Name || node.Spec.WorkerNode == "" {
+			continue
+		}
+		if !node.DeletionTimestamp.IsZero() {
+			continue
+		}
+		kept = append(kept, *node)
+	}
+	return kept, nil
 }
 
 // enrollWorkers puts every worker this cluster has a node on into its storage
@@ -165,24 +205,13 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 // set from the nodes that want it, so calling it once per worker is both
 // sufficient and what keeps the set consistent.
 func (r *StorageNodeWorkloadReconciler) enrollWorkers(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+	ctx context.Context,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	nodes []simplyblockv1alpha2.StorageNode,
 ) error {
-	var nodes simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &nodes, client.InNamespace(cluster.Namespace)); err != nil {
-		return fmt.Errorf("list the storage nodes: %w", err)
-	}
-
 	seen := map[string]struct{}{}
-	for i := range nodes.Items {
-		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster.Name || node.Spec.WorkerNode == "" {
-			continue
-		}
-		// A node on its way out is not a reason to keep its worker enrolled, and
-		// releasing it is ReleaseWorker's job on the node's own path.
-		if !node.DeletionTimestamp.IsZero() {
-			continue
-		}
+	for i := range nodes {
+		node := &nodes[i]
 		if _, already := seen[node.Spec.WorkerNode]; already {
 			continue
 		}

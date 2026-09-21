@@ -106,6 +106,7 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-401 | No backend node for the worker: the queue takes its slot as before                   | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
 | U-402 | A slot is held while the control plane still reports the node in_creation            | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
 | U-403 | The slot goes back once the node leaves in_creation                                  | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
+| U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass    | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
 
 ### Entity: The Provisioning Claim (design §4.2)
 
