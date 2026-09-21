@@ -63,23 +63,23 @@ func deleteExportBefore(ctx context.Context, registry ExportRegistry, volumeHand
 // operator re-assembles, and assembly runs xfs_growfs on the host. Nothing here
 // can reach that host, and no CSI call ever targets it.
 //
-// It also reports whether the node has anything left to do. For a pNFS volume
-// it does not: the client has an NFS mount, not the filesystem.
+// Whether the node still has work is not decided here: every volume has some.
+// A block volume's node grows its filesystem, and a pNFS client re-takes its
+// layout. See ControllerExpandVolume.
 func growExportAfter(
 	ctx context.Context, registry ExportRegistry, volumeHandle string, bytes int64,
-) (nodeExpansion bool, err error) {
+) error {
 	if registry == nil {
-		return true, nil
+		return nil
 	}
 	lvolID, ok := lvolIDOf(volumeHandle)
 	if !ok {
-		return true, nil
+		return nil
 	}
 
-	grown, err := registry.SetExportSize(ctx, exportRecordName(lvolID), bytes)
-	if err != nil {
-		return false, status.Errorf(codes.Internal,
+	if _, err := registry.SetExportSize(ctx, exportRecordName(lvolID), bytes); err != nil {
+		return status.Errorf(codes.Internal,
 			"recording the new size of volume %s on its export: %v", volumeHandle, err)
 	}
-	return !grown, nil
+	return nil
 }

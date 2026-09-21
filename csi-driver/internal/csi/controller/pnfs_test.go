@@ -249,8 +249,7 @@ func TestExpandingAnExportedVolumeRecordsTheNewSize(t *testing.T) {
 	const volume = "bfc56677-d602-4017-804b-975f3b929e3f"
 
 	registry := &fakeRegistry{exists: true}
-	nodeExpansion, err := growExportAfter(context.Background(), registry, handle, 8<<30)
-	if err != nil {
+	if err := growExportAfter(context.Background(), registry, handle, 8<<30); err != nil {
 		t.Fatalf("growExportAfter: %v", err)
 	}
 
@@ -260,11 +259,6 @@ func TestExpandingAnExportedVolumeRecordsTheNewSize(t *testing.T) {
 	if registry.size != 8<<30 {
 		t.Errorf("recorded %d bytes, want the new capacity", registry.size)
 	}
-	// The client holds an NFS mount, not the filesystem, so there is nothing
-	// for the node to grow.
-	if nodeExpansion {
-		t.Error("the node was asked to grow a filesystem it does not have")
-	}
 }
 
 // A volume with no export expands as it always did, and the node still grows
@@ -273,12 +267,8 @@ func TestExpandingAVolumeWithNoExportLeavesTheNodeToIt(t *testing.T) {
 	const handle = "f0bb9077-78c4-4482-9ccf-a5693ce2df78:" +
 		"9d016dd4-34d7-42f0-b549-52a5af2f1399:bfc56677-d602-4017-804b-975f3b929e3f"
 
-	nodeExpansion, err := growExportAfter(context.Background(), &fakeRegistry{}, handle, 8<<30)
-	if err != nil {
-		t.Fatalf("growExportAfter: %v", err)
-	}
-	if !nodeExpansion {
-		t.Error("a block volume's node was not asked to grow its filesystem")
+	if err := growExportAfter(context.Background(), &fakeRegistry{}, handle, 8<<30); err != nil {
+		t.Fatalf("growExportAfter on a volume with no export: %v", err)
 	}
 }
 
