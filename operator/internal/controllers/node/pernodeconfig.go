@@ -45,15 +45,24 @@ func PerNodeConfigMapName(cluster string) string {
 	return cluster + "-per-node-config"
 }
 
-// ReconcileConfig writes the ConfigMap from the cluster's nodes.
+// ReconcileConfig writes the ConfigMap from the node set it is given.
 //
-// It is written before the DaemonSet on every pass. A pod that starts against a
-// missing or empty entry reaches the node configuration script with
-// --max-subsys-count=0 and fails there, which is a long way from the cause. For
-// the same reason, a cluster missing its required sizing is refused with an error
+// It is written before the workers are enrolled on every pass, and a worker is
+// only schedulable once it carries the label enrollment puts on it, so the
+// ordering is what stops a pod starting against an entry that is not there. A
+// pod that starts against a missing entry reaches the node configuration script
+// with no sizing and fails there, which is a long way from the cause. For the
+// same reason, a cluster missing its required sizing is refused with an error
 // naming the fields rather than written out as blanks.
+//
+// The node set is a parameter rather than a list of its own, because the
+// ordering only holds while both halves are looking at the same one: a node that
+// appeared between two readings had its worker enrolled by a pass that never
+// wrote its entry.
 func (w *Workload) ReconcileConfig(
-	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+	ctx context.Context,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	nodes []simplyblockv1alpha2.StorageNode,
 ) error {
 	if cluster.Spec.MaxSubsystemCount == nil || cluster.Spec.VCPUCount == nil {
 		return fmt.Errorf(
@@ -61,18 +70,9 @@ func (w *Workload) ReconcileConfig(
 				"set spec.maxSubsystemCount and spec.vcpuCount", cluster.Name)
 	}
 
-	var nodes simplyblockv1alpha2.StorageNodeList
-	if err := w.List(ctx, &nodes, client.InNamespace(cluster.Namespace)); err != nil {
-		return fmt.Errorf("list cluster %s's nodes: %w", cluster.Name, err)
-	}
-
 	data := map[string]string{}
-	for i := range nodes.Items {
-		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster.Name {
-			continue
-		}
-		data[node.Spec.WorkerNode] = renderNodeConfig(cluster, node)
+	for i := range nodes {
+		data[nodes[i].Spec.WorkerNode] = renderNodeConfig(cluster, &nodes[i])
 	}
 
 	return w.applyConfigMap(ctx, cluster, data)
