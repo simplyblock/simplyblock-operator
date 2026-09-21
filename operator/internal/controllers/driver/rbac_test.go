@@ -135,6 +135,33 @@ func TestRulesMatchTheChart(t *testing.T) {
 	}
 }
 
+// The node role's one deliberate departure from the chart's rule set
+// (issue #277): patch on nodes, so the node plugin can label its own node
+// with its self-probed vdo-capable result. Node objects are cluster-scoped,
+// so this is the narrowest verb set self-labeling allows.
+func TestNodeRoleCanPatchNodesForVDOCapability(t *testing.T) {
+	var found *rbacv1.PolicyRule
+	for i, r := range clusterRoleRules[nodeComponent] {
+		if len(r.APIGroups) == 1 && r.APIGroups[0] == "" &&
+			len(r.Resources) == 1 && r.Resources[0] == "nodes" {
+			found = &clusterRoleRules[nodeComponent][i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no rule for nodes in the node role")
+	}
+	hasPatch := false
+	for _, v := range found.Verbs {
+		if v == "patch" {
+			hasPatch = true
+		}
+	}
+	if !hasPatch {
+		t.Errorf("nodes verbs = %v, want patch among them", found.Verbs)
+	}
+}
+
 // No rule reaches everything. A wildcard in a CSI sidecar's role is the escalation
 // primitive that turns a sidecar compromise into cluster-admin.
 func TestNoRuleIsAWildcard(t *testing.T) {

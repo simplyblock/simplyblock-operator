@@ -13,6 +13,8 @@ import (
 	"context"
 	"testing"
 
+	"k8s.io/utils/ptr"
+
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -172,6 +174,30 @@ func TestGeneratedParametersInventNothing(t *testing.T) {
 	}
 	if len(params) != 2 {
 		t.Errorf("a pool with no defaults produced %v, want only the two identity keys", params)
+	}
+}
+
+// Client-side compression and deduplication are independent parameters, and
+// each reaches the class under its own key, distinct from server-side
+// EnableCompression.
+func TestGeneratedParametersIncludeClientSideVDO(t *testing.T) {
+	p := newPool("tenant-a", func(p *simplyblockv1alpha2.StoragePool) {
+		p.Spec.VolumeDefaults = &simplyblockv1alpha2.VolumeDefaults{
+			EnableClientCompression:   ptr.To(true),
+			EnableClientDeduplication: ptr.To(false),
+		}
+	})
+
+	params := ClassParameters(p, testClusterUUID)
+
+	if params[kube.ParamClientCompression] != "true" {
+		t.Errorf("client_compression = %q, want true", params[kube.ParamClientCompression])
+	}
+	if params[kube.ParamClientDeduplication] != "false" {
+		t.Errorf("client_deduplication = %q, want false", params[kube.ParamClientDeduplication])
+	}
+	if _, ok := params[kube.ParamCompression]; ok {
+		t.Errorf("server-side compression = %q, want unset since EnableCompression was never set", params[kube.ParamCompression])
 	}
 }
 

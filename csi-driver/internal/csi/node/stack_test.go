@@ -130,6 +130,10 @@ func newTestStack(t *testing.T, runner stackRunner) (*stack, string) {
 // these tests compare plans.
 const plainShape = "fabric → filesystem"
 
+// lvmShape is the layer list a volume carrying client-side compression or
+// deduplication stages as, rendered the same way.
+const lvmShape = "fabric → lvmPhysicalVolume → lvmVolumeGroup → lvmLogicalVolume → filesystem"
+
 // stagedContext is the volume context a staged volume leaves behind, which is
 // all the teardown and expansion paths have to work from.
 func stagedContext() map[string]string {
@@ -163,12 +167,15 @@ func TestPlanForSelectsTheShapeFromTheCapability(t *testing.T) {
 	node := s.node("", nil)
 	volume := stackVolume("/staging", stagedContext(), mountCapability())
 
-	mountPlan := planFor(node, connectionFromContext(stagedContext()), volume, mountCapability())
+	vc := stagedContext()
+	options := vdoOptions(vc)
+
+	mountPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, mountCapability()))
 	if got := strings.Join(mountPlan.Names(), " → "); got != plainShape {
 		t.Errorf("a filesystem volume stages as %s", got)
 	}
 
-	blockPlan := planFor(node, connectionFromContext(stagedContext()), volume, blockCapability())
+	blockPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, blockCapability()))
 	if got := strings.Join(blockPlan.Names(), " → "); got != "fabric" {
 		t.Errorf("a raw block volume stages as %s, and nothing may format it", got)
 	}
@@ -368,10 +375,16 @@ func TestTeardownPlanFollowsTheRecord(t *testing.T) {
 	}{
 		{name: "raw block", layers: []string{"fabric"}, want: "fabric"},
 		{name: "filesystem", layers: []string{"fabric", "filesystem"}, want: plainShape},
+		{name: "client-side compression", layers: strings.Split(lvmShape, " → "), want: lvmShape},
 		{
 			name:    "a layer this build does not know",
+			layers:  []string{"fabric", "dmCrypt", "filesystem"},
+			wantErr: "dmCrypt",
+		},
+		{
+			name:    "known layers in a shape this build does not stage",
 			layers:  []string{"fabric", "lvmVolumeGroup", "filesystem"},
-			wantErr: "lvmVolumeGroup",
+			wantErr: "not a shape this build stages",
 		},
 	}
 
@@ -510,10 +523,19 @@ func writeRecord(t *testing.T, s *stack, handle string, names []string) {
 	record := volstack.Record{Version: volstack.RecordVersion, VolumeHandle: handle}
 	for _, layer := range names {
 		entry := volstack.Entry{Layer: layer, Attempted: true}
-		if layer == layerFilesystem {
+		switch layer {
+		case layerFilesystem:
 			params, err := json.Marshal(map[string]string{"fsType": extFS})
 			if err != nil {
 				t.Fatalf("encode the filesystem parameters: %v", err)
+			}
+			entry.Params = params
+		case layerLVMLogicalVolume:
+			params, err := json.Marshal(layers.LVMLogicalVolumeParams{
+				PoolName: vdoPoolName, Deduplication: true, Compression: true,
+			})
+			if err != nil {
+				t.Fatalf("encode the logical-volume parameters: %v", err)
 			}
 			entry.Params = params
 		}

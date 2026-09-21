@@ -70,10 +70,9 @@ atlas/
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
 │   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
-│   ├── dm.go               RemoveOrphanedDMNodes
-│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
-│       ├── volume.go       Registers itself with lvm, UpdateVolume
-│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
+│   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
+│   ├── devices.go          ForgetDevice: prune the node's LVM devices file
+│   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
 ├── volstack/               A volume's node-side stack, as ordered layers
 │   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
@@ -87,7 +86,7 @@ atlas/
 │   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
 │   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
 │   └── plans/              The plan shapes: one constructor per row of the design's plan table
-│       ├── plans.go        RawBlock / Plain / LVM / Striped + the LVM naming rule
+│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped + the LVM naming rule
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
@@ -1139,40 +1138,36 @@ identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
 `RenameLogicalVolume` remain available for a recovery path that needs one step
 alone.
 
-VDO lives in the `lvm/vdo` subpackage rather than in `lvm` itself. It registers
-a provisioning handler at init, and `CreateLogicalVolume` consults the registry
-for the extra `lvcreate` flags a `LogicalVolumeDefinition` implies, so a caller
-asks for compression or deduplication instead of knowing how dm-vdo spells it.
-Importing the subpackage is what makes those flags reachable, and
-`vdo.UpdateVolume` toggles them on a pool that already exists.
+VDO is a built-in `VolumeProvisioning` handler in `lvm` itself (`vdo.go`),
+registered by this package's own `init` rather than requiring a caller to
+import a separate subpackage for the side effect: `CreateLogicalVolume`
+consults the registry for the extra `lvcreate` flags a `LogicalVolumeDefinition`
+asking for compression or deduplication implies, so a caller spells neither
+`--type vdo` nor `y`/`n` itself. A forgotten import used to be how this
+degenerated silently to a plain linear volume; making the registration
+unconditional is what closed that gap.
 
 `RemoveOrphanedDMNodes` is the fallback when the backing device is already gone
 and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
 they need: it clears the live dm nodes directly, retrying across a few passes so
-removing a dependent unblocks what it was blocking.
+removing a dependent unblocks what it was blocking. `HasOrphanedDMNodes` answers
+the same listing without removing anything, for a caller — `volstack`'s own
+`lvmVolumeGroup` layer — that has to tell "the group is gone" from "the group's
+members are gone but it is still mapped" with no member device left to read.
 
-`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
-drives, not only the provisioning handler: `CreateOrAttach` (idempotent
-create-or-reactivate), `ResolveClone` (a thin wrapper over
-`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
-`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
-device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
-failure, `Remove` unconditionally, since one is trying to preserve the volume
-and the other is already destroying it), `Grow`, and `SetFeatures` (a
-lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
-lvolID alone. The volume group/pool naming convention stays internal to this
-package rather than leaking to a caller. None of it references a Kubernetes
-type: it is node-level orchestration that happens to live in a CSI driver
-today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
-nil-safe) is how a caller gets its own log format without this package taking
-on a Kubernetes-specific logging dependency.
+`ForgetDevice` runs `lvmdevices --deldev` against one device, which is the only
+thing that prunes an entry from `/etc/lvm/devices/system.devices`. Nothing else
+does, so a node otherwise accumulates one stale entry per device that went away
+without a clean teardown. It is hygiene rather than correctness, and the one
+caller is the release that already had to fall back to the dm-node cleanup
+above, which is the release whose device is gone for good.
 
-_Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
-VDO support (`csi-driver/internal/mount/vdo.go`) is the code this package was
-extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
-`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
-`NodeExpandVolume`. A striped LVM volume group across several members would use
-`CreateVolumeGroup`'s variadic device-path list the same way.
+The per-volume stack lifecycle PR #402 originally built as `lvm/vdo`
+(`CreateOrAttach`, `ResolveClone`, `Deactivate`, `Remove`, `Grow`,
+`SetFeatures`) retired once `volstack`'s three LVM layers absorbed it (issue
+#277, below): each of those operations is now one layer's `Ensure`, `Release`,
+`Destroy`, or `Grow`, composed through the runner rather than called directly,
+and the flat package was deleted with nothing left importing it.
 
 #### Bring up a volume's stack
 
@@ -1202,14 +1197,23 @@ runner := volstack.NewRunner(volstack.NewStore("/var/lib/simplyblock/stacks"))
 artifact, err := runner.Up(ctx, handle.String(), plan)
 ```
 
-There are four shapes, and they are the design's plan table: `RawBlock`
+There are five shapes, and they are the design's plan table: `RawBlock`
 (`fabric` alone, which is raw block mode as a shorter plan rather than a flag
 inside a stage function), `Plain` (`fabric` → `filesystem`), `LVM` (`fabric` →
 `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume` → `filesystem`, for
-client-side deduplication or compression), and `Striped` (the same four above a
-`members` composite, for a volume assembled over several namespaces). The last
-two take a `LogicalVolumeOptions`, which is the only thing separating a linear
-volume from a VDO or a striped one: one layer, three definitions.
+client-side deduplication or compression), `LVMRawBlock` (the same without the
+filesystem, because what deduplicates a volume is the logical volume rather than
+the filesystem over it), and `Striped` (the LVM layers above a `members`
+composite, for a volume assembled over several namespaces). The last three take
+a `LogicalVolumeOptions`, which is the only thing separating a linear volume
+from a VDO or a striped one: one layer, three definitions.
+
+`LogicalVolumeOptions.PoolName` reaches two layers. The logical-volume layer
+takes it as `lvcreate`'s `<vg>/<pool>` target, and the physical-volume layer
+takes it as a name to leave alone when it resolves a clone: the pool is
+structural and named identically in every volume's group, so a resolution that
+did not know about it would rename the pool instead of the volume carrying the
+source's name.
 
 Deciding which shape a volume gets stays with the consumer, because that answer
 comes from a StorageClass, a volume capability, and the node's role for the
@@ -1227,15 +1231,17 @@ reads no sysfs, so a consumer can unit-test the selection it makes and only the
 runner needs a host.
 
 _Today:_ the CSI node service is the consumer. `csi-driver/internal/csi/node`
-builds the seams once in `stack.go`, selects `RawBlock` or `Plain` per volume in
-`plan.go`, and every node RPC on the data path is one runner call against the
-result: `NodeStageVolume` is `Up`, `NodeUnstageVolume` is `Down`,
+builds the seams once in `stack.go`, selects one of the four single-namespace
+rows per volume in `plan.go`, and every node RPC on the data path is one runner call
+against the result: `NodeStageVolume` is `Up`, `NodeUnstageVolume` is `Down`,
 `NodePublishVolume` and a restage are `Heal`, `NodeExpandVolume` is `Grow`, and
-an unstage of a volume that is being deleted is the one caller of `Destroy`. The
-on-node integration suite (`test/integration/onnode`) is the other caller, and it
-fills the seams with the implementations that ship: nvme-cli, the sysfs
-resolvers, `lvm.Manager`, and `blockdev.Prober`. The `LVM` and `Striped` shapes
-have no consumer yet.
+an unstage of a volume that is being deleted is the one caller of `Destroy`. A
+class asking for client-side compression or deduplication is what selects `LVM`,
+with `LogicalVolumeOptions` carrying the VDO pool name and the capability a node
+has to advertise. The on-node integration suite (`test/integration/onnode`) is
+the other caller, and it fills the seams with the implementations that ship:
+nvme-cli, the sysfs resolvers, `lvm.Manager`, and `blockdev.Prober`. The
+`Striped` shape has no consumer yet.
 
 ### Operator ↔ CSI link
 

@@ -18,16 +18,16 @@ func escapeDMName(name string) string {
 	return strings.ReplaceAll(name, "-", "--")
 }
 
-// RemoveOrphanedDMNodes clears any live device-mapper nodes whose name starts
-// with volumeGroup's (escaped internally), for when the backing device is
-// gone and the higher-level removal (RemoveVolumeGroup, etc.) can no longer
-// read the metadata it needs to deactivate cleanly. Retries across a few
-// passes so removing a dependent node unblocks what it was blocking, rather
-// than hardcoding the dependency chain.
-func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, volumeGroup VolumeGroup) error {
+// matchingDMNodes lists the live device-mapper nodes whose name starts with
+// volumeGroup's (escaped internally), from a plain `dmsetup ls` naming every
+// node on the host. It is content the same way RemoveOrphanedDMNodes and
+// HasOrphanedDMNodes both need it: the check and the removal must agree on
+// which nodes belong to this group, so both go through this one listing
+// rather than each parsing dmsetup output on their own.
+func (m *Manager) matchingDMNodes(ctx context.Context, volumeGroup VolumeGroup) ([]string, error) {
 	out, err := m.exec(ctx, nil, "dmsetup", "ls")
 	if err != nil {
-		return fmt.Errorf("dmsetup ls: %w", err)
+		return nil, fmt.Errorf("dmsetup ls: %w", err)
 	}
 
 	escaped := escapeDMName(volumeGroup.Name)
@@ -42,6 +42,40 @@ func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, volumeGroup VolumeG
 		if strings.HasPrefix(name, escaped+"-") {
 			names = append(names, name)
 		}
+	}
+	return names, nil
+}
+
+// HasOrphanedDMNodes reports whether volumeGroup still has live
+// device-mapper nodes mapped on this host, independently of whether any of
+// its member devices can currently be read at all.
+//
+// This is what a layer whose members have vanished entirely — total NVMe-oF
+// path loss, rather than an interrupted bring-up — checks in order to answer
+// whether it is still holding something this host has to release: content-
+// based identity (VolumeGroup, HasLogicalVolume) needs a device to read, and
+// there is none left to read when every member is gone. The device-mapper
+// nodes RemoveOrphanedDMNodes already knows how to find and remove are the
+// one thing that survives the member devices disappearing, so this answers
+// the same question by simply not removing what it finds.
+func (m *Manager) HasOrphanedDMNodes(ctx context.Context, volumeGroup VolumeGroup) (bool, error) {
+	names, err := m.matchingDMNodes(ctx, volumeGroup)
+	if err != nil {
+		return false, err
+	}
+	return len(names) > 0, nil
+}
+
+// RemoveOrphanedDMNodes clears any live device-mapper nodes whose name starts
+// with volumeGroup's (escaped internally), for when the backing device is
+// gone and the higher-level removal (RemoveVolumeGroup, etc.) can no longer
+// read the metadata it needs to deactivate cleanly. Retries across a few
+// passes so removing a dependent node unblocks what it was blocking, rather
+// than hardcoding the dependency chain.
+func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, volumeGroup VolumeGroup) error {
+	names, err := m.matchingDMNodes(ctx, volumeGroup)
+	if err != nil {
+		return err
 	}
 	if len(names) == 0 {
 		return nil

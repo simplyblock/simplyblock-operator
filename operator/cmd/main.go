@@ -836,6 +836,10 @@ func main() {
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
+			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered vdo-size-floor validating webhook")
+
 		mgr.GetWebhookServer().Register("/mutate-v1-pvc-simplyblock-placement",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockVolumePlacementInjector{
 				Client:       mgr.GetClient(),

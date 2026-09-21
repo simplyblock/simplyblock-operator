@@ -126,12 +126,23 @@ func (n *Node) priorFormat(volume Volume) func(context.Context) (string, error) 
 // It is told the logical volume's name as well as the group's, because resolving
 // a clone renames the group and leaves the volume inside it named after the
 // source.
-func (n *Node) physicalVolume(volume Volume) volstack.Layer {
+//
+// The pool, when the options name one, is passed as a name to preserve for the
+// same reason: it is structural rather than per-volume, carries the same name in
+// every volume's group, and renaming it along with the clone's source-named
+// volume would leave the logical volume pointing at a pool that no longer
+// answers to what its metadata calls it.
+func (n *Node) physicalVolume(volume Volume, options LogicalVolumeOptions) volstack.Layer {
+	var preserve []string
+	if options.PoolName != "" {
+		preserve = []string{options.PoolName}
+	}
 	return layers.NewLVMPhysicalVolume(layers.LVMPhysicalVolumeConfig{
-		VolumeGroup:   volume.VolumeGroup(),
-		LogicalVolume: volume.LogicalVolume(),
-		Manager:       n.cfg.Manager,
-		Content:       n.cfg.Content,
+		VolumeGroup:            volume.VolumeGroup(),
+		LogicalVolume:          volume.LogicalVolume(),
+		PreserveLogicalVolumes: preserve,
+		Manager:                n.cfg.Manager,
+		Content:                n.cfg.Content,
 	})
 }
 

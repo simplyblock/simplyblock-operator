@@ -14,10 +14,13 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
@@ -35,12 +38,48 @@ import (
 // and are stable across releases, because a teardown replays a record an
 // earlier version wrote.
 const (
-	layerFabric     = "fabric"
-	layerFilesystem = "filesystem"
+	layerFabric            = "fabric"
+	layerFilesystem        = "filesystem"
+	layerLVMPhysicalVolume = "lvmPhysicalVolume"
+	layerLVMVolumeGroup    = "lvmVolumeGroup"
+	layerLVMLogicalVolume  = "lvmLogicalVolume"
 )
 
-// planFor is the shape a volume stages as: the fabric alone for raw block, and
-// the fabric with a filesystem above it for everything else.
+// vdoPoolName is the pool `lvcreate --type vdo` creates alongside the logical
+// volume, inside every volume's own group. It is not per volume: uniqueness
+// comes from the group, of which there is one per volume. Being the same name
+// in every group is what makes it structural, which is why the plan hands it to
+// the physical-volume layer as a name to preserve through a clone resolution.
+const vdoPoolName = "vdopool"
+
+// stackShape is which row of the plan catalog a volume is. It is named rather
+// than decided twice, because a stage reads it off the volume's parameters and
+// a teardown reads it off the stack record, and the two have to arrive at the
+// same list of layers or the teardown releases the wrong objects.
+type stackShape int
+
+const (
+	// shapeRawBlock is the fabric alone: a volume the pod opens as a block
+	// device, with nothing formatted on it.
+	shapeRawBlock stackShape = iota
+
+	// shapePlain is the fabric with a filesystem above it, which is what most
+	// volumes are.
+	shapePlain
+
+	// shapeLVM is the fabric with the three LVM layers above it and a filesystem
+	// on top: the shape a volume carrying client-side compression or
+	// deduplication takes.
+	shapeLVM
+
+	// shapeLVMRawBlock is shapeLVM without the filesystem, for a volume that
+	// asked for client-side compression or deduplication and is opened as a
+	// block device.
+	shapeLVMRawBlock
+)
+
+// planFor is the layer list one of the shapes means, built with the seams the
+// node was resolved with.
 //
 // Raw block mode is a shorter plan rather than a flag inside a stage function,
 // which is what keeps a block volume from sharing a code path with a formatting
@@ -49,12 +88,63 @@ func planFor(
 	node *plans.Node,
 	connection lvol.Connection,
 	volume plans.Volume,
-	volCap *csi.VolumeCapability,
+	options plans.LogicalVolumeOptions,
+	shape stackShape,
 ) volstack.Plan {
-	if volCap.GetBlock() != nil {
+	switch shape {
+	case shapeRawBlock:
 		return node.RawBlock(connection)
+	case shapeLVM:
+		return node.LVM(connection, volume, options)
+	case shapeLVMRawBlock:
+		return node.LVMRawBlock(connection, volume, options)
+	case shapePlain:
 	}
 	return node.Plain(connection, volume)
+}
+
+// shapeFor is the row a volume stages as, read off what the RPC carries: the
+// capability decides whether there is a filesystem, and the class parameters
+// decide whether the LVM layers that provide client-side compression and
+// deduplication sit between it and the fabric.
+func shapeFor(vc map[string]string, volCap *csi.VolumeCapability) stackShape {
+	block := volCap.GetBlock() != nil
+	switch {
+	case wantsVDO(vc) && block:
+		return shapeLVMRawBlock
+	case wantsVDO(vc):
+		return shapeLVM
+	case block:
+		return shapeRawBlock
+	}
+	return shapePlain
+}
+
+// wantsVDO reports whether the volume's class asked for client-side compression
+// or deduplication. Either one alone needs the whole mechanism, because VDO is
+// what provides both.
+func wantsVDO(vc map[string]string) bool {
+	return boolFromContext(vc[kube.ParamClientCompression]) ||
+		boolFromContext(vc[kube.ParamClientDeduplication])
+}
+
+// vdoOptions is what the LVM layers of such a volume are built with: a logical
+// volume of the type that compresses, deduplicates, or both, inside the pool
+// lvcreate creates for it, on a node that advertises the kernel module.
+//
+// The two parameters are independent, and a volume asking for one and not the
+// other gets exactly that: the handler in atlas-lib/lvm passes both switches to
+// lvcreate explicitly rather than letting an unset one fall to a default of its
+// own.
+func vdoOptions(vc map[string]string) plans.LogicalVolumeOptions {
+	return plans.LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{
+			Compression:   boolFromContext(vc[kube.ParamClientCompression]),
+			Deduplication: boolFromContext(vc[kube.ParamClientDeduplication]),
+		},
+		PoolName:   vdoPoolName,
+		Capability: volstack.Capability(kube.LabelVDOCapable),
+	}
 }
 
 // stackVolume is the volume as the filesystem layer needs it described.
@@ -75,7 +165,7 @@ func stackVolume(
 		StagingPath:           stagingPath,
 		FsType:                fsType,
 		MountFlags:            volumeMountFlags(volCap),
-		FormatOptions:         mount.FormatOptions(fsType, vc),
+		FormatOptions:         mount.FormatOptions(fsType, vc, wantsVDO(vc)),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
 		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
 	}
@@ -295,28 +385,57 @@ func poolIDFor(vc map[string]string, handle *lvol.Handle) string {
 	return ""
 }
 
+// recordedShapes is every layer list this build stages, against the shape it is.
+// A teardown matches a record against it rather than against a condition per
+// shape, so that adding a row to the catalog is one entry here and nothing else.
+var recordedShapes = []struct {
+	layers []string
+	shape  stackShape
+}{
+	{[]string{layerFabric}, shapeRawBlock},
+	{[]string{layerFabric, layerFilesystem}, shapePlain},
+	{
+		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeLVMRawBlock,
+	},
+	{
+		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
+		shapeLVM,
+	},
+}
+
+// knownLayers are the layer names the shapes above are made of, which is what
+// separates a record this build cannot release from one naming a layer it has
+// never heard of.
+var knownLayers = map[string]bool{
+	layerFabric:            true,
+	layerFilesystem:        true,
+	layerLVMPhysicalVolume: true,
+	layerLVMVolumeGroup:    true,
+	layerLVMLogicalVolume:  true,
+}
+
 // shapeFromRecord is the plan shape a recorded layer list describes.
 //
 // A teardown is driven by what was built rather than by what a class says now,
 // because a class can be edited or deleted after a volume is provisioned. A
 // layer name this build does not know stops the teardown and says which one it
 // was, rather than silently skipping an object nobody will release.
-func shapeFromRecord(layers []string) (raw bool, err error) {
-	switch {
-	case len(layers) == 1 && layers[0] == layerFabric:
-		return true, nil
-	case len(layers) == 2 && layers[0] == layerFabric && layers[1] == layerFilesystem:
-		return false, nil
+func shapeFromRecord(recorded []string) (stackShape, error) {
+	for _, candidate := range recordedShapes {
+		if slices.Equal(recorded, candidate.layers) {
+			return candidate.shape, nil
+		}
 	}
-	for _, layer := range layers {
-		if layer != layerFabric && layer != layerFilesystem {
-			return false, fmt.Errorf(
+	for _, layer := range recorded {
+		if !knownLayers[layer] {
+			return shapePlain, fmt.Errorf(
 				"the stack record names the layer %q, which this build does not know how to release; "+
 					"releasing the rest would leave that layer's object behind with nothing to remove it",
 				layer)
 		}
 	}
-	return false, fmt.Errorf(
+	return shapePlain, fmt.Errorf(
 		"the stack record names the layers %v, which is not a shape this build stages",
-		layers)
+		recorded)
 }

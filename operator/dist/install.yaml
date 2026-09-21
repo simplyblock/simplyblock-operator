@@ -7813,6 +7813,22 @@ spec:
                   Kubernetes API: a pool whose defaults changed would have a class the
                   operator cannot update. Changing them means creating a new pool.
                 properties:
+                  enableClientCompression:
+                    description: |-
+                      EnableClientCompression compresses each volume on the node that consumes
+                      it (VDO), before a write ever reaches the wire, rather than on the storage
+                      node. Distinct from EnableCompression, and independent of
+                      EnableClientDeduplication: either, both, or neither may be set. A volume
+                      requesting this is pinned to a node whose kernel can run dm-vdo.
+                    type: boolean
+                  enableClientDeduplication:
+                    description: |-
+                      EnableClientDeduplication deduplicates each volume on the node that
+                      consumes it (VDO), independent of EnableClientCompression. It carries a
+                      significant fixed RAM cost per volume for VDO's index, so it is meant for
+                      the pools where duplicate data is actually expected (VM images, container
+                      layers, backup targets) rather than enabled by default.
+                    type: boolean
                   enableCompression:
                     description: EnableCompression compresses logical volumes.
                     type: boolean
@@ -9613,6 +9629,25 @@ webhooks:
     operations:
     - CREATE
     - UPDATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-v1-pvc-vdo-size
+  failurePolicy: Ignore
+  name: vdo-size-floor-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
     resources:
     - persistentvolumeclaims
   sideEffects: None

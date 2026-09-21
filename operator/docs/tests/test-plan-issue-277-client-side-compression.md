@@ -90,38 +90,44 @@ File: `atlas-lib/lvm/volume_test.go`
 
 ### VDO Feature Arguments (design §6)
 
-File: `atlas-lib/lvm/vdo/volume_test.go`
+File: `atlas-lib/lvm/vdo_test.go`
 
-| #    | Scenario                                                                                                     | Type     | Test                                              |
-|------|--------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------|
-| U-32 | Both features on produce `--compression y --deduplication y`                                                 | Positive | `TestVolumeHandler_CreateVolumeArgs`              |
-| U-33 | Compression only produces `--compression y --deduplication n`                                                | Positive | `TestVolumeHandler_CreateVolumeArgs`              |
-| U-34 | Deduplication only produces `--compression n --deduplication y`                                              | Positive | `TestVolumeHandler_CreateVolumeArgs`              |
-| U-35 | Neither feature contributes no arguments at all                                                              | Boundary | `TestVolumeHandler_CreateVolumeArgs`              |
-| U-36 | `Handles` agrees with `CreateVolumeArgs` on all four combinations, so dispatch and arguments cannot disagree | Boundary | `TestVolumeHandler_Handles`                       |
-| U-37 | The handler reaches `lvcreate` only through the registry the package's `init` populates                      | Positive | `TestRegisteredHandlerReachesCreateLogicalVolume` |
-| U-38 | `UpdateVolume` toggles the features on an existing volume through `lvchange`                                 | Positive | `TestUpdateVolume`                                |
-| U-39 | An `lvchange` failure is wrapped                                                                             | Negative | `TestUpdateVolume_WrapsRunnerError`               |
+| #    | Scenario                                                                                                     | Type     | Test                                                              |
+|------|--------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
+| U-32 | Both features on produce `--compression y --deduplication y`                                                 | Positive | `TestVDOProvisioning_CreateVolumeArgs`                            |
+| U-33 | Compression only produces `--compression y --deduplication n`                                                | Positive | `TestVDOProvisioning_CreateVolumeArgs`                            |
+| U-34 | Deduplication only produces `--compression n --deduplication y`                                              | Positive | `TestVDOProvisioning_CreateVolumeArgs`                            |
+| U-35 | Neither feature is handled at all, so no segment-type arguments are contributed                              | Boundary | `TestVDOProvisioning_Handles`                                     |
+| U-36 | `Handles` agrees with `CreateVolumeArgs` on all four combinations, so dispatch and arguments cannot disagree | Boundary | `TestVDOProvisioning_Handles`                                     |
+| U-37 | The handler reaches `lvcreate` only through the registry the package's `init` populates                      | Positive | `TestManager_CreateLogicalVolume_VDODefinitionProducesVDOCommand` |
 
-### VDO Stack Lifecycle (design §7.2, §7.4, §8, §9)
+### Stack Lifecycle (design §7.2, §7.4, §8, §9)
 
-File: `atlas-lib/lvm/vdo/stack_test.go`
+The lifecycle is `volstack`'s rather than a package of its own: what a VDO
+volume's stack does at each verb is what the three LVM layers do, and those are
+covered for every LVM-backed shape rather than for VDO alone. What belongs to
+this feature is which plan a volume gets and what its layers are built with,
+which is the node-service section further down.
 
-| #    | Scenario                                                                                      | Type     | Test                                                          |
-|------|-----------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-40 | `DevicePath` names the logical volume to format and mount, not the pool's dm device           | Positive | `TestDevicePath`                                              |
-| U-41 | Fresh device: `pvcreate`, `vgcreate`, and `lvcreate` in that order, each scoped to the device | Positive | `TestCreateOrAttach_FreshDevice`                              |
-| U-42 | An existing volume group is reactivated and never recreated                                   | Positive | `TestCreateOrAttach_ExistingVolumeGroupReactivates`           |
-| U-43 | An orphaned volume group with zero LVs is removed, then the stack is created fresh            | Boundary | `TestCreateOrAttach_OrphanedVolumeGroupIsRemovedAndRecreated` |
-| U-44 | `Deactivate` deactivates the stack without destroying it                                      | Positive | `TestDeactivate_Success`                                      |
-| U-45 | Device unreachable: `vgchange -an` fails, and the dm-node fallback runs                       | Negative | `TestDeactivate_UnreachableDeviceFallsBackToDMCleanup`        |
-| U-46 | Any other deactivation error surfaces rather than being swallowed by the fallback             | Negative | `TestDeactivate_OtherErrorIsNotSwallowed`                     |
-| U-47 | `Remove` deactivates and removes the stack                                                    | Positive | `TestRemove_Success`                                          |
-| U-48 | `Remove` with the backing device already gone falls back to dm-node removal                   | Negative | `TestRemove_UnreachableDeviceFallsBackToDMCleanup`            |
-| U-49 | `Grow` extends the pool LV, then the VDO LV, then returns the device path                     | Positive | `TestGrow`                                                    |
-| U-50 | `ResolveClone` re-stamps a foreign volume-group identity before any activation                | Positive | `TestResolveClone_ForeignVolumeGroupIsReStamped`              |
-| U-51 | A device already carrying this volume's own identity is a no-op                               | Negative | `TestResolveClone_OwnIdentityIsANoOp`                         |
-| U-52 | `SetFeatures` toggles compression and deduplication on an active volume                       | Positive | `TestSetFeatures`                                             |
+Files: `atlas-lib/volstack/layers/lvmvolume_test.go`,
+`atlas-lib/volstack/layers/lvmvolumegroup_test.go`,
+`atlas-lib/volstack/layers/lvmphysicalvolume_test.go`
+
+| #    | Scenario                                                                                                             | Type     | Test                                                                                                                                      |
+|------|----------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| U-40 | Fresh device: a blank device is labeled, the group is created over it, and the volume inside it after that           | Positive | `TestLVMPVCreatesOnlyOnABlankDevice`, `TestLVMVolumeGroupAbsentCreates`, `TestLVMVolumeAbsentCreates`                                     |
+| U-41 | An existing group is mapped rather than rebuilt, and an inactive volume activated rather than recreated              | Positive | `TestLVMVolumeGroupReadyIsMappedNotRebuilt`, `TestLVMVolumeInactiveActivatesAndCreatesNothing`                                            |
+| U-42 | An interrupted create, whose group activates while producing no usable device, is completed rather than started over | Boundary | `TestLVMVolumePartialCompletesTheCreate`                                                                                                  |
+| U-43 | A probe that failed is never read as evidence that the device is blank                                               | Negative | `TestLVMVolumeNeverCreatesOnAFailedProbe`, `TestLVMVolumeGroupNeverCreatesOnAFailedProbe`, `TestLVMPVNeverCreatesOnADeviceItCouldNotRead` |
+| U-44 | `Release` deactivates the group and destroys nothing, and the layers above and below it hold nothing to release      | Positive | `TestLVMVolumeGroupReleaseDeactivates`, `TestLVMVolumeReleaseLeavesTheGroupToTheLayerBelow`, `TestLVMPVReleaseDoesNothing`                |
+| U-45 | Device unreachable: the deactivation fails, and the device-mapper fallback runs                                      | Negative | `TestLVMVolumeGroupReleaseFallsBackToDeviceMapper`                                                                                        |
+| U-46 | With no member device left to read, the group's existence is answered from `dmsetup` rather than misreported absent  | Negative | `TestLVMVolumeGroupObserveWithNoMembersChecksOrphanedDMNodes`                                                                             |
+| U-47 | The layers above and below that one report absent without erroring, so a `Down` walk reaches the one with work to do | Negative | `TestLVMVolumeObserveWithNoDeviceReportsAbsentWithoutError`, `TestLVMPVObserveWithNoDeviceReportsAbsentWithoutError`                      |
+| U-48 | Pruning the device from `system.devices` is best-effort, and its failure never fails the release                     | Negative | `TestLVMVolumeGroupReleaseSucceedsWhenForgetDeviceFails`                                                                                  |
+| U-49 | `Destroy` removes the volume and then the group, and only a deletion path reaches either                             | Positive | `TestLVMVolumeDestroyRemovesTheVolume`, `TestLVMVolumeGroupDestroyRemovesTheGroup`                                                        |
+| U-50 | `Grow` extends the pool and then the volume inside it, and is convergent on a retry                                  | Positive | `TestLVMVolumeGrow`, `TestLVMVolumeGrowIsConvergent`                                                                                      |
+| U-51 | A foreign volume-group identity is re-stamped before any activation, and a device carrying its own is left alone     | Positive | `TestLVMPVEnsureReidentifiesAForeignLabel`, `TestLVMPVOwnLabelIsReady`                                                                    |
+| U-52 | A virtualized volume reports no geometry, so the filesystem above it is given no stripe hints to align to            | Boundary | `TestLVMVolumeReportsOnlyTheGeometryItCreated`                                                                                            |
 
 ### Clone Identity Resolution (design §7.4)
 
@@ -190,7 +196,7 @@ File: `csi-driver/pkg/spdk/controllerserver_test.go`
 | U-83 | `client_deduplication` alone is enough, since a deduplication-only volume needs the module too     | Positive | `TestVDOCapableSegment` |
 | U-84 | Both parameters spelled `"False"`: no segment                                                      | Boundary | `TestVDOCapableSegment` |
 | U-85 | The segment ignores `AccessibilityRequirements`, including one that advertises `vdo-capable=false` | Negative | `TestVDOCapableSegment` |
-| U-86 | `vdoParams` accepts both the `"True"` that `boolStr` emits and a lowercase `"true"`                | Boundary | —                       |
+| U-86 | `wantsVDO` accepts both the `"True"` that `boolStr` emits and a lowercase `"true"`                 | Boundary | —                       |
 
 ### StorageClass Parameter Generation (design §6)
 
@@ -206,23 +212,30 @@ File: `operator/internal/controller/simplyblockstoragepool_controller_unit_test.
 | U-92 | Neither parameter true leaves `allowedTopologies` unconstrained by `vdo-capable`                                    | Negative   | —    |
 | U-93 | DHCHAP's own `allowedTopologies` gate on the same pool composes as AND, and neither constraint overwrites the other | Regression | —    |
 
-### `nodeserver.go` Wiring (design §7.6)
+### Node-Service Wiring (design §7.6)
 
-File: `csi-driver/pkg/spdk/nodeserver_test.go`
+Files: `csi-driver/internal/csi/node/vdo_test.go`,
+`csi-driver/internal/csi/node/stack_test.go`,
+`atlas-lib/volstack/plans/plans_test.go`
 
-| #     | Scenario                                                                                                                                          | Type     | Test |
-|-------|---------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-94  | Either parameter true: `CreateOrAttachVDO` runs between `initiator.Connect` and `stageVolume`, and its device path is what `stageVolume` receives | Positive | —    |
-| U-95  | Neither parameter true: `CreateOrAttachVDO` is never called, and the raw device path is used unchanged                                            | Negative | —    |
-| U-96  | `ResolveClonedVDO` runs before the volume-group check on every stage, not only when a `VolumeContentSource` is set                                | Positive | —    |
-| U-97  | `NodeUnstageVolume` calls `DeactivateVDO` before `initiator.Disconnect`, with the order asserted                                                  | Positive | —    |
-| U-98  | A `DeactivateVDO` failure stops the unstage before the raw device is disconnected                                                                 | Negative | —    |
-| U-99  | The reconnect path reattaches the existing stack and never issues `lvcreate`                                                                      | Positive | —    |
-| U-100 | The reconnect path finds a blank device where VDO was expected, and fails loudly instead of creating a fresh container                            | Negative | —    |
-| U-101 | `NodeExpandVolume` calls `GrowVDO` before the filesystem resize                                                                                   | Positive | —    |
-| U-102 | `GrowVDO` failing skips the filesystem resize against a device that did not grow                                                                  | Negative | —    |
-| U-103 | `stageVolume` skips `xfsStripeOptions` whenever VDO is in play                                                                                    | Positive | —    |
-| U-104 | An `ext4` volume is unaffected, because the stripe-option path never applied to it                                                                | Negative | —    |
+Every row here is about selection. The verbs are the runner's, and are the same
+for a VDO volume as for every other volume this driver stages, which is why no
+row asserts that `NodeStageVolume` calls something VDO-specific: it calls
+`runner.Up`, exactly as it does for a plain volume.
+
+| #     | Scenario                                                                                                                                    | Type       | Test                                                                                                  |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------------------------------|
+| U-94  | Either parameter true: the volume stages as the LVM row, so the filesystem lands on the logical volume rather than on the namespace         | Positive   | `TestPlanForSelectsTheLVMShapeForAClientSideVolume`                                                   |
+| U-95  | Neither parameter true: the volume stages as `Plain`, with no LVM layer in its plan                                                         | Negative   | `TestPlanForSelectsTheLVMShapeForAClientSideVolume`                                                   |
+| U-96  | Either parameter true on a block volume: the LVM layers are kept and the filesystem is not, because what deduplicates is the logical volume | Boundary   | `TestPlanForSelectsTheLVMShapeForAClientSideVolume`, `TestLVMRawBlockIsTheLVMRowWithoutItsFilesystem` |
+| U-97  | A parameter that cannot be read is false, and the volume stages as a plain one rather than failing                                          | Negative   | `TestPlanForSelectsTheLVMShapeForAClientSideVolume`                                                   |
+| U-98  | The two parameters reach `lvcreate` independently, so a compression-only class does not also deduplicate                                    | Positive   | `TestVDOOptionsCarryEachSwitchOnItsOwn`                                                               |
+| U-99  | The plan names the pool and declares the node capability, without which the feature is silently absent or staged where it cannot run        | Positive   | `TestVDOOptionsNameThePoolAndTheCapability`, `TestVDOCarriesItsPoolAndCapability`                     |
+| U-100 | The pool keeps its name through a clone resolution, and a row without a pool preserves nothing                                              | Regression | `TestThePoolSurvivesACloneResolution`, `TestALinearVolumePreservesNothing`                            |
+| U-101 | The teardown takes the pool's name from the stack record, not from a class that may have been edited since                                  | Regression | `TestTeardownReadsThePoolNameFromTheRecord`                                                           |
+| U-102 | A recorded LVM stack is released as the LVM row, and a shape this build does not stage is refused rather than half-released                 | Negative   | `TestTeardownPlanFollowsTheRecord`                                                                    |
+| U-103 | A format on a VDO device skips `mkfs`'s discard and carries none of the backend's stripe hints                                              | Positive   | `TestStackVolumeFormatsAVDOVolumeWithoutDiscardOrStripeHints`                                         |
+| U-104 | The same volume without either parameter keeps both, because nothing virtualizes its blocks                                                 | Negative   | `TestStackVolumeKeepsTheStripeHintsWithoutVDO`                                                        |
 
 ---
 
@@ -515,7 +528,7 @@ device is gone and the normal LVM teardown cannot read its metadata.
 3. Assert `dmsetup ls` shows no leftover nodes for that volume group.
 
 **Verified:** `vgchange -an` failed with `Volume group … not found`, as expected,
-and the run found two real defects: `DeactivateVDO` had no fallback, and the
+and the run found two real defects: the release had no fallback, and the
 fallback's device-name matching did not account for device-mapper's
 dash-escaping, so it matched nothing. With both fixed, cleanup is automatic, and
 a second run of the whole sequence confirmed it. E-22, E-23, and E-24 pin the
@@ -651,7 +664,7 @@ client-side VDO stack, and the pod neither restarts nor loses data.
 under 30 seconds with `Phase: Completed`, restart count `0`, and matching
 checksums. On the consumer node the primary path's `traddr` moved to the target
 node while the HA sibling path was untouched, and the `dm-vdo` device and its
-mount were unaffected. `CreateOrAttachVDO` is never re-invoked by a migration,
+mount were unaffected. Nothing re-runs the bring-up on a migration,
 and a grep of `volumemigration_controller.go` confirms the controller carries no
 `vdo-capable` reference, which is correct because VDO never runs on the storage
 node a migration moves.
@@ -719,7 +732,7 @@ automated coverage is thinnest and the live coverage is strongest.
 |---------------------------------------------------------|--------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | U-69                                                    | A target size at or below the current size is refused              | `ExtendLogicalVolumeToSize` has no guard, and the caller never requests a shrink today                                                                                            |
 | U-80                                                    | Marker file absent past the wait                                   | Needs the timeout injected, which the current test setup does not expose. Design §4.3 treats the resulting label as a durable wrong answer (design §14 Q12)                       |
-| U-86                                                    | `vdoParams` spelling tolerance                                     | Covered indirectly by the live runs in §4, and not by a unit test                                                                                                                 |
+| U-86                                                    | `wantsVDO` spelling tolerance                                      | Covered indirectly by the live runs in §4, and not by a unit test                                                                                                                 |
 | U-87 … U-93                                             | StorageClass parameter and topology generation                     | The operator-side unit test file carries no case for the two new parameters                                                                                                       |
 | U-94 … U-104                                            | `nodeserver.go` wiring                                             | No `nodeserver_test.go` case exercises the VDO branches. The behavior is verified live in §4, so these rows are automation debt                                                   |
 | I-01 … I-07                                             | Pool-to-StorageClass reconciliation under `envtest`                | No `envtest` case covers the pool controller's client parameters yet                                                                                                              |
@@ -739,8 +752,8 @@ automated coverage is thinnest and the live coverage is strongest.
 | E-36                                                    | Sustained high-throughput writes                                   | Only small, non-sustained writes have been used                                                                                                                                   |
 | E-37                                                    | A large volume with mixed compressible, duplicate, and random data | All savings measurements so far used small, synthetic, highly duplicate data                                                                                                      |
 | —                                                       | Single-node cluster, and asymmetric node sizes                     | Not exercised. The feature is node-local, so the topology gate is the only part a node count changes                                                                              |
-| —                                                       | In-tree `dm-vdo` on kernel 6.9 or newer                            | The probe implements only the legacy install path (design §14 Q3), so there is nothing to test yet                                                                                |
+| —                                                       | In-tree `dm-vdo` on kernel 6.9 or newer                            | The probe is `modprobe dm-vdo` with `kvdo` as the fallback (design §4.1), and only the `kvdo` leg has been exercised live                                                         |
 | —                                                       | `aarch64` and non-RHEL nodes                                       | Both are non-goals (design §2), and `aarch64` lacks a `vdo` package altogether                                                                                                    |
-| —                                                       | Toggling a feature on an already-staged volume                     | `SetFeatures` is covered by U-52, and no live update path calls it (design §14 Q1)                                                                                                |
+| —                                                       | Toggling a feature on an already-staged volume                     | Nothing implements it: a volume definition is read when the logical volume is created and never again, and no layer verb carries a live `lvchange` (design §14 Q1)                |
 | —                                                       | `lvm2` VDO segtype detection in the capability probe               | Undecided whether it belongs there (design §14 Q7)                                                                                                                                |
 | E-38                                                    | A node gaining capability without a `csi-node` restart             | The probe is triggered by pod start alone, and whether it should re-check on an interval is undecided (design §14 Q12)                                                            |
