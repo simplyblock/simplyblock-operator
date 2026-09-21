@@ -104,7 +104,15 @@ func (h healingLayer) Healthy(context.Context, Artifact) (bool, error) {
 
 func (h healingLayer) Heal(context.Context, Artifact, Artifact) error {
 	h.note("heal")
-	return h.healErr
+	if h.healErr != nil {
+		return h.healErr
+	}
+	// A heal that worked leaves a layer that can be read and is serving, which
+	// is what the layer under test does: the filesystem layer clears the dead
+	// mount and mounts the device again, after which its own Observe answers.
+	h.observeErr = nil
+	h.healthy = true
+	return nil
 }
 
 // growingLayer adds the optional Grower interface.
@@ -687,5 +695,55 @@ func TestObserveReportsTheLayerItCouldNotRead(t *testing.T) {
 		t.Fatal("Observe reported a stack it could not read")
 	} else if !strings.Contains(err.Error(), "filesystem") {
 		t.Errorf("the error does not name the layer that failed: %v", err)
+	}
+}
+
+// Regression: a layer that cannot be observed is healed rather than reported.
+//
+// This is the case the whole verb exists for. Total path loss removes the
+// device, the mount above it answers EIO, and the filesystem layer's Observe
+// reports that as an error rather than as a state — deliberately, because its
+// Healthy answers "not healthy" for the same mount so that a heal runs. The
+// runner asked Observe first and returned its error, so the heal never ran: the
+// CSI node service reported "observe filesystem while healing: the mount is
+// dead" on every retry, the volume was never republished, and the workload
+// stayed down.
+func TestHealRepairsALayerItCannotObserve(t *testing.T) {
+	r := NewRunner(NewStore(t.TempDir()))
+
+	var log []string
+	filesystem := healingLayer{&fakeLayer{
+		name: "filesystem", log: &log, state: StateReady, healthy: false,
+		observeErr: errors.New("the mount is dead, because the device behind it is gone"),
+	}}
+	plan := Plan{
+		healingLayer{&fakeLayer{
+			name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady, healthy: true,
+		}},
+		filesystem,
+	}
+
+	if err := r.Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal refused a layer it could not observe: %v", err)
+	}
+	if joined := strings.Join(log, " "); !strings.Contains(joined, "filesystem:heal") {
+		t.Errorf("the unobservable layer was never healed:\n%s", joined)
+	}
+}
+
+// A layer that cannot be observed and cannot heal itself is still an error,
+// because nothing in the plan can repair it and continuing would build the
+// layers above it on a reading nobody has.
+func TestHealReportsAnUnobservableLayerThatCannotHeal(t *testing.T) {
+	r := NewRunner(NewStore(t.TempDir()))
+
+	var log []string
+	plan := Plan{&fakeLayer{
+		name: "fabric", log: &log, state: StateReady,
+		observeErr: errors.New("sysfs is unreadable"),
+	}}
+
+	if err := r.Heal(context.Background(), testHandle, plan); err == nil {
+		t.Fatal("Heal reported success for a layer it could neither read nor repair")
 	}
 }

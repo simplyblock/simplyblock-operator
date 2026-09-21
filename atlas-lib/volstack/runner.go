@@ -125,6 +125,17 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 //
 // It never recreates: the data already exists, which is why this and not Up is
 // what a restage runs.
+//
+// A layer that cannot be observed is one to repair rather than one to report,
+// where it can repair itself. That is the case this verb exists for: total path
+// loss removes the device, the mount above it answers EIO, and the filesystem
+// layer's Observe reports that as an error rather than as a state — while its
+// Healthy answers "not healthy" for the same mount precisely so that a heal
+// runs. Reading the Observe error as fatal defeats the layer's own intent, and
+// what it costs is the restage: the volume is never republished and the
+// workload stays down. A layer that implements no Healer keeps the old
+// behavior, because nothing in the plan can repair it and the layers above it
+// would be walked against a reading nobody has.
 func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 	below := Artifact{}
 	for _, layer := range plan {
@@ -132,7 +143,20 @@ func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 		// build the layers it passes through on the way there.
 		_, own, err := layer.Observe(ctx, below)
 		if err != nil {
-			return fmt.Errorf("volstack: observe %s while healing: %w", layer.Name(), err)
+			healer, ok := layer.(Healer)
+			if !ok {
+				return fmt.Errorf("volstack: observe %s while healing: %w", layer.Name(), err)
+			}
+			if err := healer.Heal(ctx, below, Artifact{}); err != nil {
+				return fmt.Errorf("volstack: heal %s: %w", layer.Name(), err)
+			}
+			// Read it again, because the layers above this one sit on what it
+			// exposes and a heal that worked is one that can now be read.
+			if _, own, err = layer.Observe(ctx, below); err != nil {
+				return fmt.Errorf("volstack: observe %s after healing it: %w", layer.Name(), err)
+			}
+			below = own
+			continue
 		}
 
 		healer, ok := layer.(Healer)
