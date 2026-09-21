@@ -1473,11 +1473,26 @@ func journalPercent(spec *simplyblockv1alpha2.JournalManagerSpec) int {
 	return ptr.IntFrom(spec.PercentPerDevice, 3)
 }
 
+// journalCount is how many journal managers a node is added with, and zero when
+// the deployment has not said.
+//
+// Zero is omitted from the request (ha_jm_count is omitempty), and an absent
+// ha_jm_count is what the control plane computes for itself: four where the
+// cluster can lose two chunks, four where failure domains are enabled at any
+// level, and three otherwise. The rule has two triggers and a cap, it is the
+// control plane's, and it is the kind of rule that grows a third trigger.
+//
+// Three used to be sent here whenever a node stated no count. It was right for
+// every deployment until one was laid out 2+2, and then wrong for every node of
+// it: the add was refused inside the task rather than at it, retried with the
+// same parameters forever, and held the cluster's only node-add slot while it
+// did. Copying the formula over would have fixed that one deployment and left
+// the failure-domain trigger to be discovered the same way.
 func journalCount(spec *simplyblockv1alpha2.JournalManagerSpec) int {
 	if spec == nil {
-		return 3
+		return 0
 	}
-	return ptr.IntFrom(spec.Count, 3)
+	return ptr.IntFrom(spec.Count, 0)
 }
 
 // recordStep persists the step the machine is about to be in, with the instant it
