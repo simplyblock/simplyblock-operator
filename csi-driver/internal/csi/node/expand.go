@@ -28,12 +28,26 @@ func (ns *Server) NodeExpandVolume(
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
 	}
 
-	// A pNFS client has nothing to grow: the metadata server grew the
-	// filesystem on its own host, and this node sees the new size through NFS.
-	// Its plan has no layer that could answer anyway, since the filesystem the
-	// volume names here is pnfs rather than anything with a resize tool.
+	// A pNFS client grows nothing and re-primes instead.
+	//
+	// Nothing to grow: the metadata server grew the filesystem on its own host,
+	// and this node sees the new size through NFS. The plan here could not
+	// answer anyway, since the filesystem it names is pnfs rather than anything
+	// with a resize tool.
+	//
+	// The prime is the part that matters. Growing the namespace invalidates the
+	// client's cached block device, and whoever causes the next I/O resolves it
+	// again -- in their own mount namespace. A pod gets kubelet's minimal /dev
+	// with no disk/, so the resolve fails, the fail bit is set, and every write
+	// after it routes through the metadata server. Silently: the writes
+	// succeed. This container has the host's /dev, and kubelet calls this RPC
+	// on every node holding the volume, so it is where the race is won.
 	if isPNFSVolume(volumeContext) {
-		klog.Infof("volume %s is served by an export, so this node grows nothing", volumeID)
+		if err := primeLayout(ctx, getStagingTargetPath(req)); err != nil {
+			return nil, status.Errorf(codes.Internal,
+				"failed to re-prime the layout of volume %s after its expansion: %v", volumeID, err)
+		}
+		klog.Infof("volume %s is served by an export: grew nothing, and re-took its layout", volumeID)
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 

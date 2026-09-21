@@ -688,19 +688,27 @@ func deletingPV() *corev1.PersistentVolume {
 	return pv
 }
 
-// Regression: a pNFS client has nothing to grow. The metadata server grew the
-// filesystem on its own host, and this node sees the new size through NFS, so
-// the expansion here is a no-op rather than a stack walk.
+// Regression: expanding a pNFS volume silently took its data path away.
 //
-// Without the branch the plan carried a filesystem layer whose type was pnfs.
-// That has no resize tool, so every NodeExpandVolume failed:
+// Growing the namespace invalidates the client's cached pNFS block device, so
+// the next layout has to resolve it again. That resolution happens in the mount
+// namespace of whatever caused the I/O, and if a pod gets there first its /dev
+// is kubelet's minimal one with no disk/, so the resolve fails:
 //
-//	failed to grow volume ...: volstack: grow filesystem:
-//	filesystem: pnfs cannot be grown in place, and this volume is pnfs
+//	pNFS: no device found for volume 645a3751476137484763794b45497251
 //
-// The claim still reached its new size, so what this cost was not the
-// expansion but the quiet: kubelet reissues the call and raises
-// VolumeResizeFailed against every pod on the volume, forever.
+// The fail bit is then set and every write routes through the metadata server,
+// which is the whole feature gone. Nothing reports it: the writes succeed and
+// the data is correct.
+//
+// So an expand re-primes rather than doing nothing. This container has the
+// host's /dev, and kubelet calls this RPC on every node holding the volume.
+// Measured on a cluster: 128MiB after an expand cost 128 NFS WRITEs without the
+// prime and none with it.
+//
+// It must not walk the stack either. The metadata server grew the filesystem on
+// its own host, and the layer here is named for a filesystem with no resize
+// tool, so a walk fails outright.
 func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
 	runner := newRecordingRunner()
 	ns, _ := newStackedServer(t, runner)
@@ -708,6 +716,9 @@ func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
 	vc := stagedContext()
 	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
 	parent := stashedAt(t, vc)
+	if err := os.MkdirAll(filepath.Join(parent, pvcTestHandle), 0o755); err != nil {
+		t.Fatalf("create the staging path: %v", err)
+	}
 
 	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
 		VolumeId:          pvcTestHandle,
@@ -721,5 +732,34 @@ func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
 
 	if runner.called("grow") {
 		t.Errorf("the expansion walked a stack a pNFS client does not have: %v", runner.plans["grow"])
+	}
+}
+
+// The prime is the work this RPC does for a pNFS volume, so a prime that could
+// not run is the RPC failing rather than the RPC having nothing to do. Without
+// it the failure is silent and permanent: the next pod write resolves the
+// device in the pod's own namespace, fails, and routes through the metadata
+// server from then on.
+func TestExpandOfAPNFSVolumeReportsALayoutItCouldNotPrime(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	// The staging path is deliberately absent, which is what a probe that
+	// cannot be written looks like.
+	parent := stashedAt(t, vc)
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err == nil {
+		t.Fatal("NodeExpandVolume reported success without priming the layout")
+	}
+	if !strings.Contains(err.Error(), "layout") {
+		t.Errorf("error = %v, want it to name the layout it could not take", err)
 	}
 }
