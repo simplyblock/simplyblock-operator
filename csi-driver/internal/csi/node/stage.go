@@ -58,6 +58,17 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A pNFS volume is mounted from an export rather than a local device, so it
+	// takes its own path. The namespace is still attached, because the client
+	// reads and writes it directly.
+	if req.GetVolumeContext()[csicommon.CtxAccessProtocol] == csicommon.AccessProtocolNFS {
+		if err := ns.stagePNFSVolume(ctx, req, stagingTargetPath); err != nil {
+			klog.Errorf("failed to stage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
 		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)
@@ -123,6 +134,21 @@ func (ns *Server) NodeUnstageVolume(
 		// release needs, and teardownPlan refuses when neither source does.
 		klog.Warningf("volume %s has no stashed context; releasing it from its stack record: %v", volumeID, err)
 		volumeContext = map[string]string{}
+	}
+
+	// Unstages the way it staged: mount and alias off, then the namespace this
+	// node connected goes back. It has no volume stack, so the teardown plan
+	// below cannot be built for one.
+	if isPNFSVolume(volumeContext) {
+		spec, ok := backingVolumeOf(volumeID)
+		if !ok {
+			return nil, status.Errorf(codes.Internal, "volume %s has no readable handle", volumeID)
+		}
+		if err := ns.unstagePNFSVolume(ctx, stagingTargetPath, spec); err != nil {
+			klog.Errorf("failed to unstage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
 
 	plan, err := ns.teardownPlan(volumeID, stagingTargetPath, volumeContext)

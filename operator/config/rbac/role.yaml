@@ -266,6 +266,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - nfsexports
   - operatorops
   - replicationops
   - replicationpairs
@@ -299,6 +300,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - nfsexports/finalizers
   - operatorops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
@@ -326,6 +328,7 @@ rules:
   - backuprestores/status
   - clusterdeploymentconfigs/status
   - controlplanes/status
+  - nfsexports/status
   - operatorops/status
   - replicationops/status
   - replicationpairs/status

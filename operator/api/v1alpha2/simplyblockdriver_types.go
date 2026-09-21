@@ -144,6 +144,23 @@ type DriverTLS struct {
 	Provider DriverTLSProvider `json:"provider,omitempty"`
 }
 
+// DriverPNFS configures pNFS support, which makes the node plugin an NFS
+// metadata server as well as an NVMe-oF initiator: on the host an export binds
+// to, it makes a filesystem on the namespace, mounts it, and publishes it
+// through the host's nfsd.
+//
+// Turning it on is not sufficient. The host needs nfs-utils and a running
+// nfsd, and a client host needs blkmapd, neither of which a pod can install.
+// A host missing either fails visibly in the export's Assembling phase.
+type DriverPNFS struct {
+	// EnablePNFS gives the node plugin the four host directories an export is
+	// assembled through. It is gated because a plugin not serving exports has
+	// no use for them.
+	// +kubebuilder:default=false
+	// +optional
+	EnablePNFS *bool `json:"enablePNFS,omitempty"`
+}
+
 // SimplyblockDriverSpec is the CSI driver deployment: the node plugin, the
 // controller plugin, their RBAC, and the CSIDriver registration they produce.
 type SimplyblockDriverSpec struct {
@@ -237,6 +254,10 @@ type SimplyblockDriverSpec struct {
 	// object the way spec.driverName's default cannot be.
 	// +optional
 	TLS DriverTLS `json:"tls,omitempty"`
+
+	// PNFS configures pNFS support on the node plugin.
+	// +optional
+	PNFS DriverPNFS `json:"pnfs,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from.

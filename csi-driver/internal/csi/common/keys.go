@@ -35,6 +35,20 @@ const (
 	// data has to defer to the record instead.
 	ParamEncryption = "encryption"
 
+	// The volume-context keys a pNFS export is mounted from. They are written
+	// by the controller service and read by the node service, which is the
+	// same reason the topology keys are here: two packages spelling one wire
+	// contract separately eventually spell it differently, and a key that
+	// differs by a character leaves the node taking the block branch for a
+	// volume that has no block device.
+	CtxAccessProtocol = "access_protocol"
+	CtxExportService  = "export_service"
+	CtxExportPath     = "export_path"
+
+	// AccessProtocolNFS is what CtxAccessProtocol carries for a pNFS volume,
+	// and the value the node branches on.
+	AccessProtocolNFS = "nfs"
+
 	// The topology keys the node service reports and the controller service
 	// places against. The beta zone key is still read because clusters upgraded
 	// from it keep the label.

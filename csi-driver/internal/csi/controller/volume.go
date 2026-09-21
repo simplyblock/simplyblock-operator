@@ -37,6 +37,20 @@ func (cs *Server) CreateVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	// fsType "pnfs" is served by an export rather than a block device. The
+	// access mode does not decide it.
+	pnfs, err := isPNFSRequest(req.GetVolumeCapabilities())
+	if err != nil {
+		return nil, err
+	}
+	// Refused before the volume is created, not after: the clone returns early
+	// from createVolume and the pNFS branch below would wrap whatever it made.
+	if req.GetVolumeContentSource() != nil {
+		if err := refusePNFSCloneTarget(pnfs); err != nil {
+			return nil, err
+		}
+	}
+
 	selection, err := cs.resolveClusterSelection(req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
@@ -56,6 +70,12 @@ func (cs *Server) CreateVolume(
 			return nil, err
 		}
 		return nil, classifyCreateVolumeError(err)
+	}
+
+	if pnfs {
+		// The backing volume exists; the export is the operator's from here.
+		// Returns Aborted while it assembles, so the provisioner retries.
+		return cs.createPNFSVolume(ctx, req, csiVolume)
 	}
 
 	volumeInfo, err := cs.publishVolume(ctx, csiVolume.GetVolumeId(), sbClient)
@@ -145,6 +165,16 @@ func (cs *Server) DeleteVolume(
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
+	}
+
+	// An export, if one serves this volume, goes first: the record is the only
+	// description of a live mount and an exports entry on the host, and
+	// deleting the volume under them pulls the namespace out from beneath a
+	// mounted filesystem. A volume with no export takes the same path and
+	// finds nothing, which is why nothing here has to know in advance which
+	// kind it is holding.
+	if err := deleteExportBefore(ctx, cs.exports, volumeID); err != nil {
+		return nil, err
 	}
 
 	// Invalid format means the volume was never created by this driver - treat as already deleted.

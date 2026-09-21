@@ -25,7 +25,6 @@ func (cs *Server) ControllerExpandVolume(
 	if req.GetCapacityRange() == nil {
 		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
 	}
-
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -49,8 +48,17 @@ func (cs *Server) ControllerExpandVolume(
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
 		return nil, classifyControllerExpandVolumeError(err)
 	}
+
+	// An export serving this volume has a filesystem on top of it that only
+	// its host can grow, so the record carries the new size and the operator
+	// does the rest. A volume with no export takes the same path, finds none,
+	// and leaves the node to grow its own filesystem as before.
+	nodeExpansion, err := growExportAfter(ctx, cs.exports, volumeID, capacityBytes)
+	if err != nil {
+		return nil, err
+	}
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         capacityBytes,
-		NodeExpansionRequired: true,
+		NodeExpansionRequired: nodeExpansion,
 	}, nil
 }
