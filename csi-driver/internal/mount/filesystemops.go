@@ -43,15 +43,8 @@ var _ layers.FilesystemOps = (*FilesystemOperations)(nil)
 // answering from cache while writing nowhere.
 var ErrDeadMount = errors.New("the mount is dead, because the device behind it is gone")
 
-// extFamily are the filesystems mke2fs creates, which are the ones that take
-// -F and a reservation.
+// extFamily are the filesystems mke2fs creates, which are the ones that take -F.
 var extFamily = map[string]bool{"ext2": true, "ext3": true, "ext4": true}
-
-// defaultReservedBlocks is the reservation an ext filesystem is created with
-// when the volume asked for none. It is zero because a CSI volume is a whole
-// device handed to one workload, and holding 5% of it back for privileged
-// processes on the node serves nobody.
-const defaultReservedBlocks = "-m0"
 
 // Format writes a new filesystem on device.
 //
@@ -59,14 +52,21 @@ const defaultReservedBlocks = "-m0"
 // nothing here re-decides that: a format arriving here is one that has already
 // been established as safe.
 //
-// For the ext family the reservation default is passed *before* the caller's
-// options, because mke2fs takes the last -m it is given and a volume that asked
-// for a reservation has to get it. Everything else is given its options as they
-// are, with the device last, which is where every mkfs expects it.
+// The ext family is given -F, which is the only argument of this package's
+// choosing, and every filesystem is then given its options as they are with the
+// device last, which is where every mkfs expects it.
+//
+// No reservation is added here, and the omission is the point. Whether part of
+// the filesystem is held back for privileged processes is the volume's to state,
+// and the layer above passes -m when it was asked for one; asking for nothing is
+// a different request from asking for zero, which is what the layer's own
+// FormatParameters says of the field it comes from. A default of this package's
+// would answer both the same way and would silently change what a class that
+// says nothing has always got, which is mke2fs's own reservation.
 func (o *FilesystemOperations) Format(_ context.Context, device, fsType string, options []string) error {
-	args := make([]string, 0, len(options)+3)
+	args := make([]string, 0, len(options)+2)
 	if extFamily[fsType] {
-		args = append(args, "-F", defaultReservedBlocks)
+		args = append(args, "-F")
 	}
 	args = append(args, options...)
 	args = append(args, device)
