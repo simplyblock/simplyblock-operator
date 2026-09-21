@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	k8smount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
 	testingexec "k8s.io/utils/exec/testing"
 )
@@ -141,35 +140,5 @@ func TestFormatOptionsRejectsAnUnusableStripeWidth(t *testing.T) {
 		if strings.Contains(joined, "su=32k") {
 			t.Errorf("FormatOptions(xfs, sw=%q) = %q, want no stripe alignment", sw, joined)
 		}
-	}
-}
-
-// The mount table is what answers for a volume that names itself nowhere else:
-// it is written by the kernel rather than by this driver, so it survives every
-// window in which the driver's own records had not been written yet.
-func TestDeviceAtMountReadsTheMountTable(t *testing.T) {
-	fm := k8smount.NewFakeMounter([]k8smount.MountPoint{
-		{Device: "/dev/nvme1n2", Path: "/staging", Type: "ext4"},
-	})
-
-	device, err := NewWith(fm, nil).DeviceAtMount("/staging")
-	if err != nil {
-		t.Fatalf("DeviceAtMount: %v", err)
-	}
-	if device != "/dev/nvme1n2" {
-		t.Errorf("device = %q, want the one mounted there", device)
-	}
-}
-
-// A path nothing is mounted on is not an error: a teardown resuming against a
-// stack that is already partly down meets exactly that, and the empty answer is
-// what tells the caller the host knows of no namespace there.
-func TestDeviceAtMountAnswersNothingForAnUnmountedPath(t *testing.T) {
-	device, err := NewWith(k8smount.NewFakeMounter(nil), nil).DeviceAtMount("/staging")
-	if err != nil {
-		t.Fatalf("DeviceAtMount: %v", err)
-	}
-	if device != "" {
-		t.Errorf("device = %q, want nothing for a path that is not a mount point", device)
 	}
 }

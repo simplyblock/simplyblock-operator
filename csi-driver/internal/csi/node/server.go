@@ -59,7 +59,7 @@ func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkub
 		mounter:           mounter,
 		stack:             newStack(mounter, stackRecordDir),
 		repairFabric:      fabric.RepairAttach,
-		identifyStaged:    stagedIdentity(mounter),
+		identifyStaged:    stagedIdentity,
 		volumeLocks:       csicommon.NewVolumeLocks(),
 		kubeClient:        kubeClient,
 		manager:           manager,

@@ -14,10 +14,17 @@
 // detaches whichever one is found first, and on a node serving several volumes
 // that is somebody else's.
 //
-// This file is the third source, and it is the host itself. A staging path is a
-// mount, a mount has a device under it, and the device's sysfs entry says which
-// subsystem and namespace it belongs to. That is a reading rather than a guess,
-// which is what makes it admissible where a default would not be.
+// This file is the third source, and it is the host itself. A staging path
+// resolves to a device number, and the namespace carrying that number says
+// which subsystem and namespace id it is. That is a reading rather than a
+// guess, which is what makes it admissible where a default would not be.
+//
+// The number and not the path, because the path a volume was mounted from is
+// not the path sysfs records. The previous node service mounted what its
+// initiator handed back, which is a by-id symlink
+// (/dev/disk/by-id/nvme-SPDK_Controller1_…), while sysfs knows the namespace as
+// /dev/nvme0n1: comparing those two strings finds nothing, and finding nothing
+// here means refusing exactly the volumes this path exists for.
 
 package node
 
@@ -27,8 +34,6 @@ import (
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nvme"
-
-	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
 // stagedIdentity reads the namespace behind a staging path off the host.
@@ -37,31 +42,24 @@ import (
 // anyway and a teardown that runs once per volume is not a path worth caching
 // for.
 func stagedIdentity(
-	mounter *mount.Mounter,
-) func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error) {
-	return func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error) {
-		devicePath, err := mounter.DeviceAtMount(stagingTargetPath)
-		if err != nil {
-			return lvol.Connection{}, fmt.Errorf(
-				"read what is mounted at %s: %w", stagingTargetPath, err)
-		}
-		if devicePath == "" {
-			return lvol.Connection{}, fmt.Errorf(
-				"nothing is mounted at %s, so the host knows of no namespace to release",
-				stagingTargetPath)
-		}
-
-		device, err := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{}).
-			ByDevicePath(ctx, devicePath)
-		if err != nil {
-			return lvol.Connection{}, fmt.Errorf(
-				"read the namespace %s belongs to: %w", devicePath, err)
-		}
-
-		return lvol.Connection{
-			NQN:  device.Subsystem.NQN,
-			NSID: uint32(device.Namespace.ID),
-			UUID: device.Namespace.UUID,
-		}, nil
+	ctx context.Context, stagingTargetPath string,
+) (lvol.Connection, error) {
+	number, err := nvme.DeviceNumberAt(stagingTargetPath)
+	if err != nil {
+		return lvol.Connection{}, fmt.Errorf(
+			"read what is staged at %s: %w", stagingTargetPath, err)
 	}
+
+	device, err := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{}).
+		ByDeviceNumber(ctx, number)
+	if err != nil {
+		return lvol.Connection{}, fmt.Errorf(
+			"read the namespace device %s belongs to: %w", number, err)
+	}
+
+	return lvol.Connection{
+		NQN:  device.Subsystem.NQN,
+		NSID: uint32(device.Namespace.ID),
+		UUID: device.Namespace.UUID,
+	}, nil
 }
