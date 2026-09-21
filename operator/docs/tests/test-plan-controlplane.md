@@ -185,7 +185,7 @@ Files: `operator/api/v1alpha2/controlplane_tls_test.go`,
 | U-168 | The database operator carries the peer certificate it reconciles with            | Positive   | `TestTheDatabaseOperatorCarriesThePeerCertificate`         |
 | U-169 | One certificate issues the peer Secret, and carries both roles                   | Regression | `TestThePeerCertificateIsIssuedOnceAndForBothRoles`        |
 | U-170 | No peer certificate is issued without peer TLS                                   | Negative   | `TestNoPeerCertificateWithoutPeerTLS`                      |
-| U-171 | Every workload holding the cluster file can open a :tls database                 | Regression | `TestEveryHolderOfTheClusterFileCanReachATLSDatabase`      |
+| U-171 | Every workload holding the cluster file can open a TLS database                  | Regression | `TestEveryHolderOfTheClusterFileCanReachATLSDatabase`      |
 
 ### Deletion (design §4.4)
 
