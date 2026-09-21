@@ -58,15 +58,27 @@ cp ` + perNodeConfigDir + `/${HOSTNAME} ` + nodeEnvFile + `
 
 // nodeConfigureScript assembles the configure's arguments from that entry.
 //
-// An unset value is left out rather than sent as a default this side invented.
-// --max-lvol=0 was such a default, and zero is refused because max-lvol must be
-// a positive integer. A cluster that states no maxSubsystemCount has no opinion
-// about it, and no opinion is the control plane's own default, not zero.
+// A missing subsystem count stops the configure rather than standing in for it.
+// StorageCluster.spec.maxSubsystemCount is Required and bounded at 10, so a
+// valid cluster always has one, and its absence here means the entry this pod
+// read did not come from a valid cluster -- an empty file, or one written before
+// the value was known. The field's own contract is that a node receiving no
+// value fails config generation outright rather than falling back to a default,
+// which is what this preserves.
+//
+// What it does not do is express that by sending zero. Zero was refused by the
+// control plane for being zero, so the message named a value nobody set instead
+// of the configuration that never arrived.
 func nodeConfigureScript() string {
 	return `set -e
 [ -f ` + nodeEnvFile + ` ] && . ` + nodeEnvFile + `
-ARGS=""
-[ -n "${MAX_SUBSYS_COUNT}" ] && ARGS="${ARGS} --max-lvol=${MAX_SUBSYS_COUNT}"
+if [ -z "${MAX_SUBSYS_COUNT}" ]; then
+  echo "MAX_SUBSYS_COUNT is not set in ` + nodeEnvFile + `" >&2
+  echo "it carries the cluster's maxSubsystemCount, which is required, so this node" >&2
+  echo "has no configuration to generate from" >&2
+  exit 1
+fi
+ARGS="--max-lvol=${MAX_SUBSYS_COUNT}"
 [ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
 [ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""

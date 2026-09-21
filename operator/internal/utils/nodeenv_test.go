@@ -46,21 +46,30 @@ func TestAMissingPerNodeEntryFailsTheWriter(t *testing.T) {
 	}
 }
 
-// TestAnAbsentSubsystemCountIsNotSentAsZero covers the other half.
+// TestAnAbsentSubsystemCountStopsTheConfigure covers the other half.
 //
 // Regression: 2026-09-21-max-lvol-zero — the generator passed
-// --max-lvol=${MAX_SUBSYS_COUNT:-0}, and zero is a value the control plane
-// refuses, saying that max-lvol must be a positive integer. A cluster that
-// states no
-// maxSubsystemCount is a cluster with no opinion about it, which is the control
-// plane's default rather than zero.
-func TestAnAbsentSubsystemCountIsNotSentAsZero(t *testing.T) {
+// --max-lvol=${MAX_SUBSYS_COUNT:-0}, so a node that had received no
+// configuration asked the control plane for zero subsystems and was refused for
+// asking for zero. The message named a value nobody had set rather than the
+// configuration that never arrived.
+//
+// Stopping is the contract rather than a choice: spec.maxSubsystemCount is
+// Required and bounded at 10, and its documentation says a node receiving no
+// value fails config generation outright rather than falling back to a default.
+// So the fix is not to leave the argument out -- that would be the fallback the
+// field forbids -- but to fail where the cause can still be named.
+func TestAnAbsentSubsystemCountStopsTheConfigure(t *testing.T) {
 	_, generator := scripts(t)
 
 	if strings.Contains(generator, "${MAX_SUBSYS_COUNT:-0}") {
-		t.Error("an unset subsystem count is sent as --max-lvol=0, which is refused")
+		t.Error("an unset subsystem count is sent as --max-lvol=0, and refused for being zero")
 	}
-	if !strings.Contains(generator, "MAX_SUBSYS_COUNT") {
-		t.Error("the subsystem count is not passed at all")
+	if !strings.Contains(generator, `exit 1`) {
+		t.Error("an unset subsystem count does not stop the configure, so the node is " +
+			"configured from a default the cluster never stated")
+	}
+	if !strings.Contains(generator, "--max-lvol=${MAX_SUBSYS_COUNT}") {
+		t.Error("the subsystem count the cluster did state is not passed")
 	}
 }
