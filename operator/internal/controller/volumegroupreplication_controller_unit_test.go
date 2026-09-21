@@ -183,11 +183,11 @@ func vgrMemberVR(name, groupName, pvcName string, m vgrMember) *unstructured.Uns
 	_ = unstructured.SetNestedField(vr.Object, "primary", "spec", "replicationState")
 
 	cond := func(condType string, status bool) map[string]interface{} {
-		s := "False"
+		s := metav1.ConditionFalse
 		if status {
-			s = "True"
+			s = metav1.ConditionTrue
 		}
-		return map[string]interface{}{"type": condType, "status": s, "reason": "Test", "message": ""}
+		return map[string]interface{}{"type": condType, "status": string(s), "reason": "Test", "message": ""}
 	}
 	conditions := []interface{}{
 		cond("Completed", m.completed),
@@ -207,12 +207,11 @@ func runVGRReconcile(t *testing.T, members []vgrMember) (conditions map[string]s
 	vgrBackend{members: memberIDs(members)}.start(t)
 
 	group := vgrGroup("vgr1", "sb-group-class", "sb-vr-class", "primary")
-	objs := []client.Object{group, vgrClass("sb-group-class")}
-	var memberIDsOnly []string
+	objs := make([]client.Object, 0, 2+2*len(members))
+	objs = append(objs, group, vgrClass("sb-group-class"))
 	for _, m := range members {
 		pvc, pv := vgrPVCAndPV(m.pvcName, m.volumeID)
 		objs = append(objs, pvc, pv)
-		memberIDsOnly = append(memberIDsOnly, m.volumeID)
 	}
 	r, cl := newVGRReconciler(t, objs...)
 	for _, m := range members {
@@ -247,7 +246,7 @@ func runVGRReconcile(t *testing.T, members []vgrMember) (conditions map[string]s
 }
 
 func memberIDs(members []vgrMember) []string {
-	var ids []string
+	ids := make([]string, 0, len(members))
 	for _, m := range members {
 		ids = append(ids, m.volumeID)
 	}
@@ -260,10 +259,10 @@ func TestVolumeGroupReplication_AllMembersHealthyYieldsGroupHealthy(t *testing.T
 		{pvcName: "pvc-a", volumeID: "v1", completed: true, degraded: false, lastSync: time.Now()},
 		{pvcName: "pvc-b", volumeID: "v2", completed: true, degraded: false, lastSync: time.Now()},
 	})
-	if conditions["Completed"] != "True" {
+	if conditions["Completed"] != string(metav1.ConditionTrue) {
 		t.Errorf("Completed = %q, want True", conditions["Completed"])
 	}
-	if conditions["Degraded"] != "False" {
+	if conditions["Degraded"] != string(metav1.ConditionFalse) {
 		t.Errorf("Degraded = %q, want False", conditions["Degraded"])
 	}
 }
@@ -274,7 +273,7 @@ func TestVolumeGroupReplication_OneMemberDegradedYieldsGroupDegraded(t *testing.
 		{pvcName: "pvc-a", volumeID: "v1", completed: true, degraded: false, lastSync: time.Now()},
 		{pvcName: "pvc-b", volumeID: "v2", completed: true, degraded: true, lastSync: time.Now()},
 	})
-	if conditions["Degraded"] != "True" {
+	if conditions["Degraded"] != string(metav1.ConditionTrue) {
 		t.Errorf("Degraded = %q, want True", conditions["Degraded"])
 	}
 }

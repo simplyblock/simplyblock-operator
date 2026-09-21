@@ -375,7 +375,7 @@ func (r *VolumeGroupReplicationReconciler) fanIn(
 	members []corev1.PersistentVolumeClaim,
 	memberVRs []unstructured.Unstructured,
 ) error {
-	wasDegraded := conditionStatus(vgr, "Degraded") == "True"
+	wasDegraded := conditionStatus(vgr, "Degraded") == metav1.ConditionTrue
 
 	completed := len(memberVRs) > 0
 	degraded := false
@@ -383,13 +383,13 @@ func (r *VolumeGroupReplicationReconciler) fanIn(
 	var oldestSync *time.Time
 	for i := range memberVRs {
 		vr := &memberVRs[i]
-		if conditionStatus(vr, "Completed") != "True" {
+		if conditionStatus(vr, "Completed") != metav1.ConditionTrue {
 			completed = false
 		}
-		if conditionStatus(vr, "Degraded") == "True" {
+		if conditionStatus(vr, "Degraded") == metav1.ConditionTrue {
 			degraded = true
 		}
-		if conditionStatus(vr, "Resyncing") == "True" {
+		if conditionStatus(vr, "Resyncing") == metav1.ConditionTrue {
 			resyncing = true
 		}
 		if ts, found, _ := unstructured.NestedString(vr.Object, "status", "lastSyncTime"); found && ts != "" {
@@ -439,10 +439,10 @@ func (r *VolumeGroupReplicationReconciler) fanIn(
 	return nil
 }
 
-// conditionStatus returns a condition's status ("True"/"False"/"Unknown") on
-// an unstructured VolumeReplication or VolumeGroupReplication, or "" if the
-// object carries no condition of that type.
-func conditionStatus(obj *unstructured.Unstructured, condType string) string {
+// conditionStatus returns a condition's status (metav1.ConditionTrue/False/
+// Unknown) on an unstructured VolumeReplication or VolumeGroupReplication, or
+// "" if the object carries no condition of that type.
+func conditionStatus(obj *unstructured.Unstructured, condType string) metav1.ConditionStatus {
 	raw, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if !found {
 		return ""
@@ -454,7 +454,7 @@ func conditionStatus(obj *unstructured.Unstructured, condType string) string {
 		}
 		if cm["type"] == condType {
 			if s, ok := cm["status"].(string); ok {
-				return s
+				return metav1.ConditionStatus(s)
 			}
 		}
 	}
@@ -463,13 +463,13 @@ func conditionStatus(obj *unstructured.Unstructured, condType string) string {
 
 // groupCondition builds one status.conditions entry.
 func groupCondition(condType string, status bool, now metav1.Time) map[string]interface{} {
-	s := "False"
+	s := metav1.ConditionFalse
 	if status {
-		s = "True"
+		s = metav1.ConditionTrue
 	}
 	return map[string]interface{}{
 		"type":               condType,
-		"status":             s,
+		"status":             string(s),
 		"reason":             "GroupMemberAggregation",
 		"message":            "",
 		"lastTransitionTime": now.UTC().Format(time.RFC3339),
