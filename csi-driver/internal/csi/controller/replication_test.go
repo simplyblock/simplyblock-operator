@@ -25,10 +25,10 @@ func newReplicationTestServer(t *testing.T, mock *mockSBCLI) *Server {
 // kubernetes-csi-addons v0.15.0 sidecar sends on every Replication RPC
 // instead of the legacy flat VolumeId field (internal/sidecar/service's
 // ReplicationServer proxy never sets it).
-func replicationSourceFor(volumeID string) *replication.ReplicationSource {
+func replicationSourceFor() *replication.ReplicationSource {
 	return &replication.ReplicationSource{
 		Type: &replication.ReplicationSource_Volume{
-			Volume: &replication.ReplicationSource_VolumeSource{VolumeId: volumeID},
+			Volume: &replication.ReplicationSource_VolumeSource{VolumeId: testReplVolID},
 		},
 	}
 }
@@ -80,7 +80,7 @@ func TestEnableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *test
 	cs := newReplicationTestServer(t, mock)
 
 	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID),
+		ReplicationSource: replicationSourceFor(),
 		Parameters:        map[string]string{replicationPolicyParam: testReplPolicyID},
 	})
 	if err != nil {
@@ -196,7 +196,7 @@ func TestDisableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *tes
 	mock.volumes[testReplVolumeID].ReplicationPolicyID = testReplPolicyID
 
 	_, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID),
+		ReplicationSource: replicationSourceFor(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +275,7 @@ func TestGetVolumeReplicationInfoUsesReplicationSourceWhenVolumeIdIsEmpty(t *tes
 	}
 
 	resp, err := cs.GetVolumeReplicationInfo(context.Background(), &replication.GetVolumeReplicationInfoRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID),
+		ReplicationSource: replicationSourceFor(),
 	})
 	if err != nil {
 		t.Fatal(err)

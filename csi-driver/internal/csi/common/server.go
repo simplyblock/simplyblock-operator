@@ -17,7 +17,13 @@ type NonBlockingGRPCServer interface {
 	// Replication) with the same *grpc.Server the CSI services register on,
 	// so csicommon never has to import csi-addons: the caller builds the
 	// closures and this package only invokes them.
-	Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer, register ...func(*grpc.Server))
+	Start(
+		endpoint string,
+		ids csi.IdentityServer,
+		cs csi.ControllerServer,
+		ns csi.NodeServer,
+		register ...func(*grpc.Server),
+	)
 	Wait()
 	Stop()
 	ForceStop()

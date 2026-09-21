@@ -92,7 +92,7 @@ func TestPromoteVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	cs := newReplicationTestServer(t, mock)
 
 	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID), Force: true,
+		ReplicationSource: replicationSourceFor(), Force: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestDemoteVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	cs := newReplicationTestServer(t, mock)
 
 	_, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID),
+		ReplicationSource: replicationSourceFor(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestResyncVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	cs := newReplicationTestServer(t, mock)
 
 	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
-		ReplicationSource: replicationSourceFor(testReplVolID),
+		ReplicationSource: replicationSourceFor(),
 	})
 	if err != nil {
 		t.Fatal(err)

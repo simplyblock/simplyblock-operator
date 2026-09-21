@@ -70,7 +70,8 @@ func (cs *Server) EnableVolumeReplication(
 ) (*replication.EnableVolumeReplicationResponse, error) {
 	policyID := req.GetParameters()[replicationPolicyParam]
 	if policyID == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "VolumeReplicationClass parameter %q is required", replicationPolicyParam)
+		return nil, status.Errorf(codes.InvalidArgument,
+			"VolumeReplicationClass parameter %q is required", replicationPolicyParam)
 	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
