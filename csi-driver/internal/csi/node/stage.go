@@ -359,7 +359,16 @@ func (ns *Server) identifyFromHost(
 			"the host cannot name what is staged at %s either: %v", stagingTargetPath, err)
 		return lvol.Connection{}, refusal
 	}
-	if connection.NQN == "" && connection.UUID == "" {
+	// One namespace, not a subsystem. A selector whose NSID is zero matches
+	// every namespace the subsystem holds, so an NQN on its own would release
+	// whichever one ranked first, and on a subsystem serving several volumes
+	// that is a co-tenant's. The UUID names one namespace by itself; the NQN
+	// only does so beside a namespace id.
+	if connection.UUID == "" && (connection.NQN == "" || connection.NSID == 0) {
+		klog.Warningf(
+			"the host names no single namespace at %s (nqn=%q nsid=%d), so there is "+
+				"nothing that can be released without guessing",
+			stagingTargetPath, connection.NQN, connection.NSID)
 		return lvol.Connection{}, refusal
 	}
 

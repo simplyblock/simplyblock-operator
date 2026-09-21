@@ -18,6 +18,7 @@ package onnode
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,11 +97,29 @@ func TestALegacyStackIsReleasedByAReconstructedPlan(t *testing.T) {
 	if mounted {
 		t.Error("the staging path is still mounted after the release")
 	}
-	if _, err := os.Stat(device.Path); err == nil {
-		t.Errorf("%s is still present, so the subsystem was not detached", device.Path)
+
+	// Whether the device is gone is not asserted, because the release does not
+	// promise it: DetachDevice leaves a subsystem that holds more than one
+	// namespace connected, and nvmet reports a namespace budget above one for
+	// every subsystem it serves, so the device legitimately survives here. What
+	// the teardown owes is the mount above, and the record below.
+	if _, err := volstack.NewStore(h.records).Load(h.handle()); !errors.Is(err, volstack.ErrNoRecord) {
+		t.Errorf("the release left a record behind: %v", err)
+	}
+
+	// Kubelet reissues an unstage it did not get an answer to, and the second
+	// one meets a stack that is already down.
+	if err := h.runner().Down(ctx, h.handle(), release); err != nil {
+		t.Errorf("a second release of the same stack failed: %v", err)
 	}
 }
 
+// Regression: 2026-09-21-legacy-identity-read-by-device-path. The identity was
+// resolved by comparing the mount's device path against the one sysfs records,
+// which are two different names for one device: the volumes this path exists
+// for are mounted from a by-id link, so the lookup found nothing for every one
+// of them.
+//
 // TestTheHostNamesAVolumeMountedByItsByIDPath brings a namespace up, mounts it
 // the way the previous node service did, and asks the host what is staged
 // there.

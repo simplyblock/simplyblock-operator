@@ -41,25 +41,29 @@ import (
 // The resolver is built per call rather than held, because each call re-scans
 // anyway and a teardown that runs once per volume is not a path worth caching
 // for.
+// The sysfs root is a parameter so that a test can point it at a tree it wrote
+// and run this function rather than a copy of it. The node service passes the
+// zero value, which is the host's own /sys.
 func stagedIdentity(
-	ctx context.Context, stagingTargetPath string,
-) (lvol.Connection, error) {
-	number, err := nvme.DeviceNumberAt(stagingTargetPath)
-	if err != nil {
-		return lvol.Connection{}, fmt.Errorf(
-			"read what is staged at %s: %w", stagingTargetPath, err)
-	}
+	cfg nvme.SysfsConfig,
+) func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error) {
+	return func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error) {
+		number, err := nvme.DeviceNumberAt(stagingTargetPath)
+		if err != nil {
+			return lvol.Connection{}, fmt.Errorf(
+				"read what is staged at %s: %w", stagingTargetPath, err)
+		}
 
-	device, err := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{}).
-		ByDeviceNumber(ctx, number)
-	if err != nil {
-		return lvol.Connection{}, fmt.Errorf(
-			"read the namespace device %s belongs to: %w", number, err)
-	}
+		device, err := nvme.NewSysfsDeviceResolver(cfg).ByDeviceNumber(ctx, number)
+		if err != nil {
+			return lvol.Connection{}, fmt.Errorf(
+				"read the namespace device %s belongs to: %w", number, err)
+		}
 
-	return lvol.Connection{
-		NQN:  device.Subsystem.NQN,
-		NSID: uint32(device.Namespace.ID),
-		UUID: device.Namespace.UUID,
-	}, nil
+		return lvol.Connection{
+			NQN:  device.Subsystem.NQN,
+			NSID: uint32(device.Namespace.ID),
+			UUID: device.Namespace.UUID,
+		}, nil
+	}
 }
