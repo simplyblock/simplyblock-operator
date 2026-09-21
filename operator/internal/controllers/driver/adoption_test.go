@@ -414,47 +414,26 @@ func TestDeletingADuplicateLeavesTheHoldersObjects(t *testing.T) {
 	}
 }
 
-// A deployment carrying configuration the spec has no field for is refused
-// rather than reconciled into one that has lost it.
-func TestAdoptionRefusesConfigurationTheSpecCannotExpress(t *testing.T) {
-	tests := []struct {
-		name string
-		env  []corev1.EnvVar
-		args []string
-		want string
-	}{
-		{name: "csi-link", args: []string{"--link"}, want: "csi-link"},
-	}
+// A deployment that already carries --link is adopted rather than refused: it
+// is exactly what this operator deploys, since the link is always on.
+func TestAdoptionProceedsForALinkedDeployment(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
+	node.Spec.Template.Spec.Containers[0].Args = append(
+		node.Spec.Template.Spec.Containers[0].Args, "--link")
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			scheme := reconcilerScheme(t)
-			d := testDriver("simplyblock")
-			node := chartInstalledNodeDaemonSet(d, DefaultDriverName)
-			node.Spec.Template.Spec.Containers[0].Env = tc.env
-			node.Spec.Template.Spec.Containers[0].Args = append(
-				node.Spec.Template.Spec.Containers[0].Args, tc.args...)
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(d, node).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
 
-			c := fake.NewClientBuilder().WithScheme(scheme).
-				WithObjects(d, node).WithStatusSubresource(d).Build()
-			r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme}
-
-			message, refused, err := r.adoptionRefusal(context.Background(), d)
-			if err != nil {
-				t.Fatalf("adoptionRefusal: %v", err)
-			}
-			if !refused {
-				t.Fatalf("adopted a deployment configured with %s, which the spec cannot express", tc.want)
-			}
-			if !contains(message, tc.want) {
-				t.Errorf("the refusal %q does not name %q", message, tc.want)
-			}
-		})
+	if message, refused, err := r.adoptionRefusal(context.Background(), d); err != nil || refused {
+		t.Fatalf("refused = %v (%s), err = %v; want a linked deployment adopted", refused, message, err)
 	}
 }
 
-// A plain deployment carries none of it and is adopted.
-func TestAdoptionProceedsWithoutInexpressibleConfiguration(t *testing.T) {
+// So is one that does not.
+func TestAdoptionProceedsForAnUnlinkedDeployment(t *testing.T) {
 	scheme := reconcilerScheme(t)
 	d := testDriver("simplyblock")
 
