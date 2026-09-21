@@ -137,26 +137,43 @@ func (r *StorageNodeWorkloadReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	for _, step := range []struct {
-		what string
-		run  func(context.Context, *simplyblockv1alpha2.StorageCluster) error
-	}{
+	for _, step := range r.workloadSteps(nodes) {
+		if err := step.run(ctx, &cluster); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconcile %s: %w", step.what, err)
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
+// workloadStep is one thing the pass applies, with the name its failure is
+// reported under.
+type workloadStep struct {
+	what string
+	run  func(context.Context, *simplyblockv1alpha2.StorageCluster) error
+}
+
+// workloadSteps is everything the pass applies, in order.
+//
+// It is a method rather than a literal inside Reconcile so that what the pass
+// does is readable from a test. The spdk-proxy endpoints are in this list
+// because they were once in another one: the builder outlived the reconcile that
+// called it, kept passing its own unit tests, and published nothing.
+func (r *StorageNodeWorkloadReconciler) workloadSteps(
+	nodes []simplyblockv1alpha2.StorageNode,
+) []workloadStep {
+	return []workloadStep{
 		{"the service account and its role", r.reconcileRBAC},
 		{"the serving certificates", r.reconcileCertificates},
 		{"the headless service", r.reconcileService},
 		{"the endpoint slice", r.reconcileEndpointSlice},
+		{"the spdk-proxy endpoints", r.reconcileSpdkProxyEndpoints},
 		{"the worker enrollment", func(
 			ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 		) error {
 			return r.enrollWorkers(ctx, cluster, nodes)
 		}},
 		{"the daemon set", r.reconcileDaemonSet},
-	} {
-		if err := step.run(ctx, &cluster); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconcile %s: %w", step.what, err)
-		}
 	}
-	return ctrl.Result{}, nil
 }
 
 // clusterNodes is the one reading of this cluster's storage nodes that the pass
