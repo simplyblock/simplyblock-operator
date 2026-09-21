@@ -99,6 +99,7 @@ func (n *Node) filesystem(volume Volume) volstack.Layer {
 		MountFlags:            volume.MountFlags,
 		FormatOptions:         volume.FormatOptions,
 		ReservedBlocksPercent: volume.ReservedBlocksPercent,
+		Encrypted:             volume.Encrypted,
 		PriorFormat:           n.priorFormat(volume),
 		Ops:                   n.cfg.Filesystem,
 		Content:               n.cfg.Content,

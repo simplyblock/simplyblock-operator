@@ -76,7 +76,21 @@ func stackVolume(
 		MountFlags:            volumeMountFlags(volCap),
 		FormatOptions:         mount.FormatOptions(fsType, vc),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
+		Encrypted:             boolFromContext(vc["encryption"]),
 	}
+}
+
+// boolFromContext reads a flag the context carries as text, answering false for
+// one it does not carry and for one that cannot be read.
+//
+// False is the safe answer for both: it is the volume whose content the host
+// can read, and the guard that reading feeds is the strict one.
+func boolFromContext(value string) bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	return parsed
 }
 
 // volumeMountFlags are the flags the volume itself asked for, plus the one the

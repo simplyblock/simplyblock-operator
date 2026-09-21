@@ -86,6 +86,19 @@ type FilesystemConfig struct {
 	// blank, and a consumer that keeps no such record leaves it nil.
 	PriorFormat func(ctx context.Context) (string, error)
 
+	// Encrypted says the bytes on this device do not mean what they read as.
+	//
+	// The control plane stacks an AES-XTS crypto bdev under the namespace it
+	// exports, so a never-written block arrives decrypted from zeros, which is
+	// pseudo-random plaintext. An empty encrypted volume therefore reads as
+	// content with no known signature, exactly like somebody else's data, and no
+	// read the host can make tells the two apart. What separates them is the
+	// record PriorFormat consults, so on such a volume an unrecognized reading is
+	// referred there rather than refused. A volume with no crypto bdev under it
+	// leaves this false and keeps the stricter guard, which is the one case where
+	// the reading is evidence.
+	Encrypted bool
+
 	Ops     FilesystemOps
 	Content ContentReader
 }
@@ -145,6 +158,14 @@ func (f *Filesystem) observe(
 		// it is, which is what the layer above waits for.
 		return volstack.StateInactive, reading, volstack.Artifact{Devices: below.Devices}, nil
 	case blockdev.ContentStackLayer, blockdev.ContentForeign, blockdev.ContentUnknown:
+		if f.cfg.Encrypted && reading.Content != blockdev.ContentStackLayer {
+			// Unreadable by construction rather than occupied: see Encrypted.
+			// A stack layer is still refused, because a physical-volume or RAID
+			// label is a signature the probe positively recognized, and finding
+			// one under a filesystem plan means the plan is wrong rather than
+			// that the bytes were undecipherable.
+			return f.blank(ctx, reading, below)
+		}
 		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
 			"filesystem: refusing to stage %s, which carries %s: %s",
 			deviceOf(below), reading.Content, reading.Detail)
