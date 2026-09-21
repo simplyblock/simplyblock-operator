@@ -142,13 +142,10 @@ func (r *dynamicExportRegistry) DeleteExport(ctx context.Context, name string) (
 // SetExportSize records a volume's new capacity on the export serving it, and
 // reports whether there was one.
 //
-// The write is what matters, not the value: it bumps the record's generation,
-// and that is what tells the operator to re-assemble and grow the filesystem on
-// the host. Skipped when the size already matches, so a retried expand does not
-// churn the object.
-//
-// Listed across namespaces for DeleteExport's reason: the caller has a volume
-// handle and nothing else, and the name carries the volume's own id.
+// The write is what matters rather than the value: it bumps the generation,
+// which is what tells the operator to re-assemble and grow the filesystem.
+// Skipped when the size already matches, so a retried expand does not churn the
+// object. Listed across namespaces for DeleteExport's reason.
 func (r *dynamicExportRegistry) SetExportSize(
 	ctx context.Context, name string, bytes int64,
 ) (bool, error) {

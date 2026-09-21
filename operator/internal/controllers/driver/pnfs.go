@@ -1,23 +1,18 @@
 // What spec.pnfs puts on the node plugin: the host directories an NFS metadata
 // server cannot do without.
 //
-// All of them are about the container boundary, not about NFS. Assembly writes
-// a drop-in the host's nfsd reads, runs exportfs against that nfsd, and mounts
-// a filesystem nfsd then serves. Done against this container's own copies, the
-// drop-in reaches nothing and the mount leaves exportfs publishing an empty
-// directory -- the worse failure, because a client mounts it and sees a volume
-// that merely looks empty.
+// All four are about the container boundary rather than about NFS. Against this
+// container's own copies the drop-in reaches no nfsd and exportfs publishes an
+// empty directory, which is the worse failure: a client mounts it and sees a
+// volume that merely looks empty.
 //
 // Deliberately no hostPID. The mount reaches the node through bidirectional
-// propagation on the export root, which is how every CSI driver does it, and
-// exportfs reaches the host's nfsd through the two directories it keeps state
-// in. Entering the host's PID namespace would also let this pod see and signal
-// every process on the node, which is a far larger grant than the four paths
-// below and one the Pod Security Standards refuse outright.
+// propagation and exportfs through the state directories, so the PID namespace
+// buys nothing, and the Pod Security Standards refuse it outright.
 //
-// Nothing here checks the host can actually serve. nfsd and nfs-utils are the
-// node OS's to provide, and a host without them fails visibly in the export's
-// Assembling phase; a client without blkmapd is refused at stage time.
+// Nothing here checks the host can serve. A missing nfsd fails visibly in the
+// export's Assembling phase, but a client missing blkmapd is checked nowhere
+// and degrades silently to metadata-server-routed I/O.
 package driver
 
 import (

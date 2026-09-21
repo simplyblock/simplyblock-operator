@@ -329,14 +329,13 @@ func (r *NFSExportReconciler) reconcileDelete(
 
 // MDSCapableLabel marks a Kubernetes node as able to serve a pNFS export.
 //
-// It gates selection rather than describing it: a node without nfs-utils or a
-// kernel nfsd cannot serve, and the operator cannot see either from here. Until
-// a node agent reports it, the label is how an administrator says which nodes
-// are equipped, and selection never picks one that has not said so.
+// It gates selection rather than describing it: the operator cannot see from
+// here whether a node has nfs-utils and a kernel nfsd, so until a node agent
+// reports it, the label is how an administrator says which nodes are equipped.
 //
 // An unlabeled cluster therefore serves no exports, visibly: the export waits
-// in Pending with an event naming the label, which is a better first run than
-// binding a host that will fail in Assembling for a reason nobody can guess.
+// in Pending with an event naming the label, rather than binding a host that
+// fails in Assembling for a reason nobody can guess.
 const MDSCapableLabel = "storage.simplyblock.io/pnfs-mds"
 
 // selectMDS picks a node to serve this export, or "" when none can.

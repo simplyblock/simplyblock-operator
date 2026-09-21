@@ -159,15 +159,12 @@ const primeLayoutFile = ".simplyblock-pnfs-layout-probe"
 
 // primeLayout triggers the first LAYOUTGET, from this process rather than a pod.
 //
-// The client resolves a layout's device in the mount namespace of whichever
-// process caused the I/O, and a pod's /dev is kubelet's minimal one with no
-// disk/. So a layout the application asks for first can never resolve -- and
-// it sticks: the device is marked unavailable for two minutes and the
-// read-write fail bit is set, so everything after routes through the MDS.
-//
-// This container has the host's /dev. Resolving here leaves the device in the
-// per-client cache, so one touch covers every file a pod later opens. It
-// writes rather than reads because a layout is per-inode.
+// The client resolves a layout's device in the mount namespace of whatever
+// caused the I/O, and a pod's /dev is kubelet's minimal one with no disk/, so a
+// layout the application asks for first can never resolve. It also sticks: the
+// device is marked unavailable for two minutes, and everything after it routes
+// through the MDS. This container has the host's /dev, and one resolution here
+// fills the per-client cache for every file a pod later opens.
 func primeLayout(ctx context.Context, stagingPath string) error {
 	// Checked before rather than during: the syscalls below are not
 	// cancellable, and a stage that gave up should not add I/O.
