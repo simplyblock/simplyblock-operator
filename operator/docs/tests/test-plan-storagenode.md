@@ -110,6 +110,11 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-405 | A node stating no journal count leaves ha_jm_count to the control plane              | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
 | U-406 | An unstated count is absent from the request rather than sent as zero                | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
 | U-407 | A stated journal count is sent as it stands                                          | Positive   | `TestAStatedJournalCountIsSent`                     |
+| U-408 | The pass publishes the spdk-proxy endpoints, so the builder has a caller             | Regression | `TestThePassPublishesTheProxyEndpoints`             |
+| U-409 | A worker per-pod name resolves to its address on the right port                      | Regression | `TestTheSPDKProxyNamesArePublished`                 |
+| U-410 | One slice per RPC port                                                               | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
+| U-411 | A pod with no address is left unpublished rather than published with none            | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
+| U-412 | Two workers sharing a first DNS label are refused, not merged                        | Negative   | `TestACollidingWorkerNameIsRefused`                 |
 
 ### Entity: The Provisioning Claim (design §4.2)
 
