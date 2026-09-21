@@ -503,7 +503,7 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 	const tmpVolume = "tmp"
 	labels := map[string]string{appLabel: ComponentFDBExporter}
 	// The exporter opens the database like any other client, so peer TLS is its
-	// decision too: the cluster file it is given names :tls coordinators, and a
+	// decision too: the cluster file it is given names TLS coordinators, and a
 	// client with no certificate hangs in the handshake rather than failing.
 	peerTLS := fdbPeerTLS(cp)
 
