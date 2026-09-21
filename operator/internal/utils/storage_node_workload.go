@@ -72,33 +72,10 @@ func BuildStorageNodeDaemonSet(
 
 	// The init container sources the per-node env file (written by node-env-writer)
 	// so that node_configure.py receives per-node values for each pod.
-	initScript := `set -e
-[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
-ARGS="--max-lvol=${MAX_SUBSYS_COUNT:-0}"
-[ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
-[ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
-[ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
-[ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=\"${DEVICE_MODEL}\""
-[ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=\"${SIZE_RANGE}\""
-[ "${LBLK}" = "true" ] && ARGS="${ARGS} --lblk"
-[ -n "${BLK_NAMES}" ] && ARGS="${ARGS} --blk-names=\"${BLK_NAMES}\""
-[ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""
-[ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
-[ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
-[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force-format"
-ARGS="${ARGS}` + fleetArgs + `"
-eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
-`
+	initScript, nodeEnvWriterScript := nodeEnvScripts()
+	initScript += fleetArgs + configureInvocation
 	initCmd := []string{"sh", "-c", initScript}
 
-	// nodeEnvWriterScript copies the per-node env file from the mounted ConfigMap
-	// (keyed by hostname) into the shared node-env emptyDir volume.
-	nodeEnvWriterScript := `mkdir -p /etc/node-env
-if [ -f /etc/per-node-config/${HOSTNAME} ]; then
-  cp /etc/per-node-config/${HOSTNAME} /etc/node-env/env.sh
-else
-  touch /etc/node-env/env.sh
-fi`
 	nodeEnvWriterCmd := []string{"sh", "-c", nodeEnvWriterScript}
 
 	imagePullPolicy := wl.ImagePullPolicy
