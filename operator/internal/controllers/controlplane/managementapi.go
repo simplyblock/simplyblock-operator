@@ -502,6 +502,10 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	const tmpVolume = "tmp"
 	labels := map[string]string{appLabel: ComponentFDBExporter}
+	// The exporter opens the database like any other client, so peer TLS is its
+	// decision too: the cluster file it is given names :tls coordinators, and a
+	// client with no certificate hangs in the handshake rather than failing.
+	peerTLS := fdbPeerTLS(cp)
 
 	spec := corev1.PodSpec{
 		SecurityContext: &corev1.PodSecurityContext{
@@ -510,16 +514,16 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			RunAsGroup:   ptr.To(int64(4059)),
 			FSGroup:      ptr.To(int64(4059)),
 		},
-		Volumes: []corev1.Volume{
+		Volumes: append([]corev1.Volume{
 			{Name: tmpVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			clusterFileVolumeSource(),
-		},
+		}, peerVolumeIf(peerTLS)...),
 		Containers: []corev1.Container{{
 			Name:  "exporter",
 			Image: fdbExporterImage,
-			Env: []corev1.EnvVar{
+			Env: append([]corev1.EnvVar{
 				{Name: "FDB_CLUSTER_FILE", Value: clusterFilePath},
-			},
+			}, peerEnvIf(peerTLS)...),
 			Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: fdbExporterPort}},
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
@@ -540,7 +544,7 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 				AllowPrivilegeEscalation: ptr.To(false),
 				Privileged:               ptr.To(false),
 			},
-			VolumeMounts: []corev1.VolumeMount{
+			VolumeMounts: append([]corev1.VolumeMount{
 				{Name: tmpVolume, MountPath: "/tmp"},
 				{
 					Name:      clusterFileVolume,
@@ -548,7 +552,7 @@ func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 					SubPath:   clusterFileSubURL,
 					ReadOnly:  true,
 				},
-			},
+			}, peerMountIf(peerTLS)...),
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("50m"),

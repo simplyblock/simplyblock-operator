@@ -347,3 +347,39 @@ func TestNoPeerCertificateWithoutPeerTLS(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryHolderOfTheClusterFileCanReachATLSDatabase is the rule the exporter
+// broke.
+//
+// Regression: 2026-09-21-the-exporter-was-given-the-cluster-file-and-no-keys —
+// peer TLS rewrites the coordinators in the cluster file as :4500:tls, so every
+// process holding that file has to present a certificate to open the database.
+// The install gave the FoundationDB exporter the file and nothing else: its
+// client hung in the handshake, it never served /metrics, and the liveness probe
+// killed and restarted it for as long as the deployment stayed up.
+//
+// The rule is the cluster file rather than a list of workloads, because that is
+// what makes a process a client of the database. A test naming the exporter
+// would be a test of this fix rather than of the contract it broke.
+func TestEveryHolderOfTheClusterFileCanReachATLSDatabase(t *testing.T) {
+	cp := aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{})
+
+	objects := append(foundationDBObjects(cp), managementAPIObjects(cp)...)
+	for _, obj := range objects {
+		spec := podSpecOf(obj)
+		if spec == nil {
+			continue
+		}
+		for _, container := range spec.Containers {
+			if !slices.ContainsFunc(container.VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.MountPath == clusterFilePath
+			}) {
+				continue
+			}
+			if _, ok := envOf(container, "FDB_TLS_CERTIFICATE_FILE"); !ok {
+				t.Errorf("%s/%s holds the cluster file and no certificate, so it cannot open "+
+					"a database whose coordinators are :tls", obj.GetName(), container.Name)
+			}
+		}
+	}
+}
