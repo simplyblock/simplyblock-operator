@@ -13,6 +13,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
 )
 
 const (
@@ -104,6 +108,71 @@ var _ = ginkgo.Describe("SPDKCSI-PNFS", func() {
 		// updated for anybody else.
 		gomega.Expect(after["LAYOUTCOMMIT"]-before["LAYOUTCOMMIT"]).To(gomega.BeNumerically(">", 0),
 			"the client issued no LAYOUTCOMMIT, so the metadata server was never told what it wrote")
+	})
+
+	ginkgo.It("an expanded volume keeps writing straight to the storage nodes", func() {
+		ns := f.Namespace.Name
+		const pvcName, podName = "spdkcsi-pvc-pnfs-grow", "spdkcsi-test-pnfs-grow"
+		label := metav1.ListOptions{LabelSelector: "app=" + podName}
+
+		pnfsVolume(f, ns, pvcName, podName)
+
+		ginkgo.By("confirm the data path is direct before growing anything")
+		assertWritesBypassTheMDS(f, ns, &label, "before")
+
+		ginkgo.By("expand the claim")
+		expandPVC(f, ns, pvcName, "2Gi")
+
+		// Growing the namespace invalidates the client's cached pNFS block
+		// device, and whoever causes the next I/O resolves it again in their own
+		// mount namespace. A pod's /dev has no disk/, so a client left to
+		// rediscover it on its own fails and routes through the metadata server
+		// from then on, silently. This is that regression.
+		ginkgo.By("verify the data path is still direct after growing")
+		assertWritesBypassTheMDS(f, ns, &label, "after")
+	})
+
+	ginkgo.It("a snapshot of a pNFS volume becomes ready", func() {
+		ns := f.Namespace.Name
+		const pvcName, podName = "spdkcsi-pvc-pnfs-snap", "spdkcsi-test-pnfs-snap"
+		const snapName = "spdkcsi-snap-pnfs"
+
+		pnfsVolume(f, ns, pvcName, podName)
+
+		// The volume handle is the backing lvol's, so a snapshot addresses it
+		// without knowing an export is in front of it. That is the whole reason
+		// the handle carries no export of its own.
+		ginkgo.By("snapshot the claim")
+		framework.ExpectNoError(applyInline(ns, snapshotYAML(snapName, pvcName)), "create the snapshot")
+		ginkgo.DeferCleanup(func() { deleteInline(ns, "volumesnapshot", snapName) })
+
+		framework.ExpectNoError(
+			waitForSnapshotReady(ns, snapName, 5*time.Minute), "wait for the pNFS snapshot")
+	})
+
+	ginkgo.It("a pNFS claim naming a data source is refused rather than half-made", func() {
+		ns := f.Namespace.Name
+		const sourcePVC, sourcePod = "spdkcsi-pvc-pnfs-src", "spdkcsi-test-pnfs-src"
+		const clonePVC, clonePod = "spdkcsi-pvc-pnfs-clone", "spdkcsi-test-pnfs-clone"
+
+		pnfsVolume(f, ns, sourcePVC, sourcePod)
+
+		// A clone carries the source's filesystem, so assembly would find the
+		// device non-blank, skip the mkfs, and mount it as XFS, which it may not
+		// be. Refusing is the difference between a failure and an export that
+		// half-works.
+		ginkgo.By("ask for a pNFS clone of it")
+		framework.ExpectNoError(
+			createClonedRWXPVC(f.ClientSet, ns, clonePVC, ns+"-"+sourcePod+"-sc", sourcePVC, 1<<30),
+			"create the cloned claim")
+		ginkgo.DeferCleanup(func() { deletePVCByName(f.ClientSet, ns, clonePVC) })
+
+		framework.ExpectNoError(
+			createPodForPVC(f.ClientSet, ns, clonePod, clonePVC), "create the clone's pod")
+		ginkgo.DeferCleanup(func() { deletePodByName(f.ClientSet, ns, clonePod) })
+
+		ginkgo.By("it stays Pending rather than binding to something half-made")
+		assertPVCStaysPending(f.ClientSet, ns, clonePVC, 90*time.Second)
 	})
 
 	ginkgo.It("two pods on different nodes write to one volume", func() {
@@ -273,4 +342,121 @@ func hasNoScheduleTaint(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// assertWritesBypassTheMDS writes probeBytes and asserts that none of it went
+// through the metadata server.
+//
+// The counters are the only evidence available. A client whose layout was
+// refused writes the same bytes to the same file and reports the same success,
+// and the difference is visible here and nowhere else.
+func assertWritesBypassTheMDS(f *framework.Framework, ns string, pod *metav1.ListOptions, stage string) {
+	before := nfsOpCounts(f, ns, pod)
+
+	file := "/spdkvol/probe-" + stage
+	_, stderr := execCommandInPod(f, fmt.Sprintf(
+		"dd if=/dev/urandom of=%s bs=1M count=%d conv=fsync 2>/dev/null", file, probeBytes>>20),
+		ns, pod)
+	gomega.Expect(stderr).To(gomega.BeEmpty(), "writing the probe file %s should succeed", stage)
+
+	// Without this, "no NFS WRITEs" is also what a volume nobody wrote to says.
+	size, _ := execCommandInPod(f, "stat -c %s "+file, ns, pod)
+	gomega.Expect(strings.TrimSpace(size)).To(gomega.Equal(strconv.Itoa(probeBytes)),
+		"the probe file %s should be %d bytes", stage, probeBytes)
+
+	after := nfsOpCounts(f, ns, pod)
+
+	gomega.Expect(after["LAYOUTGET"]-before["LAYOUTGET"]).To(gomega.BeNumerically(">", 0),
+		"%s: the client issued no LAYOUTGET, so it never asked for a layout", stage)
+	gomega.Expect(after["WRITE"]-before["WRITE"]).To(gomega.BeZero(),
+		"%s: the client issued %d NFS WRITEs for %d bytes, so the data routed through the "+
+			"metadata server instead of going to the storage nodes directly",
+		stage, after["WRITE"]-before["WRITE"], probeBytes)
+	gomega.Expect(after["LAYOUTCOMMIT"]-before["LAYOUTCOMMIT"]).To(gomega.BeNumerically(">", 0),
+		"%s: the client issued no LAYOUTCOMMIT, so the metadata server was never told what it wrote",
+		stage)
+}
+
+// expandPVC grows the claim and waits for the capacity it reports to follow.
+//
+// The status is what is waited on rather than the spec: the request is recorded
+// immediately, and only the status says the storage and the export moved.
+func expandPVC(f *framework.Framework, ns, pvcName, size string) {
+	patch := []byte(`{"spec":{"resources":{"requests":{"storage":"` + size + `"}}}}`)
+	_, err := f.ClientSet.CoreV1().PersistentVolumeClaims(ns).Patch(
+		context.Background(), pvcName, types.MergePatchType, patch, metav1.PatchOptions{})
+	framework.ExpectNoError(err, "patch %s to %s", pvcName, size)
+
+	want := resource.MustParse(size)
+	framework.ExpectNoError(wait.PollUntilContextTimeout(
+		context.Background(), 5*time.Second, 5*time.Minute, true,
+		func(ctx context.Context) (bool, error) {
+			pvc, err := f.ClientSet.CoreV1().PersistentVolumeClaims(ns).
+				Get(ctx, pvcName, metav1.GetOptions{})
+			if err != nil {
+				return false, nil
+			}
+			return pvc.Status.Capacity.Storage().Cmp(want) >= 0, nil
+		}), "wait for %s to report %s", pvcName, size)
+}
+
+// snapshotYAML is one VolumeSnapshot of a claim. Written out rather than built
+// from a typed client, because the suite has no snapshot client and one object
+// does not earn one.
+func snapshotYAML(name, pvcName string) string {
+	return fmt.Sprintf(`apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: %s
+spec:
+  volumeSnapshotClassName: %s
+  source:
+    persistentVolumeClaimName: %s
+`, name, snapshotClassName, pvcName)
+}
+
+// applyInline applies a manifest this file built, through a temporary file
+// because kubectl reads one.
+func applyInline(ns, manifest string) error {
+	tmp, err := os.CreateTemp("", "e2e-pnfs-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(manifest); err != nil {
+		return err
+	}
+	_ = tmp.Close()
+	_, err = e2ekubectl.RunKubectl(ns, "apply", "-f", tmp.Name())
+	return err
+}
+
+// deleteInline removes what applyInline made. It logs rather than failing: it
+// runs in a cleanup, where the spec's own result is what matters.
+func deleteInline(ns, kind, name string) {
+	if _, err := e2ekubectl.RunKubectl(ns, "delete", kind, name, "--ignore-not-found=true"); err != nil {
+		framework.Logf("failed to delete %s %s: %v", kind, name, err)
+	}
+}
+
+// createClonedRWXPVC is createRWXPVC naming a source claim, which is what makes
+// it a clone and what a pNFS class refuses.
+func createClonedRWXPVC(c kubernetes.Interface, ns, pvcName, scName, sourcePVC string, size int64) error {
+	_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(context.Background(), &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: &scName,
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			DataSource: &corev1.TypedLocalObjectReference{
+				Kind: "PersistentVolumeClaim",
+				Name: sourcePVC,
+			},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: *resource.NewQuantity(size, resource.BinarySI),
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	return err
 }
