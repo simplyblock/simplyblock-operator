@@ -343,6 +343,15 @@ func (r *OperatorOpsReconciler) inspect(
 		return false, err
 	}
 
+	// A named set is filtered here rather than fetched one node at a time, so
+	// that everything after this point sees one node list however the run chose
+	// its machines. A name matching nothing is announced: the run was told to
+	// consider that machine, and a draft quietly missing it is the case the
+	// declined events below exist for.
+	if len(spec.Workers) > 0 {
+		nodes.Items = r.namedWorkers(ops, spec.Workers, nodes.Items)
+	}
+
 	taken, err := r.workersAlreadyTaken(ctx, ops.Namespace)
 	if err != nil {
 		return false, err
@@ -984,4 +993,40 @@ func boundEventMessage(message string) string {
 	}
 	const ellipsis = " […]"
 	return message[:maxEventMessage-len(ellipsis)] + ellipsis
+}
+
+// namedWorkers keeps the nodes a run named, in the order the API server
+// returned them, and announces each name that matched nothing.
+//
+// The announcement is the point. Being asked to inspect a machine that is not
+// there is either a typo or a node that has not joined, and both are worth one
+// event: the alternative is a draft short of the machines somebody listed, with
+// nothing anywhere saying which or why.
+func (r *OperatorOpsReconciler) namedWorkers(
+	ops *simplyblockv1alpha2.OperatorOps,
+	named []string,
+	nodes []corev1.Node,
+) []corev1.Node {
+	wanted := make(map[string]bool, len(named))
+	for _, name := range named {
+		wanted[name] = false
+	}
+
+	kept := make([]corev1.Node, 0, len(nodes))
+	for i := range nodes {
+		if _, ok := wanted[nodes[i].Name]; !ok {
+			continue
+		}
+		wanted[nodes[i].Name] = true
+		kept = append(kept, nodes[i])
+	}
+
+	for _, name := range named {
+		if !wanted[name] {
+			r.event(ops, corev1.EventTypeWarning, WorkerDeclined,
+				fmt.Sprintf("%s is named in spec.discover.workers and there is no node "+
+					"by that name", name))
+		}
+	}
+	return kept
 }

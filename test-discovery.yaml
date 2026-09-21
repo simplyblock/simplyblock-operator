@@ -1,0 +1,25 @@
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: rediscover-rack-2
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: discovered-rack-2
+
+    clusterRef: discovered-initial-discovery-cluster
+
+    workers:
+      - worker-4.ocp.simplyblock.ai
+      - worker-5.ocp.simplyblock.ai
+
+    # nodeSelector:
+    #  simplyblock.io/rack: "2"
+
+    enableControlPlaneNodes: false
+
+    deviceFilter:
+      enableLogicalBlockDevices: false
+      enablePartitionedDevices: true
