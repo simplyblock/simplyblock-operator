@@ -9,6 +9,16 @@ set -uo pipefail
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/../charts/simplyblock-operator" && pwd)"
 fail=0
 
+# The capabilities a cluster-less render has to be told about.
+#
+# TLS is on by default and the chart refuses a cluster that does not serve
+# cert-manager's API, which is the right refusal at install time and an
+# impossible one here: `helm template` asks no cluster anything, so the guard
+# fires on every render. Stating the capability is what a renderer with a
+# cluster behind it does, and without it every profile below reads as a render
+# failure rather than as the objects it is meant to check.
+CAPABILITIES=(--api-versions cert-manager.io/v1)
+
 # Objects every profile renders, as `Kind/name`.
 COMMON=(
   "Deployment/simplyblock-operator"
@@ -43,6 +53,7 @@ check() {
   local out present missing=0
 
   out="$(helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
     --set deployment.profile="$profile" \
     --set controlplane.managed.endpoint=https://cp.example.com 2>/dev/null)"
   if [ -z "$out" ]; then
@@ -69,6 +80,7 @@ render() {
   local profile="$1"
   shift
   helm template sb "$CHART" --namespace simplyblock \
+    "${CAPABILITIES[@]}" \
     --set deployment.profile="$profile" \
     --set controlplane.managed.endpoint=https://cp.example.com \
     "$@" 2>/dev/null | objects
