@@ -28,6 +28,15 @@ func (ns *Server) NodeExpandVolume(
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
 	}
 
+	// A pNFS client has nothing to grow: the metadata server grew the
+	// filesystem on its own host, and this node sees the new size through NFS.
+	// Its plan has no layer that could answer anyway, since the filesystem the
+	// volume names here is pnfs rather than anything with a resize tool.
+	if isPNFSVolume(volumeContext) {
+		klog.Infof("volume %s is served by an export, so this node grows nothing", volumeID)
+		return &csi.NodeExpandVolumeResponse{}, nil
+	}
+
 	plan, err := ns.attachPlan(ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to build the stack plan for volume %s: %v", volumeID, err)

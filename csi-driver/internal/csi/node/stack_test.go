@@ -687,3 +687,39 @@ func deletingPV() *corev1.PersistentVolume {
 	pv.Status.Phase = corev1.VolumeReleased
 	return pv
 }
+
+// Regression: a pNFS client has nothing to grow. The metadata server grew the
+// filesystem on its own host, and this node sees the new size through NFS, so
+// the expansion here is a no-op rather than a stack walk.
+//
+// Without the branch the plan carried a filesystem layer whose type was pnfs.
+// That has no resize tool, so every NodeExpandVolume failed:
+//
+//	failed to grow volume ...: volstack: grow filesystem:
+//	filesystem: pnfs cannot be grown in place, and this volume is pnfs
+//
+// The claim still reached its new size, so what this cost was not the
+// expansion but the quiet: kubelet reissues the call and raises
+// VolumeResizeFailed against every pod on the volume, forever.
+func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume on a pNFS volume: %v", err)
+	}
+
+	if runner.called("grow") {
+		t.Errorf("the expansion walked a stack a pNFS client does not have: %v", runner.plans["grow"])
+	}
+}
