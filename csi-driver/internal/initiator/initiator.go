@@ -31,6 +31,7 @@ import (
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 )
 
@@ -169,7 +170,7 @@ func New(volumeContext map[string]string) (Initiator, error) {
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
-			clusterID:      volumeContext["cluster_id"],
+			clusterID:      volumeContext[csicommon.ParamClusterID],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
 		}, nil

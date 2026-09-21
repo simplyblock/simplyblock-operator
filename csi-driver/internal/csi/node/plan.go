@@ -26,6 +26,7 @@ import (
 	"github.com/simplyblock/atlas/volstack/plans"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/initiator"
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
@@ -76,7 +77,7 @@ func stackVolume(
 		MountFlags:            volumeMountFlags(volCap),
 		FormatOptions:         mount.FormatOptions(fsType, vc),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
-		Encrypted:             boolFromContext(vc["encryption"]),
+		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
 	}
 }
 
@@ -269,7 +270,7 @@ func intFromContext(value string) int {
 // the context names when a failover redirected the volume to another, and
 // otherwise the one encoded in the subsystem NQN.
 func clusterIDFor(vc map[string]string, handle *lvol.Handle) string {
-	if clusterID := strings.TrimSpace(vc["cluster_id"]); clusterID != "" {
+	if clusterID := strings.TrimSpace(vc[csicommon.ParamClusterID]); clusterID != "" {
 		return clusterID
 	}
 	if subsystem, ok := nqn.Parse(vc["nqn"]); ok && subsystem.ClusterID != "" {

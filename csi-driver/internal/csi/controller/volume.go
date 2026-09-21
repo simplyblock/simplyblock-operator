@@ -203,7 +203,7 @@ func (cs *Server) prepareCreateVolumeReq(
 		return nil, false, err
 	}
 
-	encryption, err := kube.BoolParam(params, "encryption", false)
+	encryption, err := kube.BoolParam(params, csicommon.ParamEncryption, false)
 	if err != nil {
 		return nil, false, err
 	}
