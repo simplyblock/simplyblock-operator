@@ -54,7 +54,7 @@ func (p planner) Plan(ctx context.Context, spec export.Spec) (volstack.Plan, err
 		FsType:      export.FSType,
 		// Pinned rather than derived: this image's mkfs.xfs defaults features an
 		// older host kernel cannot mount (format.go).
-		FormatOptions: xfsFormatOptions,
+		FormatOptions: exportFormatOptions(),
 		Encrypted:     spec.Encrypted,
 	}), nil
 }

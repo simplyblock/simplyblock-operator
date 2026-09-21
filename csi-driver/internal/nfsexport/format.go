@@ -3,22 +3,26 @@
 // This image is newer than the hosts it runs on, so mkfs.xfs here defaults
 // features an older host kernel cannot mount: the filesystem formats cleanly
 // and then fails to mount, naming a feature flag rather than the skew behind
-// it. Pinning the set fixes that, and unlike borrowing the host's binary it can
-// be tested.
+// it. XFS features can only be added, never removed, so there is no repair
+// path and prevention is the only option.
 
 package nfsexport
 
-// xfsFormatOptions pin the format to what every supported host kernel mounts.
-// Each name records the kernel that gained it, because the rule for changing
-// this list is the oldest kernel supported, not the newest one run on:
+import (
+	"github.com/simplyblock/atlas/export"
+
+	csimount "github.com/simplyblock/csi-driver/internal/mount"
+)
+
+// exportFormatOptions are the block path's, unchanged.
 //
-//   - crc is metadata checksumming, universal since 3.15, left on.
-//   - bigtime and inobtcount arrived in 5.10.
-//   - nrext64 arrived in 5.19 and is defaulted ON by the xfsprogs 6.x this
-//     image ships. It is the one that bit: a host on 5.14 answers "Superblock
-//     has unknown incompatible features."
-//   - reflink is not needed by an export, and off keeps the format narrow.
-var xfsFormatOptions = []string{
-	"-m", "crc=1,bigtime=0,inobtcount=0,reflink=0",
-	"-i", "nrext64=0",
+// Pinning a baseline is mkfs.xfs's own job, through the config file that names
+// the whole feature set rather than the flags somebody remembered. A list
+// written out here was missing parent pointers, which 6.18 defaults on and
+// which a host on 5.14 refuses as an unknown incompatible feature, 0x80. One
+// pinning for every XFS volume on the node, so the two
+// cannot drift and neither is touched when xfsprogs defaults another feature
+// on.
+func exportFormatOptions() []string {
+	return csimount.FormatOptions(export.FSType, nil)
 }

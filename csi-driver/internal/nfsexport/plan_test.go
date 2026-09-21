@@ -76,7 +76,7 @@ func TestPlanFormatsXFSWithThePinnedOptions(t *testing.T) {
 
 	// XFS is not a default here: no other Linux filesystem serves a SCSI
 	// layout. The options are pinned because this image's mkfs.xfs defaults
-	// features an older host kernel cannot mount.
+	// features an older host kernel cannot mount (format.go).
 	params, ok := plan[1].(volstack.Recorder).Params().(layers.FilesystemParams)
 	if !ok {
 		t.Fatalf("the top layer recorded %T, want FilesystemParams", plan[1].(volstack.Recorder).Params())
@@ -84,8 +84,8 @@ func TestPlanFormatsXFSWithThePinnedOptions(t *testing.T) {
 	if params.FsType != export.FSType {
 		t.Errorf("fsType = %q, want %q", params.FsType, export.FSType)
 	}
-	if len(xfsFormatOptions) == 0 || !strings.Contains(strings.Join(xfsFormatOptions, " "), "nrext64=0") {
-		t.Errorf("format options = %v, want nrext64 pinned off", xfsFormatOptions)
+	if len(exportFormatOptions()) == 0 {
+		t.Error("the plan passes no format options, so mkfs.xfs would use this image's own defaults")
 	}
 }
 
