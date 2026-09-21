@@ -104,6 +104,8 @@ Files: `operator/internal/controllers/node/provisioning_test.go`,
 | U-399 | A worker's second socket takes no second slot and resolves against the first         | Regression | `TestASecondSocketDoesNotTakeASecondSlot`           |
 | U-400 | A backend node appearing while a node queues for a slot is adopted, not re-added     | Regression | `TestANodeWaitingForASlotAdoptsTheNodeThatAppeared` |
 | U-401 | No backend node for the worker: the queue takes its slot as before                   | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
+| U-402 | A slot is held while the control plane still reports the node in_creation            | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
+| U-403 | The slot goes back once the node leaves in_creation                                  | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
 
 ### Entity: The Provisioning Claim (design §4.2)
 

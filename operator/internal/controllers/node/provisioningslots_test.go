@@ -318,3 +318,53 @@ func TestASecondSocketDoesNotTakeASecondSlot(t *testing.T) {
 		t.Errorf("one worker holds %d slots", len(slots))
 	}
 }
+
+// TestASlotIsHeldUntilTheAddIsFinished is what the cap is measured in.
+//
+// Regression: 2026-09-21-the-slot-was-released-when-the-uuid-appeared — the
+// control plane writes the node object at the start of add_node, with
+// status=in_creation, so its UUID exists seconds into an add that runs for
+// minutes. Releasing on the UUID made every add look finished the moment it
+// began: on a six-worker cluster with maxParallelNodeAdds 1, five node_add tasks
+// ran at once and five SPDK pods came up together. The cap exists because an add
+// reboots its host.
+func TestASlotIsHeldUntilTheAddIsFinished(t *testing.T) {
+	adding, waiting := waitingNode("w1"), waitingNode("w2")
+	adding.Status.UUID = "10fe8da7-55d6-4162-a5a2-9575421ee31f"
+	adding.Status.Status = nodeStatusInCreation
+
+	cluster := slotCluster(1)
+	cluster.Status.ProvisioningSlots = []simplyblockv1alpha2.ProvisioningSlot{
+		{Worker: "w1", Node: adding.Name, TakenAt: metav1.Now()},
+	}
+	reconcilers := blindReconcilers(t, cluster, adding, waiting)
+
+	next, _, err := reconcilers[1].awaitSlot(context.Background(), waiting, cluster.DeepCopy())
+	if err == nil && next == stepPosting {
+		t.Error("a second add was posted while the first worker was still being created")
+	}
+	if slots := storedCluster(t, reconcilers[1]).Status.ProvisioningSlots; len(slots) != 1 {
+		t.Errorf("the cluster records %d slots while one add is running", len(slots))
+	}
+}
+
+// Once the add is over the slot goes back, which is what keeps the queue moving.
+func TestTheSlotGoesBackWhenTheNodeLeavesCreation(t *testing.T) {
+	added, waiting := waitingNode("w1"), waitingNode("w2")
+	added.Status.UUID = "10fe8da7-55d6-4162-a5a2-9575421ee31f"
+	added.Status.Status = nodeStatusOnline
+
+	cluster := slotCluster(1)
+	cluster.Status.ProvisioningSlots = []simplyblockv1alpha2.ProvisioningSlot{
+		{Worker: "w1", Node: added.Name, TakenAt: metav1.Now()},
+	}
+	reconcilers := blindReconcilers(t, cluster, added, waiting)
+
+	next, _, err := reconcilers[1].awaitSlot(context.Background(), waiting, cluster.DeepCopy())
+	if err != nil {
+		t.Fatalf("awaitSlot: %v", err)
+	}
+	if next != stepPosting {
+		t.Errorf("the next worker was sent to %s after the previous add finished", next)
+	}
+}

@@ -124,7 +124,7 @@ func (r *StorageNodeReconciler) heldSlots(
 			}
 			return nil, err
 		}
-		if holder.Status.UUID != "" ||
+		if addFinished(&holder) ||
 			holder.Status.Phase == simplyblockv1alpha2.StorageNodePhaseFailed ||
 			!holder.DeletionTimestamp.IsZero() {
 			continue
@@ -179,4 +179,16 @@ func describeSlots(slots []simplyblockv1alpha2.ProvisioningSlot) string {
 	}
 	slices.Sort(parts)
 	return strings.Join(parts, ", ")
+}
+
+// addFinished reports whether the add a slot was taken for is over.
+//
+// A node with no UUID has not been created at all, and one the control plane
+// still reports as in_creation is being created now. Every other status is a
+// node the control plane has finished with, whatever it then thinks of it: a
+// node that came up and went unreachable has still had its add, and holding the
+// cluster's only slot for it would stop the fleet for a node nothing is working
+// on.
+func addFinished(node *simplyblockv1alpha2.StorageNode) bool {
+	return node.Status.UUID != "" && node.Status.Status != nodeStatusInCreation
 }
