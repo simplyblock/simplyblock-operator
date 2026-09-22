@@ -174,16 +174,18 @@ File: `atlas-lib/lvm/dm_test.go`
 
 ### Node Capability Advertisement (design §4.3)
 
-File: `csi-driver/pkg/spdk/nodeserver_vdo_capability_test.go`
+File: `csi-driver/internal/csi/node/capability_test.go`
 
-| #    | Scenario                                                                                          | Type     | Test                                                  |
-|------|---------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------|
-| U-75 | No label at all: the node is free for the auto-detect probe to claim                              | Positive | `TestVDOCapableOperatorManaged`                       |
-| U-76 | A label carrying the `auto-detect` annotation stays the probe's to manage                         | Positive | `TestVDOCapableOperatorManaged`                       |
-| U-77 | A label set by hand, with no `managed-by` annotation, is an operator override                     | Negative | `TestVDOCapableOperatorManaged`                       |
-| U-78 | A label present with an unrelated annotation value is still an override                           | Boundary | `TestVDOCapableOperatorManaged`                       |
-| U-79 | The probe leaves an operator-set label untouched across a `csi-node` restart                      | Negative | `TestAdvertiseVDOCapability_RespectsOperatorOverride` |
-| U-80 | The marker file never appears within the wait: the node is treated as not capable, not as unknown | Negative | —                                                     |
+| #     | Scenario                                                                                                                                                  | Type       | Test                                                                 |
+|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------|
+| U-75  | A capable node is labeled `true`, and the label is stamped as the probe's own                                                                             | Positive   | `TestAdvertiseVDOCapability_WritesTrue`                              |
+| U-76  | A node the probe reported incapable of VDO is labeled `false`                                                                                             | Positive   | `TestAdvertiseVDOCapability_WritesFalse`                             |
+| U-77  | A label set by hand, with no `managed-by` annotation, is an operator override and is left alone                                                           | Negative   | `TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone`           |
+| U-78  | A label the probe wrote before is the probe's to overwrite, which is how a lost capability flips                                                          | Positive   | `TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel`              |
+| U-79  | The marker is not written yet when the plugin starts, and the probe waits for it                                                                          | Regression | `TestAdvertiseVDOCapabilityWaitsForAMarkerTheHookHasNotWrittenYet`   |
+| U-80  | The marker never appears within the wait: the node is left unlabeled rather than declared incapable, because an unanswered probe is not a negative answer | Negative   | `TestAdvertiseVDOCapabilityGivesUpOnAMarkerThatNeverArrives`         |
+| U-105 | A shutdown ends the wait rather than outliving it                                                                                                         | Negative   | `TestAdvertiseVDOCapabilityStopsWaitingWhenTheProcessIsShuttingDown` |
+| U-106 | A marker that exists and cannot be read is answered at once, not waited out as if it were missing                                                         | Boundary   | `TestAdvertiseVDOCapabilityFailsFastOnAMarkerItCannotRead`           |
 
 ### Topology Segment (design §5)
 

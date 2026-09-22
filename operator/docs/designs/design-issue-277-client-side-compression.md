@@ -327,7 +327,19 @@ label absent, on failure.
 
 `advertiseVDOCapability` runs on every `csi-node` pod start, and a hand-set
 label is the escape hatch a golden-image node depends on, so the probe has to
-tell its own labels apart from an operator's. Every label value the probe
+tell its own labels apart from an operator's.
+
+It waits for the marker rather than reading it once. The `postStart` hook that
+writes the marker and the container's own entrypoint start at the same moment,
+so the marker is normally absent for the first instants of the process's life:
+reading it once found nothing on all seven nodes of a cluster, left every one
+of them unlabeled, and turned the feature off across the whole deployment
+without a single volume reporting anything. The wait is two minutes, which is
+generous for a `modprobe`, and it is bounded because a hook that never writes
+the marker leaves a question nothing will answer. A marker that exists and
+cannot be read is answered immediately instead: that is a permission or a mount
+problem, and waiting out the budget on it would report it as a timeout that
+says nothing about the cause. Every label value the probe
 writes itself is stamped with a second annotation,
 `storage.simplyblock.io/vdo-capable-managed-by: auto-detect`. On startup the
 probe first checks whether the label is already present without that

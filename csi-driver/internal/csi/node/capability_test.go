@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -98,11 +99,85 @@ func TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel(t *testing.T) {
 	}
 }
 
-func TestAdvertiseVDOCapability_MissingMarkerIsAnError(t *testing.T) {
+// Regression: the marker does not exist yet when the node plugin starts.
+//
+// The postStart hook that writes it and the container's own entrypoint run
+// concurrently, so reading the marker once, at process start, found nothing on
+// every node of a seven-node cluster. The node then carried no vdo-capable
+// label at all, and a volume asking for client-side compression could never be
+// scheduled anywhere: the feature was silently off across the whole deployment.
+func TestAdvertiseVDOCapabilityWaitsForAMarkerTheHookHasNotWrittenYet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "marker")
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
-	if err := AdvertiseVDOCapability(
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		if err := os.WriteFile(path, []byte(vdoCapableTrue), 0o600); err != nil {
+			panic(err)
+		}
+	}()
+
+	err := advertiseVDOCapability(context.Background(), client, "node-a", path, time.Minute, time.Millisecond)
+	if err != nil {
+		t.Fatalf("advertiseVDOCapability: %v", err)
+	}
+
+	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
+	if node.Labels[kube.LabelVDOCapable] != vdoCapableTrue {
+		t.Errorf("label = %q, want the capability the hook reported once it had run",
+			node.Labels[kube.LabelVDOCapable])
+	}
+}
+
+// The wait is bounded. A hook that never writes the marker at all is a node
+// whose capability is unknown, and waiting on it forever would leave a
+// goroutine holding a question nothing will answer.
+func TestAdvertiseVDOCapabilityGivesUpOnAMarkerThatNeverArrives(t *testing.T) {
+	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+
+	err := advertiseVDOCapability(
 		context.Background(), client, "node-a", filepath.Join(t.TempDir(), "missing"),
+		20*time.Millisecond, time.Millisecond)
+
+	if err == nil {
+		t.Fatal("the advertiser reported success with no marker ever written")
+	}
+	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
+	if _, ok := node.Labels[kube.LabelVDOCapable]; ok {
+		t.Error("a node whose capability was never answered was labeled anyway")
+	}
+}
+
+// A shutdown ends the wait rather than outliving it.
+func TestAdvertiseVDOCapabilityStopsWaitingWhenTheProcessIsShuttingDown(t *testing.T) {
+	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := advertiseVDOCapability(
+		ctx, client, "node-a", filepath.Join(t.TempDir(), "missing"), time.Hour, time.Millisecond,
 	); err == nil {
-		t.Error("AdvertiseVDOCapability succeeded with no marker file to read")
+		t.Fatal("the advertiser kept waiting after its context was canceled")
+	}
+}
+
+// A marker that exists and cannot be read is not a marker that has not been
+// written yet, and waiting out the budget on it would turn a permission problem
+// into a timeout that says nothing about the cause.
+func TestAdvertiseVDOCapabilityFailsFastOnAMarkerItCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "marker")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("create the unreadable marker: %v", err)
+	}
+	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+
+	start := time.Now()
+	err := advertiseVDOCapability(context.Background(), client, "node-a", path, time.Hour, time.Second)
+	if err == nil {
+		t.Fatal("a marker that cannot be read was accepted")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("the advertiser waited %s on a marker it could not read", elapsed)
 	}
 }
