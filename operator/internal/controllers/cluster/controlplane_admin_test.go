@@ -21,7 +21,11 @@ import (
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
-const clusterAdminSpecPath = "../../../../shared/openapi.json"
+const (
+	clusterAdminSpecPath = "../../../../shared/openapi.json"
+	testAdminToken       = "admin-token"
+	testAdminAuthHeader  = "Bearer " + testAdminToken
+)
 
 func TestCreateClusterAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, clusterAdminSpecPath, false)
@@ -33,7 +37,7 @@ func TestCreateClusterAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(
 	})
 
 	resolveEndpoint := func(context.Context) string { return mock.URL() }
-	resolveCredential := func(context.Context) (string, bool) { return "admin-token", true }
+	resolveCredential := func(context.Context) (string, bool) { return testAdminToken, true }
 
 	api := NewControlPlane(resolveEndpoint, resolveCredential)
 	if _, err := api.CreateCluster(context.Background(), utils.ClusterAddParams{Name: "b"}); err != nil {
@@ -44,7 +48,7 @@ func TestCreateClusterAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(
 	if len(reqs) != 1 {
 		t.Fatalf("expected one request, got %d", len(reqs))
 	}
-	if got := reqs[0].Headers["Authorization"]; got != "Bearer admin-token" {
+	if got := reqs[0].Headers["Authorization"]; got != testAdminAuthHeader {
 		t.Errorf("authorization header = %q, want the managed admin credential", got)
 	}
 }
@@ -58,7 +62,7 @@ func TestClusterByNameAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(
 	})
 
 	resolveEndpoint := func(context.Context) string { return mock.URL() }
-	resolveCredential := func(context.Context) (string, bool) { return "admin-token", true }
+	resolveCredential := func(context.Context) (string, bool) { return testAdminToken, true }
 
 	api := NewControlPlane(resolveEndpoint, resolveCredential)
 	if _, _, err := api.ClusterByName(context.Background(), "b"); err != nil {
@@ -69,7 +73,7 @@ func TestClusterByNameAuthenticatesWithTheManagedAdminCredentialWhenOneResolves(
 	if len(reqs) != 1 {
 		t.Fatalf("expected one request, got %d", len(reqs))
 	}
-	if got := reqs[0].Headers["Authorization"]; got != "Bearer admin-token" {
+	if got := reqs[0].Headers["Authorization"]; got != testAdminAuthHeader {
 		t.Errorf("authorization header = %q, want the managed admin credential", got)
 	}
 }
@@ -98,7 +102,7 @@ func TestCreateClusterCarriesNoAdminCredentialWhenNoneResolves(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("expected one request, got %d", len(reqs))
 	}
-	if got := reqs[0].Headers["Authorization"]; got == "Bearer admin-token" {
+	if got := reqs[0].Headers["Authorization"]; got == testAdminAuthHeader {
 		t.Errorf("authorization header = %q, want the client's own (empty) token, not the admin credential", got)
 	}
 }

@@ -248,7 +248,7 @@ func TestAShutdownIssuesOneCallAndWaitsForTheCluster(t *testing.T) {
 		cluster: func(string) (webapi.ClusterResponse, error) {
 			reading := activeCluster()
 			if !active {
-				reading.Status = "suspended"
+				reading.Status = statusSuspended
 			}
 			return reading, nil
 		},
@@ -283,7 +283,7 @@ func TestAnOperationAuthenticatesAsItsClusterOnceItsSecretIsKnown(t *testing.T) 
 		cluster: func(string) (webapi.ClusterResponse, error) {
 			reading := activeCluster()
 			if !active {
-				reading.Status = "suspended"
+				reading.Status = statusSuspended
 			}
 			return reading, nil
 		},
@@ -330,7 +330,7 @@ func TestARestartShutsDownThenStarts(t *testing.T) {
 			reading.Status = status
 			return reading, nil
 		},
-		shutdown: func(string) error { status = "suspended"; return nil },
+		shutdown: func(string) error { status = statusSuspended; return nil },
 		start:    func(string) error { status = utils.ClusterStatusActive; return nil },
 	}
 	r := newOpsReconciler(t, api, &recorder{},
