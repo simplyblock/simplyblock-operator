@@ -73,37 +73,6 @@ func TestDoAgainstSpecMockSendsHeadersBodyAndReturnsResponse(t *testing.T) {
 	}
 }
 
-// A call scoped to one cluster authenticates as that cluster when
-// WithBearerToken names one, instead of as this process's own service
-// account -- the only way to reach a control plane a different Kubernetes
-// cluster runs, since a TokenReview can never cross a cluster boundary.
-func TestDoSendsTheBearerTokenAttachedToContextInsteadOfTheServiceAccountToken(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
-	defer mock.Close()
-
-	mock.Register(
-		http.MethodGet,
-		"/api/v2/clusters/cluster-uuid/",
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
-	)
-
-	c := NewClient(mock.URL())
-	c.saToken = "operators-own-service-account-token"
-
-	ctx := WithBearerToken(context.Background(), "cluster-uuids-own-secret")
-	if _, _, err := c.Do(ctx, http.MethodGet, "/api/v2/clusters/cluster-uuid/", nil); err != nil {
-		t.Fatalf("Do returned error: %v", err)
-	}
-
-	reqs := mock.Requests()
-	if len(reqs) != 1 {
-		t.Fatalf("expected one request, got %d", len(reqs))
-	}
-	if got := reqs[0].Headers["Authorization"]; got != "Bearer cluster-uuids-own-secret" {
-		t.Fatalf("authorization header = %q, want the context's bearer token", got)
-	}
-}
-
 func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()

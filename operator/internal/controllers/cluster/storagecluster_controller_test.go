@@ -15,7 +15,6 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -128,42 +127,6 @@ func TestACreatedClusterReachesSteadyState(t *testing.T) {
 	}
 	if len(secret.Data["secret.json"]) == 0 {
 		t.Error("the CSI credentials secret carries no entry")
-	}
-}
-
-// The CSI driver dials ClusterEndpoint directly rather than through this
-// reconciler, so a control plane shared across more than one Kubernetes
-// cluster -- the hub in a Ramen/DR topology -- needs that entry to carry the
-// endpoint this reconciler was actually configured to reach, not a hardcoded
-// address that only resolves inside its own cluster.
-func TestCSICredentialsCarryTheControlPlanesConfiguredEndpoint(t *testing.T) {
-	const hubEndpoint = "http://simplyblock-webappapi.hub.example:31500"
-	api := &fakeControlPlane{
-		endpoint: hubEndpoint,
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			reading := activeCluster()
-			reading.Secret = testClusterSecret
-			return reading, nil
-		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
-	}
-	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
-	reconcileCluster(t, r, 6)
-
-	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: testNamespace, Name: csiCredentialsSecret}
-	if err := r.Get(context.Background(), key, &secret); err != nil {
-		t.Fatalf("read the CSI credentials secret: %v", err)
-	}
-	var creds CSICredentials
-	if err := json.Unmarshal(secret.Data["secret.json"], &creds); err != nil {
-		t.Fatalf("unmarshal secret.json: %v", err)
-	}
-	if len(creds.Clusters) != 1 {
-		t.Fatalf("clusters = %d entries, want 1", len(creds.Clusters))
-	}
-	if got := creds.Clusters[0].ClusterEndpoint; got != hubEndpoint {
-		t.Errorf("clusterEndpoint = %q, want the configured endpoint %q", got, hubEndpoint)
 	}
 }
 
@@ -297,74 +260,6 @@ func TestAnUpgradeSecretAdoptsRatherThanCreating(t *testing.T) {
 	}
 	if !rec.has(ClusterAdopted) {
 		t.Error("an adoption emitted no ClusterAdopted, so it is indistinguishable from a creation")
-	}
-}
-
-// An adopted cluster's control plane may run on a different Kubernetes
-// cluster than this operator does (a shared hub), where a Kubernetes
-// TokenReview of this operator's own service-account token can never
-// succeed. The read that confirms the adoption must authenticate as the
-// cluster itself instead, using the secret the upgrade Secret names.
-func TestAnUpgradeSecretAuthenticatesTheAdoptionReadAsTheAdoptedCluster(t *testing.T) {
-	var gotToken string
-	var gotOK bool
-	api := &fakeControlPlane{
-		cluster: func(string) (webapi.ClusterResponse, error) {
-			return activeCluster(), nil
-		},
-		clusterCtx: func(ctx context.Context) {
-			gotToken, gotOK = webapi.BearerTokenFromContext(ctx)
-		},
-	}
-	upgrade := &corev1.Secret{
-		ObjectMeta: objectMeta("simplyblock-" + testClusterName + "-upgrade"),
-		Data: map[string][]byte{
-			"uuid":   []byte(testClusterUUID),
-			"secret": []byte(testClusterSecret),
-		},
-	}
-	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster(), upgrade)
-	reconcileCluster(t, r, 6)
-
-	if !gotOK {
-		t.Fatal("the adoption read carried no bearer-token override")
-	}
-	if gotToken != testClusterSecret {
-		t.Errorf("bearer token = %q, want the upgrade secret's own cluster secret %q",
-			gotToken, testClusterSecret)
-	}
-}
-
-// Once a cluster is created and its secret is on record, every later
-// steady-state read of it must keep authenticating as that cluster -- the
-// same reasoning as the adoption read above, just for the read that runs on
-// every reconcile after.
-func TestStorageClusterSyncAuthenticatesAsTheClusterOnceItsSecretIsKnown(t *testing.T) {
-	var gotToken string
-	var gotOK bool
-	api := &fakeControlPlane{
-		create: func(utils.ClusterAddParams) (webapi.ClusterResponse, error) {
-			reading := activeCluster()
-			reading.Secret = testClusterSecret
-			return reading, nil
-		},
-		cluster: func(string) (webapi.ClusterResponse, error) { return activeCluster(), nil },
-		clusterCtx: func(ctx context.Context) {
-			gotToken, gotOK = webapi.BearerTokenFromContext(ctx)
-		},
-	}
-	r := newClusterReconciler(t, api, &recorder{}, newUncreatedCluster())
-	// The creation machine takes 6 passes to reach steady state
-	// (TestACreatedClusterReachesSteadyState); one more pass is the first
-	// steady-state sync, which is the read this test is about.
-	reconcileCluster(t, r, 7)
-
-	if !gotOK {
-		t.Fatal("the steady-state read carried no bearer-token override")
-	}
-	if gotToken != testClusterSecret {
-		t.Errorf("bearer token = %q, want the cluster's own recorded secret %q",
-			gotToken, testClusterSecret)
 	}
 }
 

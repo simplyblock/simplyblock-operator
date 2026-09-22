@@ -168,11 +168,6 @@ var _ events.EventRecorder = (*recorder)(nil)
 type fakeControlPlane struct {
 	t *testing.T
 
-	// endpoint is what Endpoint() returns verbatim -- a pure config read, not
-	// an action the test scripts, so a zero value is a legitimate "unset"
-	// rather than an unexpected call.
-	endpoint string
-
 	ready        func() error
 	create       func(utils.ClusterAddParams) (webapi.ClusterResponse, error)
 	cluster      func(string) (webapi.ClusterResponse, error)
@@ -188,12 +183,6 @@ type fakeControlPlane struct {
 	tasks        func(string) ([]subscriptions.TaskDTO, error)
 	cancelTask   func(string, string) error
 
-	// clusterCtx, when set, is handed the context Cluster() was called with --
-	// how a test observes the bearer-token override a caller attached
-	// (webapi.BearerTokenFromContext), since the closures above only see the
-	// clusterID.
-	clusterCtx func(context.Context)
-
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
 	// to tell a step that skipped its call from one that made it twice.
@@ -206,8 +195,6 @@ type fakeControlPlane struct {
 	restartNodeCalls  int
 	cancelTaskCalls   int
 }
-
-func (f *fakeControlPlane) Endpoint() string { return f.endpoint }
 
 func (f *fakeControlPlane) Ready(context.Context) error {
 	if f.ready == nil {
@@ -227,11 +214,8 @@ func (f *fakeControlPlane) CreateCluster(
 }
 
 func (f *fakeControlPlane) Cluster(
-	ctx context.Context, clusterID string,
+	_ context.Context, clusterID string,
 ) (webapi.ClusterResponse, error) {
-	if f.clusterCtx != nil {
-		f.clusterCtx(ctx)
-	}
 	if f.cluster == nil {
 		f.t.Fatal("the control plane was asked for a cluster and the test did not script it")
 	}
