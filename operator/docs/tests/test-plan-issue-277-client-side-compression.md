@@ -172,20 +172,21 @@ File: `atlas-lib/lvm/dm_test.go`
 | U-73 | A node still blocked by a live dependency on the first pass clears on a later one       | Negative | `TestManager_RemoveOrphanedDMNodes` |
 | U-74 | `dmsetup ls` failing is propagated rather than reported as a successful cleanup         | Negative | `TestManager_RemoveOrphanedDMNodes` |
 
-### Node Capability Advertisement (design §4.3)
+### Node Capability Advertisement (design §4.1, §4.3)
 
 File: `csi-driver/internal/csi/node/capability_test.go`
 
-| #     | Scenario                                                                                                                                                  | Type       | Test                                                                 |
-|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------------|
-| U-75  | A capable node is labeled `true`, and the label is stamped as the probe's own                                                                             | Positive   | `TestAdvertiseVDOCapability_WritesTrue`                              |
-| U-76  | A node the probe reported incapable of VDO is labeled `false`                                                                                             | Positive   | `TestAdvertiseVDOCapability_WritesFalse`                             |
-| U-77  | A label set by hand, with no `managed-by` annotation, is an operator override and is left alone                                                           | Negative   | `TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone`           |
-| U-78  | A label the probe wrote before is the probe's to overwrite, which is how a lost capability flips                                                          | Positive   | `TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel`              |
-| U-79  | The marker is not written yet when the plugin starts, and the probe waits for it                                                                          | Regression | `TestAdvertiseVDOCapabilityWaitsForAMarkerTheHookHasNotWrittenYet`   |
-| U-80  | The marker never appears within the wait: the node is left unlabeled rather than declared incapable, because an unanswered probe is not a negative answer | Negative   | `TestAdvertiseVDOCapabilityGivesUpOnAMarkerThatNeverArrives`         |
-| U-105 | A shutdown ends the wait rather than outliving it                                                                                                         | Negative   | `TestAdvertiseVDOCapabilityStopsWaitingWhenTheProcessIsShuttingDown` |
-| U-106 | A marker that exists and cannot be read is answered at once, not waited out as if it were missing                                                         | Boundary   | `TestAdvertiseVDOCapabilityFailsFastOnAMarkerItCannotRead`           |
+| #     | Scenario                                                                                                                                                           | Type       | Test                                                       |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------|
+| U-75  | A node whose kernel loads `dm-vdo` is labeled `true`, and the label is stamped as the probe's own                                                                  | Positive   | `TestAdvertiseVDOCapabilityLabelsACapableNode`             |
+| U-76  | A node carrying neither module is labeled `false`                                                                                                                  | Negative   | `TestAdvertiseVDOCapabilityLabelsAnIncapableNodeFalse`     |
+| U-77  | `kvdo` is tried when `dm-vdo` is absent, since the module has two names across node operating systems                                                              | Positive   | `TestAdvertiseVDOCapabilityFallsBackToKvdo`                |
+| U-78  | A module that loads ends the search, so a node carrying `dm-vdo` is not asked for `kvdo` too                                                                       | Boundary   | `TestAdvertiseVDOCapabilityStopsAtTheFirstModuleThatLoads` |
+| U-79  | The probe asks the kernel version, each module by name, and LVM's segment types, which is what a reader needs to tell an incapable node from one that never probed | Regression | `TestTheProbeAsksWhatAReaderNeedsToDiagnoseIt`             |
+| U-80  | A probe whose commands are not present answers `false` rather than failing the plugin                                                                              | Negative   | `TestTheProbeSurvivesACommandThatIsNotThere`               |
+| U-105 | A label set by hand, with no `managed-by` annotation, is an operator override, left alone, and still probed                                                        | Negative   | `TestAdvertiseVDOCapabilityLeavesAnOperatorSetLabelAlone`  |
+| U-106 | A label the probe wrote before is the probe's to overwrite, which is how a lost capability flips                                                                   | Positive   | `TestAdvertiseVDOCapabilityOverwritesItsOwnPriorLabel`     |
+| U-107 | The vdo segment types are read out of `lvm segtypes` output, and their absence says so rather than nothing                                                         | Boundary   | `TestVDOSegtypes`                                          |
 
 ### Topology Segment (design §5)
 

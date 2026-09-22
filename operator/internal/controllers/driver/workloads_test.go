@@ -239,48 +239,26 @@ func TestNodePluginKeepsThePrivilegeItNeeds(t *testing.T) {
 	}
 }
 
-// The vdo-capable probe (issue #277) rides the same postStart hook as the
-// NVMe-oF transport modprobes, and its marker survives a plugin restart the
-// same way the NVMe host id, guardian's own state, and the stack records do: a
-// host path mounted into the container, not container-local storage.
-func TestNodePluginProbesVDOCapability(t *testing.T) {
+// The postStart hook loads the NVMe-oF transports and gives the host a stable
+// NVMe identity, and does not probe for VDO: that moved into the node plugin,
+// where what it finds reaches the pod's log instead of nowhere
+// (csi-driver/internal/csi/node/capability.go).
+func TestNodePluginPostStartLoadsTheTransports(t *testing.T) {
 	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
 	spec := ds.Spec.Template.Spec
 
 	node := containerNamed(spec.Containers, "csi-node")
 	script := node.Lifecycle.PostStart.Exec.Command[2]
-	for _, want := range []string{"modprobe dm-vdo", "modprobe kvdo", vdoCapableMountDir + "/marker"} {
+	for _, want := range []string{"modprobe nvme-tcp", "modprobe nvme-rdma", "/etc/nvme/hostnqn"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("postStart script missing %q:\n%s", want, script)
 		}
 	}
-
-	wantMounts := map[string]string{
-		"vdo-capable":   vdoCapableMountDir,
-		"stack-records": stackRecordsMountDir,
+	if strings.Contains(script, "vdo") {
+		t.Errorf("the postStart hook still probes for VDO, where nothing can read what it found:\n%s", script)
 	}
-	for name, path := range wantMounts {
-		mount := volumeMountNamed(node.VolumeMounts, name)
-		if mount == nil {
-			t.Fatalf("csi-node has no %q volume mount", name)
-		}
-		if mount.MountPath != path {
-			t.Errorf("%s mount path = %q, want %q", name, mount.MountPath, path)
-		}
-	}
-
-	wantHostPaths := map[string]string{
-		"vdo-capable":   vdoCapableHostDir,
-		"stack-records": stackRecordsHostDir,
-	}
-	for name, hostPath := range wantHostPaths {
-		vol := volumeNamed(spec.Volumes, name)
-		if vol == nil || vol.HostPath == nil {
-			t.Fatalf("no host-path volume named %q", name)
-		}
-		if vol.HostPath.Path != hostPath {
-			t.Errorf("%s host path = %q, want %q", name, vol.HostPath.Path, hostPath)
-		}
+	if volumeNamed(spec.Volumes, "vdo-capable") != nil {
+		t.Error("the DaemonSet still carries the host path the marker file needed")
 	}
 }
 

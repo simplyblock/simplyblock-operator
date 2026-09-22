@@ -227,9 +227,9 @@ explicitly, advertised explicitly, and gated on for scheduling.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ simplyblock-csi-node DaemonSet, one pod per node                     │
 │                                                                      │
-│  1. postStart hook: nsenter into PID 1, modprobe dm-vdo, write the   │
-│     capability marker file                                           │
-│  2. advertiseVDOCapability: read the marker, patch the node label    │
+│  1. advertiseVDOCapability: modprobe dm-vdo, else kvdo, and log     │
+│     the kernel, each module's answer, and lvm's segment types        │
+│  2. the same call patches the node label with the verdict            │
 │  3. NodeGetInfo -> buildAccessibleTopology: label to CSI segment     │
 │  4. CreateVolume -> vdoCapableSegment: PV nodeAffinity               │
 │  5. NodeStageVolume: plan.go selects the LVM row, and the runner     │
@@ -266,45 +266,42 @@ step, the marker-read and label-patch step, and the VDO stack lifecycle in
 
 ### 4.1 Module Load and Detection
 
-**Revised 2026-09-16: no `hostPID`/`nsenter`.** The `csi-node` container's
-`postStart` lifecycle hook (`operator/internal/controllers/driver/workloads.go`,
-`nodePostStartScript`) already `modprobe`s `nvme-tcp` and `nvme-rdma` directly,
-with no `nsenter` and no `hostPID`, and that has always worked: the container
-is privileged, holds `SYS_MODULE`, and mounts the host's `/lib/modules`
-read-only, which is what a kernel module load actually needs — module loading
-affects the whole kernel regardless of which namespace the loading process
-sits in. `modprobe dm-vdo` is one more step in the same script, on the same
-terms:
+**Revised 2026-09-22: the probe is the node plugin's, not a lifecycle hook's.**
+It began in the `csi-node` container's `postStart` hook, beside the `nvme-tcp`
+and `nvme-rdma` loads already there, exchanging its answer with the plugin
+through a marker file on a host path. The hook was the wrong place: its output
+reaches neither the container's log stream nor anywhere else a reader can get at
+it, because Kubernetes surfaces a lifecycle hook's output only as an event when
+the hook *fails*. A probe that ran and answered no therefore left no trace of
+having run, which is precisely the case an operator needs to see — a node that
+cannot run VDO and a node whose probe never ran leave the cluster looking
+identical, with every volume needing the capability unschedulable and nothing
+anywhere having failed.
 
-```bash
-if modprobe dm-vdo; then echo -n true > /var/run/simplyblock/vdo-capable/marker
-else echo -n false > /var/run/simplyblock/vdo-capable/marker; fi
-```
+The plugin runs in that same privileged container, holding `SYS_MODULE` and
+mounting the host's `/lib/modules` read-only, which is what a module load
+actually needs: loading affects the whole kernel regardless of which namespace
+the loading process sits in, so no `nsenter` and no `hostPID` are involved. It
+asks the kernel directly, in `csi-driver/internal/csi/node/capability.go`, and
+the marker file and the host path that carried it are gone with the hook.
 
-The marker path is backed by the host path `/var/lib/simplyblock/vdo-capable`,
-via `kube.VDOCapableMarkerPath` (`atlas-lib/kube`), a contract between the
-operator (which builds the DaemonSet spec) and the CSI driver (which reads the
-marker), so the two literal paths cannot drift apart. §4.3 turns that marker
-into a node label.
+Two module names are tried, because "VDO in the kernel" means two different
+things depending on the node's operating system: `dm-vdo` is upstream's in-tree
+name (kernel 6.9 and newer), and `kvdo` is what RHEL-family systems still ship
+it as through the separate `kmod-kvdo` package, verified live on a Rocky/RHEL 9
+kernel carrying no `dm-vdo` at all. Either one loading means the node can run
+VDO, so the second is tried only when the first does not load, and both answers
+are reported either way.
 
-There is no install step, per §14's Q11: capability is limited to nodes whose
-kernel already carries `dm-vdo` in-tree (kernel 6.9 and newer, per the
-`dm-vdo/kvdo` project's README), and the probe either finds that or it does
-not. This is a live question asked of the running kernel rather than a
+There is no install step, per §14's Q11: the probe either finds a module or it
+does not. This is a live question asked of the running kernel rather than a
 version check, which is what lets the same probe work unchanged on any node
-operating system: `modprobe` either succeeds or it does not, and nothing
-about the answer depends on how the node got its kernel.
+operating system, and nothing about the answer depends on how the node got its
+kernel.
 
-The probe rides the node plugin's own `postStart` lifecycle because that is
-what already has the two properties it needs. It has to run on every node
-that might consume a volume, and it has to run again whenever the node's
-kernel changes, because a node that boots an older kernel or image can lose
-the capability a newer one gave it. The DaemonSet is already one pod per
-node, and a kernel change restarts that pod, so the hook fires exactly when
-the answer can have changed. Nothing about it is slow enough to belong
-outside the node plugin's readiness path: a single `modprobe` against a
-module the kernel already carries, or fails to, answers in milliseconds,
-which is why this design needs no installer pod of its own (§14, Q10).
+It runs once per plugin start, which is when the answer can have changed: the
+DaemonSet is one pod per node, and a kernel change restarts that pod. A
+capability gained without a restart is §14's Q12 and is not covered here.
 
 ### 4.2 Container Image Dependencies
 
@@ -329,17 +326,22 @@ label absent, on failure.
 label is the escape hatch a golden-image node depends on, so the probe has to
 tell its own labels apart from an operator's.
 
-It waits for the marker rather than reading it once. The `postStart` hook that
-writes the marker and the container's own entrypoint start at the same moment,
-so the marker is normally absent for the first instants of the process's life:
-reading it once found nothing on all seven nodes of a cluster, left every one
-of them unlabeled, and turned the feature off across the whole deployment
-without a single volume reporting anything. The wait is two minutes, which is
-generous for a `modprobe`, and it is bounded because a hook that never writes
-the marker leaves a question nothing will answer. A marker that exists and
-cannot be read is answered immediately instead: that is a permission or a mount
-problem, and waiting out the budget on it would report it as a timeout that
-says nothing about the cause. Every label value the probe
+The probe itself runs here too, rather than in the `postStart` hook §4.1
+originally put it in, and the marker file the two exchanged it through is gone.
+A hook's output reaches nothing a reader can get at: Kubernetes surfaces it only
+as an event when the hook *fails*, so a probe that ran and answered no left no
+trace of having run. That is the difference between a node that cannot run VDO
+and a node whose probe never ran, and from outside the cluster the two are
+identical: every volume needing the capability is unschedulable, and nothing
+anywhere has failed. The plugin is in the same privileged container over the
+same `/lib/modules`, so it asks the kernel directly and logs what it was told.
+
+What it logs is the whole probe and not only its verdict: the kernel version,
+each module it tried and what `modprobe` said about that module by name, and
+whether `lvm segtypes` lists the vdo types. The segment types are recorded and
+not acted on, which is what will settle §14's Q7: a node whose module loads
+while LVM offers no vdo segtype is exactly the case that question is about, and
+nothing before this would have shown it. Every label value the probe
 writes itself is stamped with a second annotation,
 `storage.simplyblock.io/vdo-capable-managed-by: auto-detect`. On startup the
 probe first checks whether the label is already present without that
@@ -369,8 +371,8 @@ and removed in PR #484: `AllowedTopologies` becomes external-provisioner's
 `requisite` list, which is checked against the *selected* node's `CSINode`
 object, and a `CSINode`'s topology keys are fixed once, at CSI plugin
 registration. A label a `postStart` hook or an operator applies after that —
-which is every case here, since `vdo-capable` is a per-node capability
-advertised well after the node plugin registers — can never retroactively
+which is the case here whenever the probe has not finished by the time the
+plugin registers — can never retroactively
 join that set. Requiring it in the StorageClass's `AllowedTopologies` makes
 every PVC from a client-side pool fail provisioning permanently, the exact
 failure PR #484's `[[project_dhchap_sc_allowedtopologies_gap]]` reproduced live.

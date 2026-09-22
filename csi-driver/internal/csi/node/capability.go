@@ -1,17 +1,24 @@
-// Reads the postStart hook's VDO probe result and turns it into a node label
-// (issue #277 §4.3).
+// Whether this node can run a client-side compressed or deduplicated volume:
+// the probe that finds out, and the node label that publishes the answer
+// (issue #277 §4.1, §4.3).
+//
+// The probe runs here rather than in the DaemonSet's postStart hook, which is
+// where it started. A hook's output reaches neither the container's log stream
+// nor anywhere else a reader can get at it: Kubernetes surfaces it only as an
+// event when the hook fails, so a probe that ran and answered no left no trace
+// of having run at all. That is not worth working around with a file written on
+// one side and read on the other, because the plugin runs in the same
+// privileged container over the same /lib/modules, and can ask the kernel
+// itself and say what it was told.
 package node
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
+	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,82 +28,42 @@ import (
 	"github.com/simplyblock/atlas/kube"
 )
 
-// The wait for the postStart hook's answer, and how often it is looked for.
-//
-// The hook and the container's own entrypoint start at the same time, so the
-// marker is normally absent for the first moments of this process's life:
-// reading it once found nothing on every node of a cluster, and left every one
-// of them unlabeled, which turns the feature off everywhere without saying so.
-//
-// The budget is generous because what is being waited for is a `modprobe`
-// against a kernel that may be loading other things, and it is bounded because
-// a hook that never writes the marker leaves a question nothing will answer.
-const (
-	markerWait = 2 * time.Minute
-	markerPoll = time.Second
-)
+// The two names VDO goes by. dm-vdo is the in-tree module (kernel 6.9 and
+// newer) and kvdo is what RHEL-family systems ship it as through the separate
+// kmod-kvdo package, verified live on a Rocky/RHEL 9 kernel carrying no dm-vdo
+// at all. Either one loading means the node can run VDO, so both are tried and
+// both answers are reported.
+var vdoModules = []string{"dm-vdo", "kvdo"}
 
-// awaitMarker reads the marker, waiting for the hook to write it.
-//
-// A marker that is not there yet is the expected state rather than a failure,
-// and is the only one worth waiting through. Any other read error is answered
-// immediately: a marker that exists and cannot be read is a permission or a
-// mount problem, and waiting out the budget on it would report it as a timeout
-// that says nothing about the cause.
-func awaitMarker(ctx context.Context, path string, wait, poll time.Duration) (string, error) {
-	deadline := time.Now().Add(wait)
-	for {
-		marker, err := os.ReadFile(path)
-		switch {
-		case err == nil:
-			return string(marker), nil
-		case !errors.Is(err, fs.ErrNotExist):
-			return "", fmt.Errorf("read vdo-capable marker %s: %w", path, err)
-		case !time.Now().Before(deadline):
-			return "", fmt.Errorf(
-				"the vdo-capable marker %s was not written within %s; the node plugin's postStart "+
-					"probe either has not run or could not reach the host path it writes to", path, wait)
-		}
+// commandRunner runs one command and returns what it said, combined, whether or
+// not it succeeded. It is a seam so a test can probe a kernel it does not have.
+type commandRunner func(ctx context.Context, name string, args ...string) (string, error)
 
-		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("waiting for the vdo-capable marker %s: %w", path, ctx.Err())
-		case <-time.After(poll):
-		}
-	}
+// runCommand is the shipped runner. Output is combined because what a failed
+// modprobe says is the whole point of asking it.
+func runCommand(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
 
-// vdoCapableTrue and vdoCapableFalse are the two things the marker file says,
-// and the two values the label carries.
-const vdoCapableFalse = "false"
-
-// vdoCapableTrue is the marker file's positive content.
-const vdoCapableTrue = "true"
-
-// AdvertiseVDOCapability reads markerPath (kube.VDOCapableMarkerPath in
-// production) and sets nodeName's vdo-capable label to match.
+// AdvertiseVDOCapability probes this node's kernel and sets nodeName's
+// vdo-capable label to match.
 //
-// An operator's hand-set label (no managed-by annotation) is left alone —
-// that's the override an admin uses to skip auto-detection.
+// An operator's hand-set label, which is one carrying no managed-by annotation,
+// is left alone: that is the override a golden-image node depends on. The probe
+// still runs and still reports, because an override that disagrees with the
+// kernel underneath it is worth being able to see.
 //
-// Runs once at process start. No periodic re-check yet (§14 Q12).
-func AdvertiseVDOCapability(ctx context.Context, kubeClient kubernetes.Interface, nodeName, markerPath string) error {
-	return advertiseVDOCapability(ctx, kubeClient, nodeName, markerPath, markerWait, markerPoll)
+// Runs once at process start. A capability gained afterward is not noticed
+// until the pod restarts (§14, Q12).
+func AdvertiseVDOCapability(ctx context.Context, kubeClient kubernetes.Interface, nodeName string) error {
+	return advertiseVDOCapability(ctx, kubeClient, nodeName, runCommand)
 }
 
-// advertiseVDOCapability is AdvertiseVDOCapability with the wait spelled out,
-// so a test can drive it in milliseconds rather than minutes.
 func advertiseVDOCapability(
-	ctx context.Context,
-	kubeClient kubernetes.Interface,
-	nodeName, markerPath string,
-	wait, poll time.Duration,
+	ctx context.Context, kubeClient kubernetes.Interface, nodeName string, run commandRunner,
 ) error {
-	marker, err := awaitMarker(ctx, markerPath, wait, poll)
-	if err != nil {
-		return err
-	}
-	capable := strings.TrimSpace(marker) == vdoCapableTrue
+	capable := probeVDO(ctx, nodeName, run)
 
 	node, err := kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
@@ -104,10 +71,9 @@ func advertiseVDOCapability(
 	}
 
 	existing, hasLabel := node.Labels[kube.LabelVDOCapable]
-	_, managedByThisProbe := node.Annotations[kube.AnnoVDOCapableManagedBy]
-	if hasLabel && !managedByThisProbe {
-		klog.Infof("node %s carries a hand-set %s=%s, which this probe leaves alone; "+
-			"its own reading of %s was %q", nodeName, kube.LabelVDOCapable, existing, markerPath, marker)
+	if _, managed := node.Annotations[kube.AnnoVDOCapableManagedBy]; hasLabel && !managed {
+		klog.Infof("vdo probe: node %s carries a hand-set %s=%s, which this probe leaves alone "+
+			"(it would have set %t)", nodeName, kube.LabelVDOCapable, existing, capable)
 		return nil
 	}
 
@@ -127,12 +93,69 @@ func advertiseVDOCapability(
 		return fmt.Errorf("patch node %s with vdo-capable=%t: %w", nodeName, capable, err)
 	}
 
-	// Said out loud, at the level a passing run keeps, because this is the one
-	// fact that decides whether a volume asking for client-side compression can
-	// be placed at all. Silence on success is what made a cluster where no node
-	// was capable indistinguishable from one where the probe never ran: the
-	// volumes were simply unschedulable, with nothing anywhere having failed.
-	klog.Infof("node %s labeled %s=%t, from the postStart probe's marker %s",
-		nodeName, kube.LabelVDOCapable, capable, markerPath)
+	klog.Infof("vdo probe: node %s labeled %s=%t", nodeName, kube.LabelVDOCapable, capable)
 	return nil
+}
+
+// probeVDO asks the kernel for VDO and says, step by step, what it was told.
+//
+// Every step is logged and not only the verdict, because the verdict alone
+// cannot be acted on: a node that answered no and a node whose probe never ran
+// leave a cluster in the same visible state, with every volume needing the
+// capability unschedulable and nothing anywhere having failed. The kernel
+// version, what modprobe said about each module by name, and whether LVM offers
+// the segment types are between them enough to tell those apart from a log.
+//
+// Nothing here fails the caller. A probe is a question, and a node that cannot
+// answer it still stages every volume that does not need VDO.
+func probeVDO(ctx context.Context, nodeName string, run commandRunner) bool {
+	if release, err := run(ctx, "uname", "-r"); err == nil {
+		klog.Infof("vdo probe: node %s runs kernel %s", nodeName, release)
+	} else {
+		klog.Infof("vdo probe: node %s kernel version unavailable: %v", nodeName, err)
+	}
+
+	capable := false
+	for _, module := range vdoModules {
+		out, err := run(ctx, "modprobe", module)
+		switch {
+		case err == nil:
+			klog.Infof("vdo probe: node %s loaded %s", nodeName, module)
+			capable = true
+		case out != "":
+			klog.Infof("vdo probe: node %s cannot load %s: %s", nodeName, module, out)
+		default:
+			klog.Infof("vdo probe: node %s cannot load %s: %v", nodeName, module, err)
+		}
+		if capable {
+			break
+		}
+	}
+
+	// Reported and not acted on. Whether the probe should also require the
+	// segment types is undecided (§14, Q7), and this is what will settle it: a
+	// node whose module loads while LVM lists no vdo segtype is exactly the case
+	// that question is about, and nothing today would show it.
+	if segtypes, err := run(ctx, "lvm", "segtypes"); err == nil {
+		klog.Infof("vdo probe: node %s lvm vdo segtypes: %s", nodeName, vdoSegtypes(segtypes))
+	} else {
+		klog.Infof("vdo probe: node %s could not list lvm segtypes: %v", nodeName, err)
+	}
+
+	return capable
+}
+
+// vdoSegtypes are the vdo segment types in `lvm segtypes` output, joined for a
+// log line, and a plain "none" when there are none.
+func vdoSegtypes(out string) string {
+	found := make([]string, 0, 2)
+	for _, line := range strings.Split(out, "\n") {
+		if name := strings.TrimSpace(line); strings.HasPrefix(name, "vdo") {
+			found = append(found, name)
+		}
+	}
+	if len(found) == 0 {
+		return "none"
+	}
+	return strings.Join(found, ", ")
 }

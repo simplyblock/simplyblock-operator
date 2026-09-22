@@ -152,15 +152,6 @@ const (
 	AnnoVDOCapableManagedBy = "storage.simplyblock.io/vdo-capable-managed-by"
 	// AnnoVDOCapableManagedByAutoDetect is AnnoVDOCapableManagedBy's one value.
 	AnnoVDOCapableManagedByAutoDetect = "auto-detect"
-
-	// VDOCapableMarkerPath is where the csi-node DaemonSet's postStart hook
-	// writes its vdo-capable probe result ("true" or "false"), and where the
-	// node plugin reads it from. A contract between the operator, which builds
-	// the DaemonSet spec (mounting the host path this is backed by), and the
-	// CSI driver, which reads it — not a Kubernetes API object, so it lives
-	// here rather than with the labels above only because both sides of that
-	// contract import this package already.
-	VDOCapableMarkerPath = "/var/run/simplyblock/vdo-capable/marker"
 	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads
