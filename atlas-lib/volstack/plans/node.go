@@ -69,13 +69,27 @@ type Node struct {
 	cfg NodeConfig
 }
 
-// NewNode holds the given seams, filling in the one that has a single shipped
-// implementation. It validates nothing: a missing seam is a programming error
-// that surfaces at the first call through it, and refusing to build a plan here
-// would only move that failure earlier without making it clearer.
+// NewNode holds the given seams, filling in those that have a single shipped
+// implementation.
+//
+// The two filled in here are the two whose absence is not an error but a panic.
+// Both are concrete types rather than interfaces, so a layer reaching a nil one
+// dereferences it: the manager is a *lvm.Manager whose methods take a pointer
+// receiver, and a nil receiver panics inside the command it was about to run
+// rather than returning. In a node plugin that is the process, and with it that
+// node's CSI. A consumer that wants its own passes it; one that forgets gets the
+// real thing rather than a crash on the first LVM command.
+//
+// It still validates nothing else. A missing interface seam surfaces at the
+// first call through it as an ordinary nil-interface panic that names the seam,
+// and refusing to build a plan here would only move that failure earlier without
+// making it clearer.
 func NewNode(cfg NodeConfig) *Node {
 	if cfg.Resolve == nil {
 		cfg.Resolve = blockdev.ResolveDevice
+	}
+	if cfg.Manager == nil {
+		cfg.Manager = lvm.NewManager()
 	}
 	return &Node{cfg: cfg}
 }

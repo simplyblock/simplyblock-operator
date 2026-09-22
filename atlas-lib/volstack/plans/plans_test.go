@@ -505,3 +505,29 @@ func TestAPlanWithoutARecordAsksNothing(t *testing.T) {
 		t.Errorf("formatted %d times, want once for a device nothing contradicts", len(ops.formatted))
 	}
 }
+
+// TestANodeWithoutAManagerStillGetsOne closes the class of failure that a nil
+// concrete seam is.
+//
+// The manager's methods take a pointer receiver, so a nil one is not an error at
+// the call site: it panics inside the first LVM command a layer runs. In the CSI
+// node plugin that is the process, and with it that node's CSI. A consumer that
+// forgot to pass one, which is exactly what happened when the LVM rows were
+// first selected, gets the shipped implementation instead of a crash.
+func TestANodeWithoutAManagerStillGetsOne(t *testing.T) {
+	plan := NewNode(NodeConfig{}).LVM(conn("nqn:vol"), testVolume(), LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Compression: true},
+		PoolName:   "vdopool",
+	})
+
+	// Observing reaches the manager. It is allowed to fail — there is no LVM
+	// here — but it must fail rather than panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a plan built without a manager panicked instead of failing: %v", r)
+		}
+	}()
+	if _, _, err := plan[2].Observe(context.Background(), clonedDevice()); err == nil {
+		t.Log("the volume-group layer answered without an LVM present, which is fine")
+	}
+}

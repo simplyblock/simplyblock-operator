@@ -708,3 +708,29 @@ func deletingPV() *corev1.PersistentVolume {
 	pv.Status.Phase = corev1.VolumeReleased
 	return pv
 }
+
+// Regression: every seam the plans this driver selects will reach has to be
+// filled, because the layers do not check.
+//
+// The LVM rows were wired without the LVM manager among the seams, since the
+// only shapes before them were fabric and filesystem, which need none. The
+// layers take it as a concrete *lvm.Manager, so a nil one is not an error at the
+// call site — it is a nil-receiver panic the moment a layer runs its first LVM
+// command. That killed the node plugin on the first unstage of a compressed
+// volume, took that node's CSI with it, and collapsed the rest of the run: one
+// plugin down, 6 of 7 ready, and two volumes staged across the whole suite.
+func TestTheStackFillsEverySeamItsPlansReach(t *testing.T) {
+	s, _ := newTestStack(t, newRecordingRunner())
+
+	for name, filled := range map[string]bool{
+		"Connector":  s.seams.Connector != nil,
+		"Devices":    s.seams.Devices != nil,
+		"Content":    s.seams.Content != nil,
+		"Filesystem": s.seams.Filesystem != nil,
+		"Manager":    s.seams.Manager != nil,
+	} {
+		if !filled {
+			t.Errorf("the %s seam is nil; a layer reaching it panics rather than failing", name)
+		}
+	}
+}

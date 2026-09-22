@@ -27,15 +27,6 @@ func containerNamed(containers []corev1.Container, name string) *corev1.Containe
 	return nil
 }
 
-func volumeMountNamed(mounts []corev1.VolumeMount, name string) *corev1.VolumeMount {
-	for i := range mounts {
-		if mounts[i].Name == name {
-			return &mounts[i]
-		}
-	}
-	return nil
-}
-
 func argValue(c *corev1.Container, flag string) (string, bool) {
 	for _, a := range c.Args {
 		if strings.HasPrefix(a, flag+"=") {
