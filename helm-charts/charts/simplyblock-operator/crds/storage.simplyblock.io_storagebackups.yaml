@@ -250,6 +250,10 @@ spec:
                   description: |-
                     ClusterRef names the StorageCluster whose store this backup was found in.
                     With BackupID it is the whole of this object's identity.
+
+                    Bounded at what a StorageCluster name may be, since a longer value names
+                    nothing that can exist (design-api-upgrade.md §19.4).
+                  maxLength: 63
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable

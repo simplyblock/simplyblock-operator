@@ -11,11 +11,10 @@
 // `enable` fields and one removal, and status gaining a typed phase, a creation
 // step, the control plane's task window, and observedGeneration.
 //
-// One field of Appendix A is deliberately absent. spec.storageNodes is the
-// Kubernetes workload the cluster's nodes run as, and its type belongs to
-// design-storagenode.md Appendix C, which has not been written yet: StorageNode
-// is still v1alpha1 and StorageNodeSet still owns the workload. It lands with
-// that kind's move rather than here, where it could only be an empty block.
+// spec.storageNodes is the Kubernetes workload the cluster's nodes run as. Its
+// type is design-storagenode.md Appendix C and it arrived with that kind's move
+// to v1alpha2, which is what retired StorageNodeSet and left the DaemonSet, the
+// Services, the certificates, and the per-node ConfigMap without an owner.
 
 package v1alpha2
 
@@ -30,7 +29,7 @@ import (
 // first two values are the operator's own creation path; the rest are its
 // reading of the lifecycle status.status carries in the control plane's own
 // spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -40,6 +39,20 @@ const (
 
 	// StorageClusterPhaseCreating: the creation machine is running.
 	StorageClusterPhaseCreating StorageClusterPhase = "Creating"
+
+	// StorageClusterPhaseProvisioning: the cluster exists in the control plane
+	// and is being built up — its first nodes are joining, or an expansion is
+	// adding more. It is not serving and there is nothing wrong with it, which
+	// is the distinction Unavailable cannot carry.
+	StorageClusterPhaseProvisioning StorageClusterPhase = "Provisioning"
+
+	// StorageClusterPhaseActivating: the control plane is activating the
+	// cluster.
+	//
+	// It is a phase of its own rather than part of Provisioning because it is
+	// not only the last step of a deployment: an expansion ends in one, and so
+	// does recovering from a suspension, long after anything was being built.
+	StorageClusterPhaseActivating StorageClusterPhase = "Activating"
 
 	// StorageClusterPhaseOnline: the control plane reports the cluster active
 	// and serving.
@@ -51,6 +64,11 @@ const (
 
 	// StorageClusterPhaseUnavailable: not serving, and not because anybody
 	// asked.
+	//
+	// It is what is left once the statuses that mean something has been asked
+	// for are read as themselves, which is what keeps it worth reporting: a
+	// cluster in this phase is one whose status this operator has no reading
+	// for, rather than every cluster that is not currently serving.
 	StorageClusterPhaseUnavailable StorageClusterPhase = "Unavailable"
 
 	// StorageClusterPhaseSuspended: shut down deliberately, which is where a
@@ -75,6 +93,21 @@ const (
 
 // StripeSpec is the erasure-coding layout: how many data chunks a stripe
 // carries and how many parity chunks protect them.
+//
+// The pair is one of the seven schemes simplyblock supports, and the rule below
+// is the same set the control plane holds in SUPPORTED_ERASURE_CODING_SCHEMES.
+// It is stated here as well because the control plane's refusal arrives at the
+// cluster create, which is several steps and — for a cluster a deployment config
+// produced — one irreversible approval after the apply that stated the scheme.
+//
+// Each scheme also has a storage-node count below which it must not be used,
+// which is ndcs+npcs nodes to place a stripe across plus one spare per tolerated
+// failure to rebuild onto: 1 for 1+0, 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for
+// 1+2, 6 for 2+2, and 8 for 4+2. That is not expressible here, because the nodes
+// are objects of their own and a cluster is created before any of them exists.
+// It is answered by the deployment config's validation, by its approval webhook,
+// and by the cluster's activation gate.
+// +kubebuilder:validation:XValidation:rule="[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks) ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4, 2]]",message="the erasure-coding scheme must be one of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and an unstated half is 1"
 type StripeSpec struct {
 	// DataChunks is the number of data chunks per stripe (ndcs).
 	// +kubebuilder:validation:Minimum=1
@@ -189,7 +222,7 @@ const (
 
 // BaselineStrategy selects how the per-node latency baseline, the denominator
 // of the rebalancing deviation signal, is derived.
-// +kubebuilder:validation:Enum=benchmark;rollingWindow
+// +kubebuilder:validation:Enum=Benchmark;RollingWindow
 type BaselineStrategy string
 
 const (
@@ -197,31 +230,31 @@ const (
 	// fresh cluster and frozen on the node's status. It is simple and tends to
 	// read too low, because an idle cluster is far faster than a loaded one and
 	// every loaded node then shows a large deviation.
-	BaselineStrategyBenchmark BaselineStrategy = "benchmark"
+	BaselineStrategyBenchmark BaselineStrategy = "Benchmark"
 
 	// BaselineStrategyRollingWindow derives the baseline from a rolling window
 	// of the probe sidecar's latency series, using an outlier-rejecting
 	// estimator. It reflects each node's recent operating latency rather than
 	// an idle measurement, and is the default.
-	BaselineStrategyRollingWindow BaselineStrategy = "rollingWindow"
+	BaselineStrategyRollingWindow BaselineStrategy = "RollingWindow"
 )
 
 // BaselineColdStartPolicy selects what happens to a node with fewer than
 // BaselineMinSamples samples in the window: a freshly onboarded node, or one
 // whose probe sidecar has just started.
-// +kubebuilder:validation:Enum=defer;partialWindow
+// +kubebuilder:validation:Enum=Defer;PartialWindow
 type BaselineColdStartPolicy string
 
 const (
 	// BaselineColdStartDefer omits an under-sampled node from the cycle: it is
 	// neither a migration source nor a target until it has accumulated enough
 	// samples, which avoids acting on a noisy baseline.
-	BaselineColdStartDefer BaselineColdStartPolicy = "defer"
+	BaselineColdStartDefer BaselineColdStartPolicy = "Defer"
 
 	// BaselineColdStartPartialWindow computes the baseline from whatever
 	// samples exist, accepting a noisier baseline early on so that rebalancing
 	// engages sooner. It is the default.
-	BaselineColdStartPartialWindow BaselineColdStartPolicy = "partialWindow"
+	BaselineColdStartPartialWindow BaselineColdStartPolicy = "PartialWindow"
 )
 
 // DataRealignmentSettings tunes the post-migration control-plane data
@@ -340,17 +373,17 @@ type VolumeAutoPlacementSettings struct {
 	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
 
 	// BaselineStrategy selects how the per-node baseline is derived. Defaults
-	// to rollingWindow.
+	// to RollingWindow.
 	// +optional
 	BaselineStrategy *BaselineStrategy `json:"baselineStrategy,omitempty"`
 
-	// BaselineWindow is the look-back the rollingWindow strategy reduces.
+	// BaselineWindow is the look-back the RollingWindow strategy reduces.
 	// Defaults to 6h.
 	// +optional
 	BaselineWindow *metav1.Duration `json:"baselineWindow,omitempty"`
 
 	// BaselineColdStart selects what happens to an under-sampled node. Defaults
-	// to partialWindow.
+	// to PartialWindow.
 	// +optional
 	BaselineColdStart *BaselineColdStartPolicy `json:"baselineColdStart,omitempty"`
 
@@ -437,6 +470,117 @@ type ClusterTask struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Retry int32 `json:"retry,omitempty"`
+}
+
+// StorageNodesSpec is the Kubernetes workload every storage node in the cluster
+// runs as: a DaemonSet, a headless Service and its EndpointSlices, a serving
+// certificate, a ServiceAccount, and the ConfigMap the init container reads its
+// per-node configuration out of.
+//
+// Every field here is cluster-uniform by construction, because a DaemonSet is one
+// object for every node it schedules and its pod template cannot differ per node.
+// What can differ is in StorageNode.spec.config: the two images, the SPDK system
+// memory, and the sizing block, which are per node precisely so that an image
+// rollout and a hardware re-size can walk the fleet one machine at a time.
+type StorageNodesSpec struct {
+	// Image is the storage-node container image. Defaults to the ControlPlane
+	// singleton's spec.image when unset, so a deployment states the version once.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImagePullPolicy controls when that image is pulled.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=IfNotPresent
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// MgmtInterface is the management network interface storage nodes bind.
+	// +optional
+	// +k8s:immutable
+	MgmtInterface string `json:"mgmtInterface,omitempty"`
+
+	// DataInterfaces are the data-plane network interfaces.
+	// +optional
+	DataInterfaces []string `json:"dataInterfaces,omitempty"`
+
+	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
+	// socket 0 alone.
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +optional
+	// +k8s:immutable
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// MaxParallelNodeAdds limits how many workers may be in the node-add process
+	// at once, counted by distinct worker rather than by object so that a
+	// two-socket host consumes one slot. Workers hosting a FoundationDB pod are
+	// always sequential regardless of this value, because a node add reboots the
+	// host and two simultaneous FoundationDB reboots reduce the control plane's
+	// own fault tolerance.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +optional
+	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+
+	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
+	// journal manager, instead of carving a journal partition out of every
+	// device.
+	// +optional
+	// +k8s:immutable
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
+
+	// EnableFormat4K formats NVMe devices to a 4K block size where the device
+	// supports it.
+	// +optional
+	// +k8s:immutable
+	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
+
+	// EnableCpuTopology turns on topology-aware CPU assignment.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
+	// ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
+	// EnableKubeletConfiguration lets the storage node apply the kubelet
+	// configuration changes it needs. Off by default, which is the behavior the
+	// retired skipKubeletConfiguration expressed by being set.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// UbuntuHost states that the worker's host OS is Ubuntu, which changes how
+	// the node configures huge pages and the kernel modules it loads.
+	// +optional
+	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
+
+	// OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+	// +optional
+	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+
+	// OpenShiftMachineConfigPool names the pool generated MachineConfig objects
+	// are labeled into.
+	// +kubebuilder:default=worker
+	// +optional
+	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
+
+	// Tolerations are applied to the storage-node pods.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// ContainerResources sets requests and limits for the storage-node container.
+	// Unset enforces no limits.
+	// +optional
+	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
+
+	// InitContainerResources does the same for the init container.
+	// +optional
+	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
 }
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
@@ -586,6 +730,15 @@ type StorageClusterSpec struct {
 	// +optional
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 
+	// StorageNodes is the Kubernetes workload the cluster's storage nodes run
+	// as, and the cluster owns every object in it by controller reference: a
+	// cluster deleted takes its DaemonSet, Services, certificate, and per-node
+	// ConfigMap with it. One workload serves the whole cluster, because growth is
+	// nodes rather than sets and what differs between hardware generations is per
+	// node already.
+	// +optional
+	StorageNodes *StorageNodesSpec `json:"storageNodes,omitempty"`
+
 	// Backup is the S3 location this cluster's backups live in, and it is both
 	// the target copies are written to and the inventory the operator walks to
 	// produce StorageBackup objects. Mutable: a cluster that has never had a
@@ -620,6 +773,25 @@ type StorageClusterSpec struct {
 }
 
 // StorageClusterStatus is the observed state of one backend cluster.
+// ProvisioningSlot is one worker's hold on the cluster's node-add concurrency,
+// held from the moment its add is posted until the node has a backend UUID or
+// has given up.
+type ProvisioningSlot struct {
+	// Worker is the Kubernetes node the add was posted for, and it is what the
+	// cap counts.
+	Worker string `json:"worker"`
+
+	// Node is the StorageNode object that took the slot. A release removes only
+	// the entry naming its own object, which is what keeps a node from freeing
+	// somebody else's slot, and a slot whose object is gone is reaped.
+	Node string `json:"node"`
+
+	// TakenAt is when the slot was taken, so a hold that outlives its node's
+	// deadlines is visible in the object rather than only in the events.
+	// +optional
+	TakenAt metav1.Time `json:"takenAt,omitempty"`
+}
+
 type StorageClusterStatus struct {
 	// Phase is the operator's own view of this cluster.
 	// +optional
@@ -695,13 +867,32 @@ type StorageClusterStatus struct {
 	// +optional
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
-	// Tasks are the control plane's running and pending jobs, newest first and
-	// capped at twenty. Completed and canceled tasks are not here: they leave
-	// the list and become events, so the length tracks concurrency rather than
-	// history.
+	// Tasks are the control plane's running and pending jobs, capped at twenty
+	// and in the order the control plane reports them: its TaskDTO carries no
+	// creation date, so newest-first is not orderable from what is on the wire
+	// (design-storagecluster.md §12.1). Completed and canceled tasks are not
+	// here: they leave the list and become events, so the length tracks
+	// concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
+
+	// ProvisioningSlots are the workers whose node add is outstanding. The list
+	// is the metadata of the Provisioning phase, and it is also the mutex that
+	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+	//
+	// It is one list on one object because that is what makes taking a slot
+	// atomic. A node takes one with an optimistic-locked patch of this field, so
+	// exactly one node wins a given resourceVersion and every other is told to
+	// count again. A slot recorded per node could not do that: six objects carry
+	// six resourceVersions, and two nodes reading a cold cache would both see the
+	// same one free and both take it.
+	//
+	// A worker rather than an object is what holds a slot, because one POST adds
+	// every socket of a worker and a two-socket host must consume one slot.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.
@@ -735,6 +926,19 @@ type StorageClusterStatus struct {
 // `kubectl get sc` reaches storageclasses.storage.k8s.io and never this kind,
 // and the operator writes a StorageClass per pool, which puts both kinds in
 // every cluster this runs in.
+// The name is bounded at 63 rather than at the 253 an object name may be,
+// because it travels into label values this operator writes and cannot shorten:
+// storage.simplyblock.io/cluster on every generated StorageClass and every
+// mirrored StorageDevice, and io.simplyblock.storagenodeset on every worker the
+// cluster claims. Where a name is copied into a label, the label's limit binds
+// and not the object's (design-api-upgrade.md §19.1).
+//
+// It is a rule rather than a MaxLength marker because metadata.name is not this
+// schema's field. It is one of the two metadata fields a validation rule can
+// see, which is what makes the bound expressible at all (§19.4, §19.7), and the
+// alternative is an overflow that surfaces as a reconcile retrying forever on a
+// label write while the cluster says nothing about the name that caused it.
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StorageCluster name is at most 63 characters, because it is written into label values on StorageClasses, StorageDevices, and worker Nodes"
 // +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

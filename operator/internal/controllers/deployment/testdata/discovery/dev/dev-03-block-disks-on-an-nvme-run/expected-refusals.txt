@@ -1,0 +1,5 @@
+worker-01/vdb: declined by device class because this run scans NVMe devices and the device is on Virtio
+worker-01/vdc: declined by device class because this run scans NVMe devices and the device is on Virtio
+worker-01/vdd: declined by device class because this run scans NVMe devices and the device is on Virtio
+worker-01/vde: declined by device class because this run scans NVMe devices and the device is on Virtio
+worker-01: declined by has devices because no device of it survived the device rules

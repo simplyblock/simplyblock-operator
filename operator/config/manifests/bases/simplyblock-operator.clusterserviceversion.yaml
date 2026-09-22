@@ -143,11 +143,24 @@ spec:
       kind: BackupPolicy
       name: backuppolicies.storage.simplyblock.io
       version: v1alpha1
-    - description: ControlPlane is the Schema for the controlplanes API.
+    - description: ControlPlane is the simplyblock control plane for one Kubernetes
+        cluster, FoundationDB together with the management API, either installed
+        by the operator or already existing. It is a singleton named "simplyblock",
+        and it is the root of the ownership spine, so nothing else in this API group
+        reconciles meaningfully before it reports Available.
       displayName: Control Plane
       kind: ControlPlane
       name: controlplanes.storage.simplyblock.io
-      version: v1alpha1
+      version: v1alpha2
+    - description: ControlPlaneOps is a single operation performed against the control
+        plane. It runs to a terminal phase and stays afterward as the audit record
+        of what was done, with which parameters, and how it ended. Only one may be
+        active per control plane at a time, which the control plane's status.activeOpsRef
+        enforces.
+      displayName: Control Plane Ops
+      kind: ControlPlaneOps
+      name: controlplaneops.storage.simplyblock.io
+      version: v1alpha2
     - description: ReplicationOps is the Schema for the replicationops API.
       displayName: Replication Ops
       kind: ReplicationOps
@@ -207,6 +220,16 @@ spec:
       kind: SimplyblockDriver
       name: simplyblockdrivers.storage.simplyblock.io
       version: v1alpha2
+    - description: PersistentVolumeOps is a single operation performed against one PersistentVolume.
+        It is the one Ops kind in this group whose target is a core Kubernetes type
+        rather than a kind this group defines, so it locks its target with an annotation
+        rather than a status field, is cluster-scoped because its target is, cannot
+        be owned by the namespaced operation that created it, and derives its cluster,
+        pool, and volume from the volume's CSI handle rather than being told.
+      displayName: Persistent Volume Ops
+      kind: PersistentVolumeOps
+      name: persistentvolumeops.storage.simplyblock.io
+      version: v1alpha2
     - description: StorageBackupOps is a single operation performed against one StorageBackup.
         It runs to a terminal phase and stays afterward as the audit record of what
         was restored, into which pool, and how it ended. The claim a restore produces
@@ -232,6 +255,11 @@ spec:
       displayName: Storage Device
       kind: StorageDevice
       name: storagedevices.storage.simplyblock.io
+      version: v1alpha2
+    - description: StorageDeviceOps is a single operation performed against one StorageDevice.
+      displayName: Storage Device Ops
+      kind: StorageDeviceOps
+      name: storagedeviceops.storage.simplyblock.io
       version: v1alpha2
     - description: StoragePoolOps is a single operation performed against one StoragePool.
         Analogous to a Kubernetes Job, it drives an action to completion and records

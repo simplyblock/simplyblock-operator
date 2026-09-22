@@ -98,14 +98,14 @@ var (
 	rollingRestartNodeIndex = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "simplyblock_storagecluster_rolling_restart_node_index_count",
-			Help: "The walk's position in its node list, against rolling_restart_node_total, so progress is graphable.",
+			Help: "The walk's position in its node list, against rolling_restart_node_count, so progress is graphable.",
 		},
 		[]string{"cluster"},
 	)
 
-	rollingRestartNodeTotal = prometheus.NewGaugeVec(
+	rollingRestartNodeCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_storagecluster_rolling_restart_node_total",
+			Name: "simplyblock_storagecluster_rolling_restart_node_count",
 			Help: "How many nodes the running walk covers. Absent when no rolling restart is in flight.",
 		},
 		[]string{"cluster"},
@@ -130,7 +130,7 @@ func init() {
 		operationActiveState,
 		rollingRestartPeerHoldSeconds,
 		rollingRestartNodeIndex,
-		rollingRestartNodeTotal,
+		rollingRestartNodeCount,
 		clusterPhaseState,
 	)
 }

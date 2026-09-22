@@ -1,6 +1,5 @@
 {{- $storagenodeEnabled := and .Values.storagenode.create .Values.storagenode.enableCpuTopology .Values.storagenode.enableDevicePlugin -}}
-{{- $operatorEnabled := .Values.operator.enabled -}}
-{{- if or $storagenodeEnabled $operatorEnabled -}}
+{{- if or $storagenodeEnabled true -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -53,7 +52,7 @@ spec:
                 - {{ $ds.nodeSelector.value | quote }}
                 {{- end }}
                 {{- end }}
-      {{- else if $operatorEnabled }}
+      {{- else if true }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

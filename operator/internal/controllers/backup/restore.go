@@ -61,18 +61,6 @@ const (
 	bindingDeadline        = 15 * time.Minute
 )
 
-// abortableSteps are the steps from which an abort unwinds cleanly.
-//
-// It is a table beside the graph rather than an edge in it, because the kind's
-// step enum has four values and none of them is an abort state: a terminal
-// Aborted step would be a fifth value in the API, and the phase already carries
-// that meaning. The test in this package's suite asserts that every step here is
-// one the graph declares, so the two cannot drift.
-var abortableSteps = map[step]bool{
-	stepValidating: true,
-	stepRestoring:  true,
-}
-
 // restoreGraph is the Restore action's declared steps. The deadlines are set on
 // entry, which is what makes a step that outlived its own budget detectable
 // after an operator restart: the instant is absolute and travels in the status.
@@ -84,8 +72,18 @@ func restoreGraph() statemachine.MultiConfig[step] {
 		actionRestore: {
 			Initial: stepValidating,
 			States: map[step]statemachine.StateDef[step]{
-				stepValidating:     {To: []step{stepRestoring}, OnEnter: deadline(validatingDeadline)},
-				stepRestoring:      {To: []step{stepAwaitingVolume}, OnEnter: deadline(restoringDeadline)},
+				// Abortable draws the line this file's opening comment
+				// describes: where a logical volume comes into existence.
+				stepValidating: {
+					To:        []step{stepRestoring},
+					Abortable: true,
+					OnEnter:   deadline(validatingDeadline),
+				},
+				stepRestoring: {
+					To:        []step{stepAwaitingVolume},
+					Abortable: true,
+					OnEnter:   deadline(restoringDeadline),
+				},
 				stepAwaitingVolume: {To: []step{stepBinding}, OnEnter: deadline(awaitingVolumeDeadline)},
 				stepBinding:        {OnEnter: deadline(bindingDeadline)},
 			},
@@ -101,6 +99,9 @@ func restoreGraph() statemachine.MultiConfig[step] {
 // being the one step that cannot time out.
 const initialDeadline = validatingDeadline
 
-// abortable reports whether an abort asked for while the operation sits on this
-// step can be honored.
-func abortable(current step) bool { return abortableSteps[current] }
+// unabortableSteps are the steps the graph declares no abort from, which is what
+// this kind's DELETE guard and its tests read. The reconciler asks its machine
+// instead, because the machine was built for the action in hand.
+func unabortableSteps() []step {
+	return statemachine.UnabortableMultiStates(restoreGraph())
+}

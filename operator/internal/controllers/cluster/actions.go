@@ -81,6 +81,13 @@ func (r *StorageClusterOpsReconciler) request(
 		if active {
 			return true, nil
 		}
+		// After the active check rather than before it, so that a re-activation
+		// of a cluster that is already serving is never held: the gate exists to
+		// stop a layout being brought up wrong, and a live cluster's layout is
+		// already a fact.
+		if ready, err := r.stripeNodesReady(ctx, ops); err != nil || !ready {
+			return false, err
+		}
 		if err := r.API.Activate(ctx, clusterID); err != nil {
 			return false, fmt.Errorf("activate cluster %s: %w", ops.Spec.ClusterRef, err)
 		}

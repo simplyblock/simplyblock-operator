@@ -44,21 +44,26 @@ func TestDeclaredStepsMatchTheKindsEnum(t *testing.T) {
 	}
 }
 
-// Every step an abort is honored from has to be one the graph declares, or the
-// table and the graph would disagree about what the action can do.
-func TestAbortableStepsAreDeclaredByTheGraph(t *testing.T) {
-	declared := statemachine.DeclaredMultiStates(restoreGraph())
-	for abortableStep := range abortableSteps {
-		if !slices.Contains(declared, string(abortableStep)) {
-			t.Errorf("abortableSteps names %q, which the graph does not declare", abortableStep)
-		}
-	}
+// Where the abort is honored and where it is refused, written out rather than
+// derived: the graph is the only place this is declared now, so a step quietly
+// gaining or losing it would otherwise change what an abort does with nothing
+// disagreeing.
+func TestTheGraphDeclaresWhereAnAbortIsHonored(t *testing.T) {
+	refused := unabortableSteps()
+
 	// The two the design fixes as the point of no return. A step that gained an
 	// abort edge without the graph gaining a way to unwind it would let an
 	// operation stop with a volume nothing accounts for.
 	for _, beyondReturn := range []step{stepAwaitingVolume, stepBinding} {
-		if abortable(beyondReturn) {
+		if !slices.Contains(refused, beyondReturn) {
 			t.Errorf("step %q is abortable, and it has already created a logical volume", beyondReturn)
+		}
+	}
+	// Validating has created nothing, and Restoring deletes whatever its request
+	// produced.
+	for _, stoppable := range []step{stepValidating, stepRestoring} {
+		if slices.Contains(refused, stoppable) {
+			t.Errorf("step %q refuses an abort, and its unwind exists", stoppable)
 		}
 	}
 }

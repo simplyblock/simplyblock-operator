@@ -64,8 +64,20 @@ const (
 	// something it cannot hurry: a lock another operation holds, or a step
 	// waiting on the control plane. A queued operation is normally woken by
 	// its cluster rather than by this, and this is the backstop for when that
-	// event is missed.
-	opsRetry = 15 * time.Second
+	// event is missed (design-storagecluster.md §6.1).
+	opsRetry = 10 * time.Second
+
+	// opsContended is how long a pass waits when its lock patch was refused
+	// rather than when it found the lock held. The two are different
+	// situations: a lock somebody visibly holds is released by work that has
+	// to finish first, while a 409 means the object moved between this pass's
+	// read and its write and who holds it now is one read away.
+	//
+	// It is shorter than opsRetry for that reason, and it is not zero. An
+	// immediate requeue against an object two reconcilers are writing is a
+	// spin: it burns a pass to re-read a value that has not settled, and it
+	// does so fastest exactly when contention is highest.
+	opsContended = 5 * time.Second
 
 	// opsAdvance is how long a pass that moved the operation forward waits
 	// before the next one. It is short because there is nothing to wait for:
@@ -207,12 +219,15 @@ func (r *StorageClusterOpsReconciler) Reconcile(
 		return ctrl.Result{}, r.releaseLock(ctx, &ops)
 	}
 
-	acquired, err := r.acquireLock(ctx, &ops)
+	outcome, err := r.acquireLock(ctx, &ops)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !acquired {
+	switch outcome {
+	case lockHeld:
 		return ctrl.Result{RequeueAfter: opsRetry}, nil
+	case lockContended:
+		return ctrl.Result{RequeueAfter: opsContended}, nil
 	}
 
 	return r.advance(ctx, &ops)
@@ -246,7 +261,7 @@ func (r *StorageClusterOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, current)
+		return r.unwind(ctx, ops, machine, current)
 	}
 
 	if machine.TimeoutReached() {
@@ -376,9 +391,15 @@ func (r *StorageClusterOpsReconciler) nextStep(
 // control plane for something it is part-way through, and stopping there would
 // leave nothing driving the cluster back to a state somebody can reason about.
 func (r *StorageClusterOpsReconciler) unwind(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps, current step,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageClusterOps,
+	machine *statemachine.Machine[step],
+	current step,
 ) (ctrl.Result, error) {
-	if !abortable(current) {
+	// The machine is asked rather than a table beside it, and it is asked rather
+	// than the graphs, because it was built for this operation's action: a step
+	// two actions share can be abortable in one of them.
+	if !machine.CanAbort() {
 		// Not a failure of the operation: it carries on. What the user asked
 		// for cannot be done, and saying so is the whole of the response.
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
@@ -446,7 +467,7 @@ func (r *StorageClusterOpsReconciler) observeOperation(
 			Observe(time.Since(started.Time).Seconds())
 	}
 	rollingRestartNodeIndex.DeleteLabelValues(cluster)
-	rollingRestartNodeTotal.DeleteLabelValues(cluster)
+	rollingRestartNodeCount.DeleteLabelValues(cluster)
 }
 
 // observeStep records how long one step took. The start is the step's entry,
@@ -525,26 +546,29 @@ func (r *StorageClusterOpsReconciler) teardown(
 // what makes the read-then-write safe: two operations can both read an empty
 // field and both conclude the lock is free, and the patch succeeds for exactly
 // one of them at a given resourceVersion and returns 409 to the rest.
+//
+// The outcome is typed rather than a bool, because "not acquired" is two
+// situations with different waits (§6.1) and a bool collapses them.
 func (r *StorageClusterOpsReconciler) acquireLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
-) (bool, error) {
+) (lockOutcome, error) {
 	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}
 	err := r.Get(ctx, key, &cluster)
 	if apierrors.IsNotFound(err) {
 		_, err := r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseFailed,
 			fmt.Sprintf("StorageCluster %s does not exist", ops.Spec.ClusterRef))
-		return false, err
+		return lockHeld, err
 	}
 	if err != nil {
-		return false, err
+		return lockHeld, err
 	}
 
 	if held := cluster.Status.ActiveOpsRef; held != "" && held != ops.Name {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 			OperationQueued, OperationQueued,
 			"Cluster %s is held by operation %s; this one is waiting", cluster.Name, held)
-		return false, r.hold(ctx, ops, fmt.Sprintf(
+		return lockHeld, r.hold(ctx, ops, fmt.Sprintf(
 			"waiting for operation %s to release cluster %s", held, cluster.Name))
 	}
 
@@ -557,9 +581,9 @@ func (r *StorageClusterOpsReconciler) acquireLock(
 				// Somebody else moved the object between the read and the
 				// write. Whether that was another operation taking the lock is
 				// decided by reading it again rather than guessed at here.
-				return false, nil
+				return lockContended, nil
 			}
-			return false, fmt.Errorf("acquire the lock on cluster %s: %w", cluster.Name, err)
+			return lockHeld, fmt.Errorf("acquire the lock on cluster %s: %w", cluster.Name, err)
 		}
 		operationActiveState.WithLabelValues(cluster.Name).Set(1)
 	}
@@ -577,11 +601,26 @@ func (r *StorageClusterOpsReconciler) acquireLock(
 			status.Message = "The operation holds the cluster and is running"
 		})
 		if err != nil {
-			return false, err
+			return lockHeld, err
 		}
 	}
-	return true, nil
+	return lockAcquired, nil
 }
+
+// lockOutcome is what one attempt at a cluster's lock produced. The two
+// unsuccessful values are separate because they are waited on differently
+// (§6.1): a lock somebody holds frees when their work finishes, and a refused
+// patch resolves on the next read.
+type lockOutcome int
+
+const (
+	// lockAcquired: this operation holds the cluster.
+	lockAcquired lockOutcome = iota
+	// lockHeld: another operation holds it, or the attempt could not be made.
+	lockHeld
+	// lockContended: the optimistic-lock patch was refused.
+	lockContended
+)
 
 // releaseLock clears the cluster's status.activeOpsRef, but only while it still
 // names this operation.
@@ -593,32 +632,45 @@ func (r *StorageClusterOpsReconciler) acquireLock(
 func (r *StorageClusterOpsReconciler) releaseLock(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
 ) error {
-	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}
-	err := r.Get(ctx, key, &cluster)
+
+	// The conflict is retried here rather than reported, and the compare-and-swap
+	// is what makes that safe rather than a shortcut: every attempt re-reads the
+	// cluster and checks the lock is still this operation's, so a release that
+	// lost a race to somebody taking the lock finds that on the next read and
+	// clears nothing. Swallowing the conflict without the re-read is the thing
+	// that would be wrong — it would let the caller reach a terminal phase and
+	// drop its finalizer while the cluster stayed locked by an object that no
+	// longer exists.
+	//
+	// Reporting it failed the reconcile instead, which preserved the same
+	// property by a longer route: a stack trace for an operation that had just
+	// succeeded, over a conflict with the cluster's own reconciler writing the
+	// status it writes on every pass.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cluster simplyblockv1alpha2.StorageCluster
+		if err := r.Get(ctx, key, &cluster); err != nil {
+			return err
+		}
+		if cluster.Status.ActiveOpsRef != ops.Name {
+			// Never held, already released, or taken by somebody else between
+			// two attempts. None of them is this operation's to undo.
+			return nil
+		}
+
+		patch := client.MergeFromWithOptions(cluster.DeepCopy(),
+			client.MergeFromWithOptimisticLock{})
+		cluster.Status.ActiveOpsRef = ""
+		return r.Status().Patch(ctx, &cluster, patch)
+	})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
-		return err
-	}
-	if cluster.Status.ActiveOpsRef != ops.Name {
-		return nil
+		return fmt.Errorf("release the lock on cluster %s: %w", ops.Spec.ClusterRef, err)
 	}
 
-	patch := client.MergeFromWithOptions(cluster.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	cluster.Status.ActiveOpsRef = ""
-	if err := r.Status().Patch(ctx, &cluster, patch); err != nil {
-		// A conflict is reported rather than swallowed, and that is the whole
-		// point of returning an error here. Somebody else wrote the cluster's
-		// status between the read and the write, so the lock this operation
-		// still holds was not cleared; treating that as a release lets the
-		// caller reach a terminal phase and the finalizer go, and the cluster
-		// stays locked by an object that no longer exists. Reporting it
-		// retries the read and the release on the next pass.
-		return fmt.Errorf("release the lock on cluster %s: %w", cluster.Name, err)
-	}
-	operationActiveState.WithLabelValues(cluster.Name).Set(0)
+	operationActiveState.WithLabelValues(ops.Spec.ClusterRef).Set(0)
 	return nil
 }
 

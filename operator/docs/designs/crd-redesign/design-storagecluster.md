@@ -2,7 +2,7 @@
 
 **Status:** Implemented, with the exceptions §12.1 records  
 **Authors:** Christoph Engelbert (noctarius), Israel Geoffrey (`StorageClusterOps`)  
-**Date:** 2026-08-28 (last updated 2026-09-14)  
+**Date:** 2026-08-28 (last updated 2026-09-17)  
 **Supersedes:** `design-storageclusterops.md`, removed in the same change  
 **Test Plan:** [`tests/test-plan-storagecluster.md`](../../tests/test-plan-storagecluster.md)
 
@@ -115,7 +115,7 @@ accepts the edit, which is not the same as the cluster tolerating it.
 
 ## 3. StorageCluster: API
 
-Declared in `operator/api/v1alpha1/storagecluster_types.go`, short name `stc`.
+Declared in `operator/api/v1alpha2/storagecluster_types.go`, short name `stc`.
 **The type is Appendix A**, whole and as it is to be written. What follows quotes
 the field an argument turns on and no more, so that one copy of each type exists
 and it is the one an implementation is written against.
@@ -144,6 +144,30 @@ failure-domain mode, where every node must label the fault group it belongs to
 affinity-based placement for storage components. `deviceClass` names the one class
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
+
+**`stripe` is one of seven schemes, and the schema is what says so.** simplyblock
+supports 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, and 4+2, which is the set the control
+plane holds in `SUPPORTED_ERASURE_CODING_SCHEMES` and refuses a cluster create
+outside of. A type-level CEL rule on `StripeSpec` states the same set, so the
+refusal arrives at the apply rather than from a cluster create that runs several
+steps — and, for a cluster a deployment config produced, one irreversible
+approval — later
+([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5.1).
+An unstated half is 1, which is what the control plane defaults each field to.
+
+**Each scheme also has a storage-node count below which it must not be used, and
+the activation gate is where that is enforced.** The minimum is `ndcs+npcs` nodes
+to place a stripe across plus one spare per tolerated failure to rebuild onto: 1
+for 1+0, 3 for 1+1, 4 for 2+1, 6 for 4+1, 5 for 1+2, 6 for 2+2, and 8 for 4+2.
+Nothing below the operator enforces it — the control plane's own activation gate
+counts devices, `ndcs+npcs+1` of them, and never nodes — so a cluster of four
+nodes configured 4+2 activates today and loses data on the second failure it was
+configured to survive. It cannot be a rule on this type, because the nodes are
+objects of their own and a cluster is created before any of them exists, so
+`Activate` holds on it instead and says why under `StripeNodesNotReady` (§6.3).
+The hold is placed after the "already active" check, so a re-activation of a
+cluster that is already serving is never held: the gate exists to stop a layout
+being brought up wrong, and a live cluster's layout is already a fact.
 
 **A cluster is built out of one class of device, and `deviceClass` is which.**
 NVMe devices are the class simplyblock has always accepted and logical block
@@ -195,8 +219,12 @@ MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 // This is an explicit core count, not a percentage. Required: the core layout
 // it produces must match across the cluster, so it is stated rather than left
 // to a per-node heuristic.
+//
+// The floor is 4 rather than a hardware limit: a node must carry one core
+// beyond this budget for the system, and the control plane's core layout
+// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 // +kubebuilder:validation:Required
-// +kubebuilder:validation:Minimum=6
+// +kubebuilder:validation:Minimum=4
 VCPUCount *int32 `json:"vcpuCount"`
 ```
 
@@ -440,27 +468,28 @@ belongs in its status.
 
 ```go
 // Tasks are the control plane's own asynchronous jobs, as of the last stream
-// frame: running and pending only, newest first, and capped. It is a window on
-// the backend rather than a record: a task that finishes leaves the list, and
-// what remains of it is the event that says it did (§10.1).
+// frame: running and pending only, capped, and in the order the control plane
+// reports them. It is a window on the backend rather than a record: a task that
+// finishes leaves the list, and what remains of it is the event that says it
+// did (§10.1).
 // +kubebuilder:validation:MaxItems=20
 // +optional
 Tasks []ClusterTask `json:"tasks,omitempty"`
 ```
 
 **Twenty is a window onto a cluster's work.** A busy cluster runs more than twenty
-tasks, and the field shows what fits in a status somebody reads: ordered newest first,
-so the twenty most recent running or pending tasks are visible and the rest stay in the
-control plane. The
-cap is what keeps an object bounded whose subject is not, which is the constraint any
-status list has to answer to
-([`design-crd-model.md`](design-crd-model.md) §3.1).
+tasks, and the field shows what fits in a status somebody reads. The cap is what
+keeps an object bounded whose subject is not, which is the constraint any status
+list has to answer to ([`design-crd-model.md`](design-crd-model.md) §3.1).
 
-**Newest first is the one part of this section the control plane cannot
-support**, and §12.1 records what was done instead: its `TaskDTO` carries no
-creation date, so the shipped window keeps the control plane's own order and
-`ClusterTask` carries neither `createdAt` nor the `progress` the schema also
-lacks.
+**The window's order is the control plane's own**, because ordering it is not
+something this operator can do. The `TaskDTO` carries no creation date and no
+progress figure, so a newest-first window cannot be built from what is on the
+wire, and `ClusterTask` declares neither `createdAt` nor `progress` rather than
+declaring fields nothing can write
+([`design-crd-model.md`](design-crd-model.md) §7.9). What it carries instead is
+`retry`, which the schema does report and which is the one number separating a
+task that is slow from one that is failing.
 
 **Only running and pending tasks appear.** A completed or canceled task is not
 current state, so it leaves the list, and the object stops describing it. That is what
@@ -484,7 +513,7 @@ The smallest valid `StorageCluster` is the two required sizing fields and nothin
 else. Everything the control plane can default, it defaults.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:
   name: production
@@ -498,7 +527,7 @@ A cluster that sets the layout, the tenancy thresholds, key storage, and both
 migration policies:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:
   name: production
@@ -606,7 +635,7 @@ steady-state only.
 │                  Kubernetes Control Plane                    │
 │   ┌──────────────────────────────────────────────────────┐   │
 │   │              StorageClusterReconciler                │   │
-│   │  1. Get the CR from the API server, not the cache    │   │
+│   │  1. Get the CR through the manager's cache           │   │
 │   │  2. Deletion: backend DELETE, then finalizer         │   │
 │   │  3. Ensure the finalizer                             │   │
 │   │  4. status.uuid != ""  → syncStatus                  │   │
@@ -624,10 +653,14 @@ steady-state only.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The CR is fetched with a direct read rather than from the informer cache. A
-cached read can still return `status.uuid == ""` immediately after
-`Status().Patch` has persisted a UUID, and acting on that stale value is a second
-`POST` and a second backend cluster.
+The CR is read through the manager's cache, so a reconcile can observe
+`status.uuid == ""` immediately after `Status().Patch` has persisted a UUID. What
+keeps that from becoming a second `POST` and a second backend cluster is the claim
+rather than the read. §4.2's optimistic-lock patch returns 409 to a reconciler
+holding a stale `resourceVersion`, and a pass that does get through re-enters
+adoption, which finds the cluster by name and is idempotent. A direct read would
+narrow the window without closing it, because the gap between reading and posting
+is not the part that races.
 
 ### 4.2 Creation, and the lock that makes it single-shot
 
@@ -677,7 +710,7 @@ response lost after the backend committed.
 
 ```go
 // StorageClusterPhase is where the operator has got to with this cluster.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 // StorageClusterStep is one step of the creation path. There is one graph rather
@@ -685,6 +718,31 @@ type StorageClusterPhase string
 // +kubebuilder:validation:Enum=Claiming;CheckingControlPlane;ResolvingConfig;Creating;Adopting;Persisting
 type StorageClusterStep string
 ```
+
+**The phase is the operator's creation path until the cluster exists, and the
+control plane's lifecycle afterward.** `Pending` and `Creating` are the operator's
+own. Every other value is a reading of the string the control plane reports, and
+the mapping is stated once rather than left to be inferred from a switch:
+
+| Control plane reports                    | Phase          |
+|------------------------------------------|----------------|
+| nothing yet                              | `Pending`      |
+| `in_creation`, `in_expansion`, `unready` | `Provisioning` |
+| `in_activation`                          | `Activating`   |
+| `active`                                 | `Online`       |
+| `degraded`, `read_only`                  | `Degraded`     |
+| `suspended`                              | `Suspended`    |
+| anything else                            | `Unavailable`  |
+
+`Provisioning` and `Activating` exist because a cluster being built is not a
+cluster that is broken. Without them `unready` and `in_activation` both read as
+`Unavailable`, which reports a fault for the ordinary course of a deployment and
+leaves the phase unable to say that the control plane was asked for something and
+is doing it. `Activating` is separate from `Provisioning` rather than its last
+step, because an expansion ends in an activation and so does recovery from a
+suspension, long after anything was being built. `Unavailable` keeps its meaning
+as the residue: a status this operator has no reading for, rather than every
+cluster that is not currently serving.
 
 `Adopting` is reached from two states rather than one: the upgrade Secret diverts
 before any `POST`, and a `POST` that failed against an existing cluster diverts
@@ -753,7 +811,7 @@ immediately.
 
 ## 5. StorageClusterOps: API
 
-Declared in `operator/api/v1alpha1/storageclusterops_types.go`, short name
+Declared in `operator/api/v1alpha2/storageclusterops_types.go`, short name
 `scops`. The type is Appendix B.
 
 ### 5.1 Spec
@@ -778,7 +836,7 @@ the class [`design-crd-model.md`](design-crd-model.md) §7.5 leaves outside the
 `enableXyz`/`disableXyz` rule.
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: roll-the-fleet
@@ -813,7 +871,7 @@ wrong.
 An operation that is one call and one wait, in flight:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: activate-production
@@ -837,7 +895,7 @@ the machine has got to within one node, and `rollingRestart` is which node that 
 (§7).
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:
   name: roll-the-fleet
@@ -981,7 +1039,7 @@ to exercise, is caught by any test that builds a machine at all.
   Lock free?         ← held by another ops → stay Pending, requeue after 10s
     │  free or ours
     ▼
-  Acquire the lock   ← optimistic-lock patch; 409 → requeue immediately
+  Acquire the lock   ← optimistic-lock patch; 409 → requeue after 5s
     │
     ▼
   Pending → Running  ← stamp startedAt
@@ -999,6 +1057,17 @@ Watching only `StorageClusterOps` would leave a queued operation waiting up to
 its 10-second requeue after the lock frees. `clusterToOpsRequests` maps a
 `StorageCluster` event back to every operation targeting it, so a release wakes
 the queue immediately.
+
+**The two unsuccessful outcomes of an acquisition are waited on differently, and
+neither wait is zero.** A lock another operation visibly holds frees when that
+operation's work finishes, which is what the 10-second backstop is sized for. A
+409 is not that: the object moved between this pass's read and its write, so who
+holds the lock now is one read away, and the pass backs off by 5 seconds instead.
+Requeueing a refused patch immediately would be a spin — it burns a pass to
+re-read a value that has not settled, and it does so fastest exactly when
+contention is highest. The creation claim of §4.2 backs off by the same 5 seconds
+and for the same reason, since it is the same kind of refusal on a different
+object.
 
 ### 6.2 The persisted position is the write-ahead record
 
@@ -1338,6 +1407,7 @@ behavior, and without an event it is indistinguishable from a stalled controller
 | `simplyblock_storagecluster_operation_active_state`                 | `cluster`                     | Gauge, 1 while `status.activeOpsRef` is set, so a lock held by a finished operation is visible |
 | `simplyblock_storagecluster_rolling_restart_peer_hold_seconds`      | `cluster`                     | Histogram of time the rolling restart held for a peer node to come back online                 |
 | `simplyblock_storagecluster_rolling_restart_node_index_count`       | `cluster`                     | Gauge of `nodeIndex`, against the `nodes` length, so walk progress is graphable                |
+| `simplyblock_storagecluster_rolling_restart_node_count`             | `cluster`                     | Gauge of how many nodes the running walk covers, which is the length the index is read against |
 | `simplyblock_storagecluster_phase_state`                            | `cluster`, `phase`            | Gauge, 1 for the cluster's current phase (§4.2), so a cluster stuck in `Creating` is alertable |
 
 Every metric carries `cluster`, matching the rebalancer's existing convention, so
@@ -1516,11 +1586,11 @@ question rather than answered quietly: see §13, Q3.
 Five things this document specifies are not in the shipped kinds, and each is
 waiting on something outside it rather than on a decision.
 
-**`spec.storageNodes` is absent.** Its type is
-[`design-storagenode.md`](design-storagenode.md) Appendix C, and that kind has
-not moved: `StorageNode` is still `v1alpha1` and `StorageNodeSet` still owns the
-workload. The field lands with that move rather than here, where it could only
-be an empty block.
+**`spec.storageNodes` carries the workload settings the node kinds gave up.**
+Its type is [`design-storagenode.md`](design-storagenode.md) Appendix C. The
+fields in it, `enableKubeletConfiguration` among them, are per-DaemonSet rather
+than per-node, because a DaemonSet is one object for every node it schedules, and
+they landed here with the workload's move onto the cluster.
 
 **All three `?watch=true` subscriptions of §9 are served by the control-plane
 informer.** The storage-node stream was already there; the cluster stream and
@@ -1557,14 +1627,12 @@ same whichever way the state arrived, so each stream replaced one read function
 and no step.
 
 One thing the task stream settles rather than provides. The control plane's
-`TaskDTO` carries no creation date and no progress figure, so §3.4's
-"newest first" is not achievable and Appendix A's `progress` and `createdAt`
-cannot be written. `ClusterTask` therefore carries neither — a field declared
-and never written reports a definite-looking nothing, which is what
-[`design-crd-model.md`](design-crd-model.md) §7.9 rules out and what §3.3
-removed four registered fields for. What it carries instead is `retry`, which
-the schema does report and which is the one number separating a task that is
-slow from one that is failing. The window's order is the control plane's own.
+`TaskDTO` carries no creation date and no progress figure, so a newest-first
+window is not orderable and neither `progress` nor `createdAt` can be written.
+`ClusterTask` therefore declares neither: a field declared and never written
+reports a definite-looking nothing, which is what
+[`design-crd-model.md`](design-crd-model.md) §7.9 rules out and what §3.3 removed
+four registered fields for. §3.4 states what the window carries instead.
 
 **`CancelTask` has nothing to call.** The v2 API lists tasks and reads one by
 ID, and offers no cancel (§9). The action is served — it takes the lock, waits
@@ -1660,7 +1728,7 @@ against the same conventions it audits the shipped types against.
 // StorageClusterPhase is where the operator has got to with this cluster. The
 // first two values are the operator's own creation path; the rest are its reading
 // of the lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -1669,6 +1737,18 @@ const (
 
 	// Creating: the creation machine of §4.2 is running.
 	StorageClusterPhaseCreating StorageClusterPhase = "Creating"
+
+	// Provisioning: the cluster exists in the control plane and is being built
+	// up, either by its first nodes joining or by an expansion adding more. It
+	// is not serving and there is nothing wrong with it, which is the
+	// distinction Unavailable cannot carry.
+	StorageClusterPhaseProvisioning StorageClusterPhase = "Provisioning"
+
+	// Activating: the control plane is activating the cluster. It is a phase of
+	// its own rather than part of Provisioning because it is not only the last
+	// step of a deployment: an expansion ends in one, and so does recovering
+	// from a suspension, long after anything was being built.
+	StorageClusterPhaseActivating StorageClusterPhase = "Activating"
 
 	// Online: the control plane reports the cluster active and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
@@ -1815,8 +1895,12 @@ type StorageClusterSpec struct {
 	// because it describes the host that node runs on. Required: the core layout
 	// it produces must match across the cluster in steady state, so it is stated
 	// rather than left to a per-node heuristic.
+	//
+	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// beyond this budget for the system, and the control plane's core layout
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node
@@ -2065,6 +2149,15 @@ type StorageClusterStatus struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
+
+	// ProvisioningSlots are the workers whose node add is outstanding. The list
+	// is the metadata of the Provisioning phase, and it is also the mutex that
+	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds: taking a
+	// slot is an optimistic-locked patch of this one field, so exactly one node
+	// wins a given resourceVersion (design-storagenode.md §4.2).
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ProvisioningSlots []ProvisioningSlot `json:"provisioningSlots,omitempty"`
 
 	// ActiveOpsRef names the StorageClusterOps currently allowed to operate on
 	// this cluster. Empty when none is running.

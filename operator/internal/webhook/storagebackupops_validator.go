@@ -36,15 +36,16 @@ import (
 // undeletableSteps are the steps from which a running operation's record may not
 // be withdrawn.
 //
-// Both have a logical volume the control plane created behind them and a claim
-// the operation is on its way to binding, so removing the record leaves both with
-// nothing accounting for them. It is the same set the controller refuses an abort
-// from, read from the same graph: the two channels ask one question, and the one
-// that carries a reason forward is spec.abort, because it leaves an Aborted
-// object to read where a delete leaves nothing.
+// This is the one guard in the group that refuses more than the graph does, and
+// Restoring below is the step it adds. Everywhere else the two channels agree
+// exactly and a test holds them equal; here the delete is strictly the more
+// dangerous of the two, because an abort leaves an Aborted object behind for the
+// controller to clean up from and a delete leaves nothing at all. Binding an
+// agreement test to this set would therefore force the weaker answer onto the
+// stronger channel.
 //
-// The webhook is the stronger of the two guards, because it also catches the
-// `--force --grace-period=0` that a finalizer alone does not.
+// The webhook is also the stronger of the two guards in the other sense, because
+// it catches the `--force --grace-period=0` that a finalizer alone does not.
 var undeletableSteps = map[simplyblockv1alpha2.StorageBackupOpsStep]string{
 	// Restoring is here although the design's §6 names only the two below, and
 	// the reason is a window the design does not model: the step asks the control

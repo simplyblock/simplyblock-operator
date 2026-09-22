@@ -10,7 +10,7 @@ import (
 
 const (
 	// DefaultEvaluationInterval is how often the rebalancer evaluates load when the spec
-	// does not override it. Exported so callers can fall back to it (e.g. for requeue
+	// does not override it. Exported so callers can fall back to it (e.g., for requeue
 	// timing) before a RebalancingConfig has been resolved.
 	DefaultEvaluationInterval = 60 * time.Second
 
@@ -18,7 +18,7 @@ const (
 	defaultImbalanceThresholdPct = 80
 	// defaultMinHotColdDifferencePct is the minimum latency-deviation gap (in
 	// percentage points) a target node must have below the hot source before a
-	// migration is worthwhile — prevents shuffling load between near-equally-loaded
+	// migration is worthwhile — prevents shuffling load between nearly equally loaded
 	// nodes.
 	defaultMinHotColdDifferencePct     = 20
 	defaultCoolDownSeconds             = 600
@@ -28,7 +28,7 @@ const (
 	// journal/EC/HA tail spikes. Overridden by the operator-wide --latency-percentile flag.
 	defaultLatencyPercentile = "p50"
 
-	// Rolling-window baseline defaults. The rollingWindow strategy derives each node's
+	// Rolling-window baseline defaults. The RollingWindow strategy derives each node's
 	// baseline from a robust (outlier-rejecting) estimate over BaselineWindow of the probe
 	// latency series in Prometheus, rather than the frozen one-shot fio benchmark.
 	defaultBaselineStrategy   = string(simplyblockv1alpha2.BaselineStrategyRollingWindow)
@@ -42,7 +42,7 @@ const (
 	// it must match the cadence at which the probe sidecar publishes latency samples.
 	defaultBaselineStep = 5 * time.Minute
 
-	// migrationBudgetFraction is the fraction of the source node's total volume IO score
+	// migrationBudgetFraction is the fraction of the source node's total volume I/O score
 	// that may be migrated in a single evaluation cycle.
 	migrationBudgetFraction = 0.10
 
@@ -72,14 +72,15 @@ type RebalancingConfig struct {
 	MaxMigrations    int
 	CoolDownSecs     int64
 
-	// BaselineStrategy selects how the per-node baseline is derived: "rollingWindow"
-	// (default) or "benchmark" (frozen one-shot fio measurement).
+	// BaselineStrategy selects how the per-node baseline is derived: "RollingWindow"
+	// (default) or "Benchmark" (frozen one-shot fio measurement).
 	BaselineStrategy string
-	// BaselineWindow is the rollingWindow look-back period.
+	// BaselineWindow is the RollingWindow look-back period.
 	BaselineWindow time.Duration
 	// BaselineStep is the range-query step, matching the probe publish cadence.
 	BaselineStep time.Duration
-	// BaselineColdStart is the under-sampled-node policy: "partialWindow" (default) or "defer".
+	// BaselineColdStart is the under-sampled-node policy: "PartialWindow" (default)
+	// or "Defer."
 	BaselineColdStart string
 	// BaselineMinSamples is the sample count below which a node is treated as under-sampled.
 	BaselineMinSamples int

@@ -28,30 +28,76 @@ import (
 	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 )
 
+// servedKinds is every kind this group publishes, against the resource it is
+// served at.
+//
+// It is written out rather than read back from the scheme, because a roster
+// derived from the thing under test agrees with it by construction. What this
+// one is for is the opposite: to fail when a kind is added to the scheme and
+// forgotten in the OpenAPI definitions or in the resource map, which are three
+// places one kind has to appear in and which nothing else holds together.
+var servedKinds = map[string]string{
+	"LogicalVolumeMetrics":  ResourceName,
+	"StorageDeviceMetrics":  DeviceResourceName,
+	"StoragePoolMetrics":    PoolResourceName,
+	"StorageClusterMetrics": ClusterResourceName,
+	"StorageNodeMetrics":    NodeResourceName,
+}
+
 // Every kind the group serves, at the version it is served at. A kind registered
 // under the wrong version is a 404 on the route a client was told to use, which
 // nothing else in this package would catch.
 func TestSchemeKnowsTheServedKinds(t *testing.T) {
-	for _, object := range []runtime.Object{
-		&metricsv1alpha2.LogicalVolumeMetrics{},
-		&metricsv1alpha2.LogicalVolumeMetricsList{},
-		&metricsv1alpha2.StorageDeviceMetrics{},
-		&metricsv1alpha2.StorageDeviceMetricsList{},
-	} {
-		kinds, _, err := Scheme.ObjectKinds(object)
-		if err != nil {
-			t.Errorf("ObjectKinds(%T): %v", object, err)
-			continue
-		}
-		found := false
-		for _, kind := range kinds {
-			if kind.GroupVersion() == metricsv1alpha2.GroupVersion {
-				found = true
+	for kind := range servedKinds {
+		for _, name := range []string{kind, kind + "List"} {
+			object, err := Scheme.New(metricsv1alpha2.GroupVersion.WithKind(name))
+			if err != nil {
+				t.Errorf("the scheme does not know %s: %v", name, err)
+				continue
+			}
+			kinds, _, err := Scheme.ObjectKinds(object)
+			if err != nil {
+				t.Errorf("ObjectKinds(%T): %v", object, err)
+				continue
+			}
+			found := false
+			for _, registered := range kinds {
+				if registered.GroupVersion() == metricsv1alpha2.GroupVersion {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%T registered as %v, want %s", object, kinds, metricsv1alpha2.GroupVersion)
 			}
 		}
-		if !found {
-			t.Errorf("%T registered as %v, want %s", object, kinds, metricsv1alpha2.GroupVersion)
+	}
+}
+
+// The scheme publishes the roster and nothing besides.
+//
+// Adding a type to this scheme is what publishes it, so a kind here that the
+// roster does not name is served with no storage behind it and appears in the
+// discovery document as a resource that answers nothing.
+func TestTheSchemeServesExactlyTheRoster(t *testing.T) {
+	want := map[string]bool{}
+	for kind := range servedKinds {
+		want[kind] = true
+		want[kind+"List"] = true
+	}
+
+	for kind := range Scheme.KnownTypes(metricsv1alpha2.GroupVersion) {
+		if !strings.Contains(kind, "Metrics") {
+			// The meta kinds every group registers: the list and get options,
+			// and the watch event.
+			continue
 		}
+		if !want[kind] {
+			t.Errorf("the scheme serves %s, which the roster does not name", kind)
+		}
+		delete(want, kind)
+	}
+	for kind := range want {
+		t.Errorf("the roster names %s, which the scheme does not serve", kind)
 	}
 }
 
@@ -124,10 +170,22 @@ func TestAPIGroupInstalls(t *testing.T) {
 	}
 
 	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha2.GroupName, Scheme, ParameterCodec, Codecs)
-	group.VersionedResourcesStorageMap[metricsv1alpha2.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName:       NewStorage(fakeVolumes{}, nil, nil),
-		DeviceResourceName: NewDeviceStorage(nil, nil),
+	// Every resource the real server installs. The installer refuses a storage
+	// whose kind the scheme does not know, and it refuses it at startup, so a
+	// resource left out here is one this test would have passed without.
+	storages := map[string]rest.Storage{
+		ResourceName:        NewStorage(fakeVolumes{}, nil, nil),
+		DeviceResourceName:  NewDeviceStorage(nil, nil),
+		PoolResourceName:    NewPoolStorage(nil, nil),
+		ClusterResourceName: NewClusterStorage(nil, nil),
+		NodeResourceName:    NewNodeStorage(nil, nil),
 	}
+	for kind, name := range servedKinds {
+		if _, ok := storages[name]; !ok {
+			t.Errorf("%s is served at %q, which this install does not exercise", kind, name)
+		}
+	}
+	group.VersionedResourcesStorageMap[metricsv1alpha2.GroupVersion.Version] = storages
 	if err := server.InstallAPIGroup(&group); err != nil {
 		t.Fatalf("InstallAPIGroup: %v", err)
 	}
@@ -188,9 +246,11 @@ func TestCodecRoundTripsADeviceReading(t *testing.T) {
 func TestOpenAPIDefinitionsCoverEveryServedKind(t *testing.T) {
 	definitions := openAPIDefinitions(func(string) spec.Ref { return spec.Ref{} })
 	const pkg = "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2."
-	for _, kind := range []string{"LogicalVolumeMetrics", "StorageDeviceMetrics"} {
-		if _, ok := definitions[pkg+kind]; !ok {
-			t.Errorf("no OpenAPI definition for %s", pkg+kind)
+	for kind := range servedKinds {
+		for _, name := range []string{kind, kind + "List"} {
+			if _, ok := definitions[pkg+name]; !ok {
+				t.Errorf("no OpenAPI definition for %s", pkg+name)
+			}
 		}
 	}
 }

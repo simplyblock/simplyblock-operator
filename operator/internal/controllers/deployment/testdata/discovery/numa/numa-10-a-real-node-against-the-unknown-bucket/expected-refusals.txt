@@ -1,0 +1,2 @@
+worker-01/nvme8n1: declined by most available NUMA node because NUMA node 0 carries 2 unclaimed devices (6T) against 2 (6T) on no memory node in particular, so it was chosen
+worker-01/nvme9n1: declined by most available NUMA node because NUMA node 0 carries 2 unclaimed devices (6T) against 2 (6T) on no memory node in particular, so it was chosen

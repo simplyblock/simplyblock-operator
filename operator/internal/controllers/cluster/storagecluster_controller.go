@@ -1,13 +1,11 @@
 // The StorageCluster reconciler: four paths, which are creation, adoption,
 // steady-state synchronization, and deletion.
 //
-// The object is fetched with a direct read rather than from the informer
-// cache. A cached read can still return an empty status.uuid immediately after
-// a status patch has persisted one, and acting on that stale value is a second
-// POST and a second backend cluster.
-//
-// Creating a backend cluster is not idempotent, so the claim is made in
-// Kubernetes before the control plane is touched. The mutex is the
+// Creating a backend cluster is not idempotent, and the object is read through
+// the manager's cache, so a reconcile can see an empty status.uuid immediately
+// after a status patch has persisted one. What makes that safe is the claim
+// rather than the read: the claim is made in Kubernetes before the control
+// plane is touched, and a stale pass re-enters adoption, which is idempotent. The mutex is the
 // optimistic-lock patch rather than the value it writes: the patch succeeds for
 // exactly one reconciler at a given resourceVersion and returns 409 to the
 // rest, so persisting the transition into Claiming is what makes creation
@@ -367,11 +365,15 @@ func (r *StorageClusterReconciler) claim(
 		logf.FromContext(ctx).Info(
 			"another reconciler holds the creation claim; backing off",
 			"cluster", cluster.Name)
-		return ctrl.Result{RequeueAfter: 5 * time.Second}
+		return ctrl.Result{RequeueAfter: claimBackoff}
 	}
 	r.observePhase(cluster)
 	return ctrl.Result{RequeueAfter: time.Second}
 }
+
+// claimBackoff is how long a reconciler whose creation claim was refused waits
+// before looking again.
+const claimBackoff = 5 * time.Second
 
 // enterCreationStep records the next step with its deadline and moves the
 // machine into it. The record precedes the step's own work on the next pass,
@@ -754,9 +756,15 @@ func (r *StorageClusterReconciler) readTasks(
 	}
 
 	current := make(map[string]bool, len(reported))
+	// A finished task is kept by id rather than skipped, because it is the only
+	// place the outcome exists. The window publishes what is running, so a task
+	// that has ended is described once, here, and what the control plane said
+	// about it is gone on the next read.
+	finished := make(map[string]subscriptions.TaskDTO, len(reported))
 	running := make([]simplyblockv1alpha2.ClusterTask, 0, len(reported))
 	for _, task := range reported {
 		if task.Finished() {
+			finished[task.ID] = task
 			continue
 		}
 		current[task.ID] = true
@@ -776,16 +784,63 @@ func (r *StorageClusterReconciler) readTasks(
 	}
 
 	// A task that was in the list and is no longer running finished between
-	// two readings. The event is what remains of it.
+	// two readings. The event is what remains of it, so it carries the outcome
+	// rather than only the disappearance: "is no longer running" is as true of a
+	// task that succeeded as of one that exhausted its retries, and a reader
+	// looking for why a deployment stalled needs the difference.
 	for _, previous := range cluster.Status.Tasks {
 		if current[previous.ID] {
 			continue
 		}
-		r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal,
-			TaskCompleted, TaskCompleted,
-			"Task %s (%s) is no longer running", previous.ID, previous.Type)
+		r.emitTaskOutcome(cluster, previous, finished[previous.ID])
 	}
 	return running
+}
+
+// emitTaskOutcome raises the one event a finished task gets.
+//
+// The retry count decides which. A task the control plane never restarted ran
+// once and ended, and a task it restarted was failing each time it did, so one
+// that has left the window having been retried gave up rather than finished.
+// Nothing here infers that from the status, which says done for both.
+//
+// The count and the control plane's own result go into the note whatever the
+// verdict. The result is where the answer actually is — a node_add that gave up
+// came back with "max retry reached (11/11)" — and it was decoded and dropped.
+func (r *StorageClusterReconciler) emitTaskOutcome(
+	cluster *simplyblockv1alpha2.StorageCluster,
+	previous simplyblockv1alpha2.ClusterTask,
+	outcome subscriptions.TaskDTO,
+) {
+	// The task may have scrolled out of the window rather than been read as
+	// finished, in which case the previous snapshot is all there is.
+	retries := previous.Retry
+	if outcome.Retry > retries {
+		retries = outcome.Retry
+	}
+
+	detail := ""
+	if outcome.Result != "" {
+		detail = ": " + outcome.Result
+	}
+
+	if outcome.Canceled {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			TaskCanceled, TaskCanceled,
+			"Task %s (%s) was canceled after %d retries%s",
+			previous.ID, previous.Type, retries, detail)
+		return
+	}
+	if retries > 0 {
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
+			TaskGaveUp, TaskGaveUp,
+			"Task %s (%s) gave up after %d retries%s",
+			previous.ID, previous.Type, retries, detail)
+		return
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal,
+		TaskCompleted, TaskCompleted,
+		"Task %s (%s) finished%s", previous.ID, previous.Type, detail)
 }
 
 // reportedTasks is every task of one cluster, from the stream's cache once it
@@ -1174,6 +1229,8 @@ func (r *StorageClusterReconciler) observePhase(cluster *simplyblockv1alpha2.Sto
 var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 	simplyblockv1alpha2.StorageClusterPhasePending,
 	simplyblockv1alpha2.StorageClusterPhaseCreating,
+	simplyblockv1alpha2.StorageClusterPhaseProvisioning,
+	simplyblockv1alpha2.StorageClusterPhaseActivating,
 	simplyblockv1alpha2.StorageClusterPhaseOnline,
 	simplyblockv1alpha2.StorageClusterPhaseDegraded,
 	simplyblockv1alpha2.StorageClusterPhaseUnavailable,
@@ -1273,10 +1330,18 @@ func phaseFor(status string) simplyblockv1alpha2.StorageClusterPhase {
 		return simplyblockv1alpha2.StorageClusterPhaseSuspended
 	case "":
 		return simplyblockv1alpha2.StorageClusterPhasePending
+	case "in_activation":
+		// Activation is asked for, and by more than a deployment: an expansion
+		// ends in one and so does recovering from a suspension.
+		return simplyblockv1alpha2.StorageClusterPhaseActivating
+	case utils.ClusterStatusUnready, "in_creation", "in_expansion":
+		// The cluster exists and is being built up. Not serving, and nothing
+		// wrong with it.
+		return simplyblockv1alpha2.StorageClusterPhaseProvisioning
 	default:
-		// Everything else the control plane reports — unready, in_expansion,
-		// in_activation — is the cluster not serving for a reason nobody asked
-		// for, which is what Unavailable means.
+		// A status this operator has no reading for, which is what makes
+		// Unavailable worth reporting rather than the name for every cluster
+		// that is not currently serving.
 		return simplyblockv1alpha2.StorageClusterPhaseUnavailable
 	}
 }

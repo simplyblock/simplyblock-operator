@@ -32,7 +32,7 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 	src := &StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: StorageBackupSpec{
-			ClusterName: "production",
+			ClusterName: testCluster,
 			PVCRef:      &PersistentVolumeClaimRef{Name: "claim-1", Namespace: "apps"},
 		},
 		Status: StorageBackupStatus{
@@ -64,8 +64,8 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 		t.Fatalf("ConvertTo: %v", err)
 	}
 
-	if got := dst.Spec.ClusterRef; got != "production" {
-		t.Errorf("spec.clusterRef = %q, want %q", got, "production")
+	if got := dst.Spec.ClusterRef; got != testCluster {
+		t.Errorf("spec.clusterRef = %q, want %q", got, testCluster)
 	}
 	// The store's identifier is the object's identity in the hub, and v1alpha1
 	// only ever held it in status.
@@ -111,7 +111,7 @@ func TestStorageBackupConvertToRegroupsTheStatus(t *testing.T) {
 // each would be two objects of nothing that every reader then has to check
 // past.
 func TestStorageBackupConvertToLeavesEmptyGroupsAbsent(t *testing.T) {
-	src := &StorageBackup{Spec: StorageBackupSpec{ClusterName: "production"}}
+	src := &StorageBackup{Spec: StorageBackupSpec{ClusterName: testCluster}}
 
 	var dst v1alpha2.StorageBackup
 	if err := src.ConvertTo(&dst); err != nil {
@@ -127,7 +127,7 @@ func TestStorageBackupConvertToLeavesEmptyGroupsAbsent(t *testing.T) {
 
 func TestStorageBackupConvertFromFlattensTheStatus(t *testing.T) {
 	src := &v1alpha2.StorageBackup{
-		Spec: v1alpha2.StorageBackupSpec{ClusterRef: "production", BackupID: "backup-uuid"},
+		Spec: v1alpha2.StorageBackupSpec{ClusterRef: testCluster, BackupID: "backup-uuid"},
 		Status: v1alpha2.StorageBackupStatus{
 			Phase:     v1alpha2.StorageBackupPhaseCreating,
 			ClusterID: "cluster-uuid",
@@ -141,8 +141,8 @@ func TestStorageBackupConvertFromFlattensTheStatus(t *testing.T) {
 		t.Fatalf("ConvertFrom: %v", err)
 	}
 
-	if got := dst.Spec.ClusterName; got != "production" {
-		t.Errorf("spec.clusterName = %q, want %q", got, "production")
+	if got := dst.Spec.ClusterName; got != testCluster {
+		t.Errorf("spec.clusterName = %q, want %q", got, testCluster)
 	}
 	if dst.Spec.PVCRef == nil || dst.Spec.PVCRef.Name != "claim-1" {
 		t.Errorf("spec.pvcRef = %+v, want claim-1 in apps", dst.Spec.PVCRef)
@@ -317,7 +317,7 @@ func TestStorageBackupKeepsTheRequestApartFromWhatHappened(t *testing.T) {
 // for values that exist, and writing an empty one would put a key on every
 // object of the kind for a fact none of them has.
 func TestStorageBackupStashesNothingForAnEmptyObject(t *testing.T) {
-	obj := &StorageBackup{Spec: StorageBackupSpec{ClusterName: "production"}}
+	obj := &StorageBackup{Spec: StorageBackupSpec{ClusterName: testCluster}}
 
 	var hub v1alpha2.StorageBackup
 	if err := obj.ConvertTo(&hub); err != nil {
@@ -367,7 +367,7 @@ func storedBackup() *StorageBackup {
 	return &StorageBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: "backup-1", Namespace: "sb"},
 		Spec: StorageBackupSpec{
-			ClusterName:       "production",
+			ClusterName:       testCluster,
 			PVCRef:            &PersistentVolumeClaimRef{Name: "claim-1", Namespace: "apps"},
 			SnapshotName:      "snap-1",
 			SourceClusterUUID: "source-cluster-uuid",

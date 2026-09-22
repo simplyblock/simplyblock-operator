@@ -103,12 +103,19 @@ const (
 )
 
 // Labels, annotations, and finalizers atlas-managed objects carry.
+//
+// Each is the spelling that is written, which is the API group's own prefix.
+// The spellings an object written before the move carries are in keys.go beside
+// the Key that reads them, and a caller that reads one of these off an object
+// reads it through that Key rather than through the constant — the constant
+// alone would stop understanding every claim, volume, and node that predates
+// the move (design-crd-model.md §9.4).
 const (
 	// LabelVolumeHandle lets selectors find the K8s objects for a logical
 	// volume. Nothing writes it, and nothing can: a handle is 110 bytes
 	// normalized and a label value stops at 63, so AnnoVolumeHandle carries
 	// this instead.
-	LabelVolumeHandle = "simplyblock.io/volume-handle"
+	LabelVolumeHandle = "storage.simplyblock.io/volume-handle"
 
 	// AnnoVolumeHandle records a volume's handle with its pool segment
 	// normalized to a UUID, on the PersistentVolume and the
@@ -127,7 +134,7 @@ const (
 	// hand-edited annotation cannot redirect a volume to another cluster.
 	AnnoVolumeHandle = "storage.simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
-	AnnoPool = "simplyblock.io/pool"
+	AnnoPool = "storage.simplyblock.io/pool"
 	// LabelPoolPrefix opens the per-pool label the operator puts on every node in
 	// a StoragePool's AllowedNodes
 	LabelPoolPrefix  = "storage.simplyblock.io/storage-pool."
@@ -136,32 +143,32 @@ const (
 	// node. It is the canonical placement/pin annotation: the operator's pin
 	// controller, drain, and rebalancer key off it, and the CSI controller reads
 	// it in CreateVolume as the primary host_id source.
-	AnnoSelectedStorageNode = "simplyblock.io/selected-storage-node"
+	AnnoSelectedStorageNode = "storage.simplyblock.io/selected-storage-node"
 	// AnnoSelectedStorageNodeApplied records the pinned-volume target the PVC
 	// controller has already acted on. It is the strict change-diff marker: the
 	// controller only requests a migration when AnnoSelectedStorageNode differs
 	// from this value, so its own writes do not re-trigger a migration.
-	AnnoSelectedStorageNodeApplied = "simplyblock.io/selected-storage-node-applied"
+	AnnoSelectedStorageNodeApplied = "storage.simplyblock.io/selected-storage-node-applied"
 	// AnnoSelectedStorageNodeRejected records the last pinned-volume value the PVC
 	// controller's backstop validation rejected as an unknown storage node. It
 	// suppresses duplicate warning events while the invalid value remains in place.
-	AnnoSelectedStorageNodeRejected = "simplyblock.io/selected-storage-node-rejected"
+	AnnoSelectedStorageNodeRejected = "storage.simplyblock.io/selected-storage-node-rejected"
 	// AnnoPlacementHint is a one-shot creation-time placement hint: the volume-
 	// placement webhook writes it with the least-loaded node it picked, the CSI
 	// controller sends it as host_id at CreateVolume, and then removes it once the
 	// volume exists. Unlike AnnoSelectedStorageNode it is not a pin, and the
 	// volume stays eligible for rebalancing.
-	AnnoPlacementHint = "simplyblock.io/placement-hint"
+	AnnoPlacementHint = "storage.simplyblock.io/placement-hint"
 	// AnnoHostID is the legacy per-PVC placement annotation. It is honored by the
 	// CSI controller as a lowest-priority host_id fallback for pre-existing PVCs,
 	// but is never rewritten or removed by the provisioner. The volume-placement
 	// webhook rewrites a user-supplied host-id into AnnoSelectedStorageNode (a pin,
 	// matching its pre-migration behavior) on new PVCs.
-	AnnoHostID = "simplyblock.io/host-id"
+	AnnoHostID = "storage.simplyblock.io/host-id"
 	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
 	// honored for backward compatibility.
 	DeprecatedAnnoHostID = "simplybk/host-id"
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
-	Finalizer = "simplyblock.io/lvol-protection"
+	Finalizer = "storage.simplyblock.io/lvol-protection"
 )

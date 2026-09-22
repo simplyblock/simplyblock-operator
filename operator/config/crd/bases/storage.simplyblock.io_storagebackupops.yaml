@@ -102,8 +102,12 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               clusterRef:
-                description: ClusterRef names the StorageCluster the operation runs
-                  against.
+                description: |-
+                  ClusterRef names the StorageCluster the operation runs against.
+
+                  Bounded at what a StorageCluster name may be, since a longer value names
+                  nothing that can exist (design-api-upgrade.md §19.4).
+                maxLength: 63
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable

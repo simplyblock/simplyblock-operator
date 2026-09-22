@@ -34,6 +34,10 @@ const (
 type StorageBackupPolicySpec struct {
 	// ClusterRef names the StorageCluster whose backup target this policy writes
 	// to.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
 	// +k8s:immutable

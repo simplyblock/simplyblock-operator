@@ -155,6 +155,38 @@ would be the old `Degraded` under a new name.
 | U-145 | A default `StorageClass` exists: it is used, and no provisioner is applied              | Positive | —    |
 | U-146 | No default `StorageClass`: `Installing` holds rather than applying hostpath             | Boundary | —    |
 
+### TLS (design §5.1, §12 Q2)
+
+Files: `operator/api/v1alpha2/controlplane_tls_test.go`,
+`operator/internal/controllers/controlplane/tls_test.go`,
+`operator/internal/webapi/controlplane_transport_test.go`
+
+| #     | Scenario                                                                         | Type       | Test                                                       |
+|-------|----------------------------------------------------------------------------------|------------|------------------------------------------------------------|
+| U-149 | A spec with no `tls` block serves TLS and requires a client certificate          | Boundary   | `TestAControlPlaneThatSaysNothingServesTLS`                |
+| U-150 | A nil `source.local` reads as closed rather than as plaintext                    | Boundary   | `TestANilLocalControlPlaneStillReadsAsClosed`              |
+| U-151 | `enableMutualTLS: false` leaves the listener serving and the caller anonymous    | Positive   | `TestEachToggleIsHonored`                                  |
+| U-152 | `enableTLS: false` never asks a caller for a certificate                         | Negative   | `TestPlaintextNeverAsksForAClientCertificate`              |
+| U-153 | A named issuer is not overwritten by the default                                 | Positive   | `TestANamedIssuerIsKept`                                   |
+| U-154 | The installed management API carries `SB_TLS_SERVE` and mounts its certificate   | Positive   | `TestTheInstalledControlPlaneServesTLSByDefault`           |
+| U-155 | Mutual TLS carries the `FDB_TLS_*` trio, and anonymous TLS carries none of it    | Boundary   | `TestMutualTLSCarriesTheFoundationDBPeerFiles`             |
+| U-156 | A plaintext install carries no TLS environment, mount, or volume at all          | Negative   | `TestDisablingServingInstallsThePlaintextControlPlane`     |
+| U-157 | Every workload of the install carries the decision, not only the one that serves | Regression | `TestEveryControlPlaneWorkloadCarriesTheDecision`          |
+| U-158 | The OpenShift issuer projects its bundle beside the Secret                       | Positive   | `TestTheOpenShiftIssuerProjectsItsBundle`                  |
+| U-159 | The atlas-lib client is handed the startup client's verified connection          | Regression | `TestTheAtlasClientIsGivenTheSameConnection`               |
+| U-160 | A plaintext deployment hands the atlas-lib client no transport                   | Negative   | `TestAPlaintextDeploymentHandsOverNoTransport`             |
+| U-161 | Nothing the install mounts is a Secret no step of it issues                      | Regression | `TestNoWorkloadWaitsOnASecretTheInstallDoesNotCreate`      |
+| U-162 | The probe of a TLS control plane carries the CA this deployment minted           | Regression | `TestTheProbeOfATLSControlPlaneCarriesTheCA`               |
+| U-163 | A plaintext probe needs no CA and does not fail for want of one                  | Negative   | `TestThePlaintextProbeNeedsNoCA`                           |
+| U-164 | The local address follows the install, either scheme                             | Positive   | `TestTheLocalAddressFollowsTheInstall`                     |
+| U-165 | The database listens for TLS only when its peers are authenticated               | Boundary   | `TestTheDatabaseListensForTLSWhenItsPeersAreAuthenticated` |
+| U-166 | Every process class carries the peer certificate, not only general               | Regression | `TestEveryProcessClassCarriesThePeerCertificate`           |
+| U-167 | An anonymous deployment leaves the database in the clear                         | Negative   | `TestAnAnonymousDeploymentLeavesTheDatabaseInTheClear`     |
+| U-168 | The database operator carries the peer certificate it reconciles with            | Positive   | `TestTheDatabaseOperatorCarriesThePeerCertificate`         |
+| U-169 | One certificate issues the peer Secret, and carries both roles                   | Regression | `TestThePeerCertificateIsIssuedOnceAndForBothRoles`        |
+| U-170 | No peer certificate is issued without peer TLS                                   | Negative   | `TestNoPeerCertificateWithoutPeerTLS`                      |
+| U-171 | Every workload holding the cluster file can open a TLS database                  | Regression | `TestEveryHolderOfTheClusterFileCanReachATLSDatabase`      |
+
 ### Deletion (design §4.4)
 
 | #    | Scenario                                                                       | Type     | Test |

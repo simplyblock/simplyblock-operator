@@ -137,6 +137,13 @@ type DeviceFilter struct {
 }
 
 // DiscoverSpec parameterizes the Discover action.
+//
+// Which workers a run inspects is stated one of two ways and never both: by name
+// in Workers, or by label in NodeSelector. They are exclusive rather than
+// intersected because the intersection of a name list and a label selector is a
+// question nobody asks deliberately, and reading one as narrowing the other
+// would make a run inspect fewer machines than either field says.
+// +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -144,10 +151,43 @@ type DiscoverSpec struct {
 	// +optional
 	ConfigName string `json:"configName,omitempty"`
 
+	// Workers are the workers to inspect, by node name.
+	//
+	// It is the answer to inspecting two named machines, which a label selector
+	// can only express by labeling them first: a selector's entries are ANDed,
+	// so two hostnames in one selector match nothing at all.
+	//
+	// A named worker that does not exist, or that is declined for one of the
+	// reasons any worker is declined, is reported by the same event the selector
+	// path reports it by. Naming a worker is a statement about which machines to
+	// consider, not a claim that each of them will be used.
+	// +kubebuilder:validation:MaxItems=128
+	// +kubebuilder:validation:items:MaxLength=253
+	// +optional
+	Workers []string `json:"workers,omitempty"`
+
 	// NodeSelector restricts which workers are inspected. Empty inspects every
-	// schedulable worker.
+	// schedulable worker, and it is exclusive with Workers.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// EnableControlPlaneNodes lets the run consider machines that run the API
+	// server and etcd.
+	//
+	// It is off by default because a storage node is a data path, and putting one
+	// on an etcd host is a placement almost nobody intends. The approval gate is a
+	// poor place to catch it: a fifty-worker draft is not a document anybody reads
+	// closely enough to spot three control-plane nodes in it. A combined three-node
+	// or single-node deployment is the case that wants it, and those are set up
+	// deliberately.
+	//
+	// There is no field beside it for infrastructure nodes, because those are used
+	// without asking: an OpenShift infra node is the tier a cluster's own
+	// infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+	// with disks in its infra nodes meant those disks to be the storage, so a draft
+	// proposes them ahead of the workers rather than leaving them out.
+	// +optional
+	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
 
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
@@ -159,6 +199,10 @@ type DiscoverSpec struct {
 	// creates. It is copied to the draft's own clusterRef, so that re-running
 	// discovery after an expansion produces a growth document naming the same
 	// cluster.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 }

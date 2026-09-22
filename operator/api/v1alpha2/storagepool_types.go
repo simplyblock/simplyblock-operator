@@ -171,13 +171,20 @@ type StoragePoolSpec struct {
 	// pool's own finalizer while classes are assigned or volumes are bound.
 	//
 	// Immutable from creation: which cluster a pool is in is its identity.
+	//
+	// The maximum is what a StorageCluster name may be rather than what a
+	// reference may be: a longer value names nothing that can exist, and the
+	// reference is immutable, so admitting one creates a pool whose only
+	// remedy is deletion (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
 
-	// AllowedNodes restricts which storage nodes may host this pool's volumes.
-	// Empty means every node in the cluster. Narrowing it stops new volumes
-	// landing on the removed nodes and leaves the existing ones where they are.
+	// AllowedNodes restricts which hosts may carry this pool's volumes, by
+	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+	// stops new volumes landing on the removed nodes and leaves the existing
+	// ones where they are.
 	//
 	// The list is left exactly as authored: a name that no longer resolves is
 	// dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -255,10 +262,11 @@ type StoragePoolStatus struct {
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
 
-	// AllowedNodes is Spec.AllowedNodes resolved against the StorageNodes that
-	// exist, which is what the control plane is sent. An empty list here is not
-	// the same as an absent Spec.AllowedNodes: absent means every node, and
-	// empty after resolution means the pool can place nothing.
+	// AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+	// exist, which is what the control plane's host list and the per-pool node
+	// labels are derived from. An empty list here is not the same as an absent
+	// Spec.AllowedNodes: absent means every node, and empty after resolution
+	// means the pool can place nothing.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
@@ -284,6 +292,13 @@ type StoragePoolStatus struct {
 // upgrade of an existing cluster applies the same CRD with storage held at
 // v1alpha1 and flips it with the storage rewrite once the conversion webhook is
 // serving.
+//
+// The name is bounded at a label's 63 bytes, because storage.simplyblock.io/pool
+// carries it on every StorageClass assigned to this pool. That label is also the
+// selector the pool lists its own classes with, so an overlong name is not only
+// a write the API server refuses but a read: the pool would never find a class
+// it had been given (design-api-upgrade.md §19.1, §19.4).
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="a StoragePool name is at most 63 characters, because it is written into the storage.simplyblock.io/pool label that assigns StorageClasses to this pool"
 // +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

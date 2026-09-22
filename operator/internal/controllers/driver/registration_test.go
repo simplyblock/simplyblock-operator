@@ -7,9 +7,13 @@
 package driver
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	storagev1 "k8s.io/api/storage/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -179,5 +183,160 @@ func TestSidecarsAreSixAndExcludeTheSnapshotController(t *testing.T) {
 	}
 	if len(distinct) != 6 {
 		t.Errorf("six overrides produced %d distinct images: %+v", len(distinct), got)
+	}
+}
+
+// snapshotAPI is a cluster that serves the snapshot API, or does not.
+type fixedSnapshotAPI struct {
+	served bool
+	err    error
+}
+
+func (f fixedSnapshotAPI) SnapshotAPIServed(context.Context) (bool, error) {
+	return f.served, f.err
+}
+
+// U-04: a cluster already serving the API is one the operator adds nothing to.
+func TestSnapshotSupportIsDetectedWhereTheAPIIsServed(t *testing.T) {
+	d := testDriver("simplyblock")
+	r := &SimplyblockDriverReconciler{Snapshots: fixedSnapshotAPI{served: true}}
+
+	origin, err := r.snapshotOrigin(t.Context(), d)
+	if err != nil {
+		t.Fatalf("detecting: %v", err)
+	}
+	if origin != simplyblockv1alpha2.SnapshotSupportOriginDetected {
+		t.Errorf("origin = %q, want Detected", origin)
+	}
+}
+
+// U-05: a cluster serving no snapshot API gets no VolumeSnapshotClass, because
+// applying one is a request the API server has no kind for. The whole set goes
+// out in one pass, so a class the cluster cannot accept fails the apply of the
+// node plugin and the controller plugin with it.
+func TestABareClusterGetsNoSnapshotClass(t *testing.T) {
+	d := testDriver("simplyblock")
+	r := &SimplyblockDriverReconciler{Snapshots: fixedSnapshotAPI{served: false}}
+
+	objects, err := r.desired(t.Context(), d, "image:tag")
+	if err != nil {
+		t.Fatalf("building the object set: %v", err)
+	}
+	for _, obj := range objects {
+		if obj.GetObjectKind().GroupVersionKind() == volumeSnapshotClassGVK {
+			t.Fatal("a VolumeSnapshotClass was built for a cluster that serves no snapshot " +
+				"API, so the apply fails on it and nothing else in the set is written")
+		}
+	}
+}
+
+// The class is built where the API is served and the toggle is on, which is the
+// case every adopted cluster is in.
+func TestASnapshotClassIsBuiltWhereTheAPIIsServed(t *testing.T) {
+	d := testDriver("simplyblock")
+	r := &SimplyblockDriverReconciler{Snapshots: fixedSnapshotAPI{served: true}}
+
+	objects, err := r.desired(t.Context(), d, "image:tag")
+	if err != nil {
+		t.Fatalf("building the object set: %v", err)
+	}
+	var found bool
+	for _, obj := range objects {
+		if obj.GetObjectKind().GroupVersionKind() == volumeSnapshotClassGVK {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no VolumeSnapshotClass was built for a cluster that serves the API")
+	}
+}
+
+// The toggle still wins. A deployment that asked for no snapshots gets none
+// wherever it runs, and reports neither origin.
+func TestSnapshotsDisabledReportsNoOriginAndBuildsNoClass(t *testing.T) {
+	d := testDriver("simplyblock")
+	d.Spec.EnableVolumeSnapshots = ptr.To(false)
+	r := &SimplyblockDriverReconciler{Snapshots: fixedSnapshotAPI{served: true}}
+
+	origin, err := r.snapshotOrigin(t.Context(), d)
+	if err != nil {
+		t.Fatalf("detecting: %v", err)
+	}
+	if origin != "" {
+		t.Errorf("origin = %q, want none for a deployment that disabled snapshots", origin)
+	}
+
+	objects, err := r.desired(t.Context(), d, "image:tag")
+	if err != nil {
+		t.Fatalf("building the object set: %v", err)
+	}
+	for _, obj := range objects {
+		if obj.GetObjectKind().GroupVersionKind() == volumeSnapshotClassGVK {
+			t.Fatal("a VolumeSnapshotClass was built for a deployment that disabled snapshots")
+		}
+	}
+}
+
+// A reconcile that cannot ask the API server whether the kind is served must not
+// guess. Guessing served applies a class that may fail; guessing absent drops a
+// class an adopted cluster already has, which withdraws snapshot support from a
+// working deployment on a transient discovery error.
+func TestADiscoveryFailureIsReportedRatherThanAssumed(t *testing.T) {
+	d := testDriver("simplyblock")
+	r := &SimplyblockDriverReconciler{
+		Snapshots: fixedSnapshotAPI{err: errors.New("the API server said no")},
+	}
+
+	if _, err := r.desired(t.Context(), d, "image:tag"); err == nil {
+		t.Error("a discovery failure was swallowed, so the object set is built on a guess")
+	}
+}
+
+// U-38: status.snapshotSupport records which of §4.1's two happened, so an
+// administrator reading the object learns whether this deployment brought
+// snapshot support to the cluster or found it.
+func TestReconcileRecordsWhereSnapshotSupportCameFrom(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{
+		Client: c, Scheme: scheme, Snapshots: fixedSnapshotAPI{served: true},
+	}
+
+	if _, err := r.Reconcile(t.Context(), requestFor(d)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &got); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Status.SnapshotSupport != simplyblockv1alpha2.SnapshotSupportOriginDetected {
+		t.Errorf("status.snapshotSupport = %q, want Detected on a cluster already serving "+
+			"the API", got.Status.SnapshotSupport)
+	}
+}
+
+// A cluster serving no snapshot API reconciles rather than failing, and says
+// nothing about an origin it does not have.
+func TestReconcileSucceedsOnAClusterWithNoSnapshotAPI(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{
+		Client: c, Scheme: scheme, Snapshots: fixedSnapshotAPI{served: false},
+	}
+
+	if _, err := r.Reconcile(t.Context(), requestFor(d)); err != nil {
+		t.Fatalf("the reconcile failed on a cluster that serves no snapshot API: %v", err)
+	}
+
+	var got simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &got); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Status.SnapshotSupport != "" {
+		t.Errorf("status.snapshotSupport = %q on a cluster with no snapshot support at all",
+			got.Status.SnapshotSupport)
 	}
 }

@@ -1,0 +1,6 @@
+enableDriveFormat is set, so every drive listed here is formatted before a storage node takes it: a drive that carries anything is not usable otherwise. This is the line to remove if any of them should be left alone.
+vcpuCount is 16, the cores of the memory node chosen on worker-1, which is the smallest of the fleet: the control plane assumes this uniform across a cluster's nodes
+maxSubsystemCount is 30, which is the middle of the range this API accepts and not a reading: how many subsystems a node should serve follows from the workload rather than from the hardware
+minHugePagesSize is 16G, the huge pages free on the memory node chosen on worker-1, which is the smallest of the fleet
+stripe is 2+1, which needs 4 storage nodes and this fleet of 32 has them: it is the widest stripe to propose without knowing the workload. This fleet could also carry 1+1, 4+1, 1+2, 2+2, 4+2, which trade capacity for a second tolerated failure or the other way about, and a cluster's stripe cannot be changed afterward
+wrote discovered-discover-pci-09 in Draft: 32 workers with 128 nvme devices, in 2 group(s) across 1 node set(s); 0 refusal(s)

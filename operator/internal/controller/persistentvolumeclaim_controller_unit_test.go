@@ -17,6 +17,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -40,6 +41,17 @@ func pinClusterCR() *simplyblockv1alpha2.StorageCluster {
 	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: pinClusterName, Namespace: pinClusterNS},
 		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: pinCluster},
+	}
+}
+
+// pinStorageNode is the object a backend node UUID is resolved to. The
+// redesigned kind names the Kubernetes object rather than the UUID, so a move
+// to a node nothing reports cannot be raised at all.
+func pinStorageNode(name, uuid string) *simplyblockv1alpha2.StorageNode {
+	return &simplyblockv1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pinClusterNS},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: pinClusterName},
+		Status:     simplyblockv1alpha2.StorageNodeStatus{UUID: uuid},
 	}
 }
 
@@ -72,7 +84,8 @@ func pinAPIServer(t *testing.T, nodes []string, currentNode string) string {
 
 func newPVCReconciler(t *testing.T, apiURL string, objs ...client.Object) (*PersistentVolumeClaimReconciler, client.Client) {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme,
+		simplyblockv1alpha2.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, nil, objs...)
 	r := &PersistentVolumeClaimReconciler{
 		Client:    cl,
@@ -126,22 +139,24 @@ func getPinPVC(t *testing.T, cl client.Client) *corev1.PersistentVolumeClaim {
 	return pvc
 }
 
-func listPinMigrations(t *testing.T, cl client.Client) []simplyblockv1alpha1.VolumeMigration {
+// listPinMigrations reads the moves this controller raised, whichever kind
+// carries them.
+func listPinMigrations(t *testing.T, r *PersistentVolumeClaimReconciler) []volumemigration.Move {
 	t.Helper()
-	var list simplyblockv1alpha1.VolumeMigrationList
-	if err := cl.List(context.Background(), &list); err != nil {
-		t.Fatalf("list VolumeMigrations: %v", err)
+	moves, err := r.mover().List(context.Background(), pinClusterNS, nil)
+	if err != nil {
+		t.Fatalf("list the volume moves: %v", err)
 	}
-	return list.Items
+	return moves
 }
 
 func TestPVCReconcile_NoChangeGate(t *testing.T) {
 	// desired == applied → nothing happens, no API call.
-	r, cl := newPVCReconciler(t, unreachableAPI, pinPVC(pinNodeB, pinNodeB), pinPV())
+	r, _ := newPVCReconciler(t, unreachableAPI, pinPVC(pinNodeB, pinNodeB), pinPV())
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
 }
@@ -156,7 +171,7 @@ func TestPVCReconcile_Unpin(t *testing.T) {
 	if _, ok := pvc.Annotations[kube.AnnoSelectedStorageNodeApplied]; ok {
 		t.Fatalf("expected applied annotation cleared, still present")
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
 }
@@ -164,7 +179,7 @@ func TestPVCReconcile_Unpin(t *testing.T) {
 func TestPVCReconcile_UnboundRequeues(t *testing.T) {
 	pvc := pinPVC(pinNodeB, "")
 	pvc.Spec.VolumeName = ""
-	r, cl := newPVCReconciler(t, unreachableAPI, pvc)
+	r, _ := newPVCReconciler(t, unreachableAPI, pvc)
 	res, err := r.Reconcile(context.Background(), pinRequest())
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -172,7 +187,7 @@ func TestPVCReconcile_UnboundRequeues(t *testing.T) {
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected requeue for unbound PVC")
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
 }
@@ -184,7 +199,7 @@ func TestPVCReconcile_InvalidTarget(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations for invalid target, got %d", got)
 	}
 	pvc := getPinPVC(t, cl)
@@ -204,7 +219,7 @@ func TestPVCReconcile_AlreadyOnTarget(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
 	if getPinPVC(t, cl).Annotations[kube.AnnoSelectedStorageNodeApplied] != pinNodeB {
@@ -229,7 +244,7 @@ func TestPVCReconcile_LegacyHostIDNormalized(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations (already on node), got %d", got)
 	}
 	got := getPinPVC(t, cl)
@@ -248,31 +263,40 @@ func TestPVCReconcile_LegacyHostIDNormalized(t *testing.T) {
 func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 	// Volume on node-a, pin to node-b → create migration + record applied.
 	api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
-	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR())
+	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR(),
+		pinStorageNode("node-a", pinNodeA), pinStorageNode("node-b", pinNodeB))
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	migs := listPinMigrations(t, cl)
+	migs := listPinMigrations(t, r)
 	if len(migs) != 1 {
-		t.Fatalf("expected 1 migration, got %d", len(migs))
+		t.Fatalf("expected 1 move, got %d", len(migs))
 	}
-	m := migs[0]
-	if m.Spec.PVName != pinPVName || m.Spec.TargetNodeUUID != pinNodeB {
-		t.Fatalf("unexpected migration spec: %+v", m.Spec)
+	if migs[0].PVName != pinPVName {
+		t.Fatalf("the move names volume %q, want %q", migs[0].PVName, pinPVName)
 	}
-	// The migration must be created in the StorageCluster's namespace, not the PVC's.
-	if m.Namespace != pinClusterNS {
-		t.Fatalf("expected migration in cluster namespace %q, got %q", pinClusterNS, m.Namespace)
+
+	// The move names the node object rather than the backend UUID, and is
+	// attributed to the cluster that owns it rather than to the claim: a claim
+	// may live in another namespace, and a cross-namespace reference is invalid.
+	var raised simplyblockv1alpha2.PersistentVolumeOps
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: migs[0].Name}, &raised); err != nil {
+		t.Fatalf("reading the move back: %v", err)
 	}
-	if m.Labels[labelPinnedVolumePV] != pinPVLabelValue(pinPVName) {
-		t.Fatalf("expected PV label %q, got %q", pinPVLabelValue(pinPVName), m.Labels[labelPinnedVolumePV])
+	if raised.Spec.Migrate == nil || raised.Spec.Migrate.TargetNodeRef.Name != "node-b" {
+		t.Fatalf("the move's target is %+v, want the StorageNode reporting %s",
+			raised.Spec.Migrate, pinNodeB)
 	}
-	if len(m.OwnerReferences) != 1 || m.OwnerReferences[0].Name != pinClusterName ||
-		m.OwnerReferences[0].Kind != "StorageCluster" {
-		t.Fatalf("expected owner reference to StorageCluster, got %+v", m.OwnerReferences)
+	if raised.Labels[labelPinnedVolumePV] != pinPVLabelValue(pinPVName) {
+		t.Fatalf("expected PV label %q, got %q",
+			pinPVLabelValue(pinPVName), raised.Labels[labelPinnedVolumePV])
+	}
+	if raised.Spec.CreatorRef == nil || raised.Spec.CreatorRef.Name != pinClusterName {
+		t.Fatalf("expected the cluster as the creator, got %+v", raised.Spec.CreatorRef)
 	}
 	if getPinPVC(t, cl).Annotations[kube.AnnoSelectedStorageNodeApplied] != pinNodeB {
-		t.Fatalf("expected applied = %s after creating migration", pinNodeB)
+		t.Fatalf("expected applied = %s after raising the move", pinNodeB)
 	}
 }
 
@@ -288,7 +312,7 @@ func TestPVCReconcile_NoStorageCluster(t *testing.T) {
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected requeue when no StorageCluster manages the cluster")
 	}
-	if got := len(listPinMigrations(t, cl)); got != 0 {
+	if got := len(listPinMigrations(t, r)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
 	if _, ok := getPinPVC(t, cl).Annotations[kube.AnnoSelectedStorageNodeApplied]; ok {
@@ -298,17 +322,22 @@ func TestPVCReconcile_NoStorageCluster(t *testing.T) {
 
 func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 	// A non-terminal migration for this PV already exists → wait, do not duplicate.
-	existing := &simplyblockv1alpha1.VolumeMigration{
+	existing := &simplyblockv1alpha2.PersistentVolumeOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "existing-mig",
-			Namespace: pinClusterNS,
-			Labels:    map[string]string{labelPinnedVolumePV: pinPVLabelValue(pinPVName)},
+			Name:   "existing-move",
+			Labels: map[string]string{labelPinnedVolumePV: pinPVLabelValue(pinPVName)},
 		},
-		Spec:   simplyblockv1alpha1.VolumeMigrationSpec{PVName: pinPVName, TargetNodeUUID: pinNodeA},
-		Status: simplyblockv1alpha1.VolumeMigrationStatus{Phase: simplyblockv1alpha1.VolumeMigrationPhaseRunning},
+		Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+			PersistentVolumeName: pinPVName,
+			Action:               simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+		},
+		Status: simplyblockv1alpha2.PersistentVolumeOpsStatus{
+			Phase: simplyblockv1alpha2.PersistentVolumeOpsPhaseRunning,
+		},
 	}
 	api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
-	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR(), existing)
+	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR(),
+		pinStorageNode("node-a", pinNodeA), pinStorageNode("node-b", pinNodeB), existing)
 	res, err := r.Reconcile(context.Background(), pinRequest())
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -316,10 +345,46 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected requeue while a migration is in flight")
 	}
-	if got := len(listPinMigrations(t, cl)); got != 1 {
-		t.Fatalf("expected only the pre-existing migration, got %d", got)
+	if got := len(listPinMigrations(t, r)); got != 1 {
+		t.Fatalf("expected only the pre-existing move, got %d", got)
 	}
 	if _, ok := getPinPVC(t, cl).Annotations[kube.AnnoSelectedStorageNodeApplied]; ok {
 		t.Fatalf("applied must not be set while waiting for an in-flight migration")
+	}
+}
+
+// TestCSIVolumeHandlePartsPrefersTheNormalizedAnnotation is the read half of
+// §16.4. A volume provisioned before the v2 API migration spells its pool as a
+// name in a field nothing can rewrite, so the upgrade resolves it once into an
+// annotation and every reader takes that instead.
+func TestCSIVolumeHandlePartsPrefersTheNormalizedAnnotation(t *testing.T) {
+	const (
+		cluster  = "2f4f0300-9993-4289-be95-59414fc8a54d"
+		poolUUID = "1c2c0300-9993-4289-be95-59414fc8a54d"
+		volume   = "8b1f0300-9993-4289-be95-59414fc8a54d"
+	)
+
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pvc-legacy",
+			Annotations: map[string]string{
+				kube.AnnoVolumeHandle: cluster + ":" + poolUUID + ":" + volume,
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
+			CSI: &corev1.CSIPersistentVolumeSource{
+				Driver:       kube.DriverName,
+				VolumeHandle: cluster + ":production:" + volume,
+			}}},
+	}
+
+	_, poolRef, _, ok := csiVolumeHandleParts(pv)
+	if !ok {
+		t.Fatal("the handle was not read at all")
+	}
+	if poolRef != poolUUID {
+		t.Errorf("pool = %q, want the normalized %q: the reader took the field's name, so "+
+			"every control-plane call made with it names a pool by a spelling the v2 API "+
+			"does not accept", poolRef, poolUUID)
 	}
 }

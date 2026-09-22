@@ -23,23 +23,12 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 )
 
-// JournalManagerSpec configures the journal managers on a set of nodes.
-//
-// It is declared here rather than borrowed from v1alpha1, as
-// design-clusterdeploymentconfig.md §Appendix A spells it. A v1alpha2 type whose
-// fields are v1alpha1 types cannot be reshaped by the redesign without changing
-// this version's wire format, and it makes the import cycle that the conversion
-// webhook needs impossible: the spoke's ConvertTo and ConvertFrom have to be
-// methods on the v1alpha1 type, so v1alpha1 imports v1alpha2 and v1alpha2 cannot
-// import back.
-type JournalManagerSpec struct {
-	// Count is the number of journal managers to configure.
-	// +optional
-	Count *int32 `json:"count,omitempty"`
-	// PercentPerDevice is the journal manager capacity percentage per device.
-	// +optional
-	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
-}
+// JournalManagerSpec, the journal tuning this document's node-set template
+// states, is StorageNode's own type in storagenode_types.go. It was declared
+// here while that kind was still v1alpha1, for the reason StripeSpec was, and
+// moved to the kind that owns the concept once it arrived: a journal count and a
+// per-device share are one node's on-disk layout, fixed when its devices were
+// partitioned.
 
 // StripeSpec, the erasure-coding layout this document's template states, is
 // StorageCluster's own type in storagecluster_types.go. It was declared here
@@ -69,7 +58,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
 type ClusterDeploymentConfigStep string
 
 const (
@@ -77,6 +66,15 @@ const (
 	ClusterDeploymentConfigStepCreatingCluster ClusterDeploymentConfigStep = "CreatingCluster"
 	ClusterDeploymentConfigStepAwaitingCluster ClusterDeploymentConfigStep = "AwaitingCluster"
 	ClusterDeploymentConfigStepCreatingNodes   ClusterDeploymentConfigStep = "CreatingNodes"
+
+	// ClusterDeploymentConfigStepActivating waits for the nodes this document
+	// created and then asks for the cluster to be activated.
+	//
+	// The document knows how many nodes it made, so it knows when the deployment
+	// it describes is whole. Stopping at "the objects exist" would leave a
+	// cluster that serves nothing behind a document reporting Expanded, with
+	// nothing saying that one more thing is required of anybody.
+	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
@@ -204,9 +202,13 @@ type NodeSet struct {
 // one. It carries the layout fields a cluster cannot change later, so that a
 // reviewer sees them before the cluster exists rather than after.
 type ClusterTemplate struct {
-	// Name is the StorageCluster's name.
+	// Name is the StorageCluster's name, and is therefore held to what such a
+	// name may be rather than to what an object name may be. A longer value is a
+	// document the API server accepts and a CreatingCluster step that can never
+	// succeed, since the cluster it would write is one the API server refuses
+	// (design-api-upgrade.md §19.4).
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
@@ -237,6 +239,44 @@ type ClusterTemplate struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// EnableDriveFormat formats every device the document names before a storage
+	// node takes it, which is how a drive carrying anything already is made
+	// usable.
+	//
+	// It says what is wanted rather than how, because the how differs by device
+	// class: an NVMe device is formatted to a 4K block size, and a logical block
+	// device has its signatures wiped. One field covers both, so a document does
+	// not have to know which class the expansion will resolve it to.
+	//
+	// It is on the document rather than defaulted further down because it is
+	// destructive and the document is what somebody approves. A reviewer reading
+	// a draft has to see that the drives it lists will be formatted, and be able
+	// to strike it before approving; the cluster's own field is immutable once
+	// the cluster exists, so a default nobody saw could not be undone either.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
+	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+	// each worker runs, so a group of two workers on a two-socket layout expands
+	// to four nodes.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on: the layout a fleet was built with is not one a later document
+	// can vary, and a reviewer should see it before the cluster exists.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket. See
+	// SocketsToUse, which it multiplies.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
@@ -260,15 +300,24 @@ type ClusterTemplate struct {
 // node set names the same member of its DeviceSelection. The expansion reads the
 // class off them and stamps it onto the cluster it creates, which is why the
 // document carries no field for it.
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
 	// reviewing a wrong document safe.
+	//
+	// It is defaulted and serialized rather than omitted when false, and the
+	// two are the same requirement read twice. A reviewer has to see the gate
+	// they are being asked to open, and the rules above have to find the field
+	// they read: a bool omitted when false is a key the apiserver never stores,
+	// so a rule reading it fails rather than reading false, and the first rule
+	// guarding approval denied every approval there could ever be. The has()
+	// guards are what carry documents written before the default existed.
 	// +optional
-	Approved bool `json:"approved,omitempty"`
+	// +kubebuilder:default=false
+	Approved bool `json:"approved"`
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
@@ -287,7 +336,11 @@ type ClusterDeploymentConfigSpec struct {
 	// Absent means the document creates the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
-	// +kubebuilder:validation:MaxLength=253
+	//
+	// The maximum is what a StorageCluster name may be and not the 253 an object
+	// name may be: a reference between the two names nothing that can exist
+	// (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 
@@ -314,7 +367,7 @@ type ClusterDeploymentConfigStatus struct {
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -340,6 +393,18 @@ type ClusterDeploymentConfigStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ExpansionStartedAt is when the expansion machine was born, which is the
+	// first reconcile after the document was approved. A document may sit as a
+	// draft for as long as a review takes, so this is not creationTimestamp and
+	// the difference is the whole point: how long a deployment takes is measured
+	// from the moment somebody said yes.
+	//
+	// It is the start of §9.2's expansion_duration_seconds. A histogram needs an
+	// instant that survives the operator restarting mid-expansion, which nothing
+	// in memory and no step deadline supplies.
+	// +optional
+	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

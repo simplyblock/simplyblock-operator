@@ -40,6 +40,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceCapacity":     schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceCapacity(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics":      schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetrics(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetricsList":  schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity":       schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeCapacity(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics":        schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref),
+		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetricsList":    schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolCapacity":       schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolCapacity(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetrics":        schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetrics(ref),
 		"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StoragePoolMetricsList":    schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref),
@@ -597,6 +600,177 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(r
 		},
 		Dependencies: []string{
 			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageDeviceMetrics", v1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeCapacity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StorageNodeCapacity is what one storage node holds. Every size is in bytes and is quoted as a resource.Quantity so that kubectl prints it the way it prints a PersistentVolumeClaim's capacity.\n\nIt carries the same fields a device's reading does, because a node's total is the sum of its devices' and a reader comparing the two should not have to reconcile different shapes.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Total is the space the node's devices provide, as the exporter measured it.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"used": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Used is the space they currently hold.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"free": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Free is the node's unallocated remainder as the control plane accounts for it. It is reported rather than derived, so it need not equal Total minus Used.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"provisioned": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Provisioned is the space promised out of the node, which on a thin-provisioned pool may exceed Total.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"utilizationPercent": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UtilizationPercent is the control plane's own utilization figure, from 0 to 100. It is taken verbatim rather than recomputed from Used and Total, so that it agrees with what the control plane's own interfaces report.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+				Required: []string{"total", "used", "free", "provisioned", "utilizationPercent"},
+			},
+		},
+		Dependencies: []string{
+			resource.Quantity{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetrics(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StorageNodeMetrics is one storage node's capacity reading.\n\nThe object is named after the StorageNode it measures and lives in that object's namespace, so somebody who has the node's name needs to learn nothing else to ask for it, and ordinary namespaced RBAC confines a reader to the namespaces they already have. A backend node with no StorageNode object is therefore not listed: it has no name in this API and no namespace to be authorized against.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "metadata is standard object metadata. Name and namespace are the StorageNode's. The creationTimestamp is the node object's rather than the reading's.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"timestamp": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Timestamp is when the control plane sampled these values, which is older than the moment the request was served and may be considerably older if its exporter has stopped being scraped. It is the zero time when the node has never been sampled, so that \"never measured\" does not read as \"measured in 1970.\"",
+							Ref:         ref(v1.Time{}.OpenAPIModelName()),
+						},
+					},
+					"nodeID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeID is the control plane's identifier for the backend node. It is the join key back to the control plane's own exporter and to its API, and it is the field that changes when a slot is refilled by a replacement node while the object's name stays where it was.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"storageCluster": {
+						SchemaProps: spec.SchemaProps{
+							Description: "StorageCluster is the name of the StorageCluster object the node belongs to, so a reading says which cluster it is about without a second lookup.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"workerNode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WorkerNode is the Kubernetes worker the node runs on, which is what a reader correlating a full node with a machine is actually looking for.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"capacity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Capacity is the reading itself.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity"),
+						},
+					},
+				},
+				Required: []string{"timestamp", "nodeID", "storageCluster", "capacity"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeCapacity", v1.ObjectMeta{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+	}
+}
+
+func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StorageNodeMetricsList is a list of readings. It carries no continue token: the whole set is served from memory in one pass, so there is nothing to page through.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2.StorageNodeMetrics", v1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 

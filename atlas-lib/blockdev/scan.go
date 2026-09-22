@@ -191,6 +191,17 @@ const (
 	// TransportSCSI is a SCSI disk whose bus the tree does not narrow further.
 	TransportSCSI Transport = "SCSI"
 
+	// TransportISCSI is a LUN reached over iSCSI, which is a disk on the other
+	// side of a network presented through the SCSI stack.
+	//
+	// It is a separate transport from TransportSCSI, and the distinction is the
+	// whole reason it is read. Every marker an iSCSI LUN carries says SCSI: it
+	// hangs off a host, it is addressed as a target, and it presents an sdX. The
+	// one thing that says where its bytes are is the session the SCSI transport
+	// class creates for it, and a caller deciding whether to hand a disk to a
+	// storage cluster is deciding about bytes that are somewhere else.
+	TransportISCSI Transport = "iSCSI"
+
 	// TransportVirtio is a paravirtualized disk, which is what a virtual worker
 	// has.
 	TransportVirtio Transport = "Virtio"
@@ -245,6 +256,16 @@ type Disk struct {
 	// NUMANode is the memory node the device's bus is attached to, or
 	// NUMANodeUnknown.
 	NUMANode int
+
+	// SubsystemNQN is the NVMe Qualified Name of the subsystem the namespace
+	// belongs to, and is empty for a device on any other bus.
+	//
+	// It is what identifies a namespace rather than placing it. The transport
+	// says a fabric namespace came from somewhere else, which is an inference
+	// from where its controllers are; the NQN says what it is, and a caller
+	// that needs to recognize its own product's volumes among a machine's
+	// disks has nothing else to read.
+	SubsystemNQN string
 
 	// Partitions is the kernel names of the partitions on this device,
 	// ascending. A disk with any is a disk something has already divided up,
@@ -331,6 +352,7 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Virtual = sysfs.IsVirtual(resolved)
 	disk.PCIAddress = sysfs.PCIAddressOf(resolved)
 	disk.NUMANode = numaNodeOf(resolved)
+	disk.SubsystemNQN = subsystemNQNOf(resolved)
 	if transport, ok := nvmeSubsystemTransport(resolved); ok {
 		disk.Transport = transport
 	} else {
@@ -425,6 +447,12 @@ func transportOf(resolved string) Transport {
 		case strings.HasPrefix(segment, "end_device-"), strings.HasPrefix(segment, "sas_"),
 			strings.HasPrefix(segment, "expander-"):
 			return TransportSAS
+		case numbered(segment, "session"):
+			// The SCSI transport class names an iSCSI session sessionN and
+			// nothing else in the tree is named that way. The host segment
+			// above it has already set the SCSI fallback, and this overrides
+			// it, because where a LUN's bytes are is the more specific answer.
+			return TransportISCSI
 		case numbered(segment, "host"):
 			scsi = true
 		}
@@ -502,6 +530,18 @@ func nvmeSubsystemTransport(resolved string) (Transport, bool) {
 		}
 	}
 	return TransportNVMeFabric, true
+}
+
+// subsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
+// and returns the empty string for a device that is on no NVMe subsystem.
+//
+// One read covers both shapes the kernel presents. A namespace reached through
+// a multipath head sits under its nvme-subsysN directory, and one reached
+// through a single controller sits under that controller: in both, the
+// subsysnqn attribute is in the parent, which is why this reads the parent
+// rather than deciding which shape it is looking at first.
+func subsystemNQNOf(resolved string) string {
+	return sysfs.String(filepath.Dir(filepath.Clean(resolved)), "subsysnqn")
 }
 
 // controllerName matches the controller entries of a subsystem directory,

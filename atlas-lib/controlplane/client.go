@@ -16,6 +16,18 @@ type Config struct {
 	Endpoint string        // base URL of the control-plane API
 	Token    string        // cluster secret / bearer token
 	Timeout  time.Duration // per-request timeout, where zero means a sane default
+
+	// Transport carries the connection, and is what a caller reaching a control
+	// plane over TLS supplies: the certificate pool that verifies the endpoint,
+	// and the client certificate it presents where the control plane requires
+	// one.
+	//
+	// It is a RoundTripper rather than a *tls.Config because the decision is the
+	// caller's and not every caller reaches the endpoint the same way. Nil is
+	// http.DefaultTransport, which is the system trust store and no client
+	// certificate -- correct for a plaintext endpoint and for one signed by a CA
+	// the host already trusts.
+	Transport http.RoundTripper
 }
 
 // Client talks to the simplyblock control-plane v2 API. It wraps the
@@ -35,7 +47,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	api, err := cpapi.NewClientWithResponses(
 		cfg.Endpoint,
-		cpapi.WithHTTPClient(&http.Client{Timeout: cfg.Timeout}),
+		cpapi.WithHTTPClient(&http.Client{Timeout: cfg.Timeout, Transport: cfg.Transport}),
 		cpapi.WithRequestEditorFn(bearerAuth(cfg.Token)),
 	)
 	if err != nil {

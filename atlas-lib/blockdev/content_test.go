@@ -52,6 +52,10 @@ var catalog = []want{
 	{"mdraid-11", ContentForeign, "linux_raid_member", "U-12: md metadata 1.1, at offset 0"},
 	{"mdraid-12", ContentForeign, "linux_raid_member", "U-12: md metadata 1.2, at offset 4096"},
 	{"zfs", ContentForeign, "zfs_member", "U-12: ZFS vdev labels"},
+	// The one capture no local tool can reproduce: the superblock is written by
+	// a storage node, so the image comes off a device this product wrote.
+	{"alceml", ContentSimplyblock, "simplyblock_alceml",
+		"U-65: an alceml superblock, which blkid and wipefs both read as nothing"},
 	// U-15: the only reading that permits a format.
 	{"blank", ContentBlank, "", "U-15: a device that has never been written to"},
 }

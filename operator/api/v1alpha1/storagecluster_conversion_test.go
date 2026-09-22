@@ -667,3 +667,72 @@ func TestStorageClusterARemovedFieldsNoteGoesWhenItsBlockDoes(t *testing.T) {
 		}
 	}
 }
+
+// The baseline enums were recased for v1alpha2 the way MetricsBackend was, so
+// conversion has to map them rather than cast them. A cast would carry
+// "rollingWindow" into a version whose Enum marker admits "RollingWindow," which
+// the API server refuses on the next write — and the storage rewrite's unchanged
+// write is exactly such a write.
+func TestBaselineEnumsAreRecasedBothWays(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		strategy      BaselineStrategy
+		coldStart     BaselineColdStartPolicy
+		wantStrategy  v1alpha2.BaselineStrategy
+		wantColdStart v1alpha2.BaselineColdStartPolicy
+	}{
+		{
+			name:          "the defaults",
+			strategy:      BaselineStrategyRollingWindow,
+			coldStart:     BaselineColdStartPartialWindow,
+			wantStrategy:  v1alpha2.BaselineStrategyRollingWindow,
+			wantColdStart: v1alpha2.BaselineColdStartPartialWindow,
+		},
+		{
+			name:          "the other member of each",
+			strategy:      BaselineStrategyBenchmark,
+			coldStart:     BaselineColdStartDefer,
+			wantStrategy:  v1alpha2.BaselineStrategyBenchmark,
+			wantColdStart: v1alpha2.BaselineColdStartDefer,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			from := &VolumeAutoPlacementSettings{
+				BaselineStrategy:  ptr.To(tc.strategy),
+				BaselineColdStart: ptr.To(tc.coldStart),
+			}
+
+			hub := autoPlacementToHub(from)
+			if got := *hub.BaselineStrategy; got != tc.wantStrategy {
+				t.Errorf("baselineStrategy converted to %q, want %q", got, tc.wantStrategy)
+			}
+			if got := *hub.BaselineColdStart; got != tc.wantColdStart {
+				t.Errorf("baselineColdStart converted to %q, want %q", got, tc.wantColdStart)
+			}
+
+			// And back, because a round trip that did not restore the spelling
+			// would make the storage rewrite look like an edit.
+			back := autoPlacementFromHub(hub)
+			if got := *back.BaselineStrategy; got != tc.strategy {
+				t.Errorf("baselineStrategy came back as %q, want the %q it went in as",
+					got, tc.strategy)
+			}
+			if got := *back.BaselineColdStart; got != tc.coldStart {
+				t.Errorf("baselineColdStart came back as %q, want the %q it went in as",
+					got, tc.coldStart)
+			}
+		})
+	}
+}
+
+// A value neither version declares passes through rather than being dropped, the
+// same way MetricsBackend's does. A field that silently emptied itself would
+// turn a typo into the default, and the schema is what refuses the typo.
+func TestAnUndeclaredBaselineValuePassesThrough(t *testing.T) {
+	hub := autoPlacementToHub(&VolumeAutoPlacementSettings{
+		BaselineStrategy: ptr.To(BaselineStrategy("whatever")),
+	})
+	if got := string(*hub.BaselineStrategy); got != "whatever" {
+		t.Errorf("an unrecognized value converted to %q, want it carried through", got)
+	}
+}

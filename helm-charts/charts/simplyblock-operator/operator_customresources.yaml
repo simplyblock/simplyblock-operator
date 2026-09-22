@@ -1,153 +1,125 @@
-apiVersion: storage.simplyblock.io/v1alpha1
-kind: StorageCluster
+# The deployment path, as objects to apply by hand.
+#
+# Nothing in the chart applies this file: `helm install` puts the operator in the
+# cluster and this is what an administrator applies afterward, or edits into their
+# own manifests.
+#
+# Most deployments need none of it. A fresh install raises one discovery run by
+# itself, which inspects the fleet and writes a ClusterDeploymentConfig in Draft;
+# reviewing that draft and setting `approved: true` on it is the whole deployment.
+# The document below is what that draft looks like, for a deployment somebody
+# would rather write than review, and for the fields a draft leaves for a reviewer
+# to fill in.
+#
+#   kubectl get clusterdeploymentconfigs -n simplyblock
+#   kubectl edit  clusterdeploymentconfig <name> -n simplyblock   # set approved: true
+#
+# The document creates the StorageCluster and its StorageNodes. Applying a
+# StorageCluster of the same name alongside it is refused with ClusterExists,
+# because a config creates or adds and never reconciles a difference.
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
 metadata:
-  name: simplyblock-cluster
+  name: simplyblock-deployment
   namespace: simplyblock
 spec:
-  fabricType: tcp
-  # enableNodeAffinity: false
-  # clientDataIfname: eth1
-  # nvmfBasePort: 4420
-  # rpcBasePort: 9502
-  # snodeApiPort: 8090
-  # enableFailureDomains: false
-  # Cluster-wide storage-node sizing — required, and applies to every storage
-  # node in the cluster. maxSubsystemCount must not exceed the backend's
-  # MAX_SUBSYSTEMS_PER_NODE (75); vcpuCount is an explicit core count.
-  maxSubsystemCount: 50
-  vcpuCount: 8
-  # maxHugePagesSize: "100G"
-  stripe:
-    dataChunks: 1
-    parityChunks: 1
-  warningThreshold:
-    capacity: 80
-    provisionedCapacity: 80
-  criticalThreshold:
-    capacity: 90
-    provisionedCapacity: 90
-  hashicorpVaultSettings:
-    baseURL: https://vault.example.com:8200
+  # A document is validated on every pass and expanded on none until this is set.
+  # Everything below becomes immutable the moment it is, because the document is
+  # then the record of what was deployed.
+  approved: false
+
+  # The Kubernetes distribution. It is a shorthand the expansion spends: it sets
+  # the kubelet, CPU-topology, and host flags on every node the document produces,
+  # after which nothing reads it again.
+  environment: OpenShift
+  # edgeCluster: false
+
+  # The cluster to create. Omit this block and set clusterRef instead to grow a
+  # cluster that already exists, which is how a rack is added.
+  # clusterRef: simplyblock-cluster
+  cluster:
+    name: simplyblock-cluster
+    # All three sizing values are stated once for the deployment, because the
+    # control plane assumes them uniform across a cluster's nodes. Two of them are
+    # copied onto each node so a node records the layout it was built with;
+    # maxSubsystemCount is read from the cluster and no node holds a copy.
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: "100G"
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    # enableFailureDomains: false
+
+  # The nodes the cluster is made of. A node set is the organizational grouping,
+  # usually a rack; a group is the workers that share one configuration, so ten
+  # machines with the same disks are written once rather than ten times.
+  nodeSets:
+    - name: rack-a
+      groups:
+        - name: default
+          workers:
+            - worker-node-1
+            - worker-node-2
+            - worker-node-3
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          # Every device the group's workers hand to simplyblock, named
+          # explicitly. There is no allow list, no model match, and no size
+          # range: a document whose meaning depends on what the hardware turns
+          # out to be is not one a reviewer can approve, so filtering happens in
+          # the discovery run that produces the list.
+          #
+          # A cluster is built out of one class of backend storage, so every
+          # group of the document names the same member: all `nvme` or all
+          # `block`, never a mixture.
+          devices:
+            nvme:
+              - "0000:01:00.0"
+              - "0000:02:00.0"
+            # block:
+            #   - /dev/sdb
+            #   - /dev/sdc
+          # The fault group these workers share, named for the rack, zone, or
+          # power feed rather than indexed. Required when the cluster has
+          # enableFailureDomains set.
+          # failureDomain: rack-a
+          # spdkSystemMemory: 4G
+          # journalManager:
+          #   count: 3
+          #   percentPerDevice: 3
 
 ---
-apiVersion: storage.simplyblock.io/v1alpha1
+# A pool to carve volumes out of. The cluster creates a default one, so this is
+# for a deployment that wants a second with its own limits.
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: simplyblock-pool
   namespace: simplyblock
 spec:
-  clusterName: simplyblock-cluster
-  # capacityLimit: 500G
-  # logicalVolumeMaxSize: 50G
-  # dhchap: false
-  # allowedNodes:
-  #   - worker-node-1
-  #   - worker-node-2
-  #   - worker-node-3
-  # qos:
+  clusterRef: simplyblock-cluster
+  # The ceilings the pool as a whole is held to. Mutable: raising a pool's
+  # capacity is an ordinary operation.
+  # limits:
+  #   capacity: 500G
+  #   maxVolumeSize: 50G
   #   iops: 10000
   #   throughput:
   #     read: 500
   #     write: 250
   #     readWrite: 750
-  # storageClassParameters:
-  #   encryption: false
-  #   fabric: tcp
+  #
+  # What every volume in the pool is created with. Immutable once set, because a
+  # StorageClass's parameters are: changing them means creating a new pool.
+  # volumeDefaults:
   #   filesystem: ext4
-  #   maxNamespacePerSubsys: "1"
-  #   qosRMbytes: "0"
-  #   qosWMbytes: "0"
-  #   qosRwMbytes: "0"
-  #   qosRwIops: "0"
-  #   tune2fsReservedBlocks: "0"
-
----
-apiVersion: storage.simplyblock.io/v1alpha1
-kind: StorageNodeSet
-metadata:
-  name: simplyblock-node
-  namespace: simplyblock
-spec:
-  clusterName: simplyblock-cluster
-  # clusterImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
-  # spdkImage: "quay.io/simplyblock-io/spdk:26.2.2-PRE"
-  # spdkProxyImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
-  #spdkSystemMemory: 4G
-  mgmtIfname: br-ex
-  dataIfname:
-    - br-ex
-  workerNodes: []
-    # - worker-node-1
-    # - worker-node-2
-    # - worker-node-3
-  # enableJournalDevice: false
-  nodesPerSocket: 1
-  reservedSystemCPU: "0,1"
-  socketsToUse:
-    - "0"
-  journalManager:
-    count: 3
-    percentPerDevice: 3
-  # deviceNames:
-  #   - nvme0n1
-  #   - nvme1n1
-  # pcieAllowList:
-  #   - "0000:01:00.0"
-  # pcieDenyList:
-  #   - "0000:02:00.0"
-  # pcieModel: "INTEL SSDPE2KX010T8"
-  # driveSizeRange: "100G-2T"
-  skipKubeletConfiguration: false
-  enableCpuTopology: true
-  openShiftCluster: true
-  ubuntuHost: false
-  forceFormat4K: true
-  # tolerations:
-  #   - key: node-role.kubernetes.io/storage
-  #     operator: Equal
-  #     value: "true"
-  #     effect: NoSchedule
-  # openShiftMachineConfigPool: ""
-  # maxParallelNodeAdds: 1
-  # expand: false
-  # imagePullPolicy: IfNotPresent
-  # containerResources:
-  #   requests:
-  #     cpu: "500m"
-  #     memory: "512Mi"
-  #   limits:
-  #     cpu: "2"
-  #     memory: "2Gi"
-  # initContainerResources:
-  #   requests:
-  #     cpu: "100m"
-  #     memory: "128Mi"
-  #   limits:
-  #     cpu: "500m"
-  #     memory: "512Mi"
-  # nodeFailureDomains:
-  #   worker-node-1: 0
-  #   worker-node-2: 0
-  #   worker-node-3: 1
-  # nodeConfigs:
-  #   worker-node-1:
-  #     failureDomain: 0
-
----
-# The CSI driver's deployment as a resource (design-simplyblockdriver.md): the
-# operator reconciles it into the node plugin, the controller plugin, their
-# RBAC, and the CSIDriver registration. One per cluster. The name derives every
-# workload name (simplyblock-csi-node, simplyblock-csi-controller), and on a
-# cluster where the chart previously installed the driver, the first reconcile
-# adopts the running deployment instead of recreating it. Every field defaults:
-# an unset image runs the driver build belonging to the reconciling operator.
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: SimplyblockDriver
-metadata:
-  name: simplyblock
-  namespace: simplyblock
-spec:
-  driverName: csi.simplyblock.io
-  # image: docker.io/simplyblock/spdkcsi:latest
-  # imagePullPolicy: Always
-  # controllerReplicas: 1
+  #   fabric: tcp
+  #   enableEncryption: false
+  #   enableDHCHAP: false
+  #
+  # allowedNodes:
+  #   - worker-node-1

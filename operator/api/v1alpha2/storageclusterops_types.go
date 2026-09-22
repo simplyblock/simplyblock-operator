@@ -118,6 +118,10 @@ type StorageClusterOpsSpec struct {
 	// ClusterRef names the StorageCluster this operation acts on. The operation
 	// never owns its target, because deleting the record of an operation must
 	// not delete the cluster it operated on.
+	//
+	// Bounded at what a StorageCluster name may be, since a longer value names
+	// nothing that can exist (design-api-upgrade.md §19.4).
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`

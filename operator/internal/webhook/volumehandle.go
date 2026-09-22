@@ -1,14 +1,15 @@
 // volumehandle.go resolves a PersistentVolume to its simplyblock volume
 // handle for admission checks. The handle grammar and the PV ownership check
-// live in atlas (lvol.ParseHandle, kube.VolumeHandleFromPV); this file only
-// composes them with the client read the webhooks need.
+// live in atlas (kube.NormalizedVolumeHandleFromPV, which applies §16.4's rule
+// that a resolved handle recorded in an annotation is preferred to the legacy
+// spelling the immutable field keeps); this file only composes them with the
+// client read the webhooks need.
 package webhook
 
 import (
 	"context"
 
 	"github.com/simplyblock/atlas/kube"
-	"github.com/simplyblock/atlas/lvol"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,14 +29,12 @@ func pvVolumeHandle(
 	if err := c.Get(ctx, types.NamespacedName{Name: pvName}, pv); err != nil {
 		return "", "", "", false, err
 	}
-	raw, err := kube.VolumeHandleFromPV(pv)
+	normalized, err := kube.NormalizedVolumeHandleFromPV(pv)
 	if err != nil {
-		// Not a volume this driver owns: undeterminable, not a failure.
+		// Not a volume this driver owns, or one whose handle does not parse:
+		// undeterminable, not a failure.
 		return "", "", "", false, nil
 	}
-	h, parsed := lvol.ParseHandle(raw)
-	if !parsed {
-		return "", "", "", false, nil
-	}
+	h := normalized.Handle
 	return h.ClusterID, h.PoolRef, h.VolumeID, true, nil
 }

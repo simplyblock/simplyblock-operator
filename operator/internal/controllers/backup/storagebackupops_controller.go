@@ -215,7 +215,7 @@ func (r *StorageBackupOpsReconciler) advance(
 	current := machine.CurrentState()
 
 	if ops.Spec.Abort {
-		return r.unwind(ctx, ops, current)
+		return r.unwind(ctx, ops, machine, current)
 	}
 
 	if machine.TimeoutReached() {
@@ -283,9 +283,14 @@ func (r *StorageBackupOpsReconciler) enterInitialStep(
 // something the graph cannot take back, and stopping there would leave the
 // system holding it with no record of what it is for.
 func (r *StorageBackupOpsReconciler) unwind(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps, current step,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageBackupOps,
+	machine *statemachine.Machine[step],
+	current step,
 ) (ctrl.Result, error) {
-	if !abortable(current) {
+	// The machine is asked rather than a table beside it: the graph it was built
+	// from is the one authority over what this action can stop from.
+	if !machine.CanAbort() {
 		// Not a failure of the operation: it carries on. What the user asked for
 		// cannot be done, and saying so is the whole of the response.
 		return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, fmt.Sprintf(
