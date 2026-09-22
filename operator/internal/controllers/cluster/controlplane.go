@@ -79,6 +79,14 @@ type ControlPlane interface {
 	// outcome being asked for reached by another route, so the implementation
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
+
+	// Endpoint is the base URL this control plane was actually reached at,
+	// resolved from SIMPLYBLOCK_WEBAPI_BASE_URL when set. upsertCSICredentials
+	// carries it into the CSI driver's aggregate Secret, since the CSI driver
+	// dials it directly rather than through this reconciler: a hardcoded
+	// in-cluster address is wrong the moment the control plane this cluster was
+	// adopted from lives on a different Kubernetes cluster (a shared hub).
+	Endpoint() string
 }
 
 // httpControlPlane is the ControlPlane the operator runs with: the shared
@@ -87,6 +95,8 @@ type httpControlPlane struct{ client *webapi.Client }
 
 // NewControlPlane returns the HTTP-backed control-plane surface.
 func NewControlPlane() ControlPlane { return &httpControlPlane{client: webapi.NewClient()} }
+
+func (c *httpControlPlane) Endpoint() string { return c.client.BaseURL }
 
 func (c *httpControlPlane) Ready(ctx context.Context) error {
 	_, err := c.call(ctx, http.MethodGet, "/api/v2/_meta/ready", nil)

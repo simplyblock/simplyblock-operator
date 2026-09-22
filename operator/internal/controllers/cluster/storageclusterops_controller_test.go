@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -262,6 +263,45 @@ func TestAShutdownIssuesOneCallAndWaitsForTheCluster(t *testing.T) {
 	}
 	if api.shutdownCalls != 1 {
 		t.Errorf("the control plane was asked to shut down %d times, want 1", api.shutdownCalls)
+	}
+}
+
+// An operation against an already-adopted cluster may reach a control plane on
+// a different Kubernetes cluster (a shared hub), the same as
+// StorageClusterReconciler: it authenticates as the cluster's own recorded
+// secret instead of as this operator's Kubernetes identity, since a Kubernetes
+// TokenReview can never cross a cluster boundary.
+func TestAnOperationAuthenticatesAsItsClusterOnceItsSecretIsKnown(t *testing.T) {
+	var gotToken string
+	var gotOK bool
+	active := true
+	api := &fakeControlPlane{
+		cluster: func(string) (webapi.ClusterResponse, error) {
+			reading := activeCluster()
+			if !active {
+				reading.Status = "suspended"
+			}
+			return reading, nil
+		},
+		clusterCtx: func(ctx context.Context) {
+			gotToken, gotOK = webapi.BearerTokenFromContext(ctx)
+		},
+		shutdown: func(string) error { active = false; return nil },
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: objectMeta("simplyblock-cluster-" + testClusterName),
+		Data:       map[string][]byte{"secret": []byte(testClusterSecret)},
+	}
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown), secret)
+
+	reconcileOps(t, r, 6)
+
+	if !gotOK {
+		t.Fatal("the operation's control-plane read carried no bearer-token override")
+	}
+	if gotToken != testClusterSecret {
+		t.Errorf("bearer token = %q, want the cluster's own recorded secret %q", gotToken, testClusterSecret)
 	}
 }
 
