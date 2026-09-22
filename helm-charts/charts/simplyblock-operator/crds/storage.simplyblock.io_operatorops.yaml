@@ -210,9 +210,31 @@ spec:
                       type: string
                     description: |-
                       NodeSelector restricts which workers are inspected. Empty inspects every
-                      schedulable worker.
+                      schedulable worker, and it is exclusive with Workers.
                     type: object
+                  workers:
+                    description: |-
+                      Workers are the workers to inspect, by node name.
+
+                      It is the answer to inspecting two named machines, which a label selector
+                      can only express by labeling them first: a selector's entries are ANDed,
+                      so two hostnames in one selector match nothing at all.
+
+                      A named worker that does not exist, or that is declined for one of the
+                      reasons any worker is declined, is reported by the same event the selector
+                      path reports it by. Naming a worker is a statement about which machines to
+                      consider, not a claim that each of them will be used.
+                    items:
+                      maxLength: 253
+                      type: string
+                    maxItems: 128
+                    type: array
                 type: object
+                x-kubernetes-validations:
+                - message: spec.discover names workers and also carries a nodeSelector;
+                    state one or the other
+                  rule: '!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector)
+                    && size(self.nodeSelector) > 0)'
             required:
             - action
             type: object

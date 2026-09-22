@@ -171,6 +171,7 @@ func main() {
 			"be carried across.")
 	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	flag.BoolVar(&csiLinkEnabled, "csi-link", false, "Serve the CSI link.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
@@ -333,27 +334,29 @@ func main() {
 	// plugins; a reconciler reaching a node goes through it, and treats
 	// link.ErrNoSession as a requeue rather than a failure.
 	//
-	// Always served, because both plugins always dial it. TLS when a
-	// certificate is configured, plaintext when none is.
-	var certFile, keyFile string
-	if csiLinkCertPath != "" {
-		certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
-		keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+	// Off by default, on with --csi-link. TLS when a certificate is
+	// configured, plaintext when none is.
+	if csiLinkEnabled {
+		var certFile, keyFile string
+		if csiLinkCertPath != "" {
+			certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
+			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+		}
+		csiPeers, err := csilink.Setup(mgr, csilink.Config{
+			BindAddress:              csiLinkAddr,
+			CertFile:                 certFile,
+			KeyFile:                  keyFile,
+			Namespace:                operatorNamespace,
+			Audiences:                []string{csiLinkAudience},
+			NodeServiceAccount:       "simplyblock-csi-node-sa",
+			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to set up the CSI link")
+			os.Exit(1)
+		}
+		_ = csiPeers // handed to reconcilers as they start using it
 	}
-	csiPeers, err := csilink.Setup(mgr, csilink.Config{
-		BindAddress:              csiLinkAddr,
-		CertFile:                 certFile,
-		KeyFile:                  keyFile,
-		Namespace:                operatorNamespace,
-		Audiences:                []string{csiLinkAudience},
-		NodeServiceAccount:       "simplyblock-csi-node-sa",
-		ControllerServiceAccount: "simplyblock-csi-controller-sa",
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to set up the CSI link")
-		os.Exit(1)
-	}
-	_ = csiPeers // handed to reconcilers as they start using it
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
 	// driven by scopes that reconcilers register (the StorageNode controller adds
