@@ -51,6 +51,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -83,8 +84,20 @@ type StoragePoolReconciler struct {
 	VolumeScopes *cpinformer.ScopeSet
 
 	// NewAPIClient builds the control-plane client. It is a field so a test can
-	// point the reconciler at a mock server; nil selects the real one.
+	// point the reconciler at a mock server; nil selects the real one, resolved
+	// through EndpointResolver.
 	NewAPIClient func() *webapi.Client
+
+	// EndpointResolver answers where the control plane currently is, resolved
+	// per reconcile the same way internal/controllers/cluster and
+	// internal/controllers/node do (controlplane.NewEndpointResolver). Nil, or a
+	// resolver that answers nothing, means the startup client -- this cluster's
+	// own in-cluster address, or SIMPLYBLOCK_WEBAPI_BASE_URL -- is the only one,
+	// which is what a standalone deployment and every pre-existing test still
+	// get. Without this, a pool on a ControlPlane.spec.source.managed deployment
+	// could never reach its control plane at all: webapi.NewClient() defaults to
+	// a Service this Kubernetes cluster never runs.
+	EndpointResolver controlplane.EndpointResolver
 
 	// reportedMissingNodes remembers which unresolved spec.allowedNodes entries
 	// have already been announced, so a name left behind by a removed node is
@@ -92,6 +105,12 @@ type StoragePoolReconciler struct {
 	// deliberately not pruned, so without this the event would repeat for the
 	// life of the pool.
 	reportedMissingNodes sync.Map
+
+	// mu guards startupClient and resolvedClient, which clientFor rebuilds when
+	// the resolved endpoint changes.
+	mu             sync.Mutex
+	startupClient  *webapi.Client
+	resolvedClient *webapi.Client
 }
 
 // poolDTO is the control plane's storage-pool response.
@@ -212,7 +231,14 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	api := r.apiClient()
+	// Authenticates as this cluster, using its own recorded secret, for the
+	// same reason internal/controllers/cluster's sync() does: the control
+	// plane this cluster belongs to may be a ControlPlane.spec.source.managed
+	// one, on a different Kubernetes cluster than this operator.
+	if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+	api := r.apiClient(ctx)
 
 	if !p.DeletionTimestamp.IsZero() {
 		return r.reconcileDeletion(ctx, p, api, clusterUUID)
@@ -806,11 +832,52 @@ func (r *StoragePoolReconciler) event(
 	r.Recorder.Eventf(object, nil, eventType, reason, reason, format, args...)
 }
 
-func (r *StoragePoolReconciler) apiClient() *webapi.Client {
+// apiClient is the client one reconcile call uses, resolved through
+// EndpointResolver the same way internal/controllers/cluster's
+// httpControlPlane.clientFor is.
+func (r *StoragePoolReconciler) apiClient(ctx context.Context) *webapi.Client {
 	if r.NewAPIClient != nil {
 		return r.NewAPIClient()
 	}
-	return webapi.NewClient()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.startupClient == nil {
+		r.startupClient = webapi.NewClient()
+	}
+	if r.EndpointResolver == nil {
+		return r.startupClient
+	}
+	endpoint := r.EndpointResolver(ctx)
+	if endpoint == "" || endpoint == r.startupClient.BaseURL {
+		return r.startupClient
+	}
+	if r.resolvedClient == nil || r.resolvedClient.BaseURL != endpoint {
+		r.resolvedClient = webapi.NewClient(endpoint)
+	}
+	return r.resolvedClient
+}
+
+// clusterSecret reads the credential StorageClusterReconciler.persist wrote
+// for the pool's cluster, so a call scoped to it authenticates as that
+// cluster instead of as this operator's own Kubernetes identity -- the only
+// way to reach a control plane a different Kubernetes cluster runs, since a
+// TokenReview can never cross that boundary. Mirrors
+// internal/controllers/cluster's identically named method and
+// internal/controllers/node's clusterSecretByName.
+func (r *StoragePoolReconciler) clusterSecret(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) (string, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", cluster.Name),
+		Namespace: cluster.Namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
 }
 
 // SetupWithManager registers the reconciler and the one watch that is not on the

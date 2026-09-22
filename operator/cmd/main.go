@@ -584,10 +584,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&pool.StoragePoolReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
-		VolumeScopes: volumeScopes,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes:     volumeScopes,
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
