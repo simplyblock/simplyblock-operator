@@ -239,6 +239,18 @@ func (r *StorageNodeReconciler) Reconcile(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Every control-plane call below authenticates as this node's cluster,
+	// using its own recorded secret, rather than as this operator's own
+	// Kubernetes identity -- the only way to reach a control plane a
+	// different Kubernetes cluster runs (a ControlPlane.spec.source.managed
+	// one), since a Kubernetes TokenReview can never cross a cluster
+	// boundary. cluster is nil for one the object outlived (§3.4), which
+	// leaves ctx unauthenticated the same as before this fix: nothing below
+	// reaches the control plane for a node whose cluster is gone.
+	if cluster != nil {
+		secret, err := clusterSecretByName(ctx, r.Client, cluster.Namespace, cluster.Name)
+		ctx = authenticatedContext(ctx, secret, err)
+	}
 
 	if !node.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &node)

@@ -198,6 +198,17 @@ var _ events.EventRecorder = (*recorder)(nil)
 type fakeControlPlane struct {
 	t *testing.T
 
+	// endpoint is what Endpoint() returns verbatim -- a pure config read, not
+	// an action the test scripts, so a zero value is a legitimate "unset"
+	// rather than an unexpected call.
+	endpoint string
+
+	// clusterCtx, when set, is handed the context Cluster() was called with --
+	// how a test observes a bearer-token override a caller attached
+	// (webapi.BearerTokenFromContext), since the closures below only see the
+	// clusterID.
+	clusterCtx func(context.Context)
+
 	ready        func() error
 	create       func(utils.ClusterAddParams) (webapi.ClusterResponse, error)
 	cluster      func(string) (webapi.ClusterResponse, error)
@@ -226,6 +237,8 @@ type fakeControlPlane struct {
 	cancelTaskCalls   int
 }
 
+func (f *fakeControlPlane) Endpoint(context.Context) string { return f.endpoint }
+
 func (f *fakeControlPlane) Ready(context.Context) error {
 	if f.ready == nil {
 		return nil
@@ -244,8 +257,11 @@ func (f *fakeControlPlane) CreateCluster(
 }
 
 func (f *fakeControlPlane) Cluster(
-	_ context.Context, clusterID string,
+	ctx context.Context, clusterID string,
 ) (webapi.ClusterResponse, error) {
+	if f.clusterCtx != nil {
+		f.clusterCtx(ctx)
+	}
 	if f.cluster == nil {
 		f.t.Fatal("the control plane was asked for a cluster and the test did not script it")
 	}

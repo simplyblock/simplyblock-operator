@@ -256,6 +256,15 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 func (r *StorageNodeOpsReconciler) advance(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
 ) (ctrl.Result, error) {
+	// Every control-plane call this step and everything downstream of it
+	// makes authenticates as this operation's target node's cluster when its
+	// secret is known, rather than as this operator's own Kubernetes
+	// identity -- the only way to reach a control plane a different
+	// Kubernetes cluster runs (a ControlPlane.spec.source.managed one),
+	// since a Kubernetes TokenReview can never cross a cluster boundary.
+	secret, secretErr := clusterSecretForNode(ctx, r.Client, ops.Namespace, ops.Spec.NodeRef)
+	ctx = authenticatedContext(ctx, secret, secretErr)
+
 	machine, err := graphs().FromSnapshot(ctx, action(ops.Spec.Action),
 		statemachine.FromKube[step](ops.Status.Step))
 	if err != nil {

@@ -51,6 +51,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -237,6 +238,15 @@ func (r *StorageClusterOpsReconciler) Reconcile(
 func (r *StorageClusterOpsReconciler) advance(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
 ) (ctrl.Result, error) {
+	// Every control-plane call this step and everything downstream of it
+	// makes (perform, advanceWalk, and everything under them) authenticates
+	// as this operation's own cluster when its secret is known, rather than
+	// as this operator's Kubernetes identity -- the only way to reach a
+	// control plane a different Kubernetes cluster runs (a
+	// ControlPlane.spec.source.managed one), since a Kubernetes TokenReview
+	// can never cross a cluster boundary.
+	ctx = r.authenticatedContext(ctx, ops)
+
 	graph := action(ops.Spec.Action)
 	machine, err := graphs().FromSnapshot(ctx, graph,
 		statemachine.FromKube[step](ops.Status.Step))
@@ -918,6 +928,41 @@ func (r *StorageClusterOpsReconciler) clusterReading(
 		NPCS:              response.NPCS,
 		MaxFaultTolerance: response.MaxFaultTolerance,
 	}, nil
+}
+
+// clusterSecret reads the secret StorageClusterReconciler.persist wrote for
+// this operation's cluster, keyed by the StorageCluster's Kubernetes name (not
+// its backend UUID, which this reconciler is not always given yet at the point
+// it needs the credential). It reports the empty string when there is none.
+func (r *StorageClusterOpsReconciler) clusterSecret(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
+) (string, error) {
+	var secret corev1.Secret
+	key := types.NamespacedName{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", ops.Spec.ClusterRef),
+		Namespace: ops.Namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
+}
+
+// authenticatedContext attaches this operation's cluster's own credential to
+// ctx when one is known, so every control-plane call the operation makes
+// authenticates as that cluster instead of as this operator's Kubernetes
+// identity -- the only way to reach a control plane a different Kubernetes
+// cluster runs (a ControlPlane.spec.source.managed one), since a Kubernetes
+// TokenReview can never cross a cluster boundary. See StorageClusterReconciler's
+// identically-named method.
+func (r *StorageClusterOpsReconciler) authenticatedContext(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
+) context.Context {
+	secret, err := r.clusterSecret(ctx, ops)
+	if err != nil || secret == "" {
+		return ctx
+	}
+	return webapi.WithBearerToken(ctx, secret)
 }
 
 // effectiveConcurrentRestarts is min(specVal, FTT), defaulting to 1 when the

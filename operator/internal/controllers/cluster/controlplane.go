@@ -81,6 +81,14 @@ type ControlPlane interface {
 	// outcome being asked for reached by another route, so the implementation
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
+
+	// Endpoint is the base URL this call would currently reach the control
+	// plane at, resolved the same way every other call resolves it (§3.3).
+	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,
+	// since the CSI driver dials it directly rather than through this
+	// reconciler, and a hardcoded in-cluster address is wrong the moment the
+	// control plane is a ControlPlane.spec.source.managed one.
+	Endpoint(ctx context.Context) string
 }
 
 // httpControlPlane is the ControlPlane the operator runs with: one method per
@@ -106,6 +114,8 @@ type httpControlPlane struct {
 func NewControlPlane(resolve controlplane.EndpointResolver) ControlPlane {
 	return &httpControlPlane{client: webapi.NewClient(), resolve: resolve}
 }
+
+func (c *httpControlPlane) Endpoint(ctx context.Context) string { return c.clientFor(ctx).BaseURL }
 
 func (c *httpControlPlane) Ready(ctx context.Context) error {
 	_, err := c.call(ctx, http.MethodGet, "/api/v2/_meta/ready", nil)
