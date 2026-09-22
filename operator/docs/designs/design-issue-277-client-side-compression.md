@@ -303,6 +303,17 @@ It runs once per plugin start, which is when the answer can have changed: the
 DaemonSet is one pod per node, and a kernel change restarts that pod. A
 capability gained without a restart is §14's Q12 and is not covered here.
 
+**Measured on the e2e runners, 2026-09-22.** All seven nodes run RHEL 9.4 on
+kernel `5.14.0-427.24.1.el9_4.x86_64`, which carries no in-tree `dm-vdo` — that
+arrives in 6.9 — and has no `kmod-kvdo` installed, so both loads fail against
+the host's own `/lib/modules`. `lvm segtypes` on the same nodes lists `vdo` and
+`vdo-pool`: userspace LVM offers the segment types while the kernel cannot
+provide them, which is the inverse of the case §14's Q7 anticipated and is why
+the segment types are reported rather than trusted. Every node is therefore
+labeled `false`, §5's gate refuses placement, and the feature's own E2E suite
+skips rather than waiting out a pod that can never be scheduled. Exercising this
+design on that pipeline needs those nodes to gain the module first.
+
 ### 4.2 Container Image Dependencies
 
 The LVM commands in §7 run inside the `csi-node` container, not on the host, so

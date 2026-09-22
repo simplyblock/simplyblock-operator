@@ -27,6 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 const (
@@ -47,6 +49,13 @@ const (
 
 var _ = ginkgo.Describe("SPDKCSI-VDO", func() {
 	f := newTestFramework("spdkcsi")
+
+	// Every spec below needs a node whose kernel carries VDO, and none of them
+	// can do anything about a cluster that has none. Checked once per spec,
+	// before anything is created, so that such a cluster is told apart from a
+	// broken one in seconds rather than at the end of a five-minute wait for a
+	// pod the scheduler was never going to place.
+	ginkgo.BeforeEach(func() { skipWithoutVDOCapableNode(f) })
 
 	// -------------------------------------------------------------------------
 	// Client-side compression
@@ -512,3 +521,56 @@ func createPVCFromDataSource(
 // strPtr returns a pointer to s, for the one-off *string fields Kubernetes API
 // types carry (TypedLocalObjectReference.APIGroup here).
 func strPtr(s string) *string { return &s }
+
+// vdoCapableNodes are the nodes advertising that their kernel can run VDO.
+//
+// Read off the label rather than probed here, because the label is what the
+// scheduler matches a VDO volume's node affinity against: asking the same
+// question a different way could answer yes where placement still says no.
+func vdoCapableNodes(c kubernetes.Interface) ([]string, error) {
+	nodes, err := c.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{
+		LabelSelector: kube.LabelVDOCapable + "=true",
+	})
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(nodes.Items))
+	for i := range nodes.Items {
+		names = append(names, nodes.Items[i].Name)
+	}
+	return names, nil
+}
+
+// skipWithoutVDOCapableNode ends the spec before it creates anything when no
+// node can run VDO.
+//
+// A skip and not a failure: the capability is the node's kernel, which this
+// suite can neither install nor work around, and a volume asking for it is
+// pinned by node affinity to a node that advertises it. Without one the pod is
+// never scheduled, nothing fails, and the spec waits out its whole timeout on a
+// pod that was never going to run.
+//
+// The kernel is named in the skip, because "no capable node" on its own does not
+// say whether the cluster cannot run VDO or whether the probe never answered,
+// and those want different things done about them.
+func skipWithoutVDOCapableNode(f *framework.Framework) {
+	capable, err := vdoCapableNodes(f.ClientSet)
+	framework.ExpectNoError(err, "list vdo-capable nodes")
+	if len(capable) > 0 {
+		framework.Logf("VDO-capable nodes: %v", capable)
+		return
+	}
+
+	nodes, err := f.ClientSet.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+	framework.ExpectNoError(err, "list nodes")
+	answers := make([]string, 0, len(nodes.Items))
+	for i := range nodes.Items {
+		answers = append(answers, fmt.Sprintf("%s=%q",
+			nodes.Items[i].Name, nodes.Items[i].Labels[kube.LabelVDOCapable]))
+	}
+	ginkgo.Skip(fmt.Sprintf(
+		"no node advertises %s=true, so a volume asking for client-side compression or "+
+			"deduplication can be scheduled nowhere; the node plugins' \"vdo probe:\" log lines say "+
+			"which kernel each node runs and what modprobe said about dm-vdo and kvdo. Nodes: %v",
+		kube.LabelVDOCapable, answers))
+}

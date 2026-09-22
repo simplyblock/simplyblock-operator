@@ -188,6 +188,23 @@ File: `csi-driver/internal/csi/node/capability_test.go`
 | U-106 | A label the probe wrote before is the probe's to overwrite, which is how a lost capability flips                                                                   | Positive   | `TestAdvertiseVDOCapabilityOverwritesItsOwnPriorLabel`     |
 | U-107 | The vdo segment types are read out of `lvm segtypes` output, and their absence says so rather than nothing                                                         | Boundary   | `TestVDOSegtypes`                                          |
 
+### Suite Precondition (design §2, §4.1)
+
+File: `csi-driver/e2e/vdo_capability_test.go`
+
+The capability is the node's kernel, which no test can install, so a cluster
+that has none is a skip rather than a failure. Measured live on the e2e runners
+on 2026-09-22: RHEL 9.4, kernel 5.14.0-427, no in-tree `dm-vdo` (which needs
+6.9) and no `kmod-kvdo` installed, while `lvm segtypes` lists `vdo` and
+`vdo-pool`. The five E2E rows below therefore cannot run there until those nodes
+gain the module.
+
+| #     | Scenario                                                                                       | Type       | Test                                                  |
+|-------|------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------|
+| U-108 | One node advertising the capability is enough, and is the node the suite reports               | Positive   | `TestVDOCapableNodesFindsTheOneCapableNode`           |
+| U-109 | Every node answered no: the suite skips rather than waiting out a pod that cannot be scheduled | Regression | `TestVDOCapableNodesFindsNoneWhenEveryNodeAnsweredNo` |
+| U-110 | No node answered at all, which is equally nowhere to place the volume                          | Negative   | `TestVDOCapableNodesFindsNoneWhenNothingProbed`       |
+
 ### Topology Segment (design §5)
 
 File: `csi-driver/pkg/spdk/controllerserver_test.go`
