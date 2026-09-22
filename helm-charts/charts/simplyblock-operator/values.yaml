@@ -232,9 +232,12 @@ driver:
   # accounts nothing presents.
   enableServiceAccountAuth: false
 
-  # Overrides for the six CSI sidecars, as full `repository:tag` references.
+  # Overrides for the seven CSI sidecars, as full `repository:tag` references.
   # Empty takes the version this operator release ships, which is the
-  # combination it was tested against.
+  # combination it was tested against. csiAddons's own default is already the
+  # real upstream image (quay.io/csiaddons/k8s-sidecar) rather than a
+  # quay.io/simplyblock-io mirror, which does not exist yet -- see
+  # SimplyblockDriverSpec.SidecarImages.CSIAddons.
   sidecarImages:
     provisioner: ""
     attacher: ""
@@ -242,6 +245,7 @@ driver:
     snapshotter: ""
     healthMonitor: ""
     nodeDriverRegistrar: ""
+    csiAddons: ""
 
 controlplane:
   # Where the control plane is, for deployment.profile: managed.
