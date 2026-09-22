@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/klog"
 
 	"github.com/simplyblock/atlas/kube"
 )
@@ -65,6 +66,10 @@ func awaitMarker(ctx context.Context, path string, wait, poll time.Duration) (st
 	}
 }
 
+// vdoCapableTrue and vdoCapableFalse are the two things the marker file says,
+// and the two values the label carries.
+const vdoCapableFalse = "false"
+
 // vdoCapableTrue is the marker file's positive content.
 const vdoCapableTrue = "true"
 
@@ -98,10 +103,12 @@ func advertiseVDOCapability(
 		return fmt.Errorf("get node %s: %w", nodeName, err)
 	}
 
-	_, hasLabel := node.Labels[kube.LabelVDOCapable]
+	existing, hasLabel := node.Labels[kube.LabelVDOCapable]
 	_, managedByThisProbe := node.Annotations[kube.AnnoVDOCapableManagedBy]
 	if hasLabel && !managedByThisProbe {
-		return nil // an operator's own label
+		klog.Infof("node %s carries a hand-set %s=%s, which this probe leaves alone; "+
+			"its own reading of %s was %q", nodeName, kube.LabelVDOCapable, existing, markerPath, marker)
+		return nil
 	}
 
 	patch, err := json.Marshal(map[string]any{
@@ -119,5 +126,13 @@ func advertiseVDOCapability(
 	); err != nil {
 		return fmt.Errorf("patch node %s with vdo-capable=%t: %w", nodeName, capable, err)
 	}
+
+	// Said out loud, at the level a passing run keeps, because this is the one
+	// fact that decides whether a volume asking for client-side compression can
+	// be placed at all. Silence on success is what made a cluster where no node
+	// was capable indistinguishable from one where the probe never ran: the
+	// volumes were simply unschedulable, with nothing anywhere having failed.
+	klog.Infof("node %s labeled %s=%t, from the postStart probe's marker %s",
+		nodeName, kube.LabelVDOCapable, capable, markerPath)
 	return nil
 }

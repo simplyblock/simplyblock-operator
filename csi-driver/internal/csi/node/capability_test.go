@@ -45,7 +45,7 @@ func TestAdvertiseVDOCapability_WritesTrue(t *testing.T) {
 }
 
 func TestAdvertiseVDOCapability_WritesFalse(t *testing.T) {
-	marker := writeMarker(t, "false")
+	marker := writeMarker(t, vdoCapableFalse)
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 
 	if err := AdvertiseVDOCapability(context.Background(), client, "node-a", marker); err != nil {
@@ -53,14 +53,14 @@ func TestAdvertiseVDOCapability_WritesFalse(t *testing.T) {
 	}
 
 	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
-	if node.Labels[kube.LabelVDOCapable] != "false" {
+	if node.Labels[kube.LabelVDOCapable] != vdoCapableFalse {
 		t.Errorf("label = %q, want false", node.Labels[kube.LabelVDOCapable])
 	}
 }
 
 // A label with no managed-by annotation is an operator's, left alone.
 func TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone(t *testing.T) {
-	marker := writeMarker(t, "false")
+	marker := writeMarker(t, vdoCapableFalse)
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name:   "node-a",
 		Labels: map[string]string{kube.LabelVDOCapable: vdoCapableTrue},
@@ -82,7 +82,7 @@ func TestAdvertiseVDOCapability_LeavesAnOperatorSetLabelAlone(t *testing.T) {
 // A label the probe wrote before (has the managed-by annotation) is fair
 // game to overwrite, which is how a lost capability flips back to false.
 func TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel(t *testing.T) {
-	marker := writeMarker(t, "false")
+	marker := writeMarker(t, vdoCapableFalse)
 	client := kfake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name:        "node-a",
 		Labels:      map[string]string{kube.LabelVDOCapable: vdoCapableTrue},
@@ -94,7 +94,7 @@ func TestAdvertiseVDOCapability_OverwritesItsOwnPriorLabel(t *testing.T) {
 	}
 
 	node, _ := client.CoreV1().Nodes().Get(context.Background(), "node-a", metav1.GetOptions{})
-	if node.Labels[kube.LabelVDOCapable] != "false" {
+	if node.Labels[kube.LabelVDOCapable] != vdoCapableFalse {
 		t.Errorf("label = %q, want the probe's own label overwritten to false", node.Labels[kube.LabelVDOCapable])
 	}
 }
