@@ -522,6 +522,14 @@ func main() {
 	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
 		mgr.GetClient(), operatorNamespace)
 
+	// What a managed control plane's CreateCluster and ClusterByName calls
+	// authenticate with, read from the same ControlPlane object
+	// (spec.source.managed.credentialsSecretRef) for the same reason: a
+	// StorageCluster CR applied against a remote control plane has no other
+	// credential to create its backend identity with.
+	controlPlaneCredential := controlplanecontroller.NewCredentialResolver(
+		mgr.GetClient(), operatorNamespace)
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -542,7 +550,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -808,7 +816,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,

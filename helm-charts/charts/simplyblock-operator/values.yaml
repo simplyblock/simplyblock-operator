@@ -248,6 +248,17 @@ driver:
     csiAddons: ""
 
 controlplane:
+  # deployment.profile: standalone options -- this cluster's own control plane.
+  local:
+    # Secret in this namespace holding a static admin bearer token this
+    # control plane accepts, under `token`, in addition to this operator's
+    # own Kubernetes identity. It is what lets a cluster this control plane
+    # manages remotely (deployment.profile: managed there,
+    # controlplane.managed.credentialsSecretRef naming the same value) create
+    # its backend cluster identity, since a Kubernetes TokenReview can never
+    # cross a cluster boundary. Empty grants no additional admin credential.
+    adminTokenSecretRef: ""
+
   # Where the control plane is, for deployment.profile: managed.
   managed:
     # Base URL of the management API. Required for that profile. A loopback or

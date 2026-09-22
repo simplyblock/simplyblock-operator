@@ -87,6 +87,42 @@ func TestASingleManagementAPIInstanceStaysExpressible(t *testing.T) {
 	}
 }
 
+// AdminTokenSecretRef reaches the management API as SB_ADMIN_TOKENS, sourced
+// via secretKeyRef rather than a literal value, so this operator never itself
+// reads the plaintext. It is what lets a cluster this control plane manages
+// remotely authenticate a CreateCluster call.
+func TestAnAdminTokenSecretRefReachesTheManagementAPIsEnvironment(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.AdminTokenSecretRef = &corev1.LocalObjectReference{Name: "hub-admin-token"}
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_ADMIN_TOKENS")
+
+	if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("SB_ADMIN_TOKENS is not sourced from a Secret: %#v", env)
+	}
+	if env.ValueFrom.SecretKeyRef.Name != "hub-admin-token" {
+		t.Errorf("secretKeyRef.name = %q, want %q", env.ValueFrom.SecretKeyRef.Name, "hub-admin-token")
+	}
+	if env.ValueFrom.SecretKeyRef.Key != "token" {
+		t.Errorf("secretKeyRef.key = %q, want %q", env.ValueFrom.SecretKeyRef.Key, "token")
+	}
+}
+
+// Absent names no additional credential: the management API runs exactly as
+// it always has, authenticating only this operator's own service account.
+func TestNoAdminTokenSecretRefMeansNoExtraEnvVar(t *testing.T) {
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+
+	for _, e := range api.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "SB_ADMIN_TOKENS" {
+			t.Fatalf("SB_ADMIN_TOKENS set with no adminTokenSecretRef: %#v", e)
+		}
+	}
+}
+
 // Every workload built from the control plane's own image runs it, so an upgrade
 // that writes one image onto the entity moves all of them.
 func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {

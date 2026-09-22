@@ -222,6 +222,21 @@ type LocalControlPlane struct {
 	// +kubebuilder:default={}
 	// +optional
 	TLS ControlPlaneTLS `json:"tls,omitempty"`
+
+	// AdminTokenSecretRef names a Secret in this namespace holding a static
+	// admin bearer token this control plane accepts, under the `token` key, in
+	// addition to this deployment's own Kubernetes identity
+	// (SB_K8S_ADMIN_SERVICE_ACCOUNTS). It is what lets a cluster this control
+	// plane manages remotely (spec.source.managed there,
+	// ManagedControlPlane.CredentialsSecretRef naming the same value)
+	// authenticate a CreateCluster call, since a Kubernetes TokenReview can
+	// never cross a cluster boundary.
+	//
+	// The Secret is projected into the management API container's environment
+	// with secretKeyRef, so this operator never itself reads the plaintext.
+	// Absent grants no credential beyond the operator's own service account.
+	// +optional
+	AdminTokenSecretRef *corev1.LocalObjectReference `json:"adminTokenSecretRef,omitempty"`
 }
 
 // ManagedControlPlane is a control plane somewhere else, which this cluster's
