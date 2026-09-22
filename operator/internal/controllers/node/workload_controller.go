@@ -311,8 +311,15 @@ func (r *StorageNodeWorkloadReconciler) image(
 			"spec.storageNodes.image is unset and ControlPlane %s cannot be read: %w",
 			SingletonControlPlaneName, err)
 	}
-	if managed := controlPlane.Spec.Source.Local; managed != nil && managed.Image != "" {
-		return managed.Image, nil
+	if local := controlPlane.Spec.Source.Local; local != nil && local.Image != "" {
+		return local.Image, nil
+	}
+	// A managed control plane is a different Kubernetes cluster's install and
+	// carries no image of its own here to fall back to -- spec.source.managed
+	// says where the control plane is, not what this cluster's storage nodes
+	// should run. StorageNodeImage is the only source of a default left.
+	if managed := controlPlane.Spec.Source.Managed; managed != nil && managed.StorageNodeImage != "" {
+		return managed.StorageNodeImage, nil
 	}
 	return "", fmt.Errorf(
 		"spec.storageNodes.image is unset and ControlPlane %s states no managed image",

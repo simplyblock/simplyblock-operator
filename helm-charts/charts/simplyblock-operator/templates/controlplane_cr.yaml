@@ -92,5 +92,8 @@ spec:
       caBundleSecretRef:
         name: {{ .Values.controlplane.managed.caBundleSecretRef | quote }}
       {{- end }}
+      {{- if .Values.controlplane.managed.storageNodeImage }}
+      storageNodeImage: {{ .Values.controlplane.managed.storageNodeImage | quote }}
+      {{- end }}
 {{- end }}
 

@@ -270,6 +270,20 @@ type ManagedControlPlane struct {
 	// is verified against. Absent means the system trust store.
 	// +optional
 	CABundleSecretRef *corev1.LocalObjectReference `json:"caBundleSecretRef,omitempty"`
+
+	// StorageNodeImage is the storage-node image a StorageCluster on this
+	// Kubernetes cluster defaults to when its own spec.storageNodes.image is
+	// unset. A local control plane's own spec.source.local.image doubles as
+	// this default (StorageNodeWorkloadReconciler.image), because a
+	// self-hosted deployment's control plane and its storage nodes are one
+	// release. A managed one is a different Kubernetes cluster's install and
+	// says nothing about what this cluster's storage nodes should run, so
+	// there is no equivalent to fall back to without this field -- every
+	// StorageCluster on a managed deployment must get an image from here or
+	// from its own spec.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	StorageNodeImage string `json:"storageNodeImage,omitempty"`
 }
 
 // ControlPlaneSource selects whether this cluster hosts its control plane or is

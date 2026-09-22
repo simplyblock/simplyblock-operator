@@ -774,7 +774,7 @@ func (r *StorageNodeReconciler) postNode(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	params := r.addParams(node, cluster)
+	params := r.addParams(ctx, node, cluster)
 	if err := r.API.AddNode(ctx, cluster.Status.UUID, params); err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
 			node.Name, node.Spec.WorkerNode, err)
@@ -1426,6 +1426,7 @@ func (r *StorageNodeReconciler) upgradeAdoption(
 // addParams is what the node-add call carries. The node describes itself, so every
 // value but the subsystem cap comes from its own spec.config (§3.1).
 func (r *StorageNodeReconciler) addParams(
+	ctx context.Context,
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) utils.StorageNodeSetAddParams {
@@ -1436,7 +1437,7 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(node.Spec.WorkerNode, node.Namespace),
+		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
 		InterfaceName:    workload.MgmtInterface,
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,

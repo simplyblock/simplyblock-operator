@@ -270,6 +270,13 @@ controlplane:
     # Secret holding the CA the endpoint is verified against, under `ca.crt` or
     # `tls.crt`. Empty uses the system trust store. Named and unusable fails.
     caBundleSecretRef: ""
+    # Default storage-node image for a StorageCluster on this Kubernetes
+    # cluster whose own spec.storageNodes.image is unset. The managed control
+    # plane is a different Kubernetes cluster's install and says nothing about
+    # what this cluster's storage nodes should run, so there is no equivalent
+    # to the local profile's spec.image to fall back to without this --
+    # required in practice for any StorageCluster that does not set its own.
+    storageNodeImage: ""
 
   # Accept a pod's service-account token from the CSI driver's two accounts
   # instead of requiring the static cluster secret. This is the control
