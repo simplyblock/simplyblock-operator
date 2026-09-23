@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,10 +26,12 @@ import (
 
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/nvme"
 	"k8s.io/klog"
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/fabric"
 )
 
@@ -144,6 +147,11 @@ func New(volumeContext map[string]string) (Initiator, error) {
 	if nsId < 1 {
 		return nil, fmt.Errorf("namespace ID must be greater than zero")
 	}
+	// Bounded to what an NVMe namespace id can hold, which is what lets the
+	// fabric repair take it as one without a conversion that could wrap.
+	if uint64(nsId) > math.MaxUint32 {
+		return nil, fmt.Errorf("namespace ID %d is larger than an NVMe namespace id can hold", nsId)
+	}
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
 		srcLvolID := volumeContext["uuid"]
@@ -162,7 +170,7 @@ func New(volumeContext map[string]string) (Initiator, error) {
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
-			clusterID:      volumeContext["cluster_id"],
+			clusterID:      volumeContext[csicommon.ParamClusterID],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
 		}, nil
@@ -193,7 +201,10 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 // fabric could be repaired the attach is tried once more. See nvmerepair.go.
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 	devicePath, err := nvmf.connectOnce(ctx)
-	if err != nil && fabric.RepairAttach(ctx, nvmf.nqn, nvmf.nsId) {
+	// The namespace id is bounded at construction, which is what makes the
+	// narrowing safe: New refuses anything below one and anything an NVMe
+	// namespace id cannot hold.
+	if err != nil && fabric.RepairAttach(ctx, nvmf.nqn, nvme.NamespaceID(nvmf.nsId)) {
 		klog.Infof("Connect: retrying attach of %s after a fabric repair", nvmf.nqn)
 		devicePath, err = nvmf.connectOnce(ctx)
 	}

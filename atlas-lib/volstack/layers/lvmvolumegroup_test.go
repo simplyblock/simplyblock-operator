@@ -180,6 +180,22 @@ func TestLVMVolumeGroupReleaseFallsBackToDeviceMapper(t *testing.T) {
 	if !cmds.ran("dmsetup") {
 		t.Fatalf("the force path never ran, so a dead stack has nothing left to clear it:\n%s", cmds.issued())
 	}
+	if !cmds.ran("lvmdevices") {
+		t.Errorf("the force path did not forget the device, leaving a stale system.devices entry:\n%s", cmds.issued())
+	}
+}
+
+// Release still succeeds when the device-mapper cleanup ran but forgetting
+// the device fails: pruning system.devices is hygiene, and a failure at it
+// must never turn a routine unstage into a failed one.
+func TestLVMVolumeGroupReleaseSucceedsWhenForgetDeviceFails(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.err["vgchange"] = errors.New("Volume group vol-... not found")
+	cmds.err["lvmdevices"] = errors.New("device not found")
+
+	if err := l.Release(context.Background(), belowMembers(1)); err != nil {
+		t.Fatalf("Release: %v, want success even though forgetting the device failed", err)
+	}
 }
 
 // Destroy removes the group, and only a deletion path reaches it.
@@ -213,6 +229,54 @@ func TestLVMVolumeGroupRefusesAForeignMember(t *testing.T) {
 			t.Fatalf("it ran %s over another volume's group:\n%s", forbidden, cmds.issued())
 		}
 	}
+}
+
+// Total path loss removes the member device entirely rather than merely
+// making it unreadable, which membership by device label cannot distinguish
+// from "nothing here": there is no device left to ask at all. Observe answers
+// independently of any member in that case, by whether this group's name
+// still has live device-mapper nodes mapped — the same listing
+// RemoveOrphanedDMNodes acts on — because misreporting Absent here would have
+// Down skip Release and strand exactly the mapping that force path exists to
+// clear.
+func TestLVMVolumeGroupObserveWithNoMembersChecksOrphanedDMNodes(t *testing.T) {
+	t.Run("still mapped", func(t *testing.T) {
+		l, cmds := newLVMGroup(nil)
+		cmds.out["dmsetup"] = "vol--33333333--3333--3333--3333--333333333333-vdopool-vpool\t(253:3)\n"
+
+		state, _, err := l.Observe(context.Background(), volstack.Artifact{})
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if state == volstack.StateAbsent {
+			t.Error("state = Absent, want a state that makes Down call Release, since dm nodes are still mapped")
+		}
+	})
+
+	t.Run("nothing left at all", func(t *testing.T) {
+		l, cmds := newLVMGroup(nil)
+		cmds.out["dmsetup"] = "No devices found"
+
+		state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if state != volstack.StateAbsent {
+			t.Errorf("state = %s, want Absent when no dm nodes remain either", state)
+		}
+		if len(own.Devices) != 0 {
+			t.Errorf("an absent layer exposed %d devices", len(own.Devices))
+		}
+	})
+
+	t.Run("the dmsetup check itself fails", func(t *testing.T) {
+		l, cmds := newLVMGroup(nil)
+		cmds.err["dmsetup"] = errors.New("dmsetup: command not found")
+
+		if _, _, err := l.Observe(context.Background(), volstack.Artifact{}); err == nil {
+			t.Error("Observe swallowed a failed dm-node check")
+		}
+	})
 }
 
 // A probe that failed is not a reading of absent, for the reason every layer

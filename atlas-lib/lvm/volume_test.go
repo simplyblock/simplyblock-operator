@@ -118,8 +118,36 @@ func TestManager_RemoveVolumeGroup(t *testing.T) {
 	}
 }
 
+// A removal that finds nothing to remove has done what it was asked. Removing
+// is not a read: the caller wants the thing gone, and a thing that is already
+// gone is the state it wanted.
+//
+// This is what the two removals either side of it have always done, and what
+// this one alone did not. It matters on the teardown path, where the volume
+// group's metadata lives on a device the release has already detached, so
+// "not found" is the answer vgremove gives for a group that was torn down
+// correctly.
+func TestManager_RemoveVolumeGroup_IsANoOpWhenAlreadyGone(t *testing.T) {
+	for _, gone := range []string{
+		`Volume group "vg1" not found`,
+		"Failed to find volume group vg1",
+	} {
+		fake := &fakeRunner{
+			out: map[string]string{},
+			err: map[string]error{joinKey([]string{"vgremove", "-f", "vg1"}): errors.New(gone)},
+		}
+		mgr := NewManagerWithRunner(fake.run)
+		if err := mgr.RemoveVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); err != nil {
+			t.Errorf("RemoveVolumeGroup() on %q = %v, want nil: it is already gone", gone, err)
+		}
+	}
+}
+
+// A removal that failed for any other reason still says so. "Already gone" is a
+// specific answer, not a reason to swallow every failure: a group something
+// still holds open is one the caller has to hear about.
 func TestManager_RemoveVolumeGroup_WrapsRunnerError(t *testing.T) {
-	wantErr := errors.New("volume group not found")
+	wantErr := errors.New("logical volume vg1/lv1 in use")
 	fake := &fakeRunner{
 		out: map[string]string{},
 		err: map[string]error{joinKey([]string{"vgremove", "-f", "vg1"}): wantErr},
@@ -133,7 +161,11 @@ func TestManager_RemoveVolumeGroup_WrapsRunnerError(t *testing.T) {
 // fakeVolumeProvisioning is registered under a name other than "vdo" by the
 // test below, so a pass proves CreateLogicalVolume dispatches by asking each
 // registered handler whether it Handles the definition, not by hardcoding a
-// lookup of the "vdo" key.
+// lookup of the "vdo" key. Its predicate below keys on Stripes == 1 (a value
+// stripeArgs itself treats as "not striped," so it contributes no arguments
+// of its own) rather than Compression/Deduplication, so it does not overlap
+// with the real "vdo" handler this package's own init registers permanently
+// alongside it.
 type fakeVolumeProvisioning struct {
 	name    string
 	handles func(LogicalVolumeDefinition) bool
@@ -149,13 +181,13 @@ func (f *fakeVolumeProvisioning) CreateVolumeArgs(LogicalVolumeDefinition) []str
 func TestManager_CreateLogicalVolume_DispatchesByHandles(t *testing.T) {
 	RegisterVolumeProvisioning(&fakeVolumeProvisioning{
 		name:    "fake-provisioner",
-		handles: func(def LogicalVolumeDefinition) bool { return def.Compression },
+		handles: func(def LogicalVolumeDefinition) bool { return def.Stripes == 1 },
 		args:    []string{"--fake-flag"},
 	})
 
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	def := LogicalVolumeDefinition{Compression: true}
+	def := LogicalVolumeDefinition{Stripes: 1}
 	vg := VolumeGroup{Name: "vg1"}
 	lv, err := mgr.CreateLogicalVolume(context.Background(), vg, "pv1", "lv1", def)
 	if err != nil {
@@ -439,5 +471,27 @@ func TestManager_CreateLogicalVolume_StripesWithoutAChunkSize(t *testing.T) {
 	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "-i", "4", "vg1", "--yes"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
+	}
+}
+
+// An LVM object cannot outlive its group, so a group that is gone means the
+// logical volume in it is gone too. lvremove says so in the group's words
+// rather than the volume's, which is the phrasing the teardown path actually
+// meets once the device carrying both has been detached.
+func TestManager_RemoveLogicalVolume_IsANoOpWhenItsGroupIsGone(t *testing.T) {
+	path := "vg1/lv1"
+	for _, gone := range []string{
+		`Volume group "vg1" not found`,
+		"Failed to find logical volume vg1/lv1",
+	} {
+		fake := &fakeRunner{
+			out: map[string]string{},
+			err: map[string]error{joinKey([]string{"lvremove", "--yes", path}): errors.New(gone)},
+		}
+		mgr := NewManagerWithRunner(fake.run)
+		lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vg1"}, Name: "lv1"}
+		if err := mgr.RemoveLogicalVolume(context.Background(), lv); err != nil {
+			t.Errorf("RemoveLogicalVolume() on %q = %v, want nil: it is already gone", gone, err)
+		}
 	}
 }

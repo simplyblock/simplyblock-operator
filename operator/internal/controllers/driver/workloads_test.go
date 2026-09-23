@@ -300,6 +300,29 @@ func TestNodePluginKeepsThePrivilegeItNeeds(t *testing.T) {
 	}
 }
 
+// The postStart hook loads the NVMe-oF transports and gives the host a stable
+// NVMe identity, and does not probe for VDO: that moved into the node plugin,
+// where what it finds reaches the pod's log instead of nowhere
+// (csi-driver/internal/csi/node/capability.go).
+func TestNodePluginPostStartLoadsTheTransports(t *testing.T) {
+	ds := nodeDaemonSet(testDriver("simplyblock"), testImage)
+	spec := ds.Spec.Template.Spec
+
+	node := containerNamed(spec.Containers, "csi-node")
+	script := node.Lifecycle.PostStart.Exec.Command[2]
+	for _, want := range []string{"modprobe nvme-tcp", "modprobe nvme-rdma", "/etc/nvme/hostnqn"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("postStart script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "vdo") {
+		t.Errorf("the postStart hook still probes for VDO, where nothing can read what it found:\n%s", script)
+	}
+	if volumeNamed(spec.Volumes, "vdo-capable") != nil {
+		t.Error("the DaemonSet still carries the host path the marker file needed")
+	}
+}
+
 // The two plugins mount the configuration and credentials this deployment's own
 // objects hold, not another deployment's.
 func TestBothPluginsMountThisDeploymentsConfiguration(t *testing.T) {

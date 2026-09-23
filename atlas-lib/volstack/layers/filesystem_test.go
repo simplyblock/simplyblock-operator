@@ -29,10 +29,11 @@ type fakeFS struct {
 
 	grown [][]string
 
-	formatErr  error
-	mountErr   error
-	unmountErr error
-	growErr    error
+	formatErr     error
+	mountErr      error
+	unmountErr    error
+	growErr       error
+	mountPointErr error
 }
 
 type formatCall struct {
@@ -83,6 +84,11 @@ func (f *fakeFS) Grow(_ context.Context, command []string) error {
 }
 
 func (f *fakeFS) IsMountPoint(_ context.Context, path string) (bool, error) {
+	if f.mountPointErr != nil {
+		// What a dead mount answers: the real implementation reports the mount
+		// it cannot interrogate as an error rather than as a false.
+		return false, f.mountPointErr
+	}
 	return f.mountPoints[path], nil
 }
 
@@ -121,6 +127,135 @@ func newFSAsking(t *testing.T, fs *fakeFS, fsType string, reading blockdev.Readi
 		Ops:         fs,
 		Content:     fakeReader{reading: reading, err: readErr},
 	})
+}
+
+// Regression: a teardown reaching this layer after the device below it is gone
+// has to get a state rather than an error.
+//
+// NodeUnstageVolume releases the stack and then, for a volume that is being
+// deleted, destroys it, and the release is what detaches the fabric. So the
+// destroy that follows surveys a plan whose bottom layer now exposes nothing,
+// and this layer answering with an error failed the whole RPC. Kubelet retried
+// it forever, the volume was never released, and the pool it came from could
+// not be deleted while a bound volume remained.
+//
+// Absent is the honest answer and not merely the convenient one: nothing is
+// mounted and there is no device, so nothing of this layer is present on this
+// host. It cannot be read as permission to format, because Ensure refuses an
+// empty artifact before it observes anything.
+func TestObserveWithNoDeviceBelowReportsAbsentWithoutError(t *testing.T) {
+	l := newFS(t, newFakeFS(), blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe errored on a device that is already gone: %v", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent", state)
+	}
+	if len(own.Devices) != 0 || own.Path != "" {
+		t.Errorf("an absent layer exposed %+v", own)
+	}
+}
+
+// The mount is still the first question, because total path loss leaves one
+// behind after the device is gone. Answering Absent on the strength of the
+// missing device alone would have a teardown skip the release that clears it,
+// stranding a mount that answers EIO.
+func TestObserveWithNoDeviceBelowStillReportsALiveMount(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if state != volstack.StateReady {
+		t.Errorf("state = %s, want Ready: the mount is still there to be released", state)
+	}
+	if own.Path != stagingPath {
+		t.Errorf("the layer exposed %q, want the staging path it is still mounted at", own.Path)
+	}
+}
+
+// Ensure is what keeps Absent from meaning "format this": it refuses an empty
+// artifact before it observes anything, so the state above can never reach a
+// mkfs.
+func TestEnsureRefusesAnEmptyArtifactBeforeObserving(t *testing.T) {
+	fs := newFakeFS()
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	if _, err := l.Ensure(context.Background(), volstack.Artifact{}); err == nil {
+		t.Fatal("Ensure accepted a plan with no device to put a filesystem on")
+	}
+	if len(fs.formatted) != 0 {
+		t.Errorf("a format ran against no device: %+v", fs.formatted)
+	}
+}
+
+// An encrypted volume reads as random bytes when it is empty, because the
+// control plane stacks an AES-XTS crypto bdev under the namespace it exports
+// and decrypting never-written blocks yields pseudo-random plaintext. The
+// content probe therefore reports Foreign with no known signature on a volume
+// that has nothing on it, and refusing that is refusing every encrypted volume
+// there will ever be.
+func TestAnEncryptedVolumeIsStagedThoughItsContentCannotBeRead(t *testing.T) {
+	fs := newFakeFS()
+	l := NewFilesystem(FilesystemConfig{
+		FsType:      "ext4",
+		StagingPath: stagingPath,
+		Ops:         fs,
+		Content: fakeReader{reading: blockdev.Reading{
+			Content: blockdev.ContentForeign,
+			Detail:  "no known signature, and the probed regions are not empty: first non-zero byte at 0",
+		}},
+		Encrypted: true,
+	})
+
+	state, _, err := l.Observe(context.Background(), belowArtifact())
+	if err != nil {
+		t.Fatalf("Observe refused an encrypted volume: %v", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent: the volume has no filesystem and may be formatted", state)
+	}
+}
+
+// What protects an encrypted volume is the record rather than the read. A
+// volume the control plane says already carries a filesystem is not formatted
+// again, whatever the bytes on it look like.
+func TestAnEncryptedVolumeRecordedAsFormattedIsNotFormattedAgain(t *testing.T) {
+	fs := newFakeFS()
+	l := NewFilesystem(FilesystemConfig{
+		FsType:      "ext4",
+		StagingPath: stagingPath,
+		Ops:         fs,
+		Content:     fakeReader{reading: blockdev.Reading{Content: blockdev.ContentForeign}},
+		Encrypted:   true,
+		PriorFormat: func(context.Context) (string, error) { return "xfs", nil },
+	})
+
+	if _, _, err := l.Observe(context.Background(), belowArtifact()); err == nil {
+		t.Fatal("an encrypted volume recorded as carrying xfs was accepted for an ext4 plan")
+	}
+	if len(fs.formatted) > 0 {
+		t.Errorf("the volume was formatted over its record: %+v", fs.formatted)
+	}
+}
+
+// The guard keeps its teeth where the read means something. A plaintext volume
+// carrying content this driver did not write is still refused, which is the
+// case the reading was introduced for.
+func TestAPlaintextVolumeCarryingForeignContentIsStillRefused(t *testing.T) {
+	fs := newFakeFS()
+	l := newFS(t, fs, blockdev.Reading{
+		Content: blockdev.ContentForeign, Detail: "first non-zero byte at 0",
+	}, nil)
+
+	if _, _, err := l.Observe(context.Background(), belowArtifact()); err == nil {
+		t.Fatal("a device carrying foreign content was accepted")
+	}
 }
 
 // A device positively read as blank is the one case a format is permitted.
@@ -420,6 +555,24 @@ func TestHealForcesWhenAPlainUnmountRefuses(t *testing.T) {
 	}
 	if len(fs.forceUnmounted) == 0 {
 		t.Fatal("a plain unmount refused and the heal did not fall back to its force path")
+	}
+}
+
+// A mount point that cannot be interrogated is how a dead mount presents, and
+// the release detaches it rather than reading the failure as an empty path.
+// Reading it the other way is how total path loss leaves a staging path mounted
+// over a device that is gone, with nothing that will ever take it down.
+func TestReleaseDetachesAMountItCannotInterrogate(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPointErr = errors.New("the mount is dead, because the device behind it is gone")
+	fs.unmountErr = errors.New("transport endpoint is not connected")
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+
+	if err := l.Release(context.Background(), volstack.Artifact{}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if len(fs.forceUnmounted) == 0 {
+		t.Fatal("the dead mount was read as absent and left in place")
 	}
 }
 

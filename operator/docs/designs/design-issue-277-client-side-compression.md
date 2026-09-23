@@ -2,9 +2,30 @@
 
 **Status:** Partially Implemented  
 **Author:** Manohar Reddy  
-**Date:** 2026-08-06 (last updated 2026-09-08)  
+**Date:** 2026-08-06 (last updated 2026-09-21)  
 **Issue:** https://github.com/simplyblock/simplyblock-operator/issues/277  
 **Test Plan:** [`tests/test-plan-issue-277-client-side-compression.md`](../tests/test-plan-issue-277-client-side-compression.md)
+
+**2026-09-21 rewrite:** the mechanism below is a row of
+[`atlas-lib/volstack`](design-node-volume-stack.md)'s plan catalog rather than a
+stack of its own. Every node RPC on the data path is one runner call against a
+plan, for every volume this driver stages, so a volume carrying either
+client-side parameter differs from every other volume in which layers its plan
+names and in nothing else (§7.1, §7.6). The earlier rewrite of 2026-09-16
+described the three LVM layers driven through an adapter standing in for
+`fabric`, because the fabric and filesystem layers were unwired at the time;
+both are wired now, and the adapter is gone. `atlas-lib/lvm/vdo` retired with
+neither (§7.1). The topology gate no longer
+proposes `AllowedTopologies` on the generated StorageClass (§5): DHCHAP's own
+copy of that mechanism was found broken and removed in PR #484, for a reason
+that applies identically here, and `vdoCapableSegment` mirrors DHCHAP's
+*current* fix instead. §4.1's `hostPID` prerequisite is dropped: the existing
+`nvme-tcp`/`nvme-rdma` `modprobe` in the node plugin's `postStart` hook
+already proves a plain `modprobe` from this privileged container reaches the
+host kernel without it. File paths throughout reflect the post-#497
+`csi-driver/internal/csi/{node,controller}` layout and the post-#513
+`SimplyblockDriver`-managed DaemonSet (`operator/internal/controllers/driver`),
+neither of which existed when this design was first written.
 
 ---
 
@@ -14,16 +35,16 @@ Client-side compression depends on a kernel module, a packaging path, and a
 capacity floor that this repository does not build. All of them are collected
 here, and each row names the section that specifies it.
 
-| #        | Prerequisite                                                                                                                                                                                          | Kind                | Blocks                                                      | Status                                                       |
-|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------------------------------------------|--------------------------------------------------------------|
-| ~~P0-1~~ | ~~`kmod-kvdo` and `vdo` reachable from every node's BaseOS repository~~ **No longer needed.** §4.1/Q11 dropped the install path. Capability is limited to kernels that already carry `dm-vdo` in-tree | —                   | —                                                           | —                                                            |
-| P0-2     | In-tree `dm-vdo`, kernel 6.9 or newer                                                                                                                                                                 | Node OS             | Every volume this feature serves (§4.1)                     | Available on a current-enough kernel, detected by `modprobe` |
-| P0-3     | `lvm2` with the `vdo` and `vdo-pool` segment types, on the node and in the CSI node image                                                                                                             | Node OS             | Every VDO stack operation (§7)                              | Available, installed into the CSI node image (§4.2)          |
-| P0-4     | `vdoformat`, which `lvcreate --type vdo` invokes internally, in the CSI node image                                                                                                                    | Node OS             | Volume creation (§7.2)                                      | Available on `x86_64` only, no `aarch64` build exists        |
-| ~~P0-5~~ | ~~RHEL-family packaging: `dnf`, `rpm`, and the weak-modules mechanism~~ **No longer needed.** No install step remains that needs it                                                                   | —                   | —                                                           | —                                                            |
-| P0-6     | `hostPID` on the `csi-node` DaemonSet, so `nsenter` reaches the host mount namespace                                                                                                                  | Kubernetes          | The capability probe (§4.1)                                 | Available, set by the development chart                      |
-| P0-7     | A volume of at least 5GiB, above VDO's own floor of roughly 4.72GiB                                                                                                                                   | Storage plane (VDO) | Any compressed or deduplicated volume (§6)                  | Enforced by VDO itself, with no operator-side pre-check      |
-| P0-8     | The `node.kubernetes.io/out-of-service` taint, Kubernetes 1.24 or newer                                                                                                                               | Kubernetes          | Recovery of an RWO volume from a permanently dead node (§8) | Available in-cluster, not invoked by this design             |
+| #        | Prerequisite                                                                                                                                                                                                                                                      | Kind                | Blocks                                                      | Status                                                       |
+|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------------------------------------------|--------------------------------------------------------------|
+| ~~P0-1~~ | ~~`kmod-kvdo` and `vdo` reachable from every node's BaseOS repository~~ **No longer needed.** §4.1/Q11 dropped the install path. Capability is limited to kernels that already carry `dm-vdo` in-tree                                                             | —                   | —                                                           | —                                                            |
+| P0-2     | In-tree `dm-vdo`, kernel 6.9 or newer                                                                                                                                                                                                                             | Node OS             | Every volume this feature serves (§4.1)                     | Available on a current-enough kernel, detected by `modprobe` |
+| P0-3     | `lvm2` with the `vdo` and `vdo-pool` segment types, on the node and in the CSI node image                                                                                                                                                                         | Node OS             | Every VDO stack operation (§7)                              | Available, installed into the CSI node image (§4.2)          |
+| P0-4     | `vdoformat`, which `lvcreate --type vdo` invokes internally, in the CSI node image                                                                                                                                                                                | Node OS             | Volume creation (§7.2)                                      | Available on `x86_64` only, no `aarch64` build exists        |
+| ~~P0-5~~ | ~~RHEL-family packaging: `dnf`, `rpm`, and the weak-modules mechanism~~ **No longer needed.** No install step remains that needs it                                                                                                                               | —                   | —                                                           | —                                                            |
+| ~~P0-6~~ | ~~`hostPID` on the `csi-node` DaemonSet, so `nsenter` reaches the host mount namespace~~ **No longer needed.** §4.1 dropped `nsenter`: the same `SYS_MODULE`/`/lib/modules` access that already loads `nvme-tcp`/`nvme-rdma` without `hostPID` loads `dm-vdo` too | —                   | —                                                           | —                                                            |
+| P0-7     | A volume of at least 5GiB, above VDO's own floor of roughly 4.72GiB                                                                                                                                                                                               | Storage plane (VDO) | Any compressed or deduplicated volume (§6)                  | Enforced by VDO itself, with no operator-side pre-check      |
+| P0-8     | The `node.kubernetes.io/out-of-service` taint, Kubernetes 1.24 or newer                                                                                                                                                                                           | Kubernetes          | Recovery of an RWO volume from a permanently dead node (§8) | Available in-cluster, not invoked by this design             |
 
 Each missing item has a different consequence. Without P0-2 a node never
 becomes VDO-capable, so the topology gate (§5) keeps compressed volumes off
@@ -61,7 +82,7 @@ only the recovery path after a node dies permanently, described in §8.
     - [7.3 Device Identity in HA Mode](#73-device-identity-in-ha-mode)
     - [7.4 Clone and Snapshot Restore](#74-clone-and-snapshot-restore)
     - [7.5 Write Policy](#75-write-policy)
-    - [7.6 Wiring into `nodeserver.go`](#76-wiring-into-nodeservergo)
+    - [7.6 Wiring into the node service](#76-wiring-into-the-node-service)
   - [8. Re-Provisioning and Failure Handling](#8-re-provisioning-and-failure-handling)
   - [9. Volume Expansion](#9-volume-expansion)
   - [10. RBAC Changes](#10-rbac-changes)
@@ -206,22 +227,24 @@ explicitly, advertised explicitly, and gated on for scheduling.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ simplyblock-csi-node DaemonSet, one pod per node                     │
 │                                                                      │
-│  1. postStart hook: nsenter into PID 1, modprobe dm-vdo, write the   │
-│     capability marker file                                           │
-│  2. advertiseVDOCapability: read the marker, patch the node label    │
+│  1. advertiseVDOCapability: modprobe dm-vdo, else kvdo, and log     │
+│     the kernel, each module's answer, and lvm's segment types        │
+│  2. the same call patches the node label with the verdict            │
 │  3. NodeGetInfo -> buildAccessibleTopology: label to CSI segment     │
 │  4. CreateVolume -> vdoCapableSegment: PV nodeAffinity               │
-│  5. NodeStageVolume: initiator.Connect, then ResolveClonedVDO and    │
-│     CreateOrAttachVDO, then stageVolume against the VDO device       │
+│  5. NodeStageVolume: plan.go selects the LVM row, and the runner     │
+│     walks it: fabric, the three LVM layers, then the filesystem      │
 │                                                                      │
 │  Node label storage.simplyblock.io/vdo-capable and its annotation    │
 └──────────────────────────────────────────────────────────────────────┘
               │ imports (node-level primitives, no Kubernetes awareness)
 ┌─────────────▼────────────────────────────────────────────────────────┐
-│ atlas-lib: github.com/simplyblock/atlas/lvm and .../atlas/lvm/vdo    │
-│   lvm.Manager: device-scoped LVM commands, content-based identity    │
-│   lvm/vdo:     CreateOrAttach, ResolveClone, Deactivate, Remove,     │
-│                Grow, SetFeatures                                     │
+│ atlas-lib: .../atlas/lvm, .../atlas/volstack/{layers,plans}          │
+│   lvm.Manager:   device-scoped LVM commands, content-based identity  │
+│   lvm's vdo:     the VolumeProvisioning handler lvcreate's VDO       │
+│                  arguments come from                                 │
+│   volstack:      the layers, the plan rows, and the runner that      │
+│                  walks them                                          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -243,44 +266,53 @@ step, the marker-read and label-patch step, and the VDO stack lifecycle in
 
 ### 4.1 Module Load and Detection
 
-The `csi-node` container's `postStart` lifecycle hook carries an additional,
-independent step:
+**Revised 2026-09-22: the probe is the node plugin's, not a lifecycle hook's.**
+It began in the `csi-node` container's `postStart` hook, beside the `nvme-tcp`
+and `nvme-rdma` loads already there, exchanging its answer with the plugin
+through a marker file on a host path. The hook was the wrong place: its output
+reaches neither the container's log stream nor anywhere else a reader can get at
+it, because Kubernetes surfaces a lifecycle hook's output only as an event when
+the hook *fails*. A probe that ran and answered no therefore left no trace of
+having run, which is precisely the case an operator needs to see — a node that
+cannot run VDO and a node whose probe never ran leave the cluster looking
+identical, with every volume needing the capability unschedulable and nothing
+anywhere having failed.
 
-```bash
-nsenter -t 1 -m -u -n -i -- modprobe dm-vdo
-```
+The plugin runs in that same privileged container, holding `SYS_MODULE` and
+mounting the host's `/lib/modules` read-only, which is what a module load
+actually needs: loading affects the whole kernel regardless of which namespace
+the loading process sits in, so no `nsenter` and no `hostPID` are involved. It
+asks the kernel directly, in `csi-driver/internal/csi/node/capability.go`, and
+the marker file and the host path that carried it are gone with the hook.
 
-The result is written to `/var/run/simplyblock/vdo-capable/marker`, backed by
-the host path `/var/lib/simplyblock/vdo-capable`, as the literal string `true`
-or `false`. §4.3 turns that marker into a node label.
+Two module names are tried, because "VDO in the kernel" means two different
+things depending on the node's operating system: `dm-vdo` is upstream's in-tree
+name (kernel 6.9 and newer), and `kvdo` is what RHEL-family systems still ship
+it as through the separate `kmod-kvdo` package, verified live on a Rocky/RHEL 9
+kernel carrying no `dm-vdo` at all. Either one loading means the node can run
+VDO, so the second is tried only when the first does not load, and both answers
+are reported either way.
 
-There is no install step, per §14's Q11: capability is limited to nodes whose
-kernel already carries `dm-vdo` in-tree (kernel 6.9 and newer, per the
-`dm-vdo/kvdo` project's README), and the probe either finds that or it does
-not. This is a live question asked of the running kernel rather than a
+There is no install step, per §14's Q11: the probe either finds a module or it
+does not. This is a live question asked of the running kernel rather than a
 version check, which is what lets the same probe work unchanged on any node
-operating system: `modprobe` either succeeds or it does not, and nothing
-about the answer depends on how the node got its kernel.
+operating system, and nothing about the answer depends on how the node got its
+kernel.
 
-The container is already privileged, already holds `SYS_ADMIN` and
-`SYS_MODULE`, and already mounts the host's `/lib/modules` read-only, which is
-enough to `modprobe` a module the host's kernel already carries, the same
-access that loads `nvme-tcp` today. Reaching real host root through
-`hostPID: true` and `nsenter -t 1` avoids adding a writable hostPath mount of
-`/` to a long-running DaemonSet, the idiom driver-installer DaemonSets use, and
-it keeps the blast radius smaller than mounting the entire host filesystem
-read-write into a persistent pod.
+It runs once per plugin start, which is when the answer can have changed: the
+DaemonSet is one pod per node, and a kernel change restarts that pod. A
+capability gained without a restart is §14's Q12 and is not covered here.
 
-The probe rides the node plugin's own `postStart` lifecycle because that is
-what already has the two properties it needs. It has to run on every node
-that might consume a volume, and it has to run again whenever the node's
-kernel changes, because a node that boots an older kernel or image can lose
-the capability a newer one gave it. The DaemonSet is already one pod per
-node, and a kernel change restarts that pod, so the hook fires exactly when
-the answer can have changed. Nothing about it is slow enough to belong
-outside the node plugin's readiness path: a single `modprobe` against a
-module the kernel already carries, or fails to, answers in milliseconds,
-which is why this design needs no installer pod of its own (§14, Q10).
+**Measured on the e2e runners, 2026-09-22.** All seven nodes run RHEL 9.4 on
+kernel `5.14.0-427.24.1.el9_4.x86_64`, which carries no in-tree `dm-vdo` — that
+arrives in 6.9 — and has no `kmod-kvdo` installed, so both loads fail against
+the host's own `/lib/modules`. `lvm segtypes` on the same nodes lists `vdo` and
+`vdo-pool`: userspace LVM offers the segment types while the kernel cannot
+provide them, which is the inverse of the case §14's Q7 anticipated and is why
+the segment types are reported rather than trusted. Every node is therefore
+labeled `false`, §5's gate refuses placement, and the feature's own E2E suite
+skips rather than waiting out a pod that can never be scheduled. Exercising this
+design on that pipeline needs those nodes to gain the module first.
 
 ### 4.2 Container Image Dependencies
 
@@ -303,7 +335,24 @@ label absent, on failure.
 
 `advertiseVDOCapability` runs on every `csi-node` pod start, and a hand-set
 label is the escape hatch a golden-image node depends on, so the probe has to
-tell its own labels apart from an operator's. Every label value the probe
+tell its own labels apart from an operator's.
+
+The probe itself runs here too, rather than in the `postStart` hook §4.1
+originally put it in, and the marker file the two exchanged it through is gone.
+A hook's output reaches nothing a reader can get at: Kubernetes surfaces it only
+as an event when the hook *fails*, so a probe that ran and answered no left no
+trace of having run. That is the difference between a node that cannot run VDO
+and a node whose probe never ran, and from outside the cluster the two are
+identical: every volume needing the capability is unschedulable, and nothing
+anywhere has failed. The plugin is in the same privileged container over the
+same `/lib/modules`, so it asks the kernel directly and logs what it was told.
+
+What it logs is the whole probe and not only its verdict: the kernel version,
+each module it tried and what `modprobe` said about that module by name, and
+whether `lvm segtypes` lists the vdo types. The segment types are recorded and
+not acted on, which is what will settle §14's Q7: a node whose module loads
+while LVM offers no vdo segtype is exactly the case that question is about, and
+nothing before this would have shown it. Every label value the probe
 writes itself is stamped with a second annotation,
 `storage.simplyblock.io/vdo-capable-managed-by: auto-detect`. On startup the
 probe first checks whether the label is already present without that
@@ -326,67 +375,59 @@ interval rather than at pod start alone.
 
 ## 5. Scheduling Gate: Topology
 
-This repository already has working CSI topology infrastructure, and the gate
-extends it in three places.
+**Revised 2026-09-16.** This section originally proposed a second copy of the
+constraint on the generated StorageClass's `AllowedTopologies`, mirroring
+DHCHAP's original mechanism. That mechanism was found broken for DHCHAP itself
+and removed in PR #484: `AllowedTopologies` becomes external-provisioner's
+`requisite` list, which is checked against the *selected* node's `CSINode`
+object, and a `CSINode`'s topology keys are fixed once, at CSI plugin
+registration. A label a `postStart` hook or an operator applies after that —
+which is the case here whenever the probe has not finished by the time the
+plugin registers — can never retroactively
+join that set. Requiring it in the StorageClass's `AllowedTopologies` makes
+every PVC from a client-side pool fail provisioning permanently, the exact
+failure PR #484's `[[project_dhchap_sc_allowedtopologies_gap]]` reproduced live.
+`vdoCapableSegment` mirrors DHCHAP's *current*, fixed mechanism instead, and
+`buildAccessibleTopology` needs no `vdo-capable` awareness at all: it is
+unrelated to the gate below.
 
-On the node side, `buildAccessibleTopology` in `nodeserver.go` already turns
-node labels into CSI topology segments reported through `NodeGetInfo`, and it
-surfaces `storage.simplyblock.io/vdo-capable=true` the same way. On the
-controller side, `vdoCapableSegment` adds the same segment to the
-`CreateVolume` response
-whenever either client parameter is true, which is what puts a matching
-`nodeAffinity` on the resulting PersistentVolume and keeps the volume on capable
-nodes for its whole life rather than only at first binding.
+The gate is a single PV `nodeAffinity` pin, not two copies of the constraint.
+`vdoCapableSegment` (`csi-driver/internal/csi/controller/params.go`, alongside
+`dhchapAllowedNodeSegment`) adds `storage.simplyblock.io/vdo-capable=true` to
+the `CreateVolume` response's `AccessibleTopology` whenever either client
+parameter is true, built straight from the StorageClass parameters and never
+from `req.GetAccessibilityRequirements()` — the same reasoning
+`dhchapAllowedNodeSegment`'s own comment gives. External-provisioner turns that
+into `PersistentVolume.spec.nodeAffinity`, which holds for the volume's whole
+life, independent of `CSINode` registration timing.
 
-The operator sets the same constraint a second time, on the generated
-StorageClass. `createStorageClassIfNotExists` adds the label to
-`AllowedTopologies` whenever either client parameter is true, in the same
-`TopologySelectorTerm` that carries DHCHAP's node label, because Kubernetes ANDs
-the expressions within one term and ORs separate terms, and a pool needing both
-constraints must not land on a node satisfying one. That is the copy the
-scheduler reads at binding time, and the `CreateVolume` segment above is what
-holds for the volume's whole life afterward.
-
-`VolumeBindingMode` is already `WaitForFirstConsumer`, so binding is deferred
-until topology can be evaluated, and the gate needs no scheduler changes. A PVC
-that requests client compression or deduplication is never bound to a node
-lacking VDO support in the first place.
+`VolumeBindingMode` is already `WaitForFirstConsumer`, but unlike the original
+proposal, initial placement is *not* filtered at the scheduler's Filter stage:
+a pod is tentatively assigned to any node, the volume is created there, and
+only then does the PreBind plugin reject a wrong node on the PV's
+`nodeAffinity` and reschedule — the same behavior DHCHAP now has, verified live
+in `[[project_dhchap_sc_allowedtopologies_gap]]` to self-heal without wedging
+an unpinned pod. The consequence, also verified there: a volume is created
+before the placement failure surfaces, rather than never created at all. Not a
+leak (deleting the PVC reclaims it), but capacity is consumed for a workload
+that briefly cannot run, and the scheduler's message is less obvious than a
+Filter-stage rejection would have been. A pod hard-pinned (`nodeSelector`) to a
+non-capable node still wedges, as it would under any topology mechanism.
 
 The gate covers initial placement only. A node whose capability regresses while
 a volume is already bound there is §8's subject.
 
 ### 5.1 Reporting an Unsatisfiable Pool
 
-The gate is silent about its own strictness. With no capable node anywhere in
-the cluster, the StorageClass's `AllowedTopologies` matches nothing, the
-scheduler's VolumeBinding plugin filters out every node, and each pod consuming
-such a PVC stays `Pending` behind a generic scheduler message that names
-neither the label nor the feature. `CreateVolume` is never reached, so
-`vdoCapableSegment` never runs and no part of this design observes the failure. The cause, a label absent from every node in the cluster, is findable
-only by someone who already suspects it.
-
-The StoragePool reconciler closes that gap, because it is the one component that
-knows a pool requested the feature and can see every node. Whenever a pool sets
-either client parameter, it counts the nodes carrying
-`storage.simplyblock.io/vdo-capable=true`, and a count of zero produces a
-Warning event on the StoragePool naming the count and the label. The reconciler
-already holds an `events.EventRecorder` and already emits exactly this shape of
-event for `InvalidClusterReference`, and its periodic requeue re-emits while the
-condition holds and stops once a node becomes capable.
-
-The count is reported rather than enforced, because zero capable nodes is a
-legitimate transient state. The `csi-node` DaemonSet's install and label patch
-reach each node at its own pace (§4.1), so a cluster minutes into an install has
-no capable node yet and a pool created then is not wrong. The pool therefore
-reconciles and gets its StorageClass either way, and the event says what a
-consumer of it will find.
-
-Neither the count nor the event is implemented. Two questions stay open with
-them, both owned by §14's Q13: the reconciler watches only StoragePool objects,
-so the report refreshes on the requeue rather than when a node's label changes,
-and the fact has no durable home on the pool, because `status.status` carries
-the backend lifecycle status and cannot hold a local scheduling fact without
-overwriting it.
+**Not implemented**, unchanged from this design's original state: with no
+capable node anywhere in the cluster, every PVC from a client-side pool
+provisions, binds tentatively, and is rejected and rescheduled indefinitely
+rather than failing cleanly, and nothing surfaces the cause. A StoragePool
+reconciler check — counting nodes carrying `vdo-capable=true` and emitting a
+Warning event at zero, mirroring the pattern already in place for
+`InvalidClusterReference` — remains the natural fix and is not blocked on
+anything above; it is out of scope for this change and stays owned by §14's
+Q13.
 
 ---
 
@@ -439,8 +480,8 @@ Two rules follow from the two parameters being independent:
   §4 and the topology gate in §5 trigger on
   `client_compression == "true" || client_deduplication == "true"`, because a
   deduplication-only volume needs a working module exactly as much as a
-  compression-only one does. `vdoParams` in `nodeserver.go` and
-  `vdoCapableSegment` in `controllerserver.go` both apply that rule, and both
+  compression-only one does. `wantsVDO` in `csi-driver/internal/csi/node/plan.go`
+  and `vdoCapableSegment` in `csi-driver/internal/csi/controller/params.go` both apply that rule, and both
   tolerate the `"True"` spelling that `boolStr` emits.
 - **A volume that requests either parameter is at least 5GiB.** VDO enforces a
   hard floor of roughly 4.72GiB, and a smaller device cannot hold a VDO
@@ -460,66 +501,31 @@ management interface available on the target operating system: the standalone
 `vdo-pool`. Each CSI volume gets its own PV, VG, VDO pool, and LV stack, which
 is one VDO instance per volume as §2 requires.
 
-Nothing in that stack is Kubernetes-shaped, so it lives in `atlas-lib` and the
-CSI driver imports it:
+Nothing in that stack is Kubernetes-shaped, so it lives in `atlas-lib`:
 
-| Package                                | Holds                                                                                               |
-|----------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `github.com/simplyblock/atlas/lvm`     | `lvm.Manager`: device-scoped LVM commands, content-based volume-group identity, and dm node cleanup |
-| `github.com/simplyblock/atlas/lvm/vdo` | The VDO stack lifecycle, and the `lvcreate` argument handler registered for the `vdo` segtype       |
-| `csi-driver/pkg/util/vdo.go`           | One shared `lvm.Manager` and one wrapper per CSI concern, which is the whole CSI-side surface       |
+| Package                                        | Holds                                                                                                                                                                                                                   |
+|------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `github.com/simplyblock/atlas/lvm`             | `lvm.Manager` (device-scoped LVM commands, content-based volume-group identity, dm node cleanup), and the built-in `vdo` `VolumeProvisioning` handler, registered by the package's own `init`                           |
+| `github.com/simplyblock/atlas/volstack/layers` | `lvmPhysicalVolume`, `lvmVolumeGroup`, `lvmLogicalVolume`: the `Layer` contract's `Ensure`/`Release`/`Destroy`/`Grow`, generalized over every LVM-backed shape, not only VDO                                            |
+| `github.com/simplyblock/atlas/volstack/plans`  | the rows themselves: `LVM` is `fabric` → those three → `filesystem`, and `LVMRawBlock` is the same row with its top layer absent. `LogicalVolumeOptions` carries the pool name, the definition, and the node capability |
+| `csi-driver/internal/csi/node/plan.go`         | the selection alone: which row a volume is, read off its volume context and its volume capability                                                                                                                       |
 
-The `lvm/vdo` package's public surface is the lifecycle of one volume's stack:
+There is no VDO-specific type on either side of that split. What separates a
+VDO volume from a linear one is the contents of `LogicalVolumeOptions`: a
+definition asking for compression, deduplication, or both, the name of the pool
+`lvcreate --type vdo` creates alongside the logical volume, and the label a node
+must carry for the volume to be staged there at all. The handler in
+`atlas-lib/lvm` turns that definition into `lvcreate`'s arguments, and it is
+registered by its own package's `init` rather than by an import the caller has
+to remember: a forgotten import would not fail the build, it would create a
+plain linear volume and drop the feature silently.
 
-```go
-// CreateOrAttach idempotently ensures a VDO-backed logical volume exists on top of
-// devicePath, named after lvolID, and returns the device path to format and mount.
-// An existing volume group is reactivated and never recreated. Only a genuinely
-// absent one is created fresh. compression and deduplication are set independently
-// at creation time, and changing them later is SetFeatures' job.
-func CreateOrAttach(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string, compression, deduplication bool) (string, error)
-
-// ResolveClone re-stamps the identity of a device that is a block-level copy of
-// another VDO volume, before any activation is attempted. See §7.4.
-func ResolveClone(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) error
-
-// Deactivate deactivates, and does not destroy, lvolID's stack. This is the
-// counterpart to a plain NVMe-oF disconnect, and the correct call from a routine
-// unstage.
-func Deactivate(ctx context.Context, manager *lvm.Manager, lvolID string) error
-
-// Remove deactivates and removes lvolID's stack, destroying its data. Appropriate
-// only when the volume itself is being removed, or to clean up an orphaned stack
-// whose backing device is already gone.
-func Remove(ctx context.Context, manager *lvm.Manager, lvolID string) error
-
-// Grow extends the pool LV to consume the newly available physical space on
-// devicePath, grows the VDO logical volume to match, and returns its device path.
-func Grow(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) (string, error)
-
-// SetFeatures toggles compression and deduplication on an existing, active volume
-// without recreating it. No live update path calls it yet (§14, Q1).
-func SetFeatures(ctx context.Context, manager *lvm.Manager, lvolID string, compression, deduplication bool) error
-```
-
-`csi-driver/pkg/util/vdo.go` binds one process-wide `lvm.Manager` and exposes
-`CreateOrAttachVDO`, `ResolveClonedVDO`, `DeactivateVDO`, `RemoveVDO`,
-`GrowVDO`, and `SetVDOFeatures`, each a single call into the package above.
-Keeping the wrappers means `nodeserver.go` never assembles an `lvm.Manager` of
-its own, and the primitive stays usable outside a Kubernetes context.
-
-**This split absorbs cleanly into the node-side volume stack.**
-[`design-node-volume-stack.md`](design-node-volume-stack.md) generalizes
-exactly this lifecycle behind a `Layer` contract, and `atlas-lib/volstack`
-already has an `lvmLogicalVolume` layer built on the same `lvm.Manager` this
-package uses. Neither the CSI driver nor this design's own implementation
-(PR #402) imports `volstack` yet, so the flat `lvm/vdo` package above is what
-actually runs today, but it is not where this mechanism ends up: once the CSI
-driver moves onto the layered stack, `client_compression` and
-`client_deduplication` become two fields of a `LogicalVolumeDefinition`
-handed to that shared layer rather than a call into this package, and the
-`lvm/vdo` package's `CreateOrAttach`/`ResolveClone`/`Deactivate`/`Remove`/
-`Grow`/`SetFeatures` retire in favor of it.
+The pool's name reaches two layers rather than one. The logical-volume layer
+needs it as `lvcreate`'s `<vg>/<pool>` target, and the physical-volume layer
+needs it as a name to leave alone when it resolves a clone: a byte-level clone
+carries its source's LVM metadata, the resolution renames the volume carrying
+the source's name, and the pool is named the same in every volume's group
+(§7.4).
 
 ### 7.2 Device Creation
 
@@ -546,11 +552,13 @@ LVM command is scoped to `$DEV` through `--devices`, which §7.3 explains is a
 correctness requirement rather than tidiness.
 
 Idempotency is a check-then-act guard rather than a property of the tooling.
-`lvcreate --type vdo -n X` fails when `X` already exists, so `CreateOrAttach`
-probes with `pvs` and `lvs` before it calls anything, because VDO offers no
-idempotency mechanism of its own. A stack that is present is reactivated with
-`vgchange -ay`, and a stack that is present but incomplete is handled as §7.3
-describes.
+`lvcreate --type vdo -n X` fails when `X` already exists, and VDO offers no
+idempotency mechanism of its own, which is what each layer's `Observe` answers:
+it probes with `pvs` and `lvs` and reports a state, and `Ensure` acts on that
+state rather than re-deriving it. A stack that is present but not mapped is
+reactivated with `vgchange -ay`, and a stack that is present but incomplete is
+handled as §7.3 describes. Creating is what absent alone permits, and absent
+means the device carries no volume group at all.
 
 ### 7.3 Device Identity in HA Mode
 
@@ -594,8 +602,9 @@ handle it:
 3. `Manager.HasLogicalVolume` distinguishes a complete stack from an **orphaned
    VG** left by an interrupted create that reached `vgcreate` but never
    `lvcreate`. Such a VG reports zero LVs, and `vgchange -ay`
-   against it succeeds while producing no mountable device, so `CreateOrAttach`
-   removes it and falls through to a fresh create.
+   against it succeeds while producing no mountable device, which is the state
+   the layer reports as partial: the orphaned VG is removed and a fresh create
+   follows.
 
 The same content-based identity is what makes clone detection possible in §7.4,
 and `Manager.RemoveOrphanedDMNodes` is what cleans up after a device disappears
@@ -608,21 +617,24 @@ copies at the storage layer rather than a reformat, so a clone of a VDO-backed
 volume carries its source's on-disk LVM metadata verbatim: the same PV UUID, the
 same VG UUID, and the same VG name. LVM identifies a PV and a VG by that on-disk
 UUID, not by the CSI volume it logically belongs to. A clone is therefore
-indistinguishable from its source, and `CreateOrAttach`'s own question, whether
-a VG named after this volume exists, is answered no while the VG on disk is
-named after the source. Two failures follow from that answer: a fresh
-`lvcreate` over the cloned data, and a name collision with the source once both
-devices are visible on one node. `ResolveClone` is what prevents both.
+indistinguishable from its source, and the question "does a VG named after this
+volume exist" is answered no while the VG on disk is named after the source. Two
+failures follow from that answer: a fresh `lvcreate` over the cloned data, and a
+name collision with the source once both devices are visible on one node. The
+physical-volume layer is what prevents both, which is why the LVM rows have a
+layer for a label at all: a clone is spotted by whose name is on the device, one
+layer below the group that would otherwise be created over it.
 
-`ResolveClone` runs before `CreateOrAttach` on every stage and settles the
-question from the device's own on-disk identity, which is why it does not depend
-on whether the content-source fact survived into the volume context. When the VG
-it finds belongs to a different volume, it regenerates the PV and VG UUIDs and
-renames the VG and its LV to this volume's identity, the `vgimportclone` and
-`lvrename` equivalent, before any activation happens. VDO's own pool LV is
-structural and named identically in every stack, so it is preserved rather than
-renamed. A genuinely fresh device, and one already resolved, are both left
-alone.
+The layer's `Observe` reports the device foreign, and its `Ensure` answers that
+state by re-stamping the identity rather than creating anything. It settles the
+question from the device's own on-disk content, which is why it does not depend
+on whether the content-source fact survived into the volume context. The PV and
+VG UUIDs are regenerated and the VG and its LV renamed to this volume's
+identity, `vgimportclone` and `lvrename`, before any activation happens. VDO's
+own pool LV is structural and named identically in every stack, so the plan
+passes its name down as one to preserve, and exactly the LV carrying the
+source's name is renamed. A genuinely fresh device, and one already resolved,
+are both left alone.
 
 Resolution happens once, at first stage. Afterward, the device is
 indistinguishable from any other VDO volume, and every later reattach,
@@ -642,49 +654,49 @@ a real NVMe-oF-backed lvol was statistically indistinguishable across `sync`,
 an acknowledged write: flush and FUA semantics carry end-to-end through NVMe-oF
 to the backend, which §8 describes.
 
-### 7.6 Wiring into `nodeserver.go`
+### 7.6 Wiring into the node service
 
-`vdoParams` parses the two parameters out of a volume context and reports
-whether either is set, and every path below keys off that one answer.
+Nothing in the node service branches on VDO. Every node RPC on the data path is
+one runner call against a plan, for every volume this driver stages, so what
+either client-side parameter changes is which row `plan.go` selects and nothing
+else:
 
-- **`NodeStageVolume`** calls `ResolveClonedVDO` and then `CreateOrAttachVDO`
-  between `initiator.Connect` and `ns.stageVolume`, and passes the returned VDO
-  device path into `stageVolume` in place of the raw NVMe-oF path. Both
-  parameters pass through independently, per §6. `ResolveClonedVDO` runs on
-  every stage rather than only when a `VolumeContentSource` is present, for the
-  reason §7.4 gives. The volume context, already persisted through
-  `util.StashVolumeContext`, is what later unstage and restage paths read to
-  learn that VDO is in play.
-- **`NodeUnstageVolume`** calls `DeactivateVDO` before `initiator.Disconnect`,
-  because VDO has to come down before the device underneath it goes away. The
-  call is the non-destructive `DeactivateVDO` rather than `RemoveVDO`, because
-  this path fires whenever no pod on the node currently needs the volume
-  mounted, a routine pod delete and recreate included, and not only when the
-  volume is being deleted.
-- **`restageVolume` and `ensureDeviceConnected`** reattach the existing VDO
-  device after `initiator.Connect` re-establishes the raw device, and before
-  remounting. Reattachment is `pvscan --cache` and `vgchange -ay`, never
-  `lvcreate`, which mirrors the "never reformat, the data already exists"
-  invariant `restageVolume` holds today. This is the mechanism that satisfies
-  the issue's re-provisioning requirement. It holds across a node reboot with no
-  ghost state in between, because the VG is invisible until NVMe-oF reconnects
-  and `pvscan --cache` rediscovers its PV.
-- **`NodeExpandVolume`** calls `GrowVDO` before the existing filesystem resize,
-  per §9.
-- **`stageVolume`** skips `xfsStripeOptions` whenever VDO is in play. Those
-  options align `mkfs.xfs` to the backend's erasure-coding stripe geometry
-  through `xfs_su` and `xfs_sw`, and VDO virtualizes and relocates blocks, so
-  the filesystem no longer sits directly on the erasure-coded device. Applying
-  hints computed for the raw device to a VDO virtual device is misleading rather
-  than merely useless.
+- **`planFor`** returns the `LVM` row when the volume context carries either
+  parameter, and `LVMRawBlock` when such a volume is opened as a block device.
+  A volume carrying neither gets `Plain` or `RawBlock`, exactly as before.
+- **`NodeStageVolume`** is `runner.Up` against that plan. The three LVM layers
+  create the stack on a blank device and reactivate it on one that already
+  carries it, which is the distinction their `Observe` exists to make: absence
+  means the device carries no volume group at all, established by reading the
+  device, and never inferred from this volume's group not being found.
+- **`NodeUnstageVolume`** is `runner.Down`, which releases and never destroys,
+  because it fires whenever no pod on this node needs the volume mounted, a
+  routine pod delete and recreate included. `runner.Destroy` follows only for a
+  volume that is being deleted.
+- **`restageVolume` and `NodePublishVolume`** are `runner.Heal`, which repairs
+  the layers reporting themselves unhealthy and creates nothing. That is the
+  same "never reformat, the data already exists" invariant a restage has always
+  held, expressed once in the runner instead of once per call site.
+- **`NodeExpandVolume`** is `runner.Grow` (§9).
+- **The teardown follows the stack record**, not the volume's class: the record
+  names the layers that were built and what the logical-volume layer was built
+  with, so a class edited or deleted after the volume was provisioned cannot
+  point a release at a pool by another name.
 
-  This negative gate is exactly what `atlas-lib/volstack`'s `Geometry` field
-  (`design-node-volume-stack.md` §4.3) replaces with a value: a layer reports
-  its real stripe layout or the zero value, and `filesystem_strategy.go`'s
-  `-d su=,sw=` logic derives the hint from whatever it is handed instead of a
-  `wantsVDO` conditional. `atlas-lib/volstack/layers` already implements this,
-  so the fifth call site this design adds to `stageVolume` is not a gap the
-  layered stack still needs to close.
+**Format options.** A format on top of a VDO device skips `mkfs`'s full-device
+discard (`-K` for `mkfs.xfs`, `-E nodiscard` for `mke2fs`), which VDO's block
+map processes in proportion to the volume's size: confirmed live on both,
+formatting the same 20G VDO volume, 11.5s against 0.13s for XFS and 12.08s
+against 0.09s for ext4. A freshly created VDO volume has nothing on it worth
+discarding.
+
+The stripe hints XFS is otherwise given are omitted for the same volume, and
+that omission is a property of the layer rather than a conditional: the hints
+describe the erasure-coded backend, VDO virtualizes and relocates blocks, and a
+layer whose blocks are virtualized reports the zero `Geometry`, which is what
+`filesystem_strategy.go` derives the hint from. What remains a conditional in
+the CSI driver is only the hints the volume *context* carries, which predate
+`Geometry` and are still read for every volume that is not behind a VDO device.
 
 ---
 
@@ -699,18 +711,21 @@ Whether a volume uses VDO is baked into its on-disk format at creation, because
 the raw device holds a VDO container rather than a bare filesystem. A later
 `NodeStageVolume` or `restageVolume` on a node without working VDO therefore
 cannot fall back to a raw mount: the bytes on disk are VDO-formatted. When
-either client parameter is present in the volume context and
-`CreateOrAttachVDO` fails locally, both paths return a hard error, reported
-through the same klog error paths as every other hard failure in that file.
+either client parameter is present in the volume context and the
+bring-up fails locally, both paths return a hard error, reported through the
+same klog error paths as every other hard failure in that file. `runner.Up`
+releases what it already brought up when a layer fails, and never destroys, so
+a format that failed does not trigger the removal of the volume underneath
+it.
 
 | Failure                                             | Detection                                                       | Behavior                                                                                               |
 |-----------------------------------------------------|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
 | No VDO-capable node anywhere in the cluster         | Capable-node count is zero at pool reconcile                    | A Warning event on the StoragePool names the count, and every PVC from the pool stays `Pending` (§5.1) |
 | Node not VDO-capable at first binding               | Missing `vdo-capable` topology segment                          | The PVC stays `Pending`, and the volume is never bound to that node (§5)                               |
-| Node capability regresses after binding             | `CreateOrAttachVDO` fails at stage or restage                   | Hard error from `NodeStageVolume` or `restageVolume`, never a raw mount                                |
+| Node capability regresses after binding             | The logical-volume layer fails at stage or restage              | Hard error from `NodeStageVolume` or `restageVolume`, never a raw mount                                |
 | Volume smaller than VDO's floor                     | `lvcreate` exits 5, reporting the minimum size                  | Stage fails with that error surfaced, and no partial stack is left behind (§14, Q2)                    |
 | Interrupted create, VG present with no LV           | `HasLogicalVolume` reports zero LVs                             | The orphaned VG is removed, and a fresh stack is created (§7.3)                                        |
-| Clone or restore carrying its source's LVM identity | Content probe finds a foreign VG on the device                  | `ResolveClone` re-stamps PV and VG UUIDs before activation (§7.4)                                      |
+| Clone or restore carrying its source's LVM identity | The physical-volume layer reads a foreign VG off the device     | `vgimportclone` re-stamps the identity, and the pool keeps its name (§7.4)                             |
 | Backing device gone without a clean unstage         | `vgchange -an` fails with `Volume group … not found`            | Fallback to `dmsetup remove` of the live dm nodes, retried across passes                               |
 | Node reboot with several VDO volumes                | Kubelet stages every volume afresh after a restart              | Each stack reattaches independently and idempotently                                                   |
 | Node permanently dead, RWO volume attached          | `FailedAttachVolume: Multi-Attach error` on the replacement pod | The replacement pod stays blocked until an administrator applies the out-of-service taint (P0-8)       |
@@ -722,10 +737,15 @@ on a reboot, so it calls `NodeStageVolume` afresh for every volume rather than
 
 **Stale state after a node loses a volume without a clean unstage.** This covers
 a pod force-rescheduled off a node that went `NotReady`, and the storage side
-disconnecting the initiator while the node stays up. `DeactivateVDO`'s
+disconnecting the initiator while the node stays up. The volume-group layer's
 `vgchange -an` fails with `Volume group … not found`, because no device remains
 to read the VG's metadata from, and the fallback is a direct `dmsetup remove` of
-the live dm nodes rather than the normal LVM teardown path.
+the live dm nodes rather than the normal LVM teardown path. The layers below it
+answer that same situation independently, so a `Down` walk is not aborted by the
+one layer that has nothing left to read: with no device beneath them, the
+physical-volume and logical-volume layers report absent, and the volume-group
+layer asks `dmsetup` whether the group is still mapped rather than asking a
+device that is gone.
 `Manager.RemoveOrphanedDMNodes` matches every dm node whose name starts with the
 volume group's dash-escaped name, `vdo-<uuid>` appearing as `vdo--<uuid>` in
 `dmsetup ls` output, and removes each with a plain `dmsetup remove`. It retries
@@ -747,11 +767,13 @@ stuck until someone intervenes. §14's Q4 owns whether this design should invoke
 it.
 
 **The node's `/etc/lvm/devices/system.devices` file** restricts LVM's default
-visibility to specific devices, and no code path prunes a stale entry after its
-device disappears. The file gates which devices LVM considers rather than
-causing a failure of its own, so this is hygiene rather than safety, but it is
-unbounded: a node accumulates one stale entry per failure cycle over its
-lifetime with no automatic pruning. §14's Q5 owns it.
+visibility to specific devices, and nothing prunes a stale entry on its own. The
+volume-group layer removes the entry with `lvmdevices --deldev` on exactly the
+release that had to fall back to the device-mapper cleanup above, which is the
+release whose device is already gone and whose entry nothing else will ever
+clean up. It is hygiene rather than correctness — the file gates which devices
+LVM considers rather than causing a failure of its own — so a failure there is
+logged and never fails the teardown a volume depends on.
 
 **Crash consistency under `async`.** An acknowledged write survives an unclean
 node crash, because flush and FUA durability carries end-to-end through NVMe-oF
@@ -763,15 +785,15 @@ the correct POSIX outcome. Nothing here depends on forcing the `sync` policy
 
 ## 9. Volume Expansion
 
-`NodeExpandVolume` resizes the filesystem against the device path from the
-volume context. There is no standalone `vdo growPhysical` or `growLogical`
-command on this system, because VDO is managed through LVM (§7.1), so growing a
-VDO volume is an `lvextend` against the pool LV for physical space and against
-the VDO LV for logical size, followed by the existing filesystem resize through
-`mount.NewResizeFs` against the now larger VDO logical device. `GrowVDO` takes
-the device path rather than a target size, because the physical step consumes
-whatever new space the device reports, matching the `100%FREE` convention
-creation uses.
+`NodeExpandVolume` is one `runner.Grow` against the volume's plan, bottom to
+top, skipping the layers that cannot grow. There is no standalone `vdo
+growPhysical` or `growLogical` command on this system, because VDO is managed
+through LVM (§7.1), so the logical-volume layer's `Grow` is an `lvextend`
+against the pool LV for physical space and then against the VDO LV for logical
+size, and the filesystem layer above it resizes onto what that produced. No step
+takes a target size: each consumes whatever the layer below now reports, which
+is the same `100%FREE` convention creation uses, and is what makes the walk
+convergent when kubelet reissues an expansion that already succeeded.
 
 Growth is online: the physical extend, the logical extend, and the filesystem
 resize all run while the filesystem stays mounted. Overhead is roughly fixed in
@@ -782,9 +804,9 @@ Growth from exactly at VDO's minimum-size floor is not covered (§14, Q2).
 
 ## 10. RBAC Changes
 
-`helm-charts/charts/simplyblock-operator/templates/node-rbac.yaml` grants the
-CSI node's ClusterRole `patch` and `update` on `nodes`, alongside the
-pre-existing `get`, `list`, and `watch`. The capability-labeling step in §4.3
+`operator/internal/controllers/driver/rbac.go`, which builds the roles the
+operator applies to the plugins it deploys, grants the CSI node's ClusterRole
+`patch` on `nodes`, alongside the pre-existing `get`, `list`, and `watch`. The capability-labeling step in §4.3
 needs them to write the `storage.simplyblock.io/vdo-capable` label and its
 `vdo-capable-managed-by` annotation.
 
@@ -850,7 +872,7 @@ connection, and a server-side or connection-layer feature never sees it.
 
 Three features needed more than a structural argument.
 
-**Guardian.** `MarkBrokenLvol` in `csi-driver/pkg/util/guardian.go` is
+**Guardian.** `MarkBrokenLvol` in `csi-driver/internal/guardian/guardian.go` is
 Kubernetes-level bookkeeping: it marks state and later deletes the pod to force
 a fresh stage and publish cycle, and it never touches the device, mount, or dm
 layer. The device-level repair happens in `restageVolume` and
@@ -860,12 +882,12 @@ Guardian needs no VDO awareness.
 **VolumeMigration.** A migration moves an lvol between storage nodes, and
 `dm-vdo` lives on the consumer node on top of the NVMe-oF client connection, so
 a migration re-points the underlying path and leaves the VDO device and its
-mount untouched. `CreateOrAttachVDO` is never re-invoked by a migration, and the
+mount untouched. Nothing re-runs the volume's bring-up on a migration, and the
 target node's `vdo-capable` status is therefore irrelevant: the
 `VolumeMigration` controller carries no `vdo-capable` reference and needs none.
 A volume sharing a subsystem namespace with its clones cannot be migrated
 individually, because the backend enforces atomic group migration of the whole
-subsystem. That needs no client-side design work: once `ResolveClone` has given
+subsystem. That needs no client-side design work: once the clone resolution has given
 each clone its own PV, VG, and LV identity (§7.4), each volume's reconnect logic
 operates independently of the others.
 
@@ -877,8 +899,8 @@ encryption layers a crypto vbdev on top of the base lvol and reassigns
 `lvol.top_bdev`. The crypto bdev therefore sits below the NVMf attach point, and
 every read is decrypted server-side before the bytes reach the wire. The DEK is
 fetched from a server-side KMS and installed on the storage node, and no key
-material transits the CSI path: `csi-driver/pkg/util/nvmf.go` and
-`controllerserver.go` pass a boolean flag. Encryption here is at-rest only,
+material transits the CSI path: `csi-driver/internal/csi/controller/volume.go`
+passes a boolean flag. Encryption here is at-rest only,
 which matters because ciphertext does not compress or deduplicate at all, as the
 test plan's measurement records.
 
@@ -932,11 +954,11 @@ asserting coverage for it.
 
 | #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Owner         |
 |-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
-| Q1  | **Toggling features on a live volume:** `SetFeatures` exists and works, and nothing calls it. Confirmed against `UpdateVolume` (§7.1): it runs `lvchange --compression <y\|n> --deduplication <y\|n>` against the pool LV, a live attribute change LVM applies without recreating or reformatting anything. What is still undecided is only whether a `clientCompression` change on an existing pool should reach staged volumes automatically, through a `VolumeAttributesClass` or a restage, rather than sitting unused                                                                                                                                                                                                                                                                                      | Operator team |
+| Q1  | **Toggling features on a live volume:** `lvchange --compression <y\|n> --deduplication <y\|n>` against the pool LV is a live attribute change LVM applies without recreating or reformatting anything, and nothing in the layers runs it: a volume's definition is read when it is created and never again. What is undecided is both whether a `clientCompression` change on an existing pool should reach staged volumes automatically, through a `VolumeAttributesClass` or a restage, and which layer verb would carry it                                                                                                                                                                                                                                                                                   | Operator team |
 | Q2  | ~~**Enforcing VDO's size floor:** a PVC below roughly 4.72GiB fails inside `lvcreate`. Whether the webhook should reject it at admission, and where the floor is expressed so it survives a VDO change, is undecided. Growth from exactly at the floor is also untested~~ **Resolved.** A new admission webhook checks PVC size at creation time and rejects a request below the floor whenever `clientCompression` or `clientDeduplication` is on, so the error shows up immediately instead of later as an `lvcreate` failure. This is a new webhook on PVC admission, separate from the existing `StoragePoolValidator`, which only checks StoragePool objects. Growth from exactly at the floor is still untested                                                                                           | Operator team |
 | Q3  | ~~**In-tree `dm-vdo` detection:** §4.1 specifies `modprobe dm-vdo` before the install path, and the probe implements only the legacy path. Landing it removes the BaseOS dependency on kernels 6.9 and newer~~ **Absorbed by Q11.** There is no install path or legacy path left to choose between: `modprobe dm-vdo` is the whole probe (§4.1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Resolved      |
 | Q4  | ~~**Permanently failed nodes:** an RWO volume stays attached to a dead node until an administrator applies `node.kubernetes.io/out-of-service` (P0-8). Whether this operator should apply that taint, and on what evidence a node is confirmed dead, is undecided~~ **Resolved.** The operator does not apply the taint. Confirming a node is permanently, rather than transiently, dead is a judgment this design has no evidence to make safely, so §8's behavior stands: the replacement pod stays blocked until an administrator applies it by hand                                                                                                                                                                                                                                                         | Resolved      |
-| Q5  | **`system.devices` hygiene:** nothing prunes a stale entry after its device disappears, so a node accumulates one per failure cycle. Whether the node plugin should run `lvmdevices --deldev` at unstage is undecided (§8). Checked against both `atlas-lib/lvm` and `atlas-lib/volstack`: neither references `system.devices` or `lvmdevices` anywhere, so this is not something the layered volume stack already covers, and it stays open there too                                                                                                                                                                                                                                                                                                                                                          | Operator team |
+| Q5  | ~~**`system.devices` hygiene:** nothing prunes a stale entry after its device disappears, so a node accumulates one per failure cycle~~ **Resolved.** `lvm.Manager.ForgetDevice` runs `lvmdevices --deldev`, and the volume-group layer calls it on the release that had to fall back to the device-mapper cleanup, which is the only release whose entry nothing else will ever clean up. Best-effort: a failure is logged and never fails the teardown (§8)                                                                                                                                                                                                                                                                                                                                                   | Resolved      |
 | Q6  | **CSI-side metrics:** §13's metrics need a Prometheus endpoint the CSI driver does not have. `csilink` (`operator/internal/csilink`, `csi-driver/internal/csilink`), the operator↔CSI-driver reverse RPC channel, already exists on `main` and is a route to the operator for this data that needs no CSI-side Prometheus endpoint at all. Whether to build the metrics over it now, wait for a driver-wide Prometheus decision, or do both is still open                                                                                                                                                                                                                                                                                                                                                       | Operator team |
 | Q7  | **`lvm2` VDO segtype detection:** the capability probe checks the kernel module and not whether `lvm segtypes` lists `vdo`. Whether the segtype check belongs alongside `modprobe` is undecided                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Operator team |
 | Q8  | ~~**Non-RHEL and `aarch64` nodes:** both are non-goals today (§2), and P0-4 makes `aarch64` a packaging problem rather than a design one. Whether either becomes supported depends on demand~~ **Resolved, and partly for free.** `aarch64` is a goal for the feature's final release, not an experimental-only exclusion, and still needs P0-4's packaging gap (no `aarch64` `vdo` build) closed, which stays separate follow-up work. Non-RHEL is no longer a separate gap at all: Q11 dropped the RHEL-only install path, so nothing left in this design depends on a RHEL-family concept, and a non-RHEL node with an in-tree-capable kernel already works                                                                                                                                                  | Resolved      |
@@ -944,4 +966,4 @@ asserting coverage for it.
 | Q11 | ~~**Which kernel the target distributions ship:** whether the install path or the in-tree `dm-vdo` path is the common case depends on the default kernel of each supported node OS, and OpenShift, Rancher, and K3s have not been surveyed against the 6.9 line (§4.1)~~ **Resolved.** No survey needed: the design drops the `dnf install kmod-kvdo` path entirely and limits capability to kernels that already have in-tree `dm-vdo` (6.9+). The operator never has to know a node's kernel version ahead of time, since detection is a live probe rather than a version check: try `modprobe dm-vdo`, and label the node `vdo-capable=true` on success, `false` on failure. This absorbs Q3, which specified this same probe order as a fallback in front of the install path that no longer exists here    | Resolved      |
 | Q12 | ~~**Re-checking capability:** the probe runs at `csi-node` pod start and never again, so a node that becomes capable without a restart stays labeled `false`, and an install slower than the probe's five-minute wait leaves that label behind durably (§4.3). Whether the probe should re-check on an interval, and at what cost in API writes, is undecided~~ **Resolved.** The probe must re-check: a pod-start-only probe leaves a node stuck at `false` forever whenever capability changes without a restart, such as `lvm2` gaining the `vdo`/`vdo-pool` segment types after the fact (§4.3). Dropping the install path (Q11) removes the slow-install variant of this failure, but not the underlying gap. What remains open is only the interval and its API-write cost, not whether to recheck at all | Operator team |
 | Q13 | **Reporting an unsatisfiable pool:** §5.1's capable-node count and its `VDOPoolUnsatisfiable` event are not implemented. Whether the pool's view refreshes through a node watch rather than the reconciler's requeue, and whether the fact earns a durable status field of its own, is undecided                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Operator team |
-| Q9  | ~~**Where the VDO and LVM primitives live**~~ **Resolved.** They are `atlas-lib` packages, `lvm` and `lvm/vdo`, and the CSI driver holds only the wrappers in `csi-driver/pkg/util/vdo.go` (§7.1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Resolved      |
+| Q9  | ~~**Where the VDO and LVM primitives live**~~ **Resolved, and revised 2026-09-21.** `atlas-lib/lvm` (device-scoped commands and the built-in `vdo` provisioning handler), `atlas-lib/volstack/layers` (the three LVM layers), and `atlas-lib/volstack/plans` (the rows they compose into), not the flat `atlas-lib/lvm/vdo` package this row originally named, which was deleted with zero importers. The CSI driver holds the selection alone, in `csi-driver/internal/csi/node/plan.go` (§7.1)                                                                                                                                                                                                                                                                                                                | Resolved      |

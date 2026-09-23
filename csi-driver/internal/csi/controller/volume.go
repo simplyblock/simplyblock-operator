@@ -83,10 +83,32 @@ func (cs *Server) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
+	// The node service cannot read whether a volume is encrypted off the volume
+	// itself: the crypto bdev sits under the namespace it exports, so an empty
+	// encrypted volume arrives as pseudo-random plaintext with no signature of
+	// any kind. Forwarding the parameter is what lets the staging guard tell a
+	// volume that is unreadable by construction from one that carries somebody
+	// else's data.
+	if encrypted, err := kube.BoolParam(
+		req.GetParameters(), csicommon.ParamEncryption, false,
+	); err == nil && encrypted {
+		csiVolume.VolumeContext[csicommon.ParamEncryption] = strconv.FormatBool(true)
+	}
+
 	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
 	// (issue #403), since resolveClusterSelection only tracks zone and region.
 	topologySegments := copyTopologySegments(selection.topology)
 	if key, val := dhchapAllowedNodeSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
+	// Same mechanism for client-side compression/deduplication (issue #277): the
+	// PV is pinned to a vdo-capable node the same way, and for the same reason
+	// neither this nor DHCHAP's segment above is expressed as StorageClass
+	// allowedTopologies (see vdoCapableSegment's own comment).
+	if key, val := vdoCapableSegment(req); key != "" {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}
@@ -192,7 +214,7 @@ func (cs *Server) prepareCreateVolumeReq(
 		return nil, false, err
 	}
 
-	encryption, err := kube.BoolParam(params, "encryption", false)
+	encryption, err := kube.BoolParam(params, csicommon.ParamEncryption, false)
 	if err != nil {
 		return nil, false, err
 	}

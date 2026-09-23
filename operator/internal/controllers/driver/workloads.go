@@ -41,6 +41,14 @@ const (
 	kubeletPluginsDir = "/var/lib/kubelet/plugins"
 
 	verbosity = "--v=5"
+
+	// stackRecordsHostDir and stackRecordsMountDir back the per-volume stack
+	// records design-node-volume-stack.md §6 specifies: written before the
+	// first side effect, so a plugin restart mid-bring-up finds what the
+	// previous process built. Every volume kind has one, not only the ones
+	// carrying client-side compression.
+	stackRecordsHostDir  = "/var/lib/simplyblock/stacks"
+	stackRecordsMountDir = "/var/run/simplyblock/stacks"
 )
 
 // nodeRegistrationPath is the socket the kubelet is told to open, which is under
@@ -156,6 +164,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "csi-secret", MountPath: "/etc/spdkcsi-secret/", ReadOnly: true},
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
+			{Name: "stack-records", MountPath: stackRecordsMountDir},
 		}, slices.Concat(tlsVolumeMount(d), linkVolumeMounts())...),
 	}
 }
@@ -164,6 +173,12 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 // NVMe host identity. The hostid is generated once and kept on the host, because
 // a host that comes back with a new NQN is a host the control plane does not
 // recognize as the one holding its connections.
+//
+// The vdo-capable probe used to ride this hook and no longer does. A hook's
+// output goes nowhere a reader can reach it, so a probe that ran and answered
+// no left no trace of having run: the node plugin does it instead, in the same
+// privileged container, where what it finds lands in the pod's log
+// (csi-driver/internal/csi/node/capability.go).
 const nodePostStartScript = `modprobe nvme-tcp || echo failed to modprobe nvme-tcp && ` +
 	`modprobe nvme-rdma || echo failed to modprobe nvme-rdma && ` +
 	`if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && ` +
@@ -184,6 +199,11 @@ func nodeVolumes(n objectNames, driver string) []corev1.Volume {
 		hostPathVolume("host-sys", "/sys", nil),
 		hostPathVolume("host-modules", "/lib/modules", nil),
 		hostPathVolume("guardian-state", "/var/lib/simplyblock/guardian", &dirOrCreate),
+		// What each volume's node-side stack was built from. It is a host path
+		// because a plugin restart is an ordinary event, and the record is the
+		// only thing that tells the restarted process what the previous one
+		// built.
+		hostPathVolume("stack-records", stackRecordsHostDir, &dirOrCreate),
 		configMapVolume("csi-nodeserver-config", n.nodeServerConfigMap, true),
 		configMapVolume("csi-config", n.configMap, false),
 		secretVolume("csi-secret", n.secretV2),

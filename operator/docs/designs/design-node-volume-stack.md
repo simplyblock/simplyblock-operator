@@ -14,20 +14,21 @@
 
 ## Phasing Overview
 
-| Phase                   | Status         | Scope                                                                                                                                                           | Behavior change                                                         |
-|-------------------------|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| **Phase 1** (§4–§8)     | Built, unwired | The `blockdev` split, the layer contract, the runner, the stack record, the plan shapes, and the `fabric` and `filesystem` layers                               | None. RWO parity with today's node service                              |
-| **Phase 2** (§5.3–§5.5) | Partly built   | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
-| **Phase 3** (§9)        | Partly built   | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
-| **Phase 4** (§10)       | Planned        | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
+| Phase                   | Status       | Scope                                                                                                                                                           | Behavior change                                                         |
+|-------------------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| **Phase 1** (§4–§8)     | Built, wired | The `blockdev` split, the layer contract, the runner, the stack record, the plan shapes, and the `fabric` and `filesystem` layers                               | None. RWO parity with today's node service                              |
+| **Phase 2** (§5.3–§5.5) | Partly built | The `lvmPhysicalVolume`, `lvmVolumeGroup`, and `lvmLogicalVolume` layers, the VDO call sites migrated onto the stack, the LVM primitives moved into `atlas-lib` | None. VDO parity with PR #402                                           |
+| **Phase 3** (§9)        | Built, wired | `Healer` and `Grower`, so heal, restage, and expand walk the stack                                                                                              | Heal and expand become correct for every layer, not only the bottom one |
+| **Phase 4** (§10)       | Planned      | Node requirements derived from the plan on the controller side                                                                                                  | Topology gating stops being hand-written per feature                    |
 
 What "built" means here is that the layers, the runner, and the record live in
 `atlas-lib/volstack` and are covered by unit tests and by the on-node integration
-suite. What it does not mean is that anything calls them: neither the CSI driver
-nor the operator imports the package yet, so none of this is on a data path. Phase
-2 is partly built because the three LVM layers exist and the VDO call sites have
-not moved onto them; Phase 3 because every `Grower` is implemented and `Healer` is
-implemented on `fabric`, `members`, and `filesystem` alone.
+suite. What "wired" adds is that the CSI node service drives them: `csi-driver`'s
+`internal/csi/node` selects a plan per volume and every node RPC on the data path
+is a runner call against it (§7.5). Phase 2 is partly built because the three LVM
+layers exist and the VDO call sites have not moved onto them. Phase 3 carries
+`Healer` on `fabric`, `members`, and `filesystem` alone, which is every layer
+that can go bad under a live stack today.
 
 Phase 1 is shippable on its own because it changes no observable behavior: the
 existing RWO plan is `fabric` → `filesystem`, and the runner performs exactly the
@@ -958,14 +959,14 @@ nothing about the state a released layer is in, and removes the record either wa
 
 ### 7.5 Which RPC calls what
 
-| RPC or path                    | Runner call             | Notes                                                                                                                    |
-|--------------------------------|-------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `NodeStageVolume`              | `Up`                    | Acts on the top artifact's `Path`, or `Devices[0].Path` for raw block                                                    |
-| `NodeUnstageVolume`            | `Down`                  | `Release` only. `Destroy` is never reached from here                                                                     |
-| `NodePublishVolume`            | `Heal`, then bind-mount | kubelet skips `NodeStage` when the volume is still referenced on the node, so publish is where a heal has to happen (§9) |
-| `NodeExpandVolume`             | `Grow`                  | Bottom to top, skipping layers that implement no `Grower`                                                                |
-| `restageVolume`                | `Heal`                  | Never `Up`, because the data exists and nothing may be formatted                                                         |
-| `DeleteVolume`, `DeleteExport` | `Down`, then `Destroy`  | The only callers of `Destroy`                                                                                            |
+| RPC or path                        | Runner call             | Notes                                                                                                                              |
+|------------------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `NodeStageVolume`                  | `Up`                    | Acts on the top artifact's `Path`, or `Devices[0].Path` for raw block                                                              |
+| `NodeUnstageVolume`                | `Down`                  | `Release` only, except on the deletion row below                                                                                   |
+| `NodePublishVolume`                | `Heal`, then bind-mount | kubelet skips `NodeStage` when the volume is still referenced on the node, so publish is where a heal has to happen (§9)           |
+| `NodeExpandVolume`                 | `Grow`                  | Bottom to top, skipping layers that implement no `Grower`                                                                          |
+| `restageVolume`                    | `Heal`                  | Never `Up`, because the data exists and nothing may be formatted                                                                   |
+| A deletion, at `NodeUnstageVolume` | `Down`, then `Destroy`  | The only caller of `Destroy`. `DeleteVolume` runs in the controller plugin, which reaches neither the record nor the host (§17 Q4) |
 
 ---
 
@@ -1342,14 +1343,14 @@ stays valid and no PV is rewritten.
 
 ## 17. Open Questions
 
-| #   | Question                                                                                                                                                                                                                                                                                                                                                                            | Owner        |
-|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
-| 1   | **Package name.** `atlas-lib/volstack/` is provisional. The existing package names in `atlas-lib` are short concrete nouns (`nvme`, `nvmeof`, `lvol`, `nqn`), and this one is neither short nor a noun anybody uses out loud                                                                                                                                                        | —            |
-| 2   | **Whether the LVM layers share one lock key or hold two.** [Appendix B](#appendix-b-lockscope) proposes the mechanism. What decides the granularity is empirical: concurrent `pvscan` and `vgchange` on one host is unexercised rather than proven safe, and the answer is a load-test result (§15). Until it is taken, the runner locks per volume                                 | —            |
-| 3   | **Where the stack record lives.** Host-local (§6) works when the operator is unreachable and needs no RPC on the unstage path. Operator-side over csi-link is visible cluster-wide and finds orphans without a host sweep. Phase 1 takes the host-local file, and whether the operator-side record is an addition or a replacement is open                                          | —            |
-| 4   | **Whether `Destroy` is reachable from a node RPC at all.** For an LVM stack the metadata dies with the logical volume the control plane deletes, so `Destroy` would only ever remove node-local remnants. For a pNFS export it does not, and `DeleteExport` genuinely destroys. If the answer is "only a deletion path," the node RPCs get a narrower contract than §4.1 gives them | —            |
-| 5   | **`nfsExport` and `nfsMount` as layers.** §5 asserts they fit the contract. That is a claim this design cannot verify, because it does not build them. The pNFS designs are where it is settled, and a verb they cannot express is a finding against §4.1                                                                                                                           | pNFS designs |
-| 6   | **Whether Phase 4 ships.** It is planned, not committed. The cost of leaving it out is a third hand-written copy of the topology pattern when pNFS lands                                                                                                                                                                                                                            | —            |
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Owner        |
+|-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
+| 1   | **Package name.** `atlas-lib/volstack/` is provisional. The existing package names in `atlas-lib` are short concrete nouns (`nvme`, `nvmeof`, `lvol`, `nqn`), and this one is neither short nor a noun anybody uses out loud                                                                                                                                                                                                                                                                                                                              | —            |
+| 2   | **Whether the LVM layers share one lock key or hold two.** [Appendix B](#appendix-b-lockscope) proposes the mechanism. What decides the granularity is empirical: concurrent `pvscan` and `vgchange` on one host is unexercised rather than proven safe, and the answer is a load-test result (§15). Until it is taken, the runner locks per volume                                                                                                                                                                                                       | —            |
+| 3   | **Where the stack record lives.** Host-local (§6) works when the operator is unreachable and needs no RPC on the unstage path. Operator-side over csi-link is visible cluster-wide and finds orphans without a host sweep. Phase 1 takes the host-local file, and whether the operator-side record is an addition or a replacement is open                                                                                                                                                                                                                | —            |
+| 4   | **Whether `Destroy` is reachable from a node RPC at all.** Settled by where the plugins run: `DeleteVolume` is the controller plugin's, and the record and the objects are the node's, so the controller cannot call it. `NodeUnstageVolume` is the node RPC that runs last on a volume, and it calls `Destroy` when the volume is going away for good, which it reads from the `PersistentVolume`'s reclaim policy and the claim's deletion. What stays open is the pNFS `DeleteExport`, whose objects are the MDS host's rather than any staging node's | —            |
+| 5   | **`nfsExport` and `nfsMount` as layers.** §5 asserts they fit the contract. That is a claim this design cannot verify, because it does not build them. The pNFS designs are where it is settled, and a verb they cannot express is a finding against §4.1                                                                                                                                                                                                                                                                                                 | pNFS designs |
+| 6   | **Whether Phase 4 ships.** It is planned, not committed. The cost of leaving it out is a third hand-written copy of the topology pattern when pNFS lands                                                                                                                                                                                                                                                                                                                                                                                                  | —            |
 
 ---
 

@@ -387,10 +387,18 @@ define gomodver
 $(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
 endef
 
-#ENVTEST_VERSION is the controller-runtime release branch matching go.mod (i.e. release-0.20).
+#ENVTEST_VERSION is setup-envtest's own tag, which is controller-runtime's from
+# go.mod: the tool module is tagged in lockstep with it (i.e. v0.24.1).
+#
+# A tag rather than the release-X.Y branch this used to name. A branch is not a
+# version: `go install @release-0.24` resolves to whatever its head is that
+# minute, so the hash tools.lock pins against went stale the moment upstream
+# pushed to it, and every build in the monorepo failed on a mismatch for a change
+# nobody here made. A tag cannot move, so the lock stays true and what CI
+# installs is what was reviewed.
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+  printf '%s\n' "$$v" | sed -E 's/^v?/v/')
 
 #ENVTEST_K8S_VERSION is the Kubernetes version for envtest assets, from go.mod (i.e. 1.31).
 ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \

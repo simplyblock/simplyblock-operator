@@ -45,9 +45,22 @@ type Properties struct {
 	MaxNamespacePerSubsys int
 	// Encryption enables volume encryption (encryption).
 	Encryption bool
+	// ClientCompression enables client-side (VDO) compression (client_compression),
+	// independent of the server-side Compression concept and of
+	// ClientDeduplication.
+	ClientCompression bool
+	// ClientDeduplication enables client-side (VDO) deduplication
+	// (client_deduplication), independent of ClientCompression.
+	ClientDeduplication bool
 	// QoS holds the quality-of-service caps.
 	QoS QoSLimits
 }
+
+// WantsVDO reports whether either client-side parameter is set, which is the
+// one answer the capability check, the topology gate, and the node's VDO
+// device management all key off (ParamClientCompression/ParamClientDeduplication
+// are independent parameters, but both need a working VDO stack to run at all).
+func (p Properties) WantsVDO() bool { return p.ClientCompression || p.ClientDeduplication }
 
 // IsMultiNamespace reports whether volumes provisioned by this class share an
 // NVMe subsystem with sibling volumes (max_namespace_per_subsys > 1). Such a
@@ -79,6 +92,14 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 	if err != nil {
 		return Properties{}, err
 	}
+	clientCompression, err := BoolParam(p, ParamClientCompression, false)
+	if err != nil {
+		return Properties{}, err
+	}
+	clientDeduplication, err := BoolParam(p, ParamClientDeduplication, false)
+	if err != nil {
+		return Properties{}, err
+	}
 	qos, err := qosFromParams(p)
 	if err != nil {
 		return Properties{}, err
@@ -91,6 +112,8 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 		MaxSize:               StringParam(p, ParamMaxSize, ""),
 		MaxNamespacePerSubsys: maxNS,
 		Encryption:            encryption,
+		ClientCompression:     clientCompression,
+		ClientDeduplication:   clientDeduplication,
 		QoS:                   qos,
 	}, nil
 }

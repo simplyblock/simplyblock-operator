@@ -15,6 +15,7 @@ import (
 
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
@@ -139,7 +140,7 @@ func (ns *Server) redirectToActiveVolume(
 	// Override cluster_id and poolID so the initiator uses the target cluster
 	// for any subsequent API calls. Without this the initiator inherits the
 	// source cluster_id from vc and fails looking up the target volume there.
-	connInfo["cluster_id"] = targetClusterID
+	connInfo[csicommon.ParamClusterID] = targetClusterID
 	connInfo["poolID"] = targetPoolID
 	return connInfo
 }

@@ -311,6 +311,7 @@ func (r *StorageNodeWorkloadReconciler) image(
 			"spec.storageNodes.image is unset and ControlPlane %s cannot be read: %w",
 			SingletonControlPlaneName, err)
 	}
+<<<<<<< HEAD
 	if local := controlPlane.Spec.Source.Local; local != nil && local.Image != "" {
 		return local.Image, nil
 	}
@@ -320,6 +321,10 @@ func (r *StorageNodeWorkloadReconciler) image(
 	// should run. StorageNodeImage is the only source of a default left.
 	if managed := controlPlane.Spec.Source.Managed; managed != nil && managed.StorageNodeImage != "" {
 		return managed.StorageNodeImage, nil
+=======
+	if managed := controlPlane.Spec.Source.Local; managed != nil && managed.Image != "" {
+		return managed.Image, nil
+>>>>>>> main
 	}
 	return "", fmt.Errorf(
 		"spec.storageNodes.image is unset and ControlPlane %s states no managed image",

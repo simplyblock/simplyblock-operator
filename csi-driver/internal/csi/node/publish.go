@@ -1,5 +1,5 @@
 // Publishing: bind-mounting a staged volume into the path one workload reads
-// it through, and the repairs a publish performs on a staging that went away
+// it through, and the repair a publish performs on a stack that went away
 // underneath it.
 package node
 
@@ -13,8 +13,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/volstack"
+
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
-	"github.com/simplyblock/csi-driver/internal/initiator"
 )
 
 func (ns *Server) NodePublishVolume(
@@ -25,18 +26,33 @@ func (ns *Server) NodePublishVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	// If the backing NVMe-oF device was lost (total path loss), repair it before
-	// bind-mounting into the pod, since otherwise the pod inherits the dead mount or
-	// missing device. kubelet skips NodeStage when the volume is still referenced
-	// on this node (e.g., a same-node pod replacement), so NodePublish is the
-	// reliable place to heal.
-	if err := ns.healVolumeBeforePublish(ctx, req); err != nil {
+	stagingParentPath := req.GetStagingTargetPath()
+	volumeContext, err := lookupVolumeContext(stagingParentPath)
+	if err != nil {
+		klog.Errorf("failed to retrieve volume context for volume %s: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// One plan for the whole RPC: the heal below and the bind-mount after it act
+	// on the same stack, and resolving where the volume is published twice would
+	// be one control-plane round trip too many.
+	plan, err := ns.attachPlan(
+		ctx, volumeID, getStagingTargetPath(req), volumeContext, req.GetVolumeCapability())
+	if err != nil {
+		klog.Errorf("failed to build the stack plan for volume %s: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// kubelet skips NodeStageVolume while the volume is still referenced on this
+	// node, which a same-node pod replacement is, so this is the reliable place
+	// to heal a stack whose foundation went away. Heal repairs what is broken
+	// and creates nothing, so a healthy volume costs a read of each layer.
+	if err := ns.healStack(ctx, volumeID, plan, stagingParentPath); err != nil {
 		klog.Errorf("failed to heal volume %s before publish: %v", volumeID, err)
 		return nil, status.Errorf(codes.Internal, "heal volume %s before publish: %v", volumeID, err)
 	}
 
-	err := ns.publishVolume(getStagingTargetPath(req), req) // idempotent
-	if err != nil {
+	if err := ns.publishVolume(ctx, plan, getStagingTargetPath(req), req); err != nil { // idempotent
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -74,26 +90,20 @@ func (ns *Server) NodeUnpublishVolume(
 }
 
 // must be idempotent
-func (ns *Server) publishVolume(stagingPath string, req *csi.NodePublishVolumeRequest) error {
+func (ns *Server) publishVolume(
+	ctx context.Context,
+	plan volstack.Plan,
+	stagingPath string,
+	req *csi.NodePublishVolumeRequest,
+) error {
 	targetPath := req.GetTargetPath()
 
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 
 	if req.GetVolumeCapability().GetBlock() != nil {
-		stagingParentPath := req.GetStagingTargetPath()
-		volumeContext, err := lookupVolumeContext(stagingParentPath)
+		devicePath, err := ns.stagedDevice(ctx, plan, req)
 		if err != nil {
-			return status.Errorf(
-				codes.Internal,
-				"failed to retrieve volume context for volume %s: %v",
-				req.GetVolumeId(),
-				err,
-			)
-		}
-
-		devicePath, ok := volumeContext["devicePath"]
-		if !ok || devicePath == "" {
-			return status.Errorf(codes.Internal, "could not find device path for volume %s", req.GetVolumeId())
+			return status.Error(codes.Internal, err.Error())
 		}
 		stagingPath = devicePath
 
@@ -125,62 +135,35 @@ func (ns *Server) publishVolume(stagingPath string, req *csi.NodePublishVolumeRe
 	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
 }
 
-// healVolumeBeforePublish repairs a volume whose backing NVMe-oF device was lost
-// (total path loss) before it is bind-mounted into a (replacement) pod. For
-// filesystem volumes it restages the dead staging mount, and for block volumes it
-// reconnects the missing device. No-op when the volume is healthy.
-func (ns *Server) healVolumeBeforePublish(ctx context.Context, req *csi.NodePublishVolumeRequest) error {
-	volCap := req.GetVolumeCapability()
-	stagingParentPath := req.GetStagingTargetPath()
+// stagedDevice is the device a raw block volume is published from: what the
+// live stack currently exposes, read rather than remembered.
+//
+// It is read because the answer changes. A reconnect produces a different
+// namespace device, and the heal that ran before this publish may have just
+// produced one. The stashed context is the fallback, for a volume staged before
+// the stack existed and whose layers therefore report nothing.
+func (ns *Server) stagedDevice(
+	ctx context.Context,
+	plan volstack.Plan,
+	req *csi.NodePublishVolumeRequest,
+) (string, error) {
+	volumeID := req.GetVolumeId()
 
-	switch {
-	case volCap.GetBlock() != nil:
-		return ns.ensureDeviceConnected(ctx, req.GetVolumeId(), stagingParentPath)
-	case volCap.GetMount() != nil:
-		stagingTargetPath := getStagingTargetPath(req)
-		if ns.mounter.IsDead(stagingTargetPath) {
-			return ns.restageVolume(ctx, req.GetVolumeId(), stagingTargetPath, stagingParentPath, volCap)
-		}
-	}
-	return nil
-}
-
-// ensureDeviceConnected reconnects a block volume's NVMe-oF device if it has
-// gone away. The by-id device path is stable across reconnects, so only the
-// connection needs re-establishing (no mount). Idempotent.
-func (ns *Server) ensureDeviceConnected(ctx context.Context, volumeID, stagingParentPath string) error {
-	volumeContext, err := lookupVolumeContext(stagingParentPath)
+	artifact, err := ns.stack.runner.Observe(ctx, plan)
 	if err != nil {
-		return fmt.Errorf("lookup volume context: %w", err)
-	}
-	if devicePath := volumeContext["devicePath"]; devicePath != "" && deviceExists(devicePath) {
-		return nil
+		klog.Warningf("volume %s: could not read what its stack exposes: %v", volumeID, err)
+	} else if device, ok := artifact.Device(); ok {
+		return device.Path, nil
 	}
 
-	klog.Warningf("block volume %s device is gone; reconnecting NVMe-oF", volumeID)
-	nvmeInitiator, err := initiator.New(volumeContext)
+	volumeContext, err := lookupVolumeContext(req.GetStagingTargetPath())
 	if err != nil {
-		return fmt.Errorf("new initiator: %w", err)
+		return "", fmt.Errorf("failed to retrieve volume context for volume %s: %w", volumeID, err)
 	}
-	devicePath, err := nvmeInitiator.Connect(ctx) // idempotent
-	if err != nil {
-		return fmt.Errorf("reconnect device: %w", err)
+	if devicePath := volumeContext["devicePath"]; devicePath != "" {
+		return devicePath, nil
 	}
-	if volumeContext["devicePath"] != devicePath {
-		volumeContext["devicePath"] = devicePath
-		if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
-			klog.Warningf("ensureDeviceConnected: re-stash volume context for %s: %v", volumeID, err)
-		}
-	}
-	klog.Infof("reconnected block volume %s device %s", volumeID, devicePath)
-	return nil
-}
-
-// deviceExists reports whether path resolves to an existing device, following
-// symlinks such as /dev/disk/by-id/nvme-<uuid>_ha_1.
-func deviceExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return "", fmt.Errorf("could not find device path for volume %s", volumeID)
 }
 
 func getStagingTargetPath(req interface{}) string {
@@ -190,6 +173,8 @@ func getStagingTargetPath(req interface{}) string {
 	case *csi.NodeUnstageVolumeRequest:
 		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
 	case *csi.NodePublishVolumeRequest:
+		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
+	case *csi.NodeExpandVolumeRequest:
 		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
 	default:
 		klog.Warningf("invalid request %T", vr)

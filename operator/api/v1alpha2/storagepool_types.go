@@ -123,6 +123,22 @@ type VolumeDefaults struct {
 	// +optional
 	EnableCompression *bool `json:"enableCompression,omitempty"`
 
+	// EnableClientCompression compresses each volume on the node that consumes
+	// it (VDO), before a write ever reaches the wire, rather than on the storage
+	// node. Distinct from EnableCompression, and independent of
+	// EnableClientDeduplication: either, both, or neither may be set. A volume
+	// requesting this is pinned to a node whose kernel can run dm-vdo.
+	// +optional
+	EnableClientCompression *bool `json:"enableClientCompression,omitempty"`
+
+	// EnableClientDeduplication deduplicates each volume on the node that
+	// consumes it (VDO), independent of EnableClientCompression. It carries a
+	// significant fixed RAM cost per volume for VDO's index, so it is meant for
+	// the pools where duplicate data is actually expected (VM images, container
+	// layers, backup targets) rather than enabled by default.
+	// +optional
+	EnableClientDeduplication *bool `json:"enableClientDeduplication,omitempty"`
+
 	// EnableEncryption encrypts logical volumes, using the key store the cluster
 	// names in its own spec.
 	// +optional

@@ -29,6 +29,8 @@ func TestPropertiesFromStorageClass(t *testing.T) {
 		ParamMaxSize:               "10G",
 		ParamMaxNamespacePerSubsys: "32",
 		ParamEncryption:            "true",
+		ParamClientCompression:     "true",
+		ParamClientDeduplication:   "true",
 		ParamQoSRWIOPS:             "1000",
 		ParamQoSWMBytes:            "50",
 	}))
@@ -44,11 +46,35 @@ func TestPropertiesFromStorageClass(t *testing.T) {
 	if !props.Encryption {
 		t.Errorf("bool fields wrong: %+v", props)
 	}
+	if !props.ClientCompression || !props.ClientDeduplication {
+		t.Errorf("client-side bool fields wrong: %+v", props)
+	}
 	if props.QoS.RWIOPS != 1000 || props.QoS.WMBytes != 50 || props.QoS.RWMBytes != 0 {
 		t.Errorf("qos wrong: %+v", props.QoS)
 	}
 	if !props.IsMultiNamespace() {
 		t.Error("IsMultiNamespace() = false, want true for max_namespace_per_subsys=32")
+	}
+}
+
+func TestProperties_WantsVDO(t *testing.T) {
+	cases := []struct {
+		name               string
+		compression, dedup bool
+		want               bool
+	}{
+		{"neither", false, false, false},
+		{"compression only", true, false, true},
+		{"deduplication only", false, true, true},
+		{"both", true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := Properties{ClientCompression: c.compression, ClientDeduplication: c.dedup}
+			if got := p.WantsVDO(); got != c.want {
+				t.Errorf("WantsVDO() = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 
