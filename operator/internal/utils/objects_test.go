@@ -142,3 +142,92 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		t.Fatalf("ResolveClusterCRByUUID should not find a cluster from a different namespace")
 	}
 }
+
+// A cluster that is redistributing data refuses every volume migration, and the
+// operator has to know that before it asks rather than from the 400 it gets
+// back. This holds the two ways it can know: the status the control plane
+// reports, and the task list it mirrors when that status is not yet set.
+func TestClusterRebalancing(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+		tasks  []simplyblockv1alpha2.ClusterTask
+		want   bool
+	}{
+		{
+			name:   "the control plane says so",
+			status: "rebalancing",
+			want:   true,
+		},
+		{
+			name:   "a node is being added, which redistributes data",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "running"},
+			},
+			want: true,
+		},
+		{
+			name:   "a node add that has not started yet still blocks",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "new"},
+			},
+			want: true,
+		},
+		{
+			name:   "a finished node add does not",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "done"},
+			},
+			want: false,
+		},
+		{
+			// Every node_add of a deployment can be done while the expansion it
+			// started is still suspended, which is what the cluster that
+			// prompted this reported.
+			name:   "an expansion that has not finished blocks after its node adds have",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "done"},
+				{ID: "b", Type: "cluster_expand", Status: "suspended"},
+			},
+			want: true,
+		},
+		{
+			name:   "a deferred device migration blocks",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "new_device_migration", Status: "suspended"},
+			},
+			want: true,
+		},
+		{
+			name:   "a task of another kind does not",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "device_test", Status: "running"},
+			},
+			want: false,
+		},
+		{
+			name:   "an idle cluster does not",
+			status: "active",
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				Status: simplyblockv1alpha2.StorageClusterStatus{
+					Status: tc.status,
+					Tasks:  tc.tasks,
+				},
+			}
+
+			if got := ClusterRebalancing(cluster); got != tc.want {
+				t.Errorf("ClusterRebalancing() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

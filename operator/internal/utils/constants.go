@@ -50,6 +50,16 @@ const (
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
+	// ClusterStatusRebalancing is a cluster redistributing data across its
+	// nodes, which the control plane refuses every volume migration during.
+	ClusterStatusRebalancing = "rebalancing"
+
+	// The control plane's own names for the jobs that move data between nodes
+	// or devices. A volume migration is refused while any of them is unfinished,
+	// which is what utils.ClusterRebalancing reads them for.
+	TaskTypeNodeAdd            = "node_add"
+	TaskTypeClusterExpand      = "cluster_expand"
+	TaskTypeNewDeviceMigration = "new_device_migration"
 
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"

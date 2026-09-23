@@ -243,6 +243,45 @@ func ClusterInExpansion(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	return cluster.Status.Status == "in_expansion"
 }
 
+// rebalancingTaskTypes are the control plane's jobs that redistribute data, and
+// so refuse a volume migration for as long as they run.
+//
+// It is a list of the types this has been observed to happen for rather than of
+// every type the control plane has: a job whose effect on placement is unknown
+// is not assumed to block, because assuming it does stalls migrations for a
+// reason nobody can name. Extend it against a get-tasks listing, not a guess.
+var rebalancingTaskTypes = map[string]bool{
+	TaskTypeNodeAdd:            true,
+	TaskTypeClusterExpand:      true,
+	TaskTypeNewDeviceMigration: true,
+}
+
+// ClusterRebalancing answers whether the control plane will refuse a volume
+// migration because it is redistributing data.
+//
+// It asks twice, because the authoritative answer is not always there. The
+// control plane knows — it refuses the migration with a 400 saying the cluster
+// is rebalancing — but it does not always say so in the status it reports, and
+// a cluster running two node_add jobs has been seen reporting "active". So the
+// status is read first and the mirrored task list second, and the second is
+// what makes this usable before the first is fixed.
+//
+// The task list is a fallback and not a substitute. It is capped at twenty
+// entries, it carries only the types named above, and nothing keeps the control
+// plane from starting a job it does not list. A false negative here is the
+// error the operation used to fail with, which is where it was before.
+func ClusterRebalancing(cluster *simplyblockv1alpha2.StorageCluster) bool {
+	if cluster.Status.Status == ClusterStatusRebalancing {
+		return true
+	}
+	for _, task := range cluster.Status.Tasks {
+		if rebalancingTaskTypes[task.Type] && task.Status != TaskStateDone {
+			return true
+		}
+	}
+	return false
+}
+
 func ActivateCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,

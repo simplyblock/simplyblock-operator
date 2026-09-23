@@ -28,6 +28,8 @@ resources:
 - bases/storage.simplyblock.io_simplyblockdrivers.yaml
 - bases/storage.simplyblock.io_storagepoolops.yaml
 - bases/storage.simplyblock.io_persistentvolumeops.yaml
+- bases/storage.simplyblock.io_controlplaneops.yaml
+- bases/storage.simplyblock.io_storagedeviceops.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []

@@ -14,7 +14,7 @@ work out that there was a choice at all.
 {{-     end -}}
 {{-   else if eq .Values.tls.provider "cert-manager" -}}
 {{-     if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") -}}
-{{-       fail "TLS is on by default and cert-manager issues its certificates, and cert-manager.io/v1 is not served by this cluster. Install cert-manager (helm repo add jetstack https://charts.jetstack.io && helm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set installCRDs=true), or set tls.enabled=false to deploy without TLS." -}}
+{{-       fail "TLS is on by default and cert-manager issues its certificates, and cert-manager.io/v1 is not served by this cluster. Install cert-manager (helm repo add jetstack https://charts.jetstack.io && helm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set crds.enabled=true), or set tls.enabled=false to deploy without TLS." -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}

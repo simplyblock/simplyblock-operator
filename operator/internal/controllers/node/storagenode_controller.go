@@ -777,8 +777,10 @@ func (r *StorageNodeReconciler) postNode(
 // one worker are sorted by RPC port ascending, and position in that list is the
 // socket ordinal, because the ports are assigned in socket order at node-add time
 // (§4.3).
-// nodeAddTask is the control plane's own name for the job Posting starts.
-const nodeAddTask = "node_add"
+// nodeAddTask is the control plane's own name for the job Posting starts. It is
+// the shared spelling because utils.ClusterRebalancing reads the same task type
+// off the cluster's mirrored list.
+const nodeAddTask = utils.TaskTypeNodeAdd
 
 // resolve waits for the backend node the add was asked to produce, and asks
 // again when nothing is still working on producing one.
@@ -837,7 +839,7 @@ func addInFlight(cluster *simplyblockv1alpha2.StorageCluster) bool {
 
 // taskDone is the control plane's terminal task status. Everything else it
 // publishes — new, running, suspended — is a task still being worked through.
-const taskDone = "done"
+const taskDone = utils.TaskStateDone
 
 func (r *StorageNodeReconciler) resolveUUID(
 	ctx context.Context,

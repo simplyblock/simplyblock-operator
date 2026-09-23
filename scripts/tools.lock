@@ -32,6 +32,10 @@ kustomize v5.7.1 darwin arm64 sha256:073e9d16d5a235e2ff83e62d6b76edb5d962adbc33b
 kustomize v5.7.1 linux amd64 sha256:ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8
 kustomize v5.7.1 linux arm64 sha256:4261a040217df3bd6896597c3986d1465925726e4f22a945304b5233a4dcdbda
 openapi-gen v0.0.0-20260317180543-43fb72c5454a module all h1:xCeOEAOoGYl2jnJoHkC3hkbPJgdATINPMAxaynU2Ovg=
+opm v1.74.0 darwin amd64 sha256:a448e5972689036cb1168b83e18195b193bb513399c234d402c425b073a52ea6
+opm v1.74.0 darwin arm64 sha256:0ce2671c543e637ae24cb98dfeeec1a9554e3955a72c59eb872750eaf915627f
+opm v1.74.0 linux amd64 sha256:cf1bd699be72e0a4511208afdf45444fc47d21eb2ffed0c204520ff50b5a4691
+opm v1.74.0 linux arm64 sha256:348a9682975eb220bea3b98b83aa82dc6d2630e6868331ed9bf14f97e462d8be
 protoc-gen-go v1.36.11 module all h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
 protoc-gen-go-grpc v1.6.2 module all h1:rgSNvqscFZ1JgV/4wH5GOsZFSFkR2Eua9As3KIr2LlM=
 setup-envtest v0.24.1 module all h1:l2AjyGE/PWub6EB165ij4/bpCK0TlY5NlhzIHfmGvmg=
