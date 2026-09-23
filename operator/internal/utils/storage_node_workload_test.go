@@ -33,12 +33,18 @@ func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T
 	}
 }
 
-func TestBuildStorageNodeSetDaemonSet_ConfigGeneratorMountsDevAndSys(t *testing.T) {
-	sn := &simplyblockv1alpha1.StorageNodeSet{
+// TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys guards the mounts
+// node_configure.py's lblk eligibility check needs.
+//
+// It arrived with the lblk work against the v1alpha1 builder and is written
+// against the v1alpha2 one here, because that is the builder this operator
+// runs: the StorageCluster is the DaemonSet's parent now, and the check is
+// about the container rather than about which kind describes it.
+func TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
-		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster1"},
 	}
-	ds := BuildStorageNodeSetDaemonSet(sn, false, false, "", "")
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
 
 	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
 	var hasDev, hasSys bool
