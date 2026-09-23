@@ -7409,6 +7409,47 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
+                  blkForceFormat:
+                    description: |-
+                      BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                      (wipefs) to become eligible whole-disk devices on this node.
+                    type: boolean
+                  blkNames:
+                    description: |-
+                      BlkNames overrides the block-device kernel-name selector for this node.
+                      Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                  blkNamesExclude:
+                    description: |-
+                      BlkNamesExclude overrides the kernel-name exclusion selector for this node.
+                      Immutable once set (see BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                  blkSerials:
+                    description: |-
+                      BlkSerials overrides the block-device serial/WWN selector for this node.
+                      Immutable once set (see BlkNames).
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -7423,6 +7464,11 @@ spec:
                   enableCpuTopology:
                     description: EnableCpuTopology overrides topology-aware CPU handling
                       for this node.
+                    type: boolean
+                  enableLblk:
+                    description: |-
+                      EnableLblk overrides whether this node uses lblk devices instead of NVMe.
+                      Only meaningful when the cluster's spec.deviceMode is "lblk."
                     type: boolean
                   expand:
                     description: |-
@@ -7452,6 +7498,12 @@ spec:
                         format: int32
                         type: integer
                     type: object
+                  lblkJournalPercent:
+                    description: |-
+                      LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+                      this node.
+                    format: int32
+                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.
@@ -7496,6 +7548,16 @@ spec:
                       this node.
                     type: boolean
                 type: object
+                x-kubernetes-validations:
+                - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                    are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+                  rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                    && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
+                    > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) &&
+                    ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) ||
+                    (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel)
+                    && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                    > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
                   (e.g. "0", "1"). Immutable.
@@ -8259,6 +8321,52 @@ spec:
           spec:
             description: spec defines the desired state of StorageNodeSet
             properties:
+              blkForceFormat:
+                description: |-
+                  BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
+                  partitioned lblk devices so they become eligible whole-disk devices. Destructive —
+                  only set this when reusing a disk whose old data is no longer needed.
+                type: boolean
+              blkNames:
+                description: |-
+                  BlkNames selects block devices by kernel name (e.g., sdb, sdc) when EnableLblk is
+                  set. Empty selects every eligible whole disk. At most one of BlkNames,
+                  BlkNamesExclude, BlkSerials may be set. Immutable once set — including unset-to-set,
+                  since the backend (node_configure.py) silently ignores a selector change on an
+                  already-provisioned node.
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              blkNamesExclude:
+                description: |-
+                  BlkNamesExclude excludes block devices by kernel name when EnableLblk is set.
+                  Immutable once set (see BlkNames).
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              blkSerials:
+                description: |-
+                  BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
+                  stable across device-name changes, unlike BlkNames. Immutable once set (see
+                  BlkNames).
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-validations:
+                - message: field is immutable
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
@@ -8360,6 +8468,15 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              enableLblk:
+                description: |-
+                  EnableLblk selects lblk devices instead of NVMe for this fleet. Only meaningful
+                  when the cluster's spec.deviceMode is "lblk"; mutually exclusive with the NVMe
+                  PCIe selectors below.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               expand:
                 description: |-
                   Expand indicates that storage nodes added from this StorageNodeSet are being
@@ -8456,6 +8573,13 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              lblkJournalPercent:
+                description: |-
+                  LblkJournalPercent is the journal-partition capacity percentage, used when the
+                  smallest selected lblk device is a partition. Ignored for whole disks; backend
+                  defaults to 3.
+                format: int32
+                type: integer
               maxParallelNodeAdds:
                 default: 1
                 description: |-
@@ -8485,6 +8609,47 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
+                    blkForceFormat:
+                      description: |-
+                        BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                        (wipefs) to become eligible whole-disk devices on this node.
+                      type: boolean
+                    blkNames:
+                      description: |-
+                        BlkNames overrides the block-device kernel-name selector for this node.
+                        Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                    blkNamesExclude:
+                      description: |-
+                        BlkNamesExclude overrides the kernel-name exclusion selector for this node.
+                        Immutable once set (see BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+                    blkSerials:
+                      description: |-
+                        BlkSerials overrides the block-device serial/WWN selector for this node.
+                        Immutable once set (see BlkNames).
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-validations:
+                      - message: field is immutable
+                        optionalOldSelf: true
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -8499,6 +8664,11 @@ spec:
                     enableCpuTopology:
                       description: EnableCpuTopology overrides topology-aware CPU
                         handling for this node.
+                      type: boolean
+                    enableLblk:
+                      description: |-
+                        EnableLblk overrides whether this node uses lblk devices instead of NVMe.
+                        Only meaningful when the cluster's spec.deviceMode is "lblk."
                       type: boolean
                     expand:
                       description: |-
@@ -8529,6 +8699,12 @@ spec:
                           format: int32
                           type: integer
                       type: object
+                    lblkJournalPercent:
+                      description: |-
+                        LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+                        this node.
+                      format: int32
+                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.
@@ -8573,6 +8749,17 @@ spec:
                         this node.
                       type: boolean
                   type: object
+                  x-kubernetes-validations:
+                  - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                      are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+                    rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                      && size(self.blkNames) > 0) || (has(self.blkNamesExclude) &&
+                      size(self.blkNamesExclude) > 0) || (has(self.blkSerials) &&
+                      size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) &&
+                      size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) &&
+                      size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel)
+                      > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                      > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
                 description: |-
                   NodeConfigs allows per-worker-node configuration overrides keyed by the
                   Kubernetes worker node name. Entries are propagated to the corresponding
@@ -8718,8 +8905,19 @@ spec:
               rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
             - message: field nodesPerSocket is immutable once set
               rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field enableLblk is immutable once set
+              rule: '!has(oldSelf.enableLblk) || has(self.enableLblk)'
             - message: field forceFormat4K is immutable once set
               rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
+            - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+              rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
+                > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList)
+                && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList)
+                > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange)
+                && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames)
+                > 0)))'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
@@ -9479,6 +9677,22 @@ spec:
                   Kubernetes API: a pool whose defaults changed would have a class the
                   operator cannot update. Changing them means creating a new pool.
                 properties:
+                  enableClientCompression:
+                    description: |-
+                      EnableClientCompression compresses each volume on the node that consumes
+                      it (VDO), before a write ever reaches the wire, rather than on the storage
+                      node. Distinct from EnableCompression, and independent of
+                      EnableClientDeduplication: either, both, or neither may be set. A volume
+                      requesting this is pinned to a node whose kernel can run dm-vdo.
+                    type: boolean
+                  enableClientDeduplication:
+                    description: |-
+                      EnableClientDeduplication deduplicates each volume on the node that
+                      consumes it (VDO), independent of EnableClientCompression. It carries a
+                      significant fixed RAM cost per volume for VDO's index, so it is meant for
+                      the pools where duplicate data is actually expected (VM images, container
+                      layers, backup targets) rather than enabled by default.
+                    type: boolean
                   enableCompression:
                     description: EnableCompression compresses logical volumes.
                     type: boolean
@@ -9785,6 +9999,240 @@ spec:
             type: object
         required:
         - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: volumegroupsnapshotops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: VolumeGroupSnapshotOps
+    listKind: VolumeGroupSnapshotOpsList
+    plural: volumegroupsnapshotops
+    shortNames:
+    - vgsops
+    singular: volumegroupsnapshotops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.volumeGroupSnapshotRef
+      name: GroupSnapshot
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.step.state
+      name: Step
+      type: string
+    - jsonPath: .status.membersBound
+      name: Bound
+      type: integer
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VolumeGroupSnapshotOps is a one-shot operation on a VolumeGroupSnapshot,
+          analogous to a Kubernetes Job: it drives its action to completion, records
+          the result, and is then inert. The Restore action creates one
+          PersistentVolumeClaim per member snapshot of the target's generation and
+          waits for every claim to bind.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VolumeGroupSnapshotOpsSpec defines the requested operation. The whole spec is
+              immutable: the object is a request.
+            properties:
+              action:
+                description: Action is the operation to perform.
+                enum:
+                - Restore
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              restore:
+                description: |-
+                  Restore carries the parameters of the Restore action. Ignored for any
+                  other action.
+                properties:
+                  consistencyGroup:
+                    description: |-
+                      ConsistencyGroup labels every restored claim with
+                      storage.simplyblock.io/consistency-group: <value>, so the clones form a
+                      new group at provisioning under the mandatory placement rule. Empty
+                      leaves the clones as independent, mutually consistent volumes.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  enablePartialRestore:
+                    description: |-
+                      EnablePartialRestore restores the members an incomplete generation still
+                      has instead of failing the operation. Off by default: an incomplete
+                      generation fails, naming the missing members.
+                    type: boolean
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  namePrefix:
+                    description: |-
+                      NamePrefix prefixes every restored claim's name:
+                      <namePrefix>-<source PVC name>, the source name read from the member
+                      snapshot's spec.source.persistentVolumeClaimName. Defaults to the
+                      operation's own name.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                  storageClassName:
+                    description: |-
+                      StorageClassName is the class every restored claim requests. When empty,
+                      each claim inherits the class of its member snapshot's source claim, and
+                      the restore fails for a member whose source claim no longer exists.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
+                type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+                - message: field namePrefix is immutable once set
+                  rule: '!has(oldSelf.namePrefix) || has(self.namePrefix)'
+                - message: field storageClassName is immutable once set
+                  rule: '!has(oldSelf.storageClassName) || has(self.storageClassName)'
+                - message: field consistencyGroup is immutable once set
+                  rule: '!has(oldSelf.consistencyGroup) || has(self.consistencyGroup)'
+                - message: field enablePartialRestore is immutable once set
+                  rule: '!has(oldSelf.enablePartialRestore) || has(self.enablePartialRestore)'
+              volumeGroupSnapshotRef:
+                description: |-
+                  VolumeGroupSnapshotRef names the VolumeGroupSnapshot, in this namespace,
+                  the operation acts on. Resolved at admission: a create naming a
+                  VolumeGroupSnapshot that does not exist is rejected.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - action
+            - volumeGroupSnapshotRef
+            type: object
+            x-kubernetes-validations:
+            - message: field restore is immutable once set
+              rule: '!has(oldSelf.restore) || has(self.restore)'
+          status:
+            description: VolumeGroupSnapshotOpsStatus holds the observed state of
+              the operation.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished, successfully
+                  or not.
+                format: date-time
+                type: string
+              members:
+                description: Members records each member snapshot and its restored
+                  claim.
+                items:
+                  description: |-
+                    RestoredMemberStatus records one member snapshot and the claim restored
+                    from it.
+                  properties:
+                    bound:
+                      description: Bound reports whether the restored claim has bound.
+                      type: boolean
+                    persistentVolumeClaimName:
+                      description: PersistentVolumeClaimName is the restored claim.
+                      type: string
+                    volumeSnapshotName:
+                      description: VolumeSnapshotName is the member VolumeSnapshot
+                        the claim restores from.
+                      type: string
+                  required:
+                  - persistentVolumeClaimName
+                  - volumeSnapshotName
+                  type: object
+                type: array
+              membersBound:
+                description: MembersBound is how many restored claims have bound.
+                type: integer
+              membersExpected:
+                description: MembersExpected is the member count of the target generation.
+                type: integer
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the phase moves.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  was computed from.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              step:
+                description: Step is the durable position of the action's state machine.
+                properties:
+                  deadline:
+                    format: date-time
+                    type: string
+                  state:
+                    description: |-
+                      VolumeGroupSnapshotOpsStep is one step of a running operation. The enum is the
+                      union of every action's steps. Which steps belong to which action is declared
+                      by the action's state-machine graph rather than by this type.
+                    enum:
+                    - Validating
+                    - CreatingClaims
+                    - WaitingForBind
+                    type: string
+                type: object
+            type: object
         type: object
     served: true
     storage: true
@@ -10269,6 +10717,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - groupsnapshot.storage.k8s.io
+  resources:
+  - volumegroupsnapshotclasses
+  - volumegroupsnapshotcontents
+  - volumegroupsnapshots
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
@@ -10308,6 +10766,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - storage.k8s.io
@@ -10425,6 +10891,7 @@ rules:
   - storagepoolops/status
   - storagepools/status
   - tasks/status
+  - volumegroupsnapshotops/status
   - volumemigrations/status
   verbs:
   - get
@@ -10445,6 +10912,7 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagenodesets
+  - volumegroupsnapshotops
   verbs:
   - get
   - list
@@ -11098,6 +11566,25 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-v1-pvc-vdo-size
+  failurePolicy: Ignore
+  name: vdo-size-floor-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
   failurePolicy: Fail
   name: voperatorops.simplyblock.io
@@ -11326,4 +11813,61 @@ webhooks:
     - CREATE
     resources:
     - storagepools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot
+  failurePolicy: Fail
+  name: vvolumegroupsnapshot.simplyblock.io
+  rules:
+  - apiGroups:
+    - groupsnapshot.storage.k8s.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    resources:
+    - volumegroupsnapshots
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops
+  failurePolicy: Fail
+  name: vvolumegroupsnapshotops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    resources:
+    - volumegroupsnapshotops
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha1-volumemigration
+  failurePolicy: Fail
+  name: vvolumemigration.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - volumemigrations
   sideEffects: None
