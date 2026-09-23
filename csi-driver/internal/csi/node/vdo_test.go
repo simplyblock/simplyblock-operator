@@ -8,6 +8,7 @@
 package node
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -157,7 +158,7 @@ func TestTeardownReadsThePoolNameFromTheRecord(t *testing.T) {
 
 	// The context says the volume wants none of this, which is what a class
 	// edited after provisioning leaves behind.
-	if _, err := ns.teardownPlan(pvcTestHandle, "/staging", stagedContext()); err != nil {
+	if _, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext()); err != nil {
 		t.Fatalf("teardownPlan: %v", err)
 	}
 

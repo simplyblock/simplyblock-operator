@@ -124,19 +124,45 @@ File: `atlas-lib/volstack/artifact_test.go` (new)
 
 File: `atlas-lib/volstack/record_test.go` (new)
 
-| #    | Scenario                                                                                                                                   | Type     | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                             | Positive | —    |
-| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                               | Positive | —    |
-| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                      | Positive | —    |
-| U-51 | The record is removed only after the last `Release` succeeds                                                                               | Positive | —    |
-| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                         | Negative | —    |
-| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                       | Negative | —    |
-| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                    | Negative | —    |
-| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one | Boundary | —    |
-| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                 | Positive | —    |
-| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                              | Positive | —    |
-| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                            | Boundary | —    |
+| #    | Scenario                                                                                                                                   | Type     | Test                                        |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------|
+| U-48 | The record is written before the first `Ensure` runs, asserted by the fakes observing the file already present                             | Positive | —                                           |
+| U-49 | The record holds layer parameters and no device path, so a reconnect that renames the device leaves it valid                               | Positive | —                                           |
+| U-50 | A per-layer marker is written before that layer's `Ensure`, not after                                                                      | Positive | —                                           |
+| U-51 | The record is removed only after the last `Release` succeeds                                                                               | Positive | —                                           |
+| U-52 | A `Release` that fails leaves the record in place, so the stack stays discoverable                                                         | Negative | —                                           |
+| U-53 | An absent record resolves to the legacy plan `fabric` → `filesystem`                                                                       | Negative | `TestTeardownPlanFallsBackToTheLegacyShape` |
+| U-54 | A record naming an unknown layer fails the unstage with the layer named, rather than skipping the layer                                    | Negative | —                                           |
+| U-55 | A truncated or malformed record fails with an error and does not resolve to the legacy plan, because a partial record is not an absent one | Boundary | —                                           |
+| U-56 | Two volumes from two `StorageCluster`s produce distinct record filenames, because the volume handle carries the cluster ID                 | Positive | —                                           |
+| U-57 | The same PVC name in two namespaces produces distinct record filenames and distinct LVM names                                              | Positive | —                                           |
+| U-58 | A record filename is filesystem-safe for every volume handle the driver accepts                                                            | Boundary | —                                           |
+
+### Volumes This Driver Did Not Stage (design §6)
+
+File: `csi-driver/internal/csi/node/legacy_test.go`
+
+An upgraded host carries volumes with no stack record. Most of them have their
+stashed volume context, because the previous node service wrote one as the last
+step of every stage it finished; the rest are what a service that died in that
+window left, and they name themselves nowhere at all.
+
+| #    | Scenario                                                                                                                                | Type       | Test                                                     |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------|
+| U-86 | No record and no stashed context: the namespace is read off the host and the legacy plan is built                                       | Positive   | `TestTeardownNamesALegacyVolumeFromTheHost`              |
+| U-87 | The host cannot name it either: the refusal stands, and says what is missing                                                            | Negative   | `TestTeardownRefusesAVolumeTheHostCannotName`            |
+| U-88 | A stashed context that names the volume is used, and the host is never read                                                             | Boundary   | `TestTeardownPrefersTheStashOverTheHost`                 |
+| U-89 | A host reading naming a subsystem and no namespace is refused, because a zero NSID selects every namespace in it                        | Regression | `TestTeardownRefusesAHostReadingWithNoNamespace`         |
+| U-90 | A UUID alone, or an NQN beside a namespace id, each name one namespace and are accepted                                                 | Positive   | `TestTeardownAcceptsEitherWayOfNamingOneNamespace`       |
+| U-91 | The adapter reads the namespace off sysfs by device number and copies NQN, NSID, and UUID from what it found                            | Regression | `TestStagedIdentityReadsTheNamespaceOffSysfs`            |
+| U-92 | A staging path no namespace backs is an error rather than an empty connection                                                           | Negative   | `TestStagedIdentityFailsWhenNoNamespaceCarriesTheNumber` |
+| U-93 | A stash as the previous node service wrote it, with no record: the plan is derived from it, and releases the namespace its `nsId` names | Positive   | `TestALegacyStashIsDerivedIntoATeardownPlan`             |
+| U-94 | The same stash naming no filesystem, which is every volume of that era, still yields a plan that releases                               | Boundary   | `TestALegacyStashWithoutAFilesystemStillReleases`        |
+
+`U-89` and `U-91` are marked `Regression` for defects this work introduced and
+review caught: an identity resolved by comparing device paths, which finds
+nothing for a volume mounted from its by-id link, and a reading accepted while
+it named only a subsystem.
 
 ### LVM Naming and Primitives (design §5.3, §5.4)
 
@@ -210,6 +236,25 @@ File: `atlas-lib/volstack/resume_test.go` (new)
 | I-08 | The record directory is unwritable: `Up` fails before its first side effect rather than proceeding unrecorded                                       | Negative | —    |
 | I-09 | Two records for the same volume handle cannot exist, and a second `Up` reuses the first                                                             | Boundary | —    |
 | I-10 | 100 records on one host are enumerated and classified without exceeding the enumeration's bound, and the time is recorded                           | Boundary | —    |
+
+### Naming a Staged Volume on a Real Kernel (design §6)
+
+File: `test/integration/onnode/legacy_identity_test.go`
+
+What a fake cannot answer: whether the reading the fallback makes is the reading
+the kernel gives, for a volume mounted the way the previous node service mounted
+one, which is from the by-id link its initiator handed back rather than from the
+path sysfs records.
+
+| #    | Scenario                                                                                                                  | Type       | Test                                               |
+|------|---------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------|
+| I-16 | A stack staged by hand with no record is released by a plan rebuilt from the connection, and the record and mount both go | Positive   | `TestALegacyStackIsReleasedByAReconstructedPlan`   |
+| I-17 | A volume mounted from its by-id link is named from its staging path                                                       | Regression | `TestTheHostNamesAVolumeMountedByItsByIDPath`      |
+| I-18 | A raw block volume is named from its device file, which is the other shape a staged volume takes                          | Positive   | `TestTheHostNamesARawBlockVolumeFromItsDeviceFile` |
+
+`I-16` covers the release half of `E-23`. The image swap that row describes is
+still uncovered: the suite deploys one driver image, so nothing stages with the
+previous one and unstages with this one.
 
 ### Verb Contract Under a Dead Foundation (design §7.4)
 
