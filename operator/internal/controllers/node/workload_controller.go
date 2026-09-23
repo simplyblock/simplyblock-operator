@@ -35,10 +35,12 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -90,6 +92,21 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Owns(&discoveryv1.EndpointSlice{}).
 		Watches(&simplyblockv1alpha2.StorageNode{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOf)).
+		// The spdk-proxy EndpointSlices are built from the pod list, so a pod
+		// appearing -- or reappearing on a different RPC port -- is the event that
+		// makes them wrong. Without this watch the pass only reruns when something
+		// else happens to touch the cluster, and the last node of a sequential
+		// rollout is added into the quietest moment there is: its slice is never
+		// published, its per-pod DNS name never resolves, and its node add fails
+		// on a name lookup (found live 2026-09-23: worker zb6g4's pod was
+		// recreated on port 4432 after a retry and no slice followed it).
+		//
+		// Predicated on the role label rather than filtered in the map function
+		// alone: every pod in the namespace would otherwise wake the pass, and a
+		// namespace running anything besides storage nodes pays for it.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
+			builder.WithPredicates(isSpdkProxyPod())).
 		Complete(r)
 }
 
@@ -105,6 +122,48 @@ func (r *StorageNodeWorkloadReconciler) clusterOf(
 		Name:      node.Spec.ClusterRef,
 		Namespace: node.Namespace,
 	}}}
+}
+
+// isSpdkProxyPod is the watch's filter: only an spdk-proxy pod can change what
+// reconcileSpdkProxyEndpoints publishes, so only one should wake the pass.
+//
+// It reads the same label reconcileSpdkProxyEndpoints selects on, so the watch
+// and the work it triggers cannot drift apart.
+func isSpdkProxyPod() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		return object.GetLabels()["role"] == utils.LabelSpdkProxyRole
+	})
+}
+
+// clusterOfProxyPod maps an spdk-proxy pod to the clusters whose workload pass
+// publishes its DNS.
+//
+// The pod carries no owner reference and no cluster label, so the namespace is
+// the only link back and every StorageCluster there is enqueued. That is the
+// same set reconcileSpdkProxyEndpoints already considers -- it lists the proxy
+// pods of the cluster's own namespace -- so this maps no more widely than the
+// work it triggers.
+func (r *StorageNodeWorkloadReconciler) clusterOfProxyPod(
+	ctx context.Context, object client.Object,
+) []reconcile.Request {
+	pod, ok := object.(*corev1.Pod)
+	if !ok || pod.Labels["role"] != utils.LabelSpdkProxyRole {
+		return nil
+	}
+
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(pod.Namespace)); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(clusters.Items))
+	for i := range clusters.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name:      clusters.Items[i].Name,
+			Namespace: clusters.Items[i].Namespace,
+		}})
+	}
+	return requests
 }
 
 func (r *StorageNodeWorkloadReconciler) Reconcile(
