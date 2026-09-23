@@ -19,8 +19,24 @@ func TestManager_ForgetDevice(t *testing.T) {
 	}
 }
 
+// A device the file does not list is already in the state the caller asked for,
+// and this is the common answer rather than an unusual one: nothing adds an
+// entry for a device that was never labeled.
+func TestManager_ForgetDevice_IsANoOpWhenAlreadyGone(t *testing.T) {
+	key := joinKey([]string{"lvmdevices", "--devices", "/dev/nvme1n1", "--deldev", "/dev/nvme1n1"})
+	for _, gone := range []string{"device not found", "Failed to find device /dev/nvme1n1"} {
+		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: errors.New(gone)}}
+		mgr := NewManagerWithRunner(fake.run)
+		if err := mgr.ForgetDevice(context.Background(), "/dev/nvme1n1"); err != nil {
+			t.Errorf("ForgetDevice() on %q = %v, want nil: it is already gone", gone, err)
+		}
+	}
+}
+
+// Any other failure still says so: "already gone" is one specific answer, not a
+// reason to swallow a devices file that could not be written at all.
 func TestManager_ForgetDevice_WrapsRunnerError(t *testing.T) {
-	wantErr := errors.New("device not found")
+	wantErr := errors.New("permission denied")
 	key := joinKey([]string{"lvmdevices", "--devices", "/dev/nvme1n1", "--deldev", "/dev/nvme1n1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
