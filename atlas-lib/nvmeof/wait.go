@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -75,9 +76,16 @@ func ConnectMultipathDevice(
 }
 
 // WaitForDevice polls devs until the namespace selected by sel is attached and
-// returns it. The block device shows up a moment after the controller goes
-// live, so a caller that connected and immediately looked it up would race the
-// kernel. The wait ends on ctx (deadline or cancellation), and the first probe
+// can be opened, and returns it. The block device shows up a moment after the
+// controller goes live, so a caller that connected and immediately looked it up
+// would race the kernel.
+//
+// Being listed is not the same moment as being usable. sysfs gains the namespace
+// when the controller wires it up and the block device becomes openable a little
+// after, so the wait ends on an open succeeding rather than on the listing
+// naming it. A caller that took the listing as the answer got a path whose first
+// open failed ENXIO for a device that was about to be perfectly fine, which is a
+// failure it then reported as its own. The wait ends on ctx (deadline or cancellation), and the first probe
 // happens before any waiting, so an already-expired ctx still gets one attempt.
 // sel must name something, because waiting for "any device" is meaningless. The
 // NQN is the usual key and is not required: a namespace UUID names one volume
@@ -113,10 +121,18 @@ func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.Devic
 
 		switch {
 		case len(matched) == 1:
+			if err := ready(matched[0]); err != nil {
+				unsettled = err
+				break
+			}
 			return matched[0], nil
 		case len(matched) > 1:
 			d, err := soleDevice(reachable(matched))
 			if err == nil {
+				if err := ready(d); err != nil {
+					unsettled = err
+					break
+				}
 				return d, nil
 			}
 			if errors.Is(err, errAmbiguousSelector) {
@@ -219,4 +235,30 @@ func describeDevices(matched []nvme.Device, ids []string) string {
 		parts[i] = fmt.Sprintf("%s (%s, %s)", d.Namespace.DevicePath, d.Subsystem.ID, ids[i])
 	}
 	return strings.Join(parts, ", ")
+}
+
+// ready reports whether the kernel will let a reader open d's block device, as
+// the error the open itself gave so a caller reading the log sees what the
+// kernel said rather than a description of it.
+//
+// A namespace with no device path yet is not ready and is not an error: it is
+// the same "not settled yet" the rest of this loop waits through.
+func ready(d nvme.Device) error {
+	path := d.Namespace.DevicePath
+	if path == "" {
+		return errors.New("the namespace has no device path yet")
+	}
+	return openDevice(path)
+}
+
+// openDevice asks the kernel to open the device read-only and closes it again,
+// which costs the device nothing and is the only way to learn that it is really
+// there. A test's device path is a real file, so this answers for a fake exactly
+// as it does for a namespace.
+func openDevice(path string) error {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
