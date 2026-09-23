@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,6 +75,27 @@ func (r *ReplicationPairReconciler) apiClient(ctx context.Context) *webapi.Clien
 	return webapi.NewClient()
 }
 
+// clusterSecret reads the credential StorageClusterReconciler.persist wrote
+// for the named local StorageCluster, so a call authenticates as that
+// cluster instead of as this operator's own Kubernetes identity -- the only
+// way to reach a control plane a different Kubernetes cluster runs, since a
+// TokenReview can never cross that boundary. Mirrors
+// internal/controllers/pool's identically named method (and
+// internal/controllers/cluster's, internal/controllers/node's).
+func (r *ReplicationPairReconciler) clusterSecret(
+	ctx context.Context, namespace, clusterName string,
+) (string, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", clusterName),
+		Namespace: namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
+}
+
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/finalizers,verbs=update
@@ -86,6 +108,10 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	var pair simplyblockv1alpha1.ReplicationPair
 	if err := r.Get(ctx, req.NamespacedName, &pair); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if secret, err := r.clusterSecret(ctx, pair.Namespace, pair.Spec.SourceCluster); err == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
 	}
 
 	apiClient := r.apiClient(ctx)

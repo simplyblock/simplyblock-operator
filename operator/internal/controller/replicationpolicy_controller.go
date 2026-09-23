@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -87,6 +88,23 @@ func (r *ReplicationPolicyReconciler) apiClient(ctx context.Context) *webapi.Cli
 	return webapi.NewClient()
 }
 
+// clusterSecret reads the credential StorageClusterReconciler.persist wrote
+// for the named local StorageCluster. Mirrors
+// ReplicationPairReconciler.clusterSecret.
+func (r *ReplicationPolicyReconciler) clusterSecret(
+	ctx context.Context, namespace, clusterName string,
+) (string, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", clusterName),
+		Namespace: namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
+}
+
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/finalizers,verbs=update
@@ -121,6 +139,10 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		log.Error(err, "failed to resolve source cluster UUID", "sourceCluster", pair.Spec.SourceCluster)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if secret, err := r.clusterSecret(ctx, policy.Namespace, pair.Spec.SourceCluster); err == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
 	}
 
 	apiClient := r.apiClient(ctx)
