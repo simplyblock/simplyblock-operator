@@ -35,9 +35,11 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -98,8 +100,13 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		// published, its per-pod DNS name never resolves, and its node add fails
 		// on a name lookup (found live 2026-09-23: worker zb6g4's pod was
 		// recreated on port 4432 after a retry and no slice followed it).
+		//
+		// Predicated on the role label rather than filtered in the map function
+		// alone: every pod in the namespace would otherwise wake the pass, and a
+		// namespace running anything besides storage nodes pays for it.
 		Watches(&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod)).
+			handler.EnqueueRequestsFromMapFunc(r.clusterOfProxyPod),
+			builder.WithPredicates(isSpdkProxyPod())).
 		Complete(r)
 }
 
@@ -115,6 +122,17 @@ func (r *StorageNodeWorkloadReconciler) clusterOf(
 		Name:      node.Spec.ClusterRef,
 		Namespace: node.Namespace,
 	}}}
+}
+
+// isSpdkProxyPod is the watch's filter: only an spdk-proxy pod can change what
+// reconcileSpdkProxyEndpoints publishes, so only one should wake the pass.
+//
+// It reads the same label reconcileSpdkProxyEndpoints selects on, so the watch
+// and the work it triggers cannot drift apart.
+func isSpdkProxyPod() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(object client.Object) bool {
+		return object.GetLabels()["role"] == utils.LabelSpdkProxyRole
+	})
 }
 
 // clusterOfProxyPod maps an spdk-proxy pod to the clusters whose workload pass
