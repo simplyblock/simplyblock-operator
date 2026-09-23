@@ -516,8 +516,8 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
-	// MaxParallelNodeAdds limits how many workers may be in the node-add process
-	// at once, counted by distinct worker rather than by object so that a
+	// NodeProvisioningBudget limits how many workers may be in the node-add
+	// process at once, counted by distinct worker rather than by object so that a
 	// two-socket host consumes one slot. Workers hosting a FoundationDB pod are
 	// always sequential regardless of this value, because a node add reboots the
 	// host and two simultaneous FoundationDB reboots reduce the control plane's
@@ -525,7 +525,7 @@ type StorageNodesSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
-	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
 	// journal manager, instead of carving a journal partition out of every
@@ -879,7 +879,7 @@ type StorageClusterStatus struct {
 
 	// ProvisioningSlots are the workers whose node add is outstanding. The list
 	// is the metadata of the Provisioning phase, and it is also the mutex that
-	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+	// caps concurrent adds at spec.storageNodes.nodeProvisioningBudget.
 	//
 	// It is one list on one object because that is what makes taking a slot
 	// atomic. A node takes one with an optimistic-locked patch of this field, so

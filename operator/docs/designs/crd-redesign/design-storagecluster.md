@@ -2152,7 +2152,7 @@ type StorageClusterStatus struct {
 
 	// ProvisioningSlots are the workers whose node add is outstanding. The list
 	// is the metadata of the Provisioning phase, and it is also the mutex that
-	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds: taking a
+	// caps concurrent adds at spec.storageNodes.nodeProvisioningBudget: taking a
 	// slot is an optimistic-locked patch of this one field, so exactly one node
 	// wins a given resourceVersion (design-storagenode.md §4.2).
 	// +kubebuilder:validation:MaxItems=64

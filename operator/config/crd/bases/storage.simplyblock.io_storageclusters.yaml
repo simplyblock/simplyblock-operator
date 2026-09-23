@@ -1033,11 +1033,17 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
-                    maxParallelNodeAdds:
+                    mgmtInterface:
+                      description: MgmtInterface is the management network interface storage nodes bind.
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    nodeProvisioningBudget:
                       default: 1
                       description: |-
-                        MaxParallelNodeAdds limits how many workers may be in the node-add process
-                        at once, counted by distinct worker rather than by object so that a
+                        NodeProvisioningBudget limits how many workers may be in the node-add
+                        process at once, counted by distinct worker rather than by object so that a
                         two-socket host consumes one slot. Workers hosting a FoundationDB pod are
                         always sequential regardless of this value, because a node add reboots the
                         host and two simultaneous FoundationDB reboots reduce the control plane's
@@ -1045,12 +1051,6 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
-                    mgmtInterface:
-                      description: MgmtInterface is the management network interface storage nodes bind.
-                      type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                     nodesPerSocket:
                       default: 1
                       description: NodesPerSocket is how many storage nodes run per NUMA socket.
@@ -1433,7 +1433,7 @@ spec:
                   description: |-
                     ProvisioningSlots are the workers whose node add is outstanding. The list
                     is the metadata of the Provisioning phase, and it is also the mutex that
-                    caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+                    caps concurrent adds at spec.storageNodes.nodeProvisioningBudget.
 
                     It is one list on one object because that is what makes taking a slot
                     atomic. A node takes one with an optimistic-locked patch of this field, so

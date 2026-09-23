@@ -220,7 +220,7 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	if machine.IsTerminal() {
 		// The expansion does not wait for the nodes to come up. It created the
 		// objects and is finished; provisioning them is the node controller's and
-		// is bounded by maxParallelNodeAdds, and a document that stayed Expanding
+		// is bounded by nodeProvisioningBudget, and a document that stayed Expanding
 		// until a twenty-node fleet was online would be reporting the fleet's
 		// progress rather than its own (§4.2).
 		return ctrl.Result{}, r.succeed(ctx, config)

@@ -51,23 +51,25 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_validate
 
 File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 
-| #        | Scenario                                                                                                 | Type     | Test |
-|----------|----------------------------------------------------------------------------------------------------------|----------|------|
-| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —    |
-| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —    |
-| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —    |
-| U-15     | Each node carries its group's device selection                                                           | Positive | —    |
-| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —    |
-| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —    |
-| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —    |
-| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —    |
-| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —    |
-| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —    |
-| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —    |
-| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —    |
-| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —    |
-| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —    |
-| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —    |
+| #        | Scenario                                                                                                 | Type     | Test                                                |
+|----------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------|
+| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —                                                   |
+| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —                                                   |
+| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —                                                   |
+| U-15     | Each node carries its group's device selection                                                           | Positive | —                                                   |
+| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —                                                   |
+| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —                                                   |
+| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —                                                   |
+| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —                                                   |
+| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —                                                   |
+| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —                                                   |
+| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —                                                   |
+| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —                                                   |
+| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —                                                   |
+| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —                                                   |
+| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —                                                   |
+| U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                        | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster` |
+| U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                 | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`     |
 
 ### Create-Only Semantics (design §6)
 
@@ -478,7 +480,7 @@ place discovery's central question can be answered.
 | ~~E-05~~ | Approving that draft adopts the running cluster. Withdrawn: adoption is design-storagecluster.md §4.3 | —        | —    |
 | E-06     | A second config adds a rack to the running cluster                                                    | Positive | —    |
 | E-07     | Deleting every config: the cluster keeps serving I/O                                                  | Positive | —    |
-| E-08     | An expansion of twenty workers: `maxParallelNodeAdds` still bounds the adds                           | Boundary | —    |
+| E-08     | An expansion of twenty workers: `nodeProvisioningBudget` still bounds the adds                        | Boundary | —    |
 | E-11     | Sustained I/O during an expansion that adds nodes: no interruption                                    | Positive | —    |
 | E-12     | Discovery with the flag set on a worker with SATA disks: they reach the draft                         | Positive | —    |
 | E-13     | A cluster built from logical block devices serves I/O                                                 | Positive | —    |

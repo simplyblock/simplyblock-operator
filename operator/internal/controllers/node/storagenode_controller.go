@@ -575,7 +575,7 @@ func (r *StorageNodeReconciler) checkConfig(
 // awaitSlot is where two independent serialization rules live, and the last place
 // a node that needs no add at all is recognized.
 //
-// maxParallelNodeAdds caps how many workers may be in flight at once, counted by
+// nodeProvisioningBudget caps how many workers may be in flight at once, counted by
 // distinct worker rather than by object so that a two-socket host consumes one
 // slot. Workers hosting a FoundationDB pod are always sequential regardless of
 // that cap, because a node add reboots the host and two simultaneous FoundationDB
@@ -640,8 +640,8 @@ func (r *StorageNodeReconciler) awaitSlot(
 	}
 
 	limit := int32(1)
-	if spec := cluster.Spec.StorageNodes; spec != nil && spec.MaxParallelNodeAdds != nil {
-		limit = *spec.MaxParallelNodeAdds
+	if spec := cluster.Spec.StorageNodes; spec != nil && spec.NodeProvisioningBudget != nil {
+		limit = *spec.NodeProvisioningBudget
 	}
 
 	// Who is in flight is read from the cluster's own record rather than counted

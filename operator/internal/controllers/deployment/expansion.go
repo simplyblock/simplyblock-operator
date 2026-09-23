@@ -298,6 +298,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// document said.
 		workload.SocketsToUse = template.SocketsToUse
 		workload.NodesPerSocket = template.NodesPerSocket
+		// How many workers the node controller may add at once. Left here, a
+		// document that stated a budget was expanded into a cluster carrying the
+		// default of one, and the deployment it described was added serially.
+		// Unstated stays unstated, so the cluster's own default decides it.
+		workload.NodeProvisioningBudget = template.NodeProvisioningBudget
 		// The document says a drive is to be formatted; this is where that is
 		// resolved to how. NVMe is the class the cluster's own field covers, and
 		// the logical-block half has no field to carry it yet.

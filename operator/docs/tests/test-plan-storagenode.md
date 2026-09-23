@@ -71,52 +71,52 @@ function of those three inputs and of nothing else.
 Files: `operator/internal/controllers/node/provisioning_test.go`,
 `slot_race_test.go`, `provisioningslots_test.go`, `resolve_retry_test.go`
 
-| #     | Scenario                                                                             | Type       | Test                                                |
-|-------|--------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
-| U-09  | `enableFailureDomains` set and no fault group declared: provisioning is held         | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
-| U-10  | `enableFailureDomains` set and a fault group present: provisioning proceeds          | Positive   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
-| U-11  | `enableFailureDomains` unset: the fault group is not required                        | Negative   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
-| U-12  | A `failureDomain` label of `0`: a label like any other, not read as unset            | Boundary   | —                                                   |
-| U-13  | Held provisioning emits `FailureDomainMissing` and issues no `POST`                  | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
-| U-14  | The worker's storage-node API answers: the host check passes                         | Positive   | —                                                   |
-| U-15  | The worker's storage-node API is unreachable: held, no `POST`                        | Negative   | —                                                   |
-| U-16  | TLS is enabled and the CA is missing: the host check fails informatively             | Negative   | —                                                   |
-| U-17  | The host check retries until the endpoint answers                                    | Positive   | —                                                   |
-| U-18  | Nothing in flight and one slot free: exactly one of three waiting nodes takes it     | Boundary   | `TestOnlyOneNodeTakesAFreeSlot`                     |
-| U-19  | Siblings past `Posting` without a UUID hold the slot                                 | Positive   | `TestANodeInFlightFillsTheCap`                      |
-| U-20  | The node counts every sibling but itself                                             | Boundary   | —                                                   |
-| U-21  | Two nodes on one worker count as one in-flight worker, not two                       | Boundary   | —                                                   |
-| U-22  | A worker already in flight does not block another worker under the limit             | Positive   | `TestACapOfTwoAdmitsTwo`                            |
-| U-23  | `maxParallelNodeAdds` reached: the node holds at `AwaitingSlot` and issues no `POST` | Negative   | `TestANodeInFlightFillsTheCap`                      |
-| U-24  | Workers hosting a FoundationDB pod are identified                                    | Positive   | —                                                   |
-| U-25  | A FoundationDB worker holds while another FoundationDB worker is in flight           | Negative   | —                                                   |
-| U-26  | A FoundationDB worker holds even when `maxParallelNodeAdds` allows more              | Boundary   | —                                                   |
-| U-27  | A non-FoundationDB worker is not held by a FoundationDB worker in flight             | Negative   | —                                                   |
-| U-267 | The same waiting node wins the slot on every pass, so nobody overtakes it            | Positive   | `TestTheChoiceIsStable`                             |
-| U-391 | Three nodes reconciling against a cache holding only themselves: one slot admits one | Regression | `TestTheCapHoldsWhenNodesCannotSeeEachOther`        |
-| U-392 | The same, with two slots free: two are admitted and the third is not                 | Regression | `TestACapOfTwoHoldsWhenNodesCannotSeeEachOther`     |
-| U-393 | A slot taken against a cluster read the holder has not seen is refused               | Regression | `TestASlotTakenFromAStaleReadIsRefused`             |
-| U-394 | Taking a slot records the worker and the object that took it on the cluster          | Positive   | `TestTakingASlotIsRecordedOnTheCluster`             |
-| U-395 | Re-entering `AwaitingSlot` with a slot held keeps the one entry                      | Boundary   | `TestASlotIsNotTakenTwice`                          |
-| U-396 | A node releases the slot it holds and leaves another node's alone                    | Boundary   | `TestASlotIsReleasedOnlyByItsHolder`                |
-| U-397 | A slot whose `StorageNode` no longer exists is reaped, so the cap reopens            | Regression | `TestASlotWhoseNodeIsGoneIsReaped`                  |
-| U-398 | A slot whose holder already has its UUID is reaped                                   | Regression | `TestASlotWhoseNodeIsFinishedIsReaped`              |
-| U-399 | A worker's second socket takes no second slot and resolves against the first         | Regression | `TestASecondSocketDoesNotTakeASecondSlot`           |
-| U-400 | A backend node appearing while a node queues for a slot is adopted, not re-added     | Regression | `TestANodeWaitingForASlotAdoptsTheNodeThatAppeared` |
-| U-401 | No backend node for the worker: the queue takes its slot as before                   | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
-| U-402 | A slot is held while the control plane still reports the node in_creation            | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
-| U-403 | The slot goes back once the node leaves in_creation                                  | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
-| U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass    | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
-| U-405 | A node stating no journal count leaves ha_jm_count to the control plane              | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
-| U-406 | An unstated count is absent from the request rather than sent as zero                | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
-| U-407 | A stated journal count is sent as it stands                                          | Positive   | `TestAStatedJournalCountIsSent`                     |
-| U-408 | The pass publishes the spdk-proxy endpoints, so the builder has a caller             | Regression | `TestThePassPublishesTheProxyEndpoints`             |
-| U-409 | A worker per-pod name resolves to its address on the right port                      | Regression | `TestTheSPDKProxyNamesArePublished`                 |
-| U-410 | One slice per RPC port                                                               | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
-| U-411 | A pod with no address is left unpublished rather than published with none            | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
-| U-412 | Two workers sharing a first DNS label are refused, not merged                        | Negative   | `TestACollidingWorkerNameIsRefused`                 |
-| U-413 | A pushed control-plane change wakes the node controller                              | Regression | `TestAPushedNodeChangeWakesTheController`           |
-| U-414 | A deployment with no informer is given no stream source                              | Negative   | `TestNoInformerIsNoSource`                          |
+| #     | Scenario                                                                                | Type       | Test                                                |
+|-------|-----------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-09  | `enableFailureDomains` set and no fault group declared: provisioning is held            | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
+| U-10  | `enableFailureDomains` set and a fault group present: provisioning proceeds             | Positive   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
+| U-11  | `enableFailureDomains` unset: the fault group is not required                           | Negative   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
+| U-12  | A `failureDomain` label of `0`: a label like any other, not read as unset               | Boundary   | —                                                   |
+| U-13  | Held provisioning emits `FailureDomainMissing` and issues no `POST`                     | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
+| U-14  | The worker's storage-node API answers: the host check passes                            | Positive   | —                                                   |
+| U-15  | The worker's storage-node API is unreachable: held, no `POST`                           | Negative   | —                                                   |
+| U-16  | TLS is enabled and the CA is missing: the host check fails informatively                | Negative   | —                                                   |
+| U-17  | The host check retries until the endpoint answers                                       | Positive   | —                                                   |
+| U-18  | Nothing in flight and one slot free: exactly one of three waiting nodes takes it        | Boundary   | `TestOnlyOneNodeTakesAFreeSlot`                     |
+| U-19  | Siblings past `Posting` without a UUID hold the slot                                    | Positive   | `TestANodeInFlightFillsTheCap`                      |
+| U-20  | The node counts every sibling but itself                                                | Boundary   | —                                                   |
+| U-21  | Two nodes on one worker count as one in-flight worker, not two                          | Boundary   | —                                                   |
+| U-22  | A worker already in flight does not block another worker under the limit                | Positive   | `TestACapOfTwoAdmitsTwo`                            |
+| U-23  | `nodeProvisioningBudget` reached: the node holds at `AwaitingSlot` and issues no `POST` | Negative   | `TestANodeInFlightFillsTheCap`                      |
+| U-24  | Workers hosting a FoundationDB pod are identified                                       | Positive   | —                                                   |
+| U-25  | A FoundationDB worker holds while another FoundationDB worker is in flight              | Negative   | —                                                   |
+| U-26  | A FoundationDB worker holds even when `nodeProvisioningBudget` allows more              | Boundary   | —                                                   |
+| U-27  | A non-FoundationDB worker is not held by a FoundationDB worker in flight                | Negative   | —                                                   |
+| U-267 | The same waiting node wins the slot on every pass, so nobody overtakes it               | Positive   | `TestTheChoiceIsStable`                             |
+| U-391 | Three nodes reconciling against a cache holding only themselves: one slot admits one    | Regression | `TestTheCapHoldsWhenNodesCannotSeeEachOther`        |
+| U-392 | The same, with two slots free: two are admitted and the third is not                    | Regression | `TestACapOfTwoHoldsWhenNodesCannotSeeEachOther`     |
+| U-393 | A slot taken against a cluster read the holder has not seen is refused                  | Regression | `TestASlotTakenFromAStaleReadIsRefused`             |
+| U-394 | Taking a slot records the worker and the object that took it on the cluster             | Positive   | `TestTakingASlotIsRecordedOnTheCluster`             |
+| U-395 | Re-entering `AwaitingSlot` with a slot held keeps the one entry                         | Boundary   | `TestASlotIsNotTakenTwice`                          |
+| U-396 | A node releases the slot it holds and leaves another node's alone                       | Boundary   | `TestASlotIsReleasedOnlyByItsHolder`                |
+| U-397 | A slot whose `StorageNode` no longer exists is reaped, so the cap reopens               | Regression | `TestASlotWhoseNodeIsGoneIsReaped`                  |
+| U-398 | A slot whose holder already has its UUID is reaped                                      | Regression | `TestASlotWhoseNodeIsFinishedIsReaped`              |
+| U-399 | A worker's second socket takes no second slot and resolves against the first            | Regression | `TestASecondSocketDoesNotTakeASecondSlot`           |
+| U-400 | A backend node appearing while a node queues for a slot is adopted, not re-added        | Regression | `TestANodeWaitingForASlotAdoptsTheNodeThatAppeared` |
+| U-401 | No backend node for the worker: the queue takes its slot as before                      | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
+| U-402 | A slot is held while the control plane still reports the node in_creation               | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
+| U-403 | The slot goes back once the node leaves in_creation                                     | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
+| U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass       | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
+| U-405 | A node stating no journal count leaves ha_jm_count to the control plane                 | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
+| U-406 | An unstated count is absent from the request rather than sent as zero                   | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
+| U-407 | A stated journal count is sent as it stands                                             | Positive   | `TestAStatedJournalCountIsSent`                     |
+| U-408 | The pass publishes the spdk-proxy endpoints, so the builder has a caller                | Regression | `TestThePassPublishesTheProxyEndpoints`             |
+| U-409 | A worker per-pod name resolves to its address on the right port                         | Regression | `TestTheSPDKProxyNamesArePublished`                 |
+| U-410 | One slice per RPC port                                                                  | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
+| U-411 | A pod with no address is left unpublished rather than published with none               | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
+| U-412 | Two workers sharing a first DNS label are refused, not merged                           | Negative   | `TestACollidingWorkerNameIsRefused`                 |
+| U-413 | A pushed control-plane change wakes the node controller                                 | Regression | `TestAPushedNodeChangeWakesTheController`           |
+| U-414 | A deployment with no informer is given no stream source                                 | Negative   | `TestNoInformerIsNoSource`                          |
 
 ### Entity: The Provisioning Claim (design §4.2)
 
@@ -758,7 +758,7 @@ row here changes cluster state, and the destructive ones say so.
 | #    | Scenario                                                                          | Type     | Test |
 |------|-----------------------------------------------------------------------------------|----------|------|
 | E-01 | A node object created: provisioned to `Ready` with a UUID within one cycle        | Positive | —    |
-| E-02 | Five workers with `maxParallelNodeAdds` of 2: at most two are ever in flight      | Boundary | —    |
+| E-02 | Five workers with `nodeProvisioningBudget` of 2: at most two are ever in flight   | Boundary | —    |
 | E-03 | FoundationDB and non-FoundationDB workers together: the former stay sequential    | Positive | —    |
 | E-04 | A two-socket worker: two nodes provisioned, each matched to its own backend node  | Positive | —    |
 | E-05 | A pre-existing backend node with no object: adopted, keeping its UUID and volumes | Positive | —    |

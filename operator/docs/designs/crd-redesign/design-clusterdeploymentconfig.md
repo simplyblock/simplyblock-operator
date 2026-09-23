@@ -439,8 +439,16 @@ are all Online, and completes when that operation does.
 **It waits for its own nodes and not for the fleet.** The set it watches is the
 one `CreatingNodes` wrote, so a document adding four nodes to a twenty-node
 cluster waits for four. Provisioning is still the node controller's and still
-bounded by `maxParallelNodeAdds`. What the document adds is the knowledge of which
+bounded by `nodeProvisioningBudget`. What the document adds is the knowledge of which
 nodes are its own.
+
+**The budget is the document's to state.** `nodeProvisioningBudget` is the
+cluster's field, and the template carries it because the document is what states
+the size of a deployment: thirty workers added one at a time is the difference
+between an afternoon and a week, and there is no later moment at which somebody
+is asked. A document that states nothing leaves the field unset, so the cluster's
+own default of one decides it rather than the expansion inventing a cap nobody
+reviewed.
 
 **The activation is asked for once.** `Activating` is re-entered on every
 reconcile until the operation finishes, and the operation is named after the
@@ -1237,6 +1245,21 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:Maximum=8
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// NodeProvisioningBudget is how many workers the expansion may have in the
+	// node-add process at once. It expands into the cluster's own
+	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+	// is counted by distinct worker, so a two-socket host spends one of the
+	// budget, and a worker hosting a FoundationDB pod is sequential whatever the
+	// budget says.
+	//
+	// It is on the document because a document is what states the size of a
+	// deployment, and a deployment of thirty workers added one at a time is the
+	// difference between an afternoon and a week. Omitted, the cluster's default
+	// of one applies, which is the serial behavior.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// Stripe is the erasure-coding layout.
 	// +optional

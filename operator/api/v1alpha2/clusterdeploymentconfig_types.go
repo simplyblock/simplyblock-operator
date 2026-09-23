@@ -289,6 +289,21 @@ type ClusterTemplate struct {
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
+	// NodeProvisioningBudget is how many workers the expansion may have in the
+	// node-add process at once. It expands into the cluster's own
+	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+	// is counted by distinct worker, so a two-socket host spends one of the
+	// budget, and a worker hosting a FoundationDB pod is sequential whatever the
+	// budget says.
+	//
+	// It is on the document because a document is what states the size of a
+	// deployment, and a deployment of thirty workers added one at a time is the
+	// difference between an afternoon and a week. Omitted, the cluster's default
+	// of one applies, which is the serial behavior.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`

@@ -15,7 +15,7 @@
 //     working from one that stopped.
 //
 // provisioning_duration_seconds is the one to watch when a cluster is being
-// expanded, because maxParallelNodeAdds and the FoundationDB serialization of
+// expanded, because nodeProvisioningBudget and the FoundationDB serialization of
 // §4.2 mean the time to add ten workers is not ten times the time to add one, and
 // nothing today says what it actually is.
 //

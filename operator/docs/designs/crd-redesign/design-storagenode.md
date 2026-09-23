@@ -756,7 +756,7 @@ transition of the node's own machine:
   CheckingConfig  ← failure domain present when the cluster requires one
     │  valid
     ▼
-  AwaitingSlot    ← under maxParallelNodeAdds, and no FDB worker in flight
+  AwaitingSlot    ← under nodeProvisioningBudget, and no FDB worker in flight
     │  a slot is free
     ▼
   Posting         ← Status().Patch with MergeFromWithOptimisticLock, then
@@ -801,7 +801,7 @@ already exists is found, and its `Adopting` edge takes that node over instead of
 adding it twice.
 
 **It holds the claim while it waits.** A node in `AwaitingWorker` still counts as
-having claimed its worker, so `maxParallelNodeAdds` stays closed and no second
+having claimed its worker, so `nodeProvisioningBudget` stays closed and no second
 worker is handed a configuration change on top of a reboot already running — the
 same reason the cap exists at all. That is also why only the two steps that have
 claimed the worker divert into it: a claimed sibling on the same worker is read as
@@ -821,7 +821,7 @@ adopted node is already running, and the machine being reachable is not this
 operator's precondition to establish.
 
 **`AwaitingSlot` is where two independent serialization rules live.**
-`maxParallelNodeAdds` caps how many workers may be in flight at once, counted by
+`nodeProvisioningBudget` caps how many workers may be in flight at once, counted by
 distinct worker rather than by object so that a two-socket host consumes one slot.
 Workers hosting a FoundationDB pod are always sequential regardless of that cap,
 because a node add reboots the host and two simultaneous FDB reboots reduce the
@@ -973,13 +973,13 @@ Their configuration becomes one spec group on the cluster.
 // +optional
 Image string `json:"image,omitempty"`
 
-// MaxParallelNodeAdds limits how many workers may be in the node-add process at
-// once. Workers hosting a FoundationDB pod are always sequential regardless of
+// NodeProvisioningBudget limits how many workers may be in the node-add process
+// at once. Workers hosting a FoundationDB pod are always sequential regardless of
 // this value.
 // +kubebuilder:validation:Minimum=1
 // +kubebuilder:default=1
 // +optional
-MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 // EnableKubeletConfiguration lets the storage node apply the kubelet
 // configuration changes it needs. Off by default, which is the behavior
@@ -1915,7 +1915,7 @@ support question about a stalled drain into a dashboard panel.
 that stopped, which is the distinction `status.message` cannot express.
 
 `simplyblock_storagenode_provisioning_duration_seconds` is the one to watch when a cluster
-is being expanded, because `maxParallelNodeAdds` and the FoundationDB
+is being expanded, because `nodeProvisioningBudget` and the FoundationDB
 serialization of §4.2 mean the time to add ten workers is not ten times the time to
 add one, and nothing today says what it actually is.
 
@@ -2845,13 +2845,13 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
-	// MaxParallelNodeAdds limits how many workers may be in the node-add process
-	// at once. Workers hosting a FoundationDB pod are always sequential
+	// NodeProvisioningBudget limits how many workers may be in the node-add
+	// process at once. Workers hosting a FoundationDB pod are always sequential
 	// regardless of this value.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
-	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
 	// journal manager, instead of carving a journal partition out of every

@@ -93,8 +93,8 @@ func BuildStorageNodeDaemonSet(
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
-	if wl.MaxParallelNodeAdds != nil {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.MaxParallelNodeAdds)})
+	if wl.NodeProvisioningBudget != nil {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
 	if wl.OpenShiftMachineConfigPool != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShiftMachineConfigPool})

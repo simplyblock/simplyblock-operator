@@ -323,6 +323,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.NodeProvisioningBudget != nil {
+		in, out := &in.NodeProvisioningBudget, &out.NodeProvisioningBudget
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Stripe != nil {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)
@@ -3092,8 +3097,8 @@ func (in *StorageNodesSpec) DeepCopyInto(out *StorageNodesSpec) {
 		*out = new(int32)
 		**out = **in
 	}
-	if in.MaxParallelNodeAdds != nil {
-		in, out := &in.MaxParallelNodeAdds, &out.MaxParallelNodeAdds
+	if in.NodeProvisioningBudget != nil {
+		in, out := &in.NodeProvisioningBudget, &out.NodeProvisioningBudget
 		*out = new(int32)
 		**out = **in
 	}

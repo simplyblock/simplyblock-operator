@@ -392,3 +392,54 @@ func TestTheJournalDeviceDecisionReachesTheCluster(t *testing.T) {
 		}
 	}
 }
+
+// The node-provisioning budget reaches the cluster the document creates. Without
+// it, a document that asked for four workers at a time was expanded into a
+// cluster carrying the default of one, and a thirty-worker deployment was added
+// serially however the document was reviewed.
+func TestTheProvisioningBudgetReachesTheCreatedCluster(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.NodeProvisioningBudget = ptr.To(int32(4))
+	})
+	objects := append(workers("worker-1", "worker-2"), config)
+	r := reconcilerFor(t, objects...)
+
+	if _, err := r.createCluster(context.Background(), config); err != nil {
+		t.Fatalf("createCluster: %v", err)
+	}
+
+	var created simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: theNamespace, Name: theCluster}
+	if err := r.Get(context.Background(), key, &created); err != nil {
+		t.Fatalf("reading the cluster: %v", err)
+	}
+	workload := created.Spec.StorageNodes
+	if workload == nil {
+		t.Fatal("the cluster carries no workload")
+	}
+	if workload.NodeProvisioningBudget == nil || *workload.NodeProvisioningBudget != 4 {
+		t.Errorf("nodeProvisioningBudget = %v, want 4", workload.NodeProvisioningBudget)
+	}
+}
+
+// A document that states no budget leaves the field unset, so the cluster's own
+// default of one decides it. Expanding an omission into a stated number would
+// make the document the author of a cap nobody reviewed.
+func TestAnUnstatedProvisioningBudgetIsNotInvented(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+	objects := append(workers("worker-1", "worker-2"), config)
+	r := reconcilerFor(t, objects...)
+
+	if _, err := r.createCluster(context.Background(), config); err != nil {
+		t.Fatalf("createCluster: %v", err)
+	}
+
+	var created simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: theNamespace, Name: theCluster}
+	if err := r.Get(context.Background(), key, &created); err != nil {
+		t.Fatalf("reading the cluster: %v", err)
+	}
+	if budget := created.Spec.StorageNodes.NodeProvisioningBudget; budget != nil {
+		t.Errorf("nodeProvisioningBudget = %d, want it unset", *budget)
+	}
+}

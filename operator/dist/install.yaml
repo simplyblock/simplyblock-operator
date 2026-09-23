@@ -833,6 +833,22 @@ spec:
                       (design-api-upgrade.md §19.4).
                     maxLength: 63
                     type: string
+                  nodeProvisioningBudget:
+                    description: |-
+                      NodeProvisioningBudget is how many workers the expansion may have in the
+                      node-add process at once. It expands into the cluster's own
+                      spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+                      is counted by distinct worker, so a two-socket host spends one of the
+                      budget, and a worker hosting a FoundationDB pod is sequential whatever the
+                      budget says.
+
+                      It is on the document because a document is what states the size of a
+                      deployment, and a deployment of thirty workers added one at a time is the
+                      difference between an afternoon and a week. Omitted, the cluster's default
+                      of one applies, which is the serial behavior.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   nodesPerSocket:
                     description: |-
                       NodesPerSocket is how many storage nodes run per NUMA socket. See
@@ -6333,18 +6349,6 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                  maxParallelNodeAdds:
-                    default: 1
-                    description: |-
-                      MaxParallelNodeAdds limits how many workers may be in the node-add process
-                      at once, counted by distinct worker rather than by object so that a
-                      two-socket host consumes one slot. Workers hosting a FoundationDB pod are
-                      always sequential regardless of this value, because a node add reboots the
-                      host and two simultaneous FoundationDB reboots reduce the control plane's
-                      own fault tolerance.
-                    format: int32
-                    minimum: 1
-                    type: integer
                   mgmtInterface:
                     description: MgmtInterface is the management network interface
                       storage nodes bind.
@@ -6352,6 +6356,18 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                  nodeProvisioningBudget:
+                    default: 1
+                    description: |-
+                      NodeProvisioningBudget limits how many workers may be in the node-add
+                      process at once, counted by distinct worker rather than by object so that a
+                      two-socket host consumes one slot. Workers hosting a FoundationDB pod are
+                      always sequential regardless of this value, because a node add reboots the
+                      host and two simultaneous FoundationDB reboots reduce the control plane's
+                      own fault tolerance.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   nodesPerSocket:
                     default: 1
                     description: NodesPerSocket is how many storage nodes run per
@@ -6748,7 +6764,7 @@ spec:
                 description: |-
                   ProvisioningSlots are the workers whose node add is outstanding. The list
                   is the metadata of the Provisioning phase, and it is also the mutex that
-                  caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+                  caps concurrent adds at spec.storageNodes.nodeProvisioningBudget.
 
                   It is one list on one object because that is what makes taking a slot
                   atomic. A node takes one with an optimistic-locked patch of this field, so
