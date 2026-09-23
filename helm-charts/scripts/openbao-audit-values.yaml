@@ -1,0 +1,49 @@
+# Audit-log overlay for setup-kms.sh (ENABLE_AUDIT_LOG=true), layered on top
+# of openbao-values.yaml via an extra `-f`. Helm doesn't merge list values or
+# multi-line strings across -f files, so server.volumes/volumeMounts and
+# standalone.config are repeated here in full, with the audit device added.
+#
+# OpenBao 2.x refuses `bao audit enable` via the API/CLI at runtime ("cannot
+# enable audit device via API; use declarative, config-based audit device
+# management instead"), so the audit device has to be declared in the server
+# config at boot.
+server:
+  volumes:
+    - name: tls-cert
+      secret:
+        secretName: openbao-server-tls
+    - name: audit
+      emptyDir: {}
+
+  volumeMounts:
+    - name: tls-cert
+      mountPath: /openbao/tls
+      readOnly: true
+    - name: audit
+      mountPath: /openbao/audit
+
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable     = 0
+        address         = "[::]:8200"
+        cluster_address = "[::]:8201"
+        tls_cert_file   = "/openbao/tls/tls.crt"
+        tls_key_file    = "/openbao/tls/tls.key"
+        tls_min_version = "tls12"
+      }
+
+      storage "file" {
+        path = "/openbao/data"
+      }
+
+      audit "file" {
+        path = "file/"
+        type = "file"
+        options = {
+          file_path = "/openbao/audit/audit.log"
+        }
+      }

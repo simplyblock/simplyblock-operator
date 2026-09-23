@@ -8,6 +8,7 @@ NAMESPACE="${NAMESPACE:-vault}"
 STORAGE_CLASS="${STORAGE_CLASS:-local-path}"
 UNSEAL_KEYS_FILE="${UNSEAL_KEYS_FILE:-}"
 ROOT_TOKEN="${BAO_TOKEN:-}"
+ENABLE_AUDIT_LOG="${ENABLE_AUDIT_LOG:-false}"
 
 POD="openbao-0"
 BAO_ADDR="https://openbao.vault:8200/"
@@ -30,6 +31,9 @@ Env vars:
   STORAGE_CLASS     StorageClass for data PVC   (default: local-path)
   UNSEAL_KEYS_FILE  File to save init output    (default: stdout only)
   BAO_TOKEN         Skip init/unseal, use token (default: run init)
+  ENABLE_AUDIT_LOG  Log KV/transit requests to  (default: false)
+                    /openbao/audit/audit.log — declarative-only in
+                    OpenBao 2.x, so this must be set before install.
 EOF
   exit 0
 fi
@@ -45,9 +49,16 @@ kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null \
 info "Installing OpenBao..."
 helm repo add openbao https://openbao.github.io/openbao-helm
 helm repo update
+
+HELM_VALUES_ARGS=(-f "$SCRIPT_DIR/openbao-values.yaml")
+if [[ "$ENABLE_AUDIT_LOG" == "true" ]]; then
+  info "Audit logging enabled — layering openbao-audit-values.yaml"
+  HELM_VALUES_ARGS+=(-f "$SCRIPT_DIR/openbao-audit-values.yaml")
+fi
+
 helm upgrade --install openbao openbao/openbao \
   -n "$NAMESPACE" --create-namespace \
-  -f "$SCRIPT_DIR/openbao-values.yaml" \
+  "${HELM_VALUES_ARGS[@]}" \
   --set server.dataStorage.storageClass="$STORAGE_CLASS"
 
 info "Waiting for $POD to exist..."
