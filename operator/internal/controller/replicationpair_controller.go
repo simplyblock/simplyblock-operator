@@ -30,6 +30,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -46,6 +47,31 @@ const (
 type ReplicationPairReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// EndpointResolver answers where the control plane currently is, resolved
+	// per reconcile the same way internal/controllers/pool's StoragePoolReconciler
+	// does. Nil means the default/SIMPLYBLOCK_WEBAPI_BASE_URL client is the only
+	// one, which is what a standalone deployment and every pre-existing test
+	// still get. Without this, a ReplicationPair reconciled on a
+	// ControlPlane.spec.source.managed member cluster can never reach its
+	// control plane: webapi.NewClient() defaults to a Service that cluster
+	// never runs (confirmed live: cross-cluster ReplicationPair authoring
+	// failed with "dial tcp: lookup simplyblock-webappapi ... no such host").
+	EndpointResolver controlplane.EndpointResolver
+}
+
+// apiClient resolves the control-plane client for one reconcile call, through
+// EndpointResolver when set, exactly as StoragePoolReconciler.apiClient does.
+func (r *ReplicationPairReconciler) apiClient(ctx context.Context) *webapi.Client {
+	if r.EndpointResolver == nil {
+		return webapi.NewClient()
+	}
+
+	if endpoint := r.EndpointResolver(ctx); endpoint != "" {
+		return webapi.NewClient(endpoint)
+	}
+
+	return webapi.NewClient()
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;create;update;patch;delete
@@ -62,7 +88,7 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	apiClient := webapi.NewClient()
+	apiClient := r.apiClient(ctx)
 
 	if !pair.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &pair, apiClient)

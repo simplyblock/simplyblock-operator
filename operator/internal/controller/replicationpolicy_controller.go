@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -63,6 +64,27 @@ type idResponse struct {
 type ReplicationPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// EndpointResolver answers where the control plane currently is -- see
+	// ReplicationPairReconciler's identical field (replicationpair_controller.go)
+	// for why this exists: without it, a ReplicationPolicy reconciled on a
+	// ControlPlane.spec.source.managed member cluster can never reach its
+	// control plane.
+	EndpointResolver controlplane.EndpointResolver
+}
+
+// apiClient resolves the control-plane client for one reconcile call, through
+// EndpointResolver when set. Mirrors ReplicationPairReconciler.apiClient.
+func (r *ReplicationPolicyReconciler) apiClient(ctx context.Context) *webapi.Client {
+	if r.EndpointResolver == nil {
+		return webapi.NewClient()
+	}
+
+	if endpoint := r.EndpointResolver(ctx); endpoint != "" {
+		return webapi.NewClient(endpoint)
+	}
+
+	return webapi.NewClient()
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -101,7 +123,7 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	apiClient := webapi.NewClient()
+	apiClient := r.apiClient(ctx)
 
 	if !policy.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &policy, apiClient, clusterUUID)

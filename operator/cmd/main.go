@@ -853,8 +853,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
 		os.Exit(1)
@@ -867,8 +868,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPairReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)

@@ -183,6 +183,50 @@ func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
 	}
 }
 
+// ---------- EndpointResolver overrides the default/env-var endpoint ----------
+
+// TestPolicy_UsesEndpointResolver mirrors
+// TestSitePair_UsesEndpointResolver (replicationpair_controller_unit_test.go):
+// same bug, same fix, same reason -- a ReplicationPolicy reconciled on a
+// ControlPlane.spec.source.managed member cluster needs the hub's externally
+// published endpoint, not the in-cluster Service this reconciler otherwise
+// defaults to. SIMPLYBLOCK_WEBAPI_BASE_URL is deliberately left unset so a
+// pass proves the resolver path, not the env-var fallback
+// TestPolicy_CreatesBackendPolicy_WhenAbsent already covers.
+func TestPolicy_UsesEndpointResolver(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+	}
+	r, cl := newPolicyReconciler(t, pair, policy)
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, []interface{}{})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getPolicy(t, cl)
+	if got.Status.BackendPolicyID != "pol-backend-uuid" {
+		t.Errorf("BackendPolicyID = %q, want pol-backend-uuid (EndpointResolver should have been used)", got.Status.BackendPolicyID)
+	}
+}
+
 // ---------- reuse existing backend policy ----------
 
 func TestPolicy_ReusesExistingBackendPolicy(t *testing.T) {

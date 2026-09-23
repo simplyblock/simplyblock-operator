@@ -159,6 +159,56 @@ func TestSitePair_CreatesBackendTarget(t *testing.T) {
 	}
 }
 
+// ---------- EndpointResolver overrides the default/env-var endpoint ----------
+
+// TestSitePair_UsesEndpointResolver proves the reconciler reaches the control
+// plane through EndpointResolver, the same mechanism StoragePoolReconciler
+// already uses (controlplane.NewEndpointResolver, wired from
+// ControlPlane.status.endpoint) -- required for a managed cluster whose own
+// operator has no reachable simplyblock-webappapi Service, only the hub's
+// externally-published one. SIMPLYBLOCK_WEBAPI_BASE_URL is deliberately left
+// unset here so a pass proves the resolver path, not the pre-existing
+// env-var fallback TestSitePair_CreatesBackendTarget already covers.
+func TestSitePair_UsesEndpointResolver(t *testing.T) {
+	cluster1 := testCluster("default", "cluster1", "src-uuid")
+	cluster2 := testCluster("default", "cluster2", "tgt-uuid")
+	pair := newSitePair()
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		if req.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			resp, _ := json.Marshal(map[string]string{"id": "tgt-backend-uuid"})
+			_, _ = w.Write(resp)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+
+	r, cl := newSitePairReconciler(t, cluster1, cluster2, pair)
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	res, err := r.Reconcile(context.Background(), sitePairRequest("pair1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != replPairSyncInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairSyncInterval)
+	}
+
+	got := getSitePair(t, cl)
+	if !got.Status.Ready {
+		t.Errorf("pair.Status.Ready = false, want true (EndpointResolver should have been used)")
+	}
+	if got.Status.BackendTargetID != "tgt-backend-uuid" {
+		t.Errorf("BackendTargetID = %q, want tgt-backend-uuid", got.Status.BackendTargetID)
+	}
+}
+
 // ---------- backend target already exists → reuses it ----------
 
 func TestSitePair_ReuseExistingTarget(t *testing.T) {
