@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
@@ -81,6 +82,7 @@ func newStack(mounter *mount.Mounter, recordDir string) *stack {
 			Devices:    nvme.NewSysfsDeviceResolver(sysfs),
 			Content:    blockdev.NewProber(),
 			Filesystem: mounter.FilesystemOps(),
+			Manager:    lvm.NewManager(),
 		},
 		store:  store,
 		runner: volstack.NewRunner(store),

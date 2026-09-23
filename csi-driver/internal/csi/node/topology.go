@@ -77,6 +77,22 @@ func (ns *Server) buildAccessibleTopology(ctx context.Context) map[string]string
 		}
 	}
 
+	// Whether this node can run a client-side compressed or deduplicated volume,
+	// which is the node half of a pair: the controller service stamps such a
+	// volume's PV with accessible topology naming this same key, and the
+	// scheduler will only place the pod on a node whose CSINode carries it.
+	// Publishing it on only one of the two sides matches nothing, and says
+	// nothing while doing so: the PV asks for a key no node advertises, and the
+	// pod sits Pending with no failure to report.
+	//
+	// The value travels as it is rather than being filtered to the capable ones,
+	// so that a node whose probe answered no is distinguishable from one whose
+	// probe has not answered at all. A node with no label advertises no segment,
+	// because inventing one would claim an answer nobody established.
+	if capable, ok := node.Labels[kube.LabelVDOCapable]; ok {
+		segments[kube.LabelVDOCapable] = capable
+	}
+
 	if len(segments) == 0 {
 		// No zone/region labels found. Return hostname so the external-provisioner
 		// can still build AccessibilityRequirements. Without at least one topology

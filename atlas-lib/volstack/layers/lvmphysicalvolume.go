@@ -73,6 +73,18 @@ func (l *LVMPhysicalVolume) Name() string { return "lvmPhysicalVolume" }
 func (l *LVMPhysicalVolume) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
+	if len(below.Devices) == 0 {
+		// Total path loss, not an interrupted bring-up: there is no device left
+		// to read a label from at all, which is a different question from a
+		// probe that failed on a device that is there. Release is
+		// unconditionally a no-op for this layer regardless of what Observe
+		// reports, so answering Absent here costs nothing, and it is what lets a
+		// Down walk continue to the volume-group layer above, whose Release has
+		// real work to do and must not be skipped on the strength of an error
+		// from this layer.
+		return volstack.StateAbsent, volstack.Artifact{}, nil
+	}
+
 	surveyed, err := l.survey(ctx, below)
 	if err != nil {
 		return volstack.StateAbsent, volstack.Artifact{}, err
@@ -237,7 +249,11 @@ func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error { 
 // every one of them.
 func (l *LVMPhysicalVolume) Destroy(ctx context.Context, below volstack.Artifact) error {
 	if len(below.Devices) == 0 {
-		return errors.New("lvmPhysicalVolume: the layer below exposes no device to unlabel")
+		// Nothing to take a label off, so the label this was asked to remove is
+		// already gone with the device that carried it. A removal that finds
+		// nothing to remove has done what it was asked, the way every removal in
+		// atlas-lib/lvm behind this layer does.
+		return nil
 	}
 	for _, dev := range below.Devices {
 		if err := l.cfg.Manager.RemovePhysicalVolume(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {

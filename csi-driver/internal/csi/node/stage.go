@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/volstack"
@@ -278,7 +279,8 @@ func (ns *Server) attachPlan(
 		return nil, err
 	}
 	node := ns.stack.node(hostNQN, ns.priorFormat(volumeID, vc))
-	return planFor(node, connection, stackVolume(stagingTargetPath, vc, volCap), volCap), nil
+	volume := stackVolume(stagingTargetPath, vc, volCap)
+	return planFor(node, connection, volume, vdoOptions(vc), shapeFor(vc, volCap)), nil
 }
 
 // teardownPlan is the plan an unstage walks, which is the shape that was built
@@ -292,7 +294,8 @@ func (ns *Server) teardownPlan(
 	volumeID, stagingTargetPath string,
 	vc map[string]string,
 ) (volstack.Plan, error) {
-	raw, fsType := false, ""
+	shape, fsType := shapePlain, ""
+	options := vdoOptions(vc)
 
 	// Declared outside the switch: an absent record is not a failure, and the
 	// zero value is then what the connection below is merged with.
@@ -308,10 +311,13 @@ func (ns *Server) teardownPlan(
 		// teardown driven by a misread plan releases the wrong objects.
 		return nil, err
 	default:
-		if raw, err = shapeFromRecord(recordedLayers(record)); err != nil {
+		if shape, err = shapeFromRecord(recordedLayers(record)); err != nil {
 			return nil, err
 		}
 		fsType = recordedFsType(record)
+		if recorded, ok := recordedLVMOptions(record); ok {
+			options = recorded
+		}
 	}
 
 	if fsType != "" {
@@ -323,10 +329,8 @@ func (ns *Server) teardownPlan(
 	}
 
 	node := ns.stack.node("", nil)
-	if raw {
-		return node.RawBlock(connection), nil
-	}
-	return node.Plain(connection, stackVolume(stagingTargetPath, vc, nil)), nil
+	volume := stackVolume(stagingTargetPath, vc, nil)
+	return planFor(node, connection, volume, options, shape), nil
 }
 
 // teardownConnection identifies the namespace a release acts on, from the
@@ -375,6 +379,37 @@ func recordedFabric(record volstack.Record) (layers.FabricParams, bool) {
 		return params, true
 	}
 	return layers.FabricParams{}, false
+}
+
+// recordedLVMOptions is what the record says the logical volume was created as,
+// and reports whether it names one at all.
+//
+// A teardown takes the pool's name from here rather than from the volume's
+// class, for the same reason it takes the layer list from here: the class can
+// have been edited since, and a release pointed at a pool by another name finds
+// nothing to release. Which is also why an unreadable entry is not fatal — the
+// verbs a teardown reaches never consult the definition, and refusing the whole
+// release over a field none of them reads would strand the volume's objects.
+func recordedLVMOptions(record volstack.Record) (plans.LogicalVolumeOptions, bool) {
+	for _, entry := range record.Plan {
+		if entry.Layer != layerLVMLogicalVolume || len(entry.Params) == 0 {
+			continue
+		}
+		var params layers.LVMLogicalVolumeParams
+		if err := json.Unmarshal(entry.Params, &params); err != nil {
+			return plans.LogicalVolumeOptions{}, false
+		}
+		return plans.LogicalVolumeOptions{
+			Definition: lvm.LogicalVolumeDefinition{
+				Deduplication:    params.Deduplication,
+				Compression:      params.Compression,
+				Stripes:          params.Stripes,
+				StripeChunkBytes: params.StripeChunkBytes,
+			},
+			PoolName: params.PoolName,
+		}, true
+	}
+	return plans.LogicalVolumeOptions{}, false
 }
 
 // recordedLayers is the layer list a record names, in order.

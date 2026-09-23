@@ -209,6 +209,129 @@ func TestVDOCarriesItsPoolAndCapability(t *testing.T) {
 	}
 }
 
+// TestLVMRawBlockIsTheLVMRowWithoutItsFilesystem proves that a volume the pod
+// opens as a block device still gets the layers that compress and deduplicate
+// it, and nothing that would format it. Deduplication is a property of the
+// logical volume rather than of the filesystem above it, so dropping the LVM
+// layers along with the filesystem would silently turn such a volume into a
+// plain one.
+func TestLVMRawBlockIsTheLVMRowWithoutItsFilesystem(t *testing.T) {
+	options := LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Compression: true},
+		PoolName:   "vdopool",
+	}
+
+	assertShape(t, testNode().LVMRawBlock(conn("nqn:vol"), testVolume(), options),
+		[]string{"fabric", "lvmPhysicalVolume", "lvmVolumeGroup", "lvmLogicalVolume"})
+
+	assertShape(t, testNode().LVM(conn("nqn:vol"), testVolume(), options),
+		[]string{"fabric", "lvmPhysicalVolume", "lvmVolumeGroup", "lvmLogicalVolume", "filesystem"})
+}
+
+// TestThePoolSurvivesACloneResolution is the one place a plan's pool name has to
+// reach a layer other than the one that creates the volume.
+//
+// A byte-level clone carries its source's LVM metadata, and resolving it renames
+// the logical volume carrying the source's name. The pool is named the same in
+// every volume's group, so a resolution that did not know to leave it alone
+// would rename the pool instead and leave the logical volume pointing at one
+// that no longer answers to what its metadata calls it.
+//
+// It runs the layer rather than reading the plan, because the physical-volume
+// layer carries no record parameters by contract, so what it was built with is
+// observable only in what it does.
+func TestThePoolSurvivesACloneResolution(t *testing.T) {
+	commands := &recordingLVM{out: map[string]string{
+		"pvs": "vol-other\n",
+		"lvs": "  vdopool\n  lv-other\n",
+	}}
+	node := NewNode(NodeConfig{
+		Manager: lvm.NewManagerWithRunner(commands.run),
+		Content: clonedMember{},
+	})
+
+	plan := node.LVM(conn("nqn:vol"), testVolume(), LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Deduplication: true},
+		PoolName:   "vdopool",
+	})
+	if _, err := plan[1].Ensure(context.Background(), clonedDevice()); err != nil {
+		t.Fatalf("resolve the clone: %v", err)
+	}
+
+	renamed, ok := commands.renamed()
+	if !ok {
+		t.Fatalf("nothing was renamed, so the clone still carries its source's identity:\n%v", commands.calls)
+	}
+	if renamed == "vdopool" {
+		t.Fatal("the clone resolution renamed the pool, which the logical volume above it points at by name")
+	}
+	if renamed != "lv-other" {
+		t.Errorf("the clone resolution renamed %q, want the volume carrying the source's name", renamed)
+	}
+}
+
+// TestALinearVolumePreservesNothing is the negative of the case above: a row
+// with no pool has no structural volume to spare, so the first volume the
+// resolution finds is the one carrying the source's name.
+func TestALinearVolumePreservesNothing(t *testing.T) {
+	commands := &recordingLVM{out: map[string]string{
+		"pvs": "vol-other\n",
+		"lvs": "  lv-other\n",
+	}}
+	node := NewNode(NodeConfig{
+		Manager: lvm.NewManagerWithRunner(commands.run),
+		Content: clonedMember{},
+	})
+
+	plan := node.LVM(conn("nqn:vol"), testVolume(), LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Stripes: 2},
+	})
+	if _, err := plan[1].Ensure(context.Background(), clonedDevice()); err != nil {
+		t.Fatalf("resolve the clone: %v", err)
+	}
+
+	if renamed, ok := commands.renamed(); !ok || renamed != "lv-other" {
+		t.Errorf("the clone resolution renamed %q (found: %t), want lv-other", renamed, ok)
+	}
+}
+
+// clonedDevice is the one device a clone's physical-volume layer sits on.
+func clonedDevice() volstack.Artifact {
+	return volstack.Artifact{Devices: []blockdev.Device{{Path: "/dev/nvme1n1"}}}
+}
+
+// clonedMember reads every device as an LVM member, which is what a clone's
+// device is: the label came across with the bytes.
+type clonedMember struct{}
+
+func (clonedMember) Read(context.Context, blockdev.Device) (blockdev.Reading, error) {
+	return blockdev.Reading{Content: blockdev.ContentStackLayer, Type: "LVM2_member"}, nil
+}
+
+// recordingLVM answers the LVM commands a clone resolution runs, keyed on the
+// command word, and keeps what was asked. It fakes the execution rather than the
+// Manager, so the real argument building and output parsing run.
+type recordingLVM struct {
+	calls [][]string
+	out   map[string]string
+}
+
+func (r *recordingLVM) run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, args)
+	return r.out[args[0]], nil
+}
+
+// renamed is the logical volume an lvrename was pointed at, and reports whether
+// there was one.
+func (r *recordingLVM) renamed() (string, bool) {
+	for _, call := range r.calls {
+		if call[0] == "lvrename" && len(call) >= 3 {
+			return call[2], true
+		}
+	}
+	return "", false
+}
+
 // TestNamesDeriveFromTheVolumeAlone is the rule both consumers have to agree on
 // character for character: a plan replayed on another host, or by a teardown
 // that has only the handle, arrives at the same names.
@@ -380,5 +503,31 @@ func TestAPlanWithoutARecordAsksNothing(t *testing.T) {
 	}
 	if len(ops.formatted) != 1 {
 		t.Errorf("formatted %d times, want once for a device nothing contradicts", len(ops.formatted))
+	}
+}
+
+// TestANodeWithoutAManagerStillGetsOne closes the class of failure that a nil
+// concrete seam is.
+//
+// The manager's methods take a pointer receiver, so a nil one is not an error at
+// the call site: it panics inside the first LVM command a layer runs. In the CSI
+// node plugin that is the process, and with it that node's CSI. A consumer that
+// forgot to pass one, which is exactly what happened when the LVM rows were
+// first selected, gets the shipped implementation instead of a crash.
+func TestANodeWithoutAManagerStillGetsOne(t *testing.T) {
+	plan := NewNode(NodeConfig{}).LVM(conn("nqn:vol"), testVolume(), LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Compression: true},
+		PoolName:   "vdopool",
+	})
+
+	// Observing reaches the manager. It is allowed to fail — there is no LVM
+	// here — but it must fail rather than panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a plan built without a manager panicked instead of failing: %v", r)
+		}
+	}()
+	if _, _, err := plan[2].Observe(context.Background(), clonedDevice()); err == nil {
+		t.Log("the volume-group layer answered without an LVM present, which is fine")
 	}
 }

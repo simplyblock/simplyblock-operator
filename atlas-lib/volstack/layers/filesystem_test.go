@@ -129,6 +129,71 @@ func newFSAsking(t *testing.T, fs *fakeFS, fsType string, reading blockdev.Readi
 	})
 }
 
+// Regression: a teardown reaching this layer after the device below it is gone
+// has to get a state rather than an error.
+//
+// NodeUnstageVolume releases the stack and then, for a volume that is being
+// deleted, destroys it, and the release is what detaches the fabric. So the
+// destroy that follows surveys a plan whose bottom layer now exposes nothing,
+// and this layer answering with an error failed the whole RPC. Kubelet retried
+// it forever, the volume was never released, and the pool it came from could
+// not be deleted while a bound volume remained.
+//
+// Absent is the honest answer and not merely the convenient one: nothing is
+// mounted and there is no device, so nothing of this layer is present on this
+// host. It cannot be read as permission to format, because Ensure refuses an
+// empty artifact before it observes anything.
+func TestObserveWithNoDeviceBelowReportsAbsentWithoutError(t *testing.T) {
+	l := newFS(t, newFakeFS(), blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe errored on a device that is already gone: %v", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent", state)
+	}
+	if len(own.Devices) != 0 || own.Path != "" {
+		t.Errorf("an absent layer exposed %+v", own)
+	}
+}
+
+// The mount is still the first question, because total path loss leaves one
+// behind after the device is gone. Answering Absent on the strength of the
+// missing device alone would have a teardown skip the release that clears it,
+// stranding a mount that answers EIO.
+func TestObserveWithNoDeviceBelowStillReportsALiveMount(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if state != volstack.StateReady {
+		t.Errorf("state = %s, want Ready: the mount is still there to be released", state)
+	}
+	if own.Path != stagingPath {
+		t.Errorf("the layer exposed %q, want the staging path it is still mounted at", own.Path)
+	}
+}
+
+// Ensure is what keeps Absent from meaning "format this": it refuses an empty
+// artifact before it observes anything, so the state above can never reach a
+// mkfs.
+func TestEnsureRefusesAnEmptyArtifactBeforeObserving(t *testing.T) {
+	fs := newFakeFS()
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentBlank}, nil)
+
+	if _, err := l.Ensure(context.Background(), volstack.Artifact{}); err == nil {
+		t.Fatal("Ensure accepted a plan with no device to put a filesystem on")
+	}
+	if len(fs.formatted) != 0 {
+		t.Errorf("a format ran against no device: %+v", fs.formatted)
+	}
+}
+
 // An encrypted volume reads as random bytes when it is empty, because the
 // control plane stacks an AES-XTS crypto bdev under the namespace it exports
 // and decrypting never-written blocks yields pseudo-random plaintext. The

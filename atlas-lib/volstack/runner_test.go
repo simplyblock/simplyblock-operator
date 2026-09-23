@@ -10,6 +10,7 @@ package volstack
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -745,5 +746,115 @@ func TestHealReportsAnUnobservableLayerThatCannotHeal(t *testing.T) {
 
 	if err := r.Heal(context.Background(), testHandle, plan); err == nil {
 		t.Fatal("Heal reported success for a layer it could neither read nor repair")
+	}
+}
+
+// Regression: a layer whose Observe reports StateAbsent has nothing to destroy
+// either, and Destroy surveyed for that and then threw the answer away.
+//
+// NodeUnstageVolume releases the stack and then, for a volume being deleted,
+// destroys it — and the release is what detaches the fabric. So every layer
+// standing on that fabric reports absent by the time Destroy walks them, and
+// destroying them anyway means removing an object whose metadata lives on a
+// device that is no longer there. On an LVM stack that surfaced as `lvremove:
+// Volume group "vol-..." not found`, which failed the RPC on a volume that had
+// in fact been torn down correctly.
+//
+// Down has always skipped absent layers. This is the same rule, in the verb that
+// surveyed for it and discarded the result.
+func TestDestroySkipsAbsentLayers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, state: StateAbsent},
+		&fakeLayer{name: "lvmLogicalVolume", log: &log, state: StateAbsent},
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	if err := r.Destroy(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	for _, absent := range []string{"lvmVolumeGroup:destroy", "lvmLogicalVolume:destroy"} {
+		if strings.Contains(joined, absent) {
+			t.Errorf("an absent layer was destroyed (%s):\n%s", absent, joined)
+		}
+	}
+	if !strings.Contains(joined, "fabric:destroy") {
+		t.Errorf("the layer that was present was not destroyed:\n%s", joined)
+	}
+}
+
+// A layer that is already down is one a release has nothing to do to, and
+// StateAbsent is not the only way to be already down.
+//
+// StateInactive is the state Release itself leaves behind: the object is
+// complete and not mapped on this host. So a teardown resuming over a stack
+// something already took part of down meets it, and releasing again is at best
+// redundant work against an object that is in the asked-for state.
+func TestDownSkipsLayersThatAreAlreadyDown(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, exposes: "dm-0", state: StateInactive},
+		&fakeLayer{name: "filesystem", log: &log, state: StateAbsent},
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	for _, down := range []string{"lvmVolumeGroup:release", "filesystem:release"} {
+		if strings.Contains(joined, down) {
+			t.Errorf("a layer that was already down was released (%s):\n%s", down, joined)
+		}
+	}
+	if !strings.Contains(joined, "fabric:release") {
+		t.Errorf("the layer that was still up was not released:\n%s", joined)
+	}
+}
+
+// Skipping is said out loud. A teardown that released three layers and a
+// teardown that skipped them both report success, and only the log separates a
+// stack that was already down from one this never reached.
+func TestDownSaysWhichLayersItSkipped(t *testing.T) {
+	var said strings.Builder
+	Logger = slog.New(slog.NewTextHandler(&said, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() { Logger = nil })
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, state: StateAbsent},
+	}
+	r := NewRunner(NewStore(t.TempDir()))
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	out := said.String()
+	if !strings.Contains(out, "lvmVolumeGroup") {
+		t.Errorf("the skipped layer is not named in the log:\n%s", out)
+	}
+	if !strings.Contains(out, "Absent") {
+		t.Errorf("the log does not say why it was skipped:\n%s", out)
 	}
 }

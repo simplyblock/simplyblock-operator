@@ -3,6 +3,7 @@ package nvmeof
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,12 +51,42 @@ func (f *fakeDevs) ByNamespace(context.Context, string, nvme.NamespaceID) (nvme.
 	return nvme.Device{}, nil
 }
 
+// testDevRoot is this test binary's /dev.
+//
+// The readiness check in WaitForDevice opens the device it is about to return,
+// because a path synthesized from a sysfs entry name is not yet a promise that
+// the node is there. A fake that named /dev/nvme0n1 would have that open reach
+// whatever the machine running the tests happens to have at that path, or
+// nothing at all. So the fakes hand out paths under here, and the file exists.
+var testDevRoot string
+
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "nvmeof-dev")
+	if err != nil {
+		panic(err)
+	}
+	testDevRoot = root
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
+
+// devPath is where a namespace of this name lives for a test, as a file that
+// opens.
+func devPath(name string) string {
+	path := filepath.Join(testDevRoot, name)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		panic(err)
+	}
+	return path
+}
+
 func dev(subsysID, nqn, name, majorMinor string, nsid nvme.NamespaceID) nvme.Device {
 	return nvme.Device{
 		Namespace: nvme.Namespace{
 			ID:         nsid,
 			Name:       name,
-			DevicePath: "/dev/" + name,
+			DevicePath: devPath(name),
 			Dev:        majorMinor,
 			UUID:       "6dbb7d4e-2f1a-4a55-9d3c-1f2e3a4b5c6d",
 		},
@@ -99,7 +130,7 @@ func TestWaitForDevice_AppearsAfterConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Namespace.DevicePath != "/dev/nvme0n1" {
+	if got.Namespace.DevicePath != devPath("nvme0n1") {
 		t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
 	}
 }
@@ -196,7 +227,7 @@ func TestWaitForDevice_TimesOutOnPersistentConflict(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want a deadline error", err)
 	}
-	for _, want := range []string{"different devices", "/dev/nvme0n1", "/dev/nvme2n1"} {
+	for _, want := range []string{"different devices", devPath("nvme0n1"), devPath("nvme2n1")} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, want it to mention %q", err, want)
 		}
@@ -314,7 +345,7 @@ func TestWaitForDevice_UUIDAloneIsWaitedOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a wait on a namespace UUID was refused: %v", err)
 	}
-	if got.Namespace.DevicePath != "/dev/nvme0n1" {
+	if got.Namespace.DevicePath != devPath("nvme0n1") {
 		t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
 	}
 }
@@ -339,7 +370,7 @@ func TestConnectDevice(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Namespace.DevicePath != "/dev/nvme0n1" {
+		if got.Namespace.DevicePath != devPath("nvme0n1") {
 			t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
 		}
 	})
@@ -384,7 +415,7 @@ func TestConnectMultipathDevice(t *testing.T) {
 		if len(results) != 3 {
 			t.Errorf("results = %d, want one per path", len(results))
 		}
-		if got.Namespace.DevicePath != "/dev/nvme0n2" {
+		if got.Namespace.DevicePath != devPath("nvme0n2") {
 			t.Errorf("device = %q, want /dev/nvme0n2 (nsid 2)", got.Namespace.DevicePath)
 		}
 	})
@@ -398,7 +429,7 @@ func TestConnectMultipathDevice(t *testing.T) {
 		if err != nil {
 			t.Fatalf("err = %v, want nil: the secondary path came up", err)
 		}
-		if got.Namespace.DevicePath != "/dev/nvme0n1" {
+		if got.Namespace.DevicePath != devPath("nvme0n1") {
 			t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
 		}
 		if results[0].Live || results[1].Live == false {
@@ -444,4 +475,63 @@ func TestConnectMultipathDevice(t *testing.T) {
 			t.Error("err = nil, want an error for an empty target list")
 		}
 	})
+}
+
+// The namespace being listed is not the same moment as the kernel letting a
+// reader open it.
+//
+// DevicePath is synthesized from the sysfs entry's name and never stat'd, so
+// being listed says the controller wired the namespace up, not that the node
+// behind that path is there yet. A caller that took the listing as the answer
+// got a path whose first open failed ENXIO — no such device or address, which is
+// a node that exists with nothing behind it — for a device that was about to be
+// perfectly fine.
+func TestWaitForDeviceWaitsUntilTheDeviceOpens(t *testing.T) {
+	d := dev("nvme-subsys0", "nqn.x", "nvme-late", "259:1", 1)
+	path := d.Namespace.DevicePath
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("take the device node away again: %v", err)
+	}
+	devs := &fakeDevs{snapshots: [][]nvme.Device{{d}, {d}, {d}}}
+
+	// The kernel finishes wiring it up while the wait is polling.
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		_ = os.WriteFile(path, nil, 0o600)
+	}()
+
+	got, err := WaitForDevice(waitCtx(t), devs, nvme.DeviceSelector{NQN: "nqn.x"})
+	if err != nil {
+		t.Fatalf("WaitForDevice: %v", err)
+	}
+	if got.Namespace.DevicePath != path {
+		t.Errorf("device = %q, want %q", got.Namespace.DevicePath, path)
+	}
+	// The wait is what this is about: returning before the node existed would
+	// hand the caller a path whose first open fails, which is the whole defect.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("returned before the device node existed: %v", err)
+	}
+}
+
+// A device that never opens is reported as that, carrying what the open said,
+// rather than as a device that never appeared: the two want different things
+// looked at.
+func TestWaitForDeviceSaysWhenTheDeviceNeverOpens(t *testing.T) {
+	d := dev("nvme-subsys0", "nqn.x", "nvme-never", "259:1", 1)
+	if err := os.Remove(d.Namespace.DevicePath); err != nil {
+		t.Fatalf("take the device node away again: %v", err)
+	}
+	devs := &fakeDevs{snapshots: [][]nvme.Device{{d}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	_, err := WaitForDevice(ctx, devs, nvme.DeviceSelector{NQN: "nqn.x"})
+	if err == nil {
+		t.Fatal("WaitForDevice returned a device that cannot be opened")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the failure does not carry what the open said: %v", err)
+	}
 }

@@ -11,6 +11,8 @@ package layers
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -99,6 +101,36 @@ func (f *fakeDevices) ByNamespace(context.Context, string, nvme.NamespaceID) (nv
 // Serviceability is expressed through the ANA state of the namespace's paths,
 // which is what nvme.Device.Accessible judges a namespace with an ANA view on:
 // an inaccessible path is a device that is present in sysfs and cannot take I/O.
+// testDevRoot is this test binary's /dev.
+//
+// Bringing a fabric layer up waits for the namespace to be openable, not merely
+// listed, because a device path is synthesized from a sysfs entry's name and is
+// no promise that the node behind it is there yet. A fake naming /dev/nvme0n1
+// would send that open at whatever the machine running the tests has at that
+// path. So the fakes hand out paths under here, and the file exists.
+var testDevRoot string
+
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "layers-dev")
+	if err != nil {
+		panic(err)
+	}
+	testDevRoot = root
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
+
+// devPath is where a namespace of this name lives for a test, as a file that
+// opens.
+func devPath(name string) string {
+	path := filepath.Join(testDevRoot, name)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		panic(err)
+	}
+	return path
+}
+
 func device(name string, serving bool) nvme.Device {
 	ana := nvme.ANAInaccessible
 	if serving {
@@ -106,7 +138,7 @@ func device(name string, serving bool) nvme.Device {
 	}
 	return nvme.Device{
 		Namespace: nvme.Namespace{
-			ID: 1, Name: name, DevicePath: "/dev/" + name, Dev: "259:1",
+			ID: 1, Name: name, DevicePath: devPath(name), Dev: "259:1",
 			LogicalBlockSize: 512, Capacity: 1 << 21,
 			Paths: []nvme.Path{{Controller: "nvme0", NSID: 1, ANAState: ana}},
 		},
@@ -199,7 +231,7 @@ func TestFabricEnsureConnectsEveryEndpointInOrder(t *testing.T) {
 		t.Fatalf("connected %v, want the published endpoints in their published order", got)
 	}
 	dev, ok := art.Device()
-	if !ok || dev.Path != "/dev/nvme0n1" {
+	if !ok || dev.Path != devPath("nvme0n1") {
 		t.Fatalf("artifact = %+v, want the namespace device", art.Devices)
 	}
 }

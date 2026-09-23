@@ -130,6 +130,10 @@ func newTestStack(t *testing.T, runner stackRunner) (*stack, string) {
 // these tests compare plans.
 const plainShape = "fabric → filesystem"
 
+// lvmShape is the layer list a volume carrying client-side compression or
+// deduplication stages as, rendered the same way.
+const lvmShape = "fabric → lvmPhysicalVolume → lvmVolumeGroup → lvmLogicalVolume → filesystem"
+
 // stagedContext is the volume context a staged volume leaves behind, which is
 // all the teardown and expansion paths have to work from.
 func stagedContext() map[string]string {
@@ -163,12 +167,15 @@ func TestPlanForSelectsTheShapeFromTheCapability(t *testing.T) {
 	node := s.node("", nil)
 	volume := stackVolume("/staging", stagedContext(), mountCapability())
 
-	mountPlan := planFor(node, connectionFromContext(stagedContext()), volume, mountCapability())
+	vc := stagedContext()
+	options := vdoOptions(vc)
+
+	mountPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, mountCapability()))
 	if got := strings.Join(mountPlan.Names(), " → "); got != plainShape {
 		t.Errorf("a filesystem volume stages as %s", got)
 	}
 
-	blockPlan := planFor(node, connectionFromContext(stagedContext()), volume, blockCapability())
+	blockPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, blockCapability()))
 	if got := strings.Join(blockPlan.Names(), " → "); got != "fabric" {
 		t.Errorf("a raw block volume stages as %s, and nothing may format it", got)
 	}
@@ -368,10 +375,16 @@ func TestTeardownPlanFollowsTheRecord(t *testing.T) {
 	}{
 		{name: "raw block", layers: []string{"fabric"}, want: "fabric"},
 		{name: "filesystem", layers: []string{"fabric", "filesystem"}, want: plainShape},
+		{name: "client-side compression", layers: strings.Split(lvmShape, " → "), want: lvmShape},
 		{
 			name:    "a layer this build does not know",
+			layers:  []string{"fabric", "dmCrypt", "filesystem"},
+			wantErr: "dmCrypt",
+		},
+		{
+			name:    "known layers in a shape this build does not stage",
 			layers:  []string{"fabric", "lvmVolumeGroup", "filesystem"},
-			wantErr: "lvmVolumeGroup",
+			wantErr: "not a shape this build stages",
 		},
 	}
 
@@ -510,10 +523,19 @@ func writeRecord(t *testing.T, s *stack, handle string, names []string) {
 	record := volstack.Record{Version: volstack.RecordVersion, VolumeHandle: handle}
 	for _, layer := range names {
 		entry := volstack.Entry{Layer: layer, Attempted: true}
-		if layer == layerFilesystem {
+		switch layer {
+		case layerFilesystem:
 			params, err := json.Marshal(map[string]string{"fsType": extFS})
 			if err != nil {
 				t.Fatalf("encode the filesystem parameters: %v", err)
+			}
+			entry.Params = params
+		case layerLVMLogicalVolume:
+			params, err := json.Marshal(layers.LVMLogicalVolumeParams{
+				PoolName: vdoPoolName, Deduplication: true, Compression: true,
+			})
+			if err != nil {
+				t.Fatalf("encode the logical-volume parameters: %v", err)
 			}
 			entry.Params = params
 		}
@@ -685,4 +707,30 @@ func deletingPV() *corev1.PersistentVolume {
 	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
 	pv.Status.Phase = corev1.VolumeReleased
 	return pv
+}
+
+// Regression: every seam the plans this driver selects will reach has to be
+// filled, because the layers do not check.
+//
+// The LVM rows were wired without the LVM manager among the seams, since the
+// only shapes before them were fabric and filesystem, which need none. The
+// layers take it as a concrete *lvm.Manager, so a nil one is not an error at the
+// call site — it is a nil-receiver panic the moment a layer runs its first LVM
+// command. That killed the node plugin on the first unstage of a compressed
+// volume, took that node's CSI with it, and collapsed the rest of the run: one
+// plugin down, 6 of 7 ready, and two volumes staged across the whole suite.
+func TestTheStackFillsEverySeamItsPlansReach(t *testing.T) {
+	s, _ := newTestStack(t, newRecordingRunner())
+
+	for name, filled := range map[string]bool{
+		"Connector":  s.seams.Connector != nil,
+		"Devices":    s.seams.Devices != nil,
+		"Content":    s.seams.Content != nil,
+		"Filesystem": s.seams.Filesystem != nil,
+		"Manager":    s.seams.Manager != nil,
+	} {
+		if !filled {
+			t.Errorf("the %s seam is nil; a layer reaching it panics rather than failing", name)
+		}
+	}
 }

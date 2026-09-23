@@ -215,13 +215,16 @@ File: `atlas-lib/volstack/resume_test.go` (new)
 
 File: `atlas-lib/volstack/deadfoundation_test.go` (new)
 
-| #    | Scenario                                                                                                                                                           | Type       | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| I-11 | Every layer's `Release` succeeds when the layer below reports `StateAbsent`                                                                                        | Positive   | —    |
-| I-12 | `lvmVolume`'s `Release` falls back to the device-mapper force path when the LVM command fails on every retry, and the fallback is recorded (pins PR #402 defect 8) | Regression | —    |
-| I-13 | `filesystem`'s `Release` unmounts a dead mount rather than erroring on it                                                                                          | Positive   | —    |
-| I-14 | A layer with no force path whose command depends on a dead foundation reports the failure and leaves the record in place                                           | Negative   | —    |
-| I-15 | `Down` over a stack whose every layer is already gone completes and removes the record                                                                             | Boundary   | —    |
+| #    | Scenario                                                                                                                                                                                                                                        | Type       | Test                                                    |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------|
+| I-11 | Every layer's `Release` succeeds when the layer below reports `StateAbsent`                                                                                                                                                                     | Positive   | —                                                       |
+| I-12 | `lvmVolume`'s `Release` falls back to the device-mapper force path when the LVM command fails on every retry, and the fallback is recorded (pins PR #402 defect 8)                                                                              | Regression | —                                                       |
+| I-13 | `filesystem`'s `Release` unmounts a dead mount rather than erroring on it                                                                                                                                                                       | Positive   | —                                                       |
+| I-14 | A layer with no force path whose command depends on a dead foundation reports the failure and leaves the record in place                                                                                                                        | Negative   | —                                                       |
+| I-15 | `Down` over a stack whose every layer is already gone completes and removes the record                                                                                                                                                          | Boundary   | —                                                       |
+| I-16 | Every layer's `Observe` reports a state rather than an error when the layer below exposes no device, which is what `Destroy` surveys after `Down` has detached the fabric (pins the unstage that retried forever and never released the volume) | Regression | `TestObserveWithNoDeviceBelowReportsAbsentWithoutError` |
+| I-17 | `filesystem`'s `Observe` still reports the mount total path loss left behind, so the release that clears it is not skipped                                                                                                                      | Negative   | `TestObserveWithNoDeviceBelowStillReportsALiveMount`    |
+| I-18 | `Absent` from that reading is never permission to format, because `Ensure` refuses an empty artifact before it observes anything                                                                                                                | Negative   | `TestEnsureRefusesAnEmptyArtifactBeforeObserving`       |
 
 ---
 

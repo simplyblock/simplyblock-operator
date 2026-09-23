@@ -143,6 +143,24 @@ func (f *Filesystem) observe(
 		return volstack.StateReady, blockdev.Reading{}, mountedArtifact, nil
 	}
 
+	if len(below.Devices) == 0 {
+		// Nothing mounted and no device to read: nothing of this layer is on
+		// this host, which is a state rather than a failure. It is what a
+		// teardown finds, because the release that precedes it detaches the
+		// fabric, and a destroy surveying the same plan afterward reaches this
+		// layer with the device already gone. Answering with an error there
+		// failed the RPC, and kubelet retried it forever against a volume
+		// nothing would ever release.
+		//
+		// The mount is asked about first and not incidentally: total path loss
+		// leaves a mount behind after the device is gone, and reporting that as
+		// absent would have the teardown skip the release that clears it.
+		//
+		// Absent is not permission to format. Ensure refuses an empty artifact
+		// before it observes anything, so no bring-up reaches a mkfs this way.
+		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{}, nil
+	}
+
 	reading, err := f.read(ctx, below)
 	if err != nil {
 		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{}, err

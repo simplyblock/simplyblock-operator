@@ -199,6 +199,32 @@ func TestLVMVolumeNeverCreatesOnAFailedProbe(t *testing.T) {
 	}
 }
 
+// Total path loss leaves this layer nothing to read a group off at all, which
+// is a different question from a probe that failed on a device that is there.
+// Release is unconditionally a no-op for this layer regardless of state, so
+// reporting Absent here costs nothing, and it is what lets a Down walk reach
+// the group layer below without this layer's own inability to check anything
+// aborting the walk first. (Runner.survey walks bottom to top, so in practice
+// the group layer below answers this question before this layer is even
+// asked, but this layer must not depend on that to stay safe on its own.)
+func TestLVMVolumeObserveWithNoDeviceReportsAbsentWithoutError(t *testing.T) {
+	f := newLVMVolume("", "", "", lvm.LogicalVolumeDefinition{})
+
+	state, own, err := f.layer.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe: %v, want no error when there is no device to read at all", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent", state)
+	}
+	if len(own.Devices) != 0 {
+		t.Errorf("an absent layer exposed %d devices", len(own.Devices))
+	}
+	if len(f.cmds.calls) != 0 {
+		t.Errorf("Observe ran LVM commands with no device to scope them to:\n%s", f.cmds.issued())
+	}
+}
+
 // Release does nothing here. What holds a logical volume on a host is its group
 // being mapped there, and the group is the layer below: a teardown walks down
 // through both, so the hold is given up either way, and giving it up here as

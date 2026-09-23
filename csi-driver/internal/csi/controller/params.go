@@ -5,6 +5,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -31,6 +32,8 @@ const (
 	paramRegionClusterMap   = "region_cluster_map"
 	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key, see kube.PoolNodeLabelKey
 
+	// vdoCapableTrue is the topology segment value vdoCapableSegment returns.
+	vdoCapableTrue = "true"
 )
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
@@ -57,6 +60,27 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 		return "", ""
 	}
 	return key, kube.LabelPoolAllowed
+}
+
+// vdoCapableSegment is the twin of dhchapAllowedNodeSegment above, for
+// client-side compression/deduplication: it pins PersistentVolume.spec.
+// nodeAffinity to a vdo-capable node whenever either StorageClass parameter
+// is set, and returns an empty key and value otherwise.
+//
+// Same reason as dhchapAllowedNodeSegment for reading req.GetParameters()
+// directly rather than req.GetAccessibilityRequirements(): vdo-capable is a
+// node label the csi-node DaemonSet applies after it starts, so it's never in
+// the node's CSINode object at plugin-registration time. That's also why a
+// generated StorageClass carries no allowedTopologies for this (design
+// doc §5).
+func vdoCapableSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	params := req.GetParameters()
+	compression, _ := strconv.ParseBool(params[kube.ParamClientCompression])
+	deduplication, _ := strconv.ParseBool(params[kube.ParamClientDeduplication])
+	if !compression && !deduplication {
+		return "", ""
+	}
+	return kube.LabelVDOCapable, vdoCapableTrue
 }
 
 func parseStringMap(raw, paramName string) (map[string]string, error) {

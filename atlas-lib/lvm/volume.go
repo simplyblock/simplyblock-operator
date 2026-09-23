@@ -61,7 +61,7 @@ func RegisterVolumeProvisioning(handler VolumeProvisioning) {
 func (m *Manager) RemovePhysicalVolume(ctx context.Context, pv PhysicalVolume) error {
 	_, err := m.exec(ctx, []string{pv.DevicePath}, "pvremove", "--yes", pv.DevicePath)
 	if err != nil {
-		if isNoPVLabel(err) {
+		if isAlreadyGone(err) {
 			return nil
 		}
 		return fmt.Errorf("pvremove %s: %w", pv.DevicePath, err)
@@ -69,17 +69,31 @@ func (m *Manager) RemovePhysicalVolume(ctx context.Context, pv PhysicalVolume) e
 	return nil
 }
 
-// isNoPVLabel reports whether err is pvremove's own "there was no label here"
-// failure, which for it reads: No PV label found on <device>.
+// isAlreadyGone reports whether err is LVM saying that what a removal was asked
+// to remove is not there.
 //
-// It is separate from isNoPVSignature rather than folded into it, even though
-// both mean the same thing about the device. That one decides whether a device
-// is blank, and a caller reading blank proceeds to create over it, so widening
-// what counts as blank widens what may be written over. This one only decides
-// whether a removal that was asked for has already happened, where the same
-// answer costs nothing.
-func isNoPVLabel(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "no pv label")
+// Every removal in this package treats that as success, because removing is not
+// a read: the caller has asked for the object to be gone, and one that is
+// already gone is the state it asked for. That is what lets a deletion resume
+// after a crash, and a teardown run against a stack something else has already
+// taken part of down.
+//
+// LVM names whichever object it could not find, which on a teardown is often the
+// container rather than the target: once the device underneath is detached, the
+// metadata goes with it, and lvremove reports the volume group missing rather
+// than the logical volume inside it. Both readings mean the same thing to a
+// caller that wanted the volume gone.
+//
+// It stays separate from isNoPVSignature, which reads the same words for a
+// different question. That one decides whether a device is blank, and a caller
+// reading blank proceeds to create over it, so widening what counts as blank
+// widens what may be written over. This one only decides whether a removal that
+// was asked for has already happened, where the same answer costs nothing.
+func isAlreadyGone(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "failed to find") ||
+		strings.Contains(msg, "no pv label")
 }
 
 // CreatePhysicalVolume writes an LVM PV signature onto pv's device (pvcreate),
@@ -128,8 +142,16 @@ func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeG
 
 // RemoveVolumeGroup deactivates and removes volumeGroup, destroying its data
 // (vgremove -f).
+//
+// Convergent, like the removals either side of it: a volume group that is
+// already gone is the state the caller asked for. On the teardown path that is
+// the ordinary answer rather than an unusual one, because the group's metadata
+// lives on a device the release has already detached.
 func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
 	if _, err := m.exec(ctx, nil, "vgremove", "-f", volumeGroup.Name); err != nil {
+		if isAlreadyGone(err) {
+			return nil
+		}
 		return fmt.Errorf("remove VG %s: %w", volumeGroup.Name, err)
 	}
 	return nil
@@ -147,19 +169,12 @@ func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup
 func (m *Manager) RemoveLogicalVolume(ctx context.Context, logicalVolume LogicalVolume) error {
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	if _, err := m.exec(ctx, nil, "lvremove", "--yes", path); err != nil {
-		if isNoSuchLogicalVolume(err) {
+		if isAlreadyGone(err) {
 			return nil
 		}
 		return fmt.Errorf("lvremove %s: %w", path, err)
 	}
 	return nil
-}
-
-// isNoSuchLogicalVolume reports whether err is lvremove's own "there was nothing
-// here" failure, which reads: Failed to find logical volume <vg>/<lv>.
-func isNoSuchLogicalVolume(err error) bool {
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "failed to find logical volume")
 }
 
 // lvAttrStateIndex is the position of the state character in lv_attr, LVM's

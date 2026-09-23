@@ -111,7 +111,20 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 		if attempted != nil && !attempted[i] {
 			continue
 		}
-		if states != nil && states[i] == StateAbsent {
+		// Already down, so a release has nothing to do to it. Absent is nothing
+		// of the layer being there at all, and Inactive is the state Release
+		// itself leaves behind: complete, and not mapped on this host. A
+		// teardown resuming over a stack something already took part of down
+		// meets both, and acting on either is work against an object that is in
+		// the state the caller is asking for.
+		//
+		// Said out loud, because otherwise it cannot be told apart from the
+		// teardown that did the work: both return the same nothing.
+		//
+		// Partial is not among them, and must not be. A fabric device that is
+		// present and cannot serve is still the device a release has to detach.
+		if states != nil && (states[i] == StateAbsent || states[i] == StateInactive) {
+			Infof("volstack: release %s skipped, already down (%s)", plan[i].Name(), states[i])
 			continue
 		}
 		if err := plan[i].Release(ctx, inputs[i]); err != nil {
@@ -225,11 +238,27 @@ func (r *Runner) Observe(ctx context.Context, plan Plan) (Artifact, error) {
 // Destroy removes the plan's durable objects, top to bottom, so a layer goes
 // before what it sits on. Only a deletion path calls it, never an unstage.
 func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {
-	inputs, _, err := r.survey(ctx, plan)
+	inputs, states, err := r.survey(ctx, plan)
 	if err != nil {
 		return err
 	}
 	for i := len(plan) - 1; i >= 0; i-- {
+		// Nothing of this layer is there, so there is nothing of it to remove.
+		// The same rule Down applies to Release, for the same reason and read
+		// off the same survey: an absent layer's object is already in the state
+		// the caller is asking for.
+		//
+		// It is not a corner case on this path, it is the normal one. The only
+		// caller destroys after releasing, and releasing is what detaches the
+		// fabric, so every layer standing on that fabric is absent by the time
+		// this walk reaches it. Destroying one anyway means removing an object
+		// whose metadata lives on a device that is no longer attached, which
+		// cannot work: on an LVM stack it surfaced as `lvremove: Volume group
+		// "vol-..." not found`, failing the RPC for a volume that had in fact
+		// been torn down correctly.
+		if states[i] == StateAbsent {
+			continue
+		}
 		if err := plan[i].Destroy(ctx, inputs[i]); err != nil {
 			return fmt.Errorf("volstack: destroy %s: %w", plan[i].Name(), err)
 		}

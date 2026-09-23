@@ -133,6 +133,18 @@ func (n *Node) LVM(
 	return append(volstack.Plan{n.fabric(connection)}, n.lvmStack(volume, options)...)
 }
 
+// LVMRawBlock is `fabric` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
+// `lvmLogicalVolume`, the LVM row for a volume the pod opens as a block device.
+// Deduplication and compression are a property of the logical volume rather than
+// of the filesystem above it, so a raw block volume gets them the same way a
+// formatted one does, and the plan is the formatted row with its top layer
+// absent.
+func (n *Node) LVMRawBlock(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection)}, n.lvmStackRaw(volume, options)...)
+}
+
 // Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
 // `lvmLogicalVolume` → `filesystem`: several namespaces where every other plan
 // has one. It is the only plan whose bottom is not a single layer, which is the
@@ -154,10 +166,18 @@ func (n *Node) Striped(
 // part of either, because a striped volume gains capacity by taking on members
 // rather than by growing the ones it has.
 func (n *Node) lvmStack(volume Volume, options LogicalVolumeOptions) volstack.Plan {
+	return append(n.lvmStackRaw(volume, options), n.filesystem(volume))
+}
+
+// lvmStackRaw is the same three LVM layers without the filesystem on top, which
+// is what a volume the pod opens as a block device is. It is separate from
+// lvmStack rather than a flag inside it for the reason RawBlock is separate from
+// Plain: a volume that is never formatted must not share a code path with one
+// that is.
+func (n *Node) lvmStackRaw(volume Volume, options LogicalVolumeOptions) volstack.Plan {
 	return volstack.Plan{
-		n.physicalVolume(volume),
+		n.physicalVolume(volume, options),
 		n.volumeGroup(volume),
 		n.logicalVolume(volume, options),
-		n.filesystem(volume),
 	}
 }
