@@ -225,11 +225,27 @@ func (r *Runner) Observe(ctx context.Context, plan Plan) (Artifact, error) {
 // Destroy removes the plan's durable objects, top to bottom, so a layer goes
 // before what it sits on. Only a deletion path calls it, never an unstage.
 func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {
-	inputs, _, err := r.survey(ctx, plan)
+	inputs, states, err := r.survey(ctx, plan)
 	if err != nil {
 		return err
 	}
 	for i := len(plan) - 1; i >= 0; i-- {
+		// Nothing of this layer is there, so there is nothing of it to remove.
+		// The same rule Down applies to Release, for the same reason and read
+		// off the same survey: an absent layer's object is already in the state
+		// the caller is asking for.
+		//
+		// It is not a corner case on this path, it is the normal one. The only
+		// caller destroys after releasing, and releasing is what detaches the
+		// fabric, so every layer standing on that fabric is absent by the time
+		// this walk reaches it. Destroying one anyway means removing an object
+		// whose metadata lives on a device that is no longer attached, which
+		// cannot work: on an LVM stack it surfaced as `lvremove: Volume group
+		// "vol-..." not found`, failing the RPC for a volume that had in fact
+		// been torn down correctly.
+		if states[i] == StateAbsent {
+			continue
+		}
 		if err := plan[i].Destroy(ctx, inputs[i]); err != nil {
 			return fmt.Errorf("volstack: destroy %s: %w", plan[i].Name(), err)
 		}
