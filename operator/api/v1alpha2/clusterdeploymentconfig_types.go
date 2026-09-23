@@ -256,6 +256,18 @@ type ClusterTemplate struct {
 	// +optional
 	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
 
+	// EnableJournalDevice dedicates the smallest NVMe device on each of this
+	// deployment's workers to the journal manager, instead of carving a journal
+	// partition out of every device.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
+	// built with is not one a later document can vary. It also costs a drive of
+	// capacity per node, which is a trade a reviewer approves rather than one a
+	// default makes for them.
+	// +optional
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
+
 	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
 	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
 	// each worker runs, so a group of two workers on a two-socket layout expands

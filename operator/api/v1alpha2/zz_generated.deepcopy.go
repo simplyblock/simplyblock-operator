@@ -308,6 +308,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableJournalDevice != nil {
+		in, out := &in.EnableJournalDevice, &out.EnableJournalDevice
+		*out = new(bool)
+		**out = **in
+	}
 	if in.SocketsToUse != nil {
 		in, out := &in.SocketsToUse, &out.SocketsToUse
 		*out = make([]string, len(*in))
