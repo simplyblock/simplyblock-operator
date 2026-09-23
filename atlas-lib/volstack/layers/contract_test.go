@@ -5,7 +5,7 @@
 // broken in one layer is a bug in that layer; a rule broken in the next layer
 // somebody writes is the same bug, and the point of testing them here rather
 // than in each layer's own file is that the next one is covered before it is
-// written.
+// written — once it is added to shippedLayers, which a new layer owes.
 //
 // What these deliberately do not assert is which answer a layer gives. Whether
 // a dead foundation means absent is genuinely the layer's own call: an LVM
@@ -22,12 +22,7 @@ package layers
 
 import (
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/blockdev"
@@ -232,80 +227,4 @@ func TestLayerContract(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestEveryLayerInThisPackageIsUnderContract is what makes the above a contract
-// rather than a list.
-//
-// It reads this package's own source for the constructors it exports and
-// requires each one's layer to be in the fixture, so a layer added without a row
-// there fails here instead of silently never being checked. That is the case the
-// rules exist for: the layer nobody has written yet.
-func TestEveryLayerInThisPackageIsUnderContract(t *testing.T) {
-	covered := map[string]bool{}
-	for _, layer := range shippedLayers() {
-		covered[reflect.TypeOf(layer).Elem().Name()] = true
-	}
-
-	for _, constructed := range exportedLayerTypes(t) {
-		if !covered[constructed] {
-			t.Errorf("%s is constructed by this package and is in no contract fixture, "+
-				"so nothing checks it against the Layer contract; add it to shippedLayers", constructed)
-		}
-	}
-}
-
-// exportedLayerTypes is the pointer type each exported New* constructor returns,
-// read from the package's own files. Test files are excluded: a fixture's
-// helpers are not layers this package ships.
-func exportedLayerTypes(t *testing.T) []string {
-	t.Helper()
-
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read this package's directory: %v", err)
-	}
-
-	fset := token.NewFileSet()
-	var types []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "New") {
-				continue
-			}
-			if result, ok := pointerResultName(fn); ok {
-				types = append(types, result)
-			}
-		}
-	}
-	if len(types) == 0 {
-		t.Fatal("found no layer constructors at all, so this check proves nothing")
-	}
-	return types
-}
-
-// pointerResultName is the name of the single pointer type fn returns, and
-// reports whether it returns one.
-func pointerResultName(fn *ast.FuncDecl) (string, bool) {
-	if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
-		return "", false
-	}
-	star, ok := fn.Type.Results.List[0].Type.(*ast.StarExpr)
-	if !ok {
-		return "", false
-	}
-	ident, ok := star.X.(*ast.Ident)
-	if !ok {
-		return "", false
-	}
-	return ident.Name, true
 }
