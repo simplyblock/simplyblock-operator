@@ -11,6 +11,7 @@ package node
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,13 +31,36 @@ import (
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
-// fakeDevice stands in for the NVMe-oF block device staging operates on, and
 // extFS and xfsFS name the two filesystems the tests move between.
 const (
-	fakeDevice = "/dev/fake-lvol"
-	extFS      = "ext4"
-	xfsFS      = "xfs"
+	extFS = "ext4"
+	xfsFS = "xfs"
 )
+
+// fakeDevice stands in for the NVMe-oF block device staging operates on.
+//
+// A real file, in a directory the test binary owns, because bringing a fabric
+// layer up waits for the namespace to be openable rather than merely listed: a
+// device path is synthesized from a sysfs entry's name and is no promise that
+// the node behind it is there yet. A name under /dev would send that open at
+// whatever the machine running the tests happens to have at that path, or at
+// nothing at all, and waiting for a device that is never coming is a test that
+// hangs until the whole suite times out.
+var fakeDevice string
+
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "node-dev")
+	if err != nil {
+		panic(err)
+	}
+	fakeDevice = filepath.Join(root, "fake-lvol")
+	if err := os.WriteFile(fakeDevice, nil, 0o600); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
 
 // scriptedResult is one external command's scripted outcome: its combined
 // output and its error, in the order staging runs commands.
