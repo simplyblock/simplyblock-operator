@@ -928,6 +928,13 @@ func main() {
 			}})
 		setupLog.Info("registered storagedevice validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagecluster",
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterValidator{
+				Client:  mgr.GetClient(),
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			}})
+		setupLog.Info("registered storagecluster validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagepool",
 			&webhook.Admission{Handler: &internalwebhook.StoragePoolValidator{
 				Client:  mgr.GetClient(),

@@ -99,6 +99,14 @@ func (r *ClusterDeploymentConfigReconciler) validate(
 		findings = append(findings, finding{reason: check.Reason, message: check.Message})
 	}
 
+	occupied, err := r.namespaceAlreadyHasACluster(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if occupied != "" {
+		findings = append(findings, finding{reason: ClusterExists, message: occupied})
+	}
+
 	if found := conflictingInterfaces(config); found != "" {
 		findings = append(findings, finding{reason: WorkerNotFound, message: found})
 	}
@@ -367,4 +375,56 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// namespaceAlreadyHasACluster reports a document that would put a second
+// StorageCluster in a namespace that already holds one.
+//
+// A namespace holds one because the workload a cluster renders is named for the
+// namespace rather than for the cluster: the storage-node Service, its TLS
+// secret, and the serving certificate over it are constants, so the second
+// cluster cannot take ownership of them. Its workload pass stops at the
+// certificate, four steps before the DaemonSet, and what is left is a cluster
+// whose storage nodes wait on a hostname with no pod behind it.
+//
+// The admission webhook refuses the cluster as well, and that is the guard. This
+// is the same fact said at the only point it can still be acted on: admission
+// refuses during CreatingCluster, which is after approval has made the document
+// immutable, and the step then retries to its deadline so the failure that lands
+// names the deadline rather than the reason.
+//
+// A growth document is not this. It names the cluster that is there, which is
+// the precondition it was written against rather than a collision, and neither
+// is the document that created the cluster in the first place: it is validated
+// again on every pass after it has been expanded.
+func (r *ClusterDeploymentConfigReconciler) namespaceAlreadyHasACluster(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, error) {
+	if config.Spec.ClusterRef != "" {
+		return "", nil
+	}
+
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(config.Namespace)); err != nil {
+		return "", fmt.Errorf("listing the namespace's storage clusters: %w", err)
+	}
+
+	mine := config.Status.ClusterRef
+	if mine == "" && config.Spec.Cluster != nil {
+		mine = config.Spec.Cluster.Name
+	}
+
+	for i := range clusters.Items {
+		if other := clusters.Items[i].Name; other != mine {
+			return fmt.Sprintf(
+				"namespace %s already holds StorageCluster %s, and a namespace holds one: "+
+					"the storage-node Service, its TLS secret, and its serving certificate "+
+					"are named for the namespace rather than for the cluster, so a second "+
+					"cluster here would come up with storage nodes and no workload behind "+
+					"them. Write this deployment into a namespace of its own, or set "+
+					"spec.clusterRef to add its workers to %s",
+				config.Namespace, other, other), nil
+		}
+	}
+	return "", nil
 }
