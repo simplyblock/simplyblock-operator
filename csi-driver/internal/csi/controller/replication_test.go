@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	testReplVolumeID = "88888888-8888-8888-8888-888888888888"
-	testReplVolID    = sanityClusterID + ":" + sanityPoolUUID + ":" + testReplVolumeID
-	testReplPolicyID = "77777777-7777-7777-7777-777777777777"
+	testReplVolumeID       = "88888888-8888-8888-8888-888888888888"
+	testReplVolID          = sanityClusterID + ":" + sanityPoolUUID + ":" + testReplVolumeID
+	testReplPolicyID       = "77777777-7777-7777-7777-777777777777"
+	testReplTargetVolumeID = "88888888-8888-8888-8888-888888888889"
 )
 
 func newReplicationTestServer(t *testing.T, mock *mockSBCLI) *Server {
@@ -88,6 +89,42 @@ func TestEnableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *test
 	}
 	if got := mock.volumes[testReplVolumeID].ReplicationPolicyID; got != testReplPolicyID {
 		t.Errorf("ReplicationPolicyID = %q, want %q", got, testReplPolicyID)
+	}
+}
+
+// Same relationship-resolution requirement as PromoteVolume (see its own
+// TestPromoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship):
+// csi-addons calls EnableVolumeReplication as a promote precondition too, so
+// a handle inherited from the foreign source side must resolve to the local
+// target volume before the policy attach is attempted against it.
+func TestEnableVolumeReplicationResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "migration",
+		"state":             "replicating",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		VolumeId:   testReplVolID,
+		Parameters: map[string]string{replicationPolicyParam: testReplPolicyID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.volumes[testReplTargetVolumeID].ReplicationPolicyID; got != testReplPolicyID {
+		t.Errorf("target volume's ReplicationPolicyID = %q, want %q", got, testReplPolicyID)
+	}
+	if got := mock.volumes[testReplVolumeID].ReplicationPolicyID; got != "" {
+		t.Errorf("source volume's ReplicationPolicyID = %q, want untouched", got)
 	}
 }
 

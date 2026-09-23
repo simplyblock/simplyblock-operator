@@ -239,7 +239,6 @@ func (r *StorageNodeReconciler) Reconcile(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-<<<<<<< HEAD
 	// Every control-plane call below authenticates as this node's cluster,
 	// using its own recorded secret, rather than as this operator's own
 	// Kubernetes identity -- the only way to reach a control plane a
@@ -252,8 +251,6 @@ func (r *StorageNodeReconciler) Reconcile(
 		secret, err := clusterSecretByName(ctx, r.Client, cluster.Namespace, cluster.Name)
 		ctx = authenticatedContext(ctx, secret, err)
 	}
-=======
->>>>>>> main
 
 	if !node.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &node)
@@ -777,11 +774,7 @@ func (r *StorageNodeReconciler) postNode(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-<<<<<<< HEAD
 	params := r.addParams(ctx, node, cluster)
-=======
-	params := r.addParams(node, cluster)
->>>>>>> main
 	if err := r.API.AddNode(ctx, cluster.Status.UUID, params); err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
 			node.Name, node.Spec.WorkerNode, err)
@@ -1433,10 +1426,7 @@ func (r *StorageNodeReconciler) upgradeAdoption(
 // addParams is what the node-add call carries. The node describes itself, so every
 // value but the subsystem cap comes from its own spec.config (§3.1).
 func (r *StorageNodeReconciler) addParams(
-<<<<<<< HEAD
 	ctx context.Context,
-=======
->>>>>>> main
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) utils.StorageNodeSetAddParams {
@@ -1447,11 +1437,7 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-<<<<<<< HEAD
 		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
-=======
-		NodeAddress:      r.Workload.NodeAddress(node.Spec.WorkerNode, node.Namespace),
->>>>>>> main
 		InterfaceName:    workload.MgmtInterface,
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,

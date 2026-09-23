@@ -7,9 +7,18 @@ import (
 	"strings"
 	"time"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"github.com/simplyblock/atlas/internal/cpapi"
 	"github.com/simplyblock/atlas/lvol"
 )
+
+func uuidPtrString(u *openapi_types.UUID) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
+}
 
 // ReplicationStatus is the typed steady-state replication status of one
 // volume, for the volume's whole replicated life -- unlike a cutover-record
@@ -222,4 +231,53 @@ func (c *Client) ResyncVolume(ctx context.Context, h lvol.VolumeHandle, sourceCl
 		return respError("resync volume "+string(h), code, resp.Body)
 	}
 	return nil
+}
+
+// Relationship is the replication pairing h belongs to: which volume
+// replicates to which, and which side h itself names (IsSource). TargetClusterID/
+// TargetPoolID/TargetLvolID always name the same, fixed target (replica) side
+// of the pairing regardless of whether h names the source or the target --
+// querying by either volume's own id returns the identical target_* answer.
+type Relationship struct {
+	IsSource bool
+
+	SourceClusterID string
+	SourceLvolID    string
+
+	TargetClusterID string
+	TargetPoolID    string
+	TargetLvolID    string
+}
+
+// GetVolumeReplicationRelationship resolves h to its replication pairing.
+// This is what a caller handed a volume identity inherited from the OTHER
+// side of a pairing (e.g. a destination PVC whose PV was restored carrying
+// the source's own volumeHandle) uses to find the volume it should actually
+// operate on locally: TargetClusterID/TargetPoolID/TargetLvolID name that
+// volume regardless of which side h itself named. Returns an error
+// unwrapping to errs.ErrNotFound when h has no replication relationship at
+// all yet (e.g. a volume never enabled for replication) -- callers treat that
+// as "use h unchanged," not a failure.
+func (c *Client) GetVolumeReplicationRelationship(ctx context.Context, h lvol.VolumeHandle) (Relationship, error) {
+	cluster, pool, volume, err := h.Split()
+	if err != nil {
+		return Relationship{}, err
+	}
+	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGetWithResponse(
+		ctx, cluster, pool, volume)
+	if err != nil {
+		return Relationship{}, fmt.Errorf("replication relationship of volume %s: %w", h, err)
+	}
+	d, err := payload("replication relationship of volume "+string(h), resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return Relationship{}, err
+	}
+	return Relationship{
+		IsSource:        d.IsSource,
+		SourceClusterID: uuidPtrString(d.SourceClusterId),
+		SourceLvolID:    uuidPtrString(d.SourceLvolId),
+		TargetClusterID: uuidPtrString(d.TargetClusterId),
+		TargetPoolID:    uuidPtrString(d.TargetPoolId),
+		TargetLvolID:    uuidPtrString(d.TargetLvolId),
+	}, nil
 }

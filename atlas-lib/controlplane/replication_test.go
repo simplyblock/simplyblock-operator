@@ -300,3 +300,89 @@ func TestClientResyncVolumeWithoutSourceCluster(t *testing.T) {
 		t.Errorf("request body = %q, want no source_cluster_id when none is given", gotBody)
 	}
 }
+
+const (
+	testTargetCluster = "44444444-4444-4444-4444-444444444444"
+	testTargetPool    = "55555555-5555-5555-5555-555555555555"
+	testTargetVolume  = "66666666-6666-6666-6666-666666666667"
+)
+
+func TestClientGetVolumeReplicationRelationship(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/replication/") && !strings.HasSuffix(r.URL.Path, "/replication") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"replication_id": "` + testCluster + `",
+			"direction": "to_target",
+			"mode": "migration",
+			"state": "replicating",
+			"is_source": true,
+			"source_cluster_id": "` + testCluster + `",
+			"source_lvol_id": "` + testVolume + `",
+			"target_cluster_id": "` + testTargetCluster + `",
+			"target_pool_id": "` + testTargetPool + `",
+			"target_lvol_id": "` + testTargetVolume + `",
+			"target_nqn": "nqn.test",
+			"target_ns_id": 1
+		}`))
+	})
+
+	rel, err := c.GetVolumeReplicationRelationship(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rel.IsSource {
+		t.Error("IsSource = false, want true (queried by the source volume)")
+	}
+	if rel.TargetClusterID != testTargetCluster || rel.TargetPoolID != testTargetPool || rel.TargetLvolID != testTargetVolume {
+		t.Errorf("target = %s/%s/%s, want %s/%s/%s",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID,
+			testTargetCluster, testTargetPool, testTargetVolume)
+	}
+}
+
+// Queried by the TARGET volume's own id, the relationship still reports the
+// SAME fixed target_* fields -- this is what lets a caller always resolve to
+// target_* regardless of which side of the pairing it was handed, without
+// having to branch on IsSource first.
+func TestClientGetVolumeReplicationRelationshipQueriedByTarget(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"replication_id": "` + testCluster + `",
+			"direction": "to_target",
+			"mode": "migration",
+			"state": "replicating",
+			"is_source": false,
+			"source_cluster_id": "` + testCluster + `",
+			"source_lvol_id": "` + testVolume + `",
+			"target_cluster_id": "` + testTargetCluster + `",
+			"target_pool_id": "` + testTargetPool + `",
+			"target_lvol_id": "` + testTargetVolume + `",
+			"target_nqn": "nqn.test",
+			"target_ns_id": 1
+		}`))
+	})
+
+	rel, err := c.GetVolumeReplicationRelationship(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.IsSource {
+		t.Error("IsSource = true, want false (queried by the target volume)")
+	}
+	if rel.TargetLvolID != testTargetVolume {
+		t.Errorf("TargetLvolID = %s, want %s (unchanged regardless of which side was queried)", rel.TargetLvolID, testTargetVolume)
+	}
+}
+
+func TestClientGetVolumeReplicationRelationshipNotFound(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	if _, err := c.GetVolumeReplicationRelationship(context.Background(), testHandle); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound for a volume with no replication relationship yet", err)
+	}
+}

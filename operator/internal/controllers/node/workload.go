@@ -89,7 +89,6 @@ type Workload struct {
 	ManagerNode string
 }
 
-<<<<<<< HEAD
 // NodeAddress is what the control plane is given as node_address when a node
 // is added or restarted.
 //
@@ -136,18 +135,6 @@ func (w *Workload) managedNodeAddress(ctx context.Context, worker, namespace str
 	return "", false
 }
 
-=======
-// NodeAddress is the per-pod DNS name the control plane is given as node_address
-// when a node is added or restarted.
-//
-// It is the precondition for both: a restart issued against a name that does not
-// yet resolve fails name resolution inside the control plane, and the control
-// plane's response to that is to reset the node to offline (§5.4).
-func (w *Workload) NodeAddress(worker, namespace string) string {
-	return utils.StorageNodeSetAPIAddress(worker, namespace)
-}
-
->>>>>>> main
 // LabelWorker puts one worker into a cluster's storage plane and rewrites the
 // per-slot labels of every node on it.
 //

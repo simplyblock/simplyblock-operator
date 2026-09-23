@@ -8,12 +8,16 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/errs"
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
@@ -51,6 +55,42 @@ func volumeIDFrom(req volumeIDCarrier) string {
 	return req.GetVolumeId()
 }
 
+// resolveToLocalReplica rewrites h to the volume that actually replicates
+// data on this side of an existing pairing, when h names the OTHER (foreign)
+// side of it instead. Ramen's S3-restore recreates a destination PV carrying
+// the ORIGINAL source's own volumeHandle verbatim (confirmed live
+// 2026-09-23, relocate M-02), and every Replication RPC parses its target
+// straight from the handle it's given -- without this resolution, "promote"
+// or "enable replication" would operate on the foreign, original volume
+// instead of the local replica that has actually been receiving replicated
+// data. The returned handle and client change together, since the target
+// side may live on a different cluster with its own secret.json entry.
+//
+// Returns h and client unchanged when h has no replication relationship yet
+// (errs.ErrNotFound -- the ordinary case for a volume never enabled for
+// replication, e.g. M-01's first-ever protect) or when h already names the
+// target side.
+func resolveToLocalReplica(
+	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
+) (*lvol.Handle, *atlascp.Client, error) {
+	rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			return h, client, nil
+		}
+		return nil, nil, err
+	}
+	if !rel.IsSource {
+		return h, client, nil
+	}
+	target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
+	targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return target, targetClient, nil
+}
+
 // EnableVolumeReplication attaches the volume to the policy named by the
 // VolumeReplicationClass. Attaching to the policy the volume already follows
 // is success (the backend's own idempotency, P0-2).
@@ -78,6 +118,10 @@ func (cs *Server) EnableVolumeReplication(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
@@ -156,6 +200,10 @@ func (cs *Server) PromoteVolume(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}

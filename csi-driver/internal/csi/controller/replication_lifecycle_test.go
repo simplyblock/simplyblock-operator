@@ -27,6 +27,94 @@ func TestPromoteVolumeForced(t *testing.T) {
 	}
 }
 
+// A Ramen-restored destination PV inherits the ORIGINAL source's own
+// volumeHandle verbatim (confirmed live 2026-09-23, relocate M-02): Ramen's
+// S3-restore recreates the exact PV/PVC object it archived at protect time,
+// including the source cluster+lvol identity, on a cluster that never
+// provisioned that volume at all. Every Replication RPC parses its target
+// straight from the given handle, so without resolving through the backend's
+// own source->target relationship first, "promote" would be asking the
+// ORIGINAL, foreign volume to fail over -- not the local replica that has
+// actually been receiving replicated data. PromoteVolume must resolve a
+// handle whose relationship says IsSource and redirect to TargetLvolId
+// (on TargetClusterId/TargetPoolId) before calling failover.
+func TestPromoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "migration",
+		"state":             "replicating",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverVolumeID != testReplTargetVolumeID {
+		t.Errorf("failover landed on volume %q, want the resolved target %q", mock.lastFailoverVolumeID, testReplTargetVolumeID)
+	}
+}
+
+// A volume already naming the target side of its own relationship (IsSource
+// false) is promoted directly, unchanged -- resolving again would be a
+// harmless no-op, but this proves it takes that path rather than one that
+// happens to work only by coincidence.
+func TestPromoteVolumeAlreadyNamingTheTargetIsUnchanged(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "migration",
+		"state":             "replicating",
+		"is_source":         false,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": "99999999-9999-9999-9999-999999999998",
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverVolumeID != testReplVolumeID {
+		t.Errorf("failover landed on volume %q, want %q unchanged", mock.lastFailoverVolumeID, testReplVolumeID)
+	}
+}
+
+// The ordinary case, and by far the most common: a volume never enabled for
+// replication (M-01's own first-ever protect) has no relationship at all yet.
+// This must promote the given handle directly rather than fail the whole
+// call over a 404 that just means "nothing to resolve."
+func TestPromoteVolumeWithNoRelationshipYetUsesTheGivenHandle(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverVolumeID != testReplVolumeID {
+		t.Errorf("failover landed on volume %q, want %q", mock.lastFailoverVolumeID, testReplVolumeID)
+	}
+}
+
 func TestPromoteVolumePlannedSendsThePlannedFlag(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

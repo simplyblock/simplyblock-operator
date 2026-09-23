@@ -117,6 +117,15 @@ type mockSBCLI struct {
 	// only has to prove the driver maps whatever shape the endpoint returns.
 	replicationStatus map[string]map[string]any
 
+	// replicationRelationship, keyed by volume id (either side of the
+	// pairing), is the raw JSON body GET .../replication/ serves for that
+	// volume. Absent means no relationship exists yet (404, matching
+	// sbcli's get_relationship returning None for a volume never enabled for
+	// replication) -- this look-up deliberately does not require the id to
+	// exist in m.volumes, matching the real backend, whose relationship
+	// records outlive a deleted source volume.
+	replicationRelationship map[string]map[string]any
+
 	// replicationPUTStatus, when set, makes every PUT carrying
 	// replication_policy_id respond with this HTTP status instead of the
 	// normal idempotent update, modeling a backend refusal (e.g. a policy
@@ -131,6 +140,10 @@ type mockSBCLI struct {
 	// call, so a test can assert the driver actually sent planned=true/false
 	// rather than only checking the resulting gRPC code.
 	lastFailoverQuery string
+	// lastFailoverVolumeID captures which volume's path the last failover
+	// call landed on, so a test can assert a relationship-resolved call
+	// reached the TARGET volume rather than the one it was originally given.
+	lastFailoverVolumeID string
 
 	// demoteStatus, when set, is the HTTP status POST .../demote answers with
 	// instead of its default success (204). 202 models "still converging."
@@ -145,10 +158,11 @@ type mockSBCLI struct {
 
 func newMockSBCLI() *mockSBCLI {
 	m := &mockSBCLI{
-		volumes:           make(map[string]*mockVolume),
-		snapshots:         make(map[string]*mockSnapshot),
-		groups:            make(map[string]*mockGroup),
-		replicationStatus: make(map[string]map[string]any),
+		volumes:                 make(map[string]*mockVolume),
+		snapshots:               make(map[string]*mockSnapshot),
+		groups:                  make(map[string]*mockGroup),
+		replicationStatus:       make(map[string]map[string]any),
+		replicationRelationship: make(map[string]map[string]any),
 	}
 
 	mux := http.NewServeMux()
@@ -170,6 +184,10 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc(
 		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/status",
 		m.locked(m.handleReplicationStatus),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/",
+		m.locked(m.handleReplicationRelationship),
 	)
 	mux.HandleFunc(
 		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/failover",
@@ -368,12 +386,23 @@ func (m *mockSBCLI) handleReplicationStatus(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, body)
 }
 
+func (m *mockSBCLI) handleReplicationRelationship(w http.ResponseWriter, r *http.Request) {
+	volumeID := r.PathValue("volumeID")
+	body, ok := m.replicationRelationship[volumeID]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Volume has no replication relationship"})
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
 func (m *mockSBCLI) handleFailover(w http.ResponseWriter, r *http.Request) {
 	volumeID := r.PathValue("volumeID")
 	if m.lookupVolume(w, volumeID) == nil {
 		return
 	}
 	m.lastFailoverQuery = r.URL.RawQuery
+	m.lastFailoverVolumeID = volumeID
 	if m.failoverStatus != 0 {
 		writeJSON(w, m.failoverStatus, map[string]string{"detail": "injected status"})
 		return
