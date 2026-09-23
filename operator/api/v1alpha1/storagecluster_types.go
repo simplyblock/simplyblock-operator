@@ -27,6 +27,11 @@ type CapacityThresholdSpec struct {
 	ProvisionedCapacity *int32 `json:"provisionedCapacity,omitempty"`
 }
 
+// StripeSpec is the erasure-coding layout. The rule is the hub type's, declared
+// here as well because the apiserver validates the version an apply was written
+// in: a scheme the control plane refuses would otherwise reach the cluster
+// through this version and be refused by the cluster create instead.
+// +kubebuilder:validation:XValidation:rule="[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks) ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4, 1], [1, 2], [2, 2], [4, 2]]",message="the erasure-coding scheme must be one of 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks, and an unstated half is 1"
 type StripeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Chunks"
 	// DataChunks defines the number of data chunks in the erasure-coding layout.

@@ -10,44 +10,47 @@ labels:
   chartVersion: "{{ .Chart.Version }}"
 {{- end -}}
 
-{{- define "simplyblock.controlPlaneAddr" -}}
-{{- if .Values.csiConfig.simplybk.ip -}}
-{{ .Values.csiConfig.simplybk.ip }}
-{{- else if .Values.operator.enabled -}}
-http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
+{{/*
+Whether this cluster hosts its own control plane.
+
+It gates the observability workloads, which store what they collect in the
+object store and the document store a hosted control plane brings with it. A
+cluster managed from elsewhere has neither, and the control plane that manages it
+collects for it.
+*/}}
+{{- define "simplyblock.hostsControlPlane" -}}
+{{- if eq .Values.deployment.profile "standalone" -}}
+true
 {{- end -}}
 {{- end -}}
 
 {{/*
-The clusters whose event log the Grafana event-driven alert rules read, as a
-JSON array of {"id","secret"} objects for `fromJsonArray`. Both the Infinity
-data sources and the rules that query them iterate this, so the two can never
-disagree about which clusters exist.
+Whether this profile runs a CSI driver.
 
-A cluster with no id or no secret is skipped rather than rendered half-configured.
-The two are used for different halves of the same request: the secret is the
-whole credential, sent as the bearer token that /api/v2 matches against every
-cluster's secret, while the id addresses the cluster in the request path. The
-API then checks that the two agree, so a half-configured or mismatched entry
-fails every evaluation with a 401 that reads like an outage rather than like a
-missing value. The list is empty until `cluster create` has run and its UUID and
-secret have been fed back into the values, which is the normal state right after
-install.
+The profiles are listed rather than a negation of the ones that do not, so a
+profile added later renders no driver until somebody decides it should. The
+negation would do the opposite and give every future profile a CSI deployment
+by default, which is the wrong way round: a driver registers a provisioner and
+takes over the node plugin's socket on every worker, and a profile that wanted
+neither would get both by saying nothing.
+
+Both of today's profiles are here because both run workloads that mount
+simplyblock volumes. What differs between them is where the control plane is,
+and the driver reaches it through the credentials Secret either way
+(design-simplyblockdriver.md §4.3).
 */}}
-{{- define "simplyblock.eventAlertClusters" -}}
-{{- $out := list -}}
-{{- if .Values.multiCluster.enable -}}
-{{- range default (list) .Values.multiCluster.clusters -}}
-{{- if and .cluster_id .secret -}}
-{{- $out = append $out (dict "id" .cluster_id "secret" .secret) -}}
+{{- define "simplyblock.rendersCSIDriver" -}}
+{{- if has .Values.deployment.profile (list "standalone" "managed") -}}
+true
 {{- end -}}
 {{- end -}}
+
+{{- define "simplyblock.controlPlaneAddr" -}}
+{{- if .Values.csiConfig.simplybk.ip -}}
+{{ .Values.csiConfig.simplybk.ip }}
 {{- else -}}
-{{- if and .Values.csiConfig.simplybk.uuid .Values.csiSecret.simplybk.secret -}}
-{{- $out = append $out (dict "id" .Values.csiConfig.simplybk.uuid "secret" .Values.csiSecret.simplybk.secret) -}}
+http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
 {{- end -}}
-{{- end -}}
-{{- toJson $out -}}
 {{- end -}}
 
 {{/*

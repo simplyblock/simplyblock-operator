@@ -1,10 +1,14 @@
 // The inventory, and how a key is matched on an object.
 //
 // The rows are read from the code rather than from the design, which counts the
-// keys without listing them. Some of them have already half moved: the chart
-// writes simplyblock.io/replication-policy while the operator reads
-// storage.simplyblock.io/replication-policy, so a claim can already carry both,
-// which is exactly the state §19.10's sixth check exists to find.
+// keys without listing them.
+//
+// A cluster can carry two spellings of one key, which is the state §19.10's
+// sixth check exists to find. It arises from the move itself rather than from
+// any one component disagreeing with another: the keys are read under every
+// spelling and written under the group's own (atlas-lib/kube/keys.go), so an
+// object the operator has not touched since the move still carries the old one
+// while a sibling written afterward carries the new.
 
 package keys
 

@@ -333,3 +333,148 @@ func TestStorageClusterStepRejectsAnUnknownValue(t *testing.T) {
 		t.Fatalf("rejected for the wrong reason: %v", err)
 	}
 }
+
+// TestStorageClusterNameIsBoundedAtALabelsLimit proves that the rule of §19.4
+// is enforced by the apiserver and not merely present in the schema.
+//
+// The name and the reference are the same rule seen from two sides, so both are
+// exercised here: a cluster that could not be called this, and a pool naming a
+// cluster that could not exist. The bound is a label's 63 bytes rather than the
+// 253 the API server allows an object name, because the cluster's name is
+// written into storage.simplyblock.io/cluster on every StorageClass the
+// operator generates and into io.simplyblock.storagenodeset on every worker it
+// claims — and where a name travels into a label, the label's limit binds.
+//
+// Coverage of the other kinds carrying the rule is the schema enumeration in
+// api/v1alpha2/names_test.go, which is what keeps a kind added later from
+// escaping it. What this test adds is that the marker bites.
+func TestStorageClusterNameIsBoundedAtALabelsLimit(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	legal := strings.Repeat("a", 63)
+	overlong := strings.Repeat("a", 64)
+
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: legal, Namespace: "default"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			MaxSubsystemCount: ptr.To(int32(10)),
+			VCPUCount:         ptr.To(int32(6)),
+		},
+	}
+	if err := apiClient.Create(ctx, cluster); err != nil {
+		t.Fatalf("a 63-character name is the longest a label carries, so it must be "+
+			"accepted, got: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+
+	refused := cluster.DeepCopy()
+	refused.Name = overlong
+	refused.ResourceVersion = ""
+	if err := apiClient.Create(ctx, refused); err == nil {
+		t.Error("the apiserver accepted a 64-character cluster name, which every " +
+			"StorageClass and worker label derived from it would then be refused for")
+		_ = apiClient.Delete(ctx, refused)
+	}
+
+	pool := &simplyblockv1alpha2.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "bound-", Namespace: "default"},
+		Spec:       simplyblockv1alpha2.StoragePoolSpec{ClusterRef: overlong},
+	}
+	if err := apiClient.Create(ctx, pool); err == nil {
+		t.Error("the apiserver accepted a clusterRef longer than a StorageCluster name " +
+			"may be, which is an immutable reference to an object that cannot exist")
+		_ = apiClient.Delete(ctx, pool)
+	}
+}
+
+// The erasure-coding scheme is one of the seven the control plane accepts, and
+// the schema is what says so.
+//
+// It is CEL rather than a webhook because it is a statement about the document's
+// structure: the pair is wrong or right on its own, without reference to any
+// cluster, node, or fleet. What it buys is that the refusal arrives at the apply
+// rather than from the control plane's cluster create, which is several steps
+// and one approval later and leaves a StorageCluster nothing can use behind.
+func TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, testCase := range []struct {
+		data, parity int32
+		denied       bool
+	}{
+		{data: 1, parity: 0},
+		{data: 1, parity: 1},
+		{data: 2, parity: 1},
+		{data: 4, parity: 1},
+		{data: 1, parity: 2},
+		{data: 2, parity: 2},
+		{data: 4, parity: 2},
+		{data: 3, parity: 1, denied: true},
+		{data: 8, parity: 2, denied: true},
+		{data: 2, parity: 0, denied: true},
+		{data: 4, parity: 0, denied: true},
+		{data: 1, parity: 3, denied: true},
+		{data: 16, parity: 4, denied: true},
+	} {
+		cluster := &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "stripe-", Namespace: "default"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(10)),
+				VCPUCount:         ptr.To(int32(6)),
+				Stripe: &simplyblockv1alpha2.StripeSpec{
+					DataChunks: ptr.To(testCase.data), ParityChunks: ptr.To(testCase.parity),
+				},
+			},
+		}
+
+		err := apiClient.Create(context.Background(), cluster)
+		switch {
+		case testCase.denied && err == nil:
+			t.Errorf("%d+%d was accepted, and the control plane refuses it",
+				testCase.data, testCase.parity)
+		case testCase.denied && !strings.Contains(err.Error(), "erasure-coding scheme"):
+			t.Errorf("%d+%d was refused for the wrong reason: %v",
+				testCase.data, testCase.parity, err)
+		case !testCase.denied && err != nil:
+			t.Errorf("%d+%d was refused: %v", testCase.data, testCase.parity, err)
+		}
+		if err == nil {
+			if err := apiClient.Delete(context.Background(), cluster); err != nil {
+				t.Fatalf("clean up: %v", err)
+			}
+		}
+	}
+}
+
+// A cluster stating half a stripe is stating the control plane's default for the
+// other half, so the pair the rule sees is the pair the cluster is created with.
+func TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, stripe := range []*simplyblockv1alpha2.StripeSpec{
+		{},
+		{DataChunks: ptr.To(int32(2))},
+		{ParityChunks: ptr.To(int32(0))},
+	} {
+		cluster := &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "stripe-half-", Namespace: "default"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(10)),
+				VCPUCount:         ptr.To(int32(6)),
+				Stripe:            stripe,
+			},
+		}
+
+		// {} is 1+1, {dataChunks: 2} is 2+1, and {parityChunks: 0} is 1+0: all
+		// three are supported, and a rule reading an absent field as absent
+		// rather than as its default would refuse or admit the wrong ones.
+		if err := apiClient.Create(context.Background(), cluster); err != nil {
+			t.Errorf("a half-stated stripe %+v was refused: %v", stripe, err)
+			continue
+		}
+		if err := apiClient.Delete(context.Background(), cluster); err != nil {
+			t.Fatalf("clean up: %v", err)
+		}
+	}
+}

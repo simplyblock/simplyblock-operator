@@ -37,6 +37,13 @@ const (
 	TaskCompleted = "TaskCompleted"
 	TaskCanceled  = "TaskCanceled"
 
+	// TaskGaveUp is a task that left the window having been restarted, which is
+	// the control plane reporting a failure rather than a finish. Its own status
+	// says done either way, so the retry count is what separates them, and the
+	// schema says as much: it is the one number that separates a task that is
+	// slow from one that is failing.
+	TaskGaveUp = "TaskGaveUp"
+
 	// The operation reasons, raised on the StorageClusterOps rather than the
 	// cluster.
 	//
@@ -65,4 +72,10 @@ const (
 	// FailureDomainNotReady says an activation is waiting because the cluster's
 	// failure domains do not yet hold an equal number of hosts.
 	FailureDomainNotReady = "FailureDomainNotReady"
+
+	// StripeNodesNotReady says an activation is waiting because the cluster has
+	// fewer storage nodes than its erasure-coding scheme needs. Nothing below the
+	// operator reports it: the control plane's own activation gate counts devices
+	// rather than nodes.
+	StripeNodesNotReady = "StripeNodesNotReady"
 )

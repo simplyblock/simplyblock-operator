@@ -81,6 +81,55 @@ func (s *ScopeSet) Remove(scope Scope) {
 	}
 }
 
+// NewScopeSetForTest builds a set outside a manager, so a caller that only adds
+// and drops scopes can be exercised without starting one. The constructor is
+// unexported because a set belongs to the subscription that streams it; this is
+// the seam for the controllers that are only ever handed one.
+func NewScopeSetForTest() *ScopeSet { return newScopeSet() }
+
+// Len is how many scopes the set holds, which is what a test asserting that a
+// stream was closed can see.
+func (s *ScopeSet) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.scopes)
+}
+
+// RemoveLeaf drops every scope whose last element is the id given.
+//
+// It exists because the add and the drop happen at different moments with
+// different things readable. A node's scope is added when it resolves its id,
+// where the cluster it sits in is necessarily known; it is dropped on a teardown
+// path where the cluster may already be gone, and a caller that cannot name the
+// cluster cannot rebuild the key it added under. Requiring the whole key there
+// means the scope is kept instead, and the stream behind it is never closed:
+// the control plane answers 404 for a node it no longer has, the manager reads
+// that as a disconnect, and it reconnects on a backoff for the life of the
+// process.
+//
+// The leaf is the thing the scope is about, so matching on it drops the scopes
+// for that thing and no others. An empty id matches nothing rather than
+// everything, because a caller with no id to offer is a caller that knows
+// nothing, not one asking for a purge.
+func (s *ScopeSet) RemoveLeaf(id string) {
+	if id == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := false
+	for key, scope := range s.scopes {
+		if len(scope) > 0 && scope[len(scope)-1] == id {
+			delete(s.scopes, key)
+			removed = true
+		}
+	}
+	if removed {
+		s.signal()
+	}
+}
+
 func (s *ScopeSet) signal() { // caller holds s.mu
 	select {
 	case s.notify <- struct{}{}:

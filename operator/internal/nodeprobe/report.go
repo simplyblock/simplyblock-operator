@@ -28,6 +28,8 @@ import (
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/pci"
 )
 
 // ReportVersion is the schema version of the JSON below.
@@ -36,7 +38,7 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 1
+const ReportVersion = 6
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -205,8 +207,52 @@ type Interface struct {
 	// NUMANode is the memory node the interface hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
-	Virtual  bool `json:"virtual,omitempty"`
+	Virtual bool `json:"virtual,omitempty"`
+
+	// Peered reports whether the interface is one end of a pair, which is what
+	// a pod's link into the host is. It is read from iflink and is the one
+	// reading that tells such a link from the machine's own virtual devices:
+	// sysfs describes them identically otherwise.
+	Peered   bool `json:"peered,omitempty"`
 	Loopback bool `json:"loopback,omitempty"`
+
+	// Bridge reports whether the interface is a software bridge, which a
+	// cluster's own CNI leaves on every worker. It is separate from Virtual
+	// because the two answer different questions: Virtual says the interface is
+	// backed by no hardware, and Bridge says it is carrying somebody else's
+	// traffic.
+	Bridge bool `json:"bridge,omitempty"`
+
+	// Kind is what sort of device the interface is, in the spelling
+	// inventory.LinkKind uses: `physical`, `loopback`, `bridge`, `bond`, `team`,
+	// `vlan`, `vxlan`, `macvlan`, `ipvlan`, or `virtual` for a device the kernel
+	// does not identify.
+	//
+	// It is the field the management-interface rule turns on. Every software
+	// interface a worker has is virtual, so without the kind a bond and a tagged
+	// VLAN, which is where most fleets put their management address, read the
+	// same as a veth to a pod.
+	Kind string `json:"kind,omitempty"`
+
+	// Lower is what this interface is built on, ascending by name: the members
+	// of a bond or a bridge, or the single parent of a VLAN or a macvlan.
+	//
+	// It is how a draft reaches the hardware under an aggregate. A bond reports
+	// no slot, no driver, and no memory node of its own, so a reader that has
+	// to know where a bonded management network lands looks its members up in
+	// the same report.
+	Lower []string `json:"lower,omitempty"`
+
+	// Upper is what is built on this interface, ascending by name. It is the
+	// direction that answers for a NIC holding no address: on a host whose
+	// management network is tagged, the address is on a VLAN above it.
+	Upper []string `json:"upper,omitempty"`
+
+	// Addresses are the IP addresses the interface holds, without a prefix
+	// length. They are what makes a management interface identifiable: the one
+	// a draft names is the one carrying the address the cluster already reaches
+	// the machine on.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // Device is one block device and whether it may be handed to a storage cluster.
@@ -234,6 +280,16 @@ type Device struct {
 	// NUMANode is the memory node the device hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
+	// SubsystemNQN is the NVMe Qualified Name of the subsystem the namespace
+	// belongs to, and is empty for a device on any other bus.
+	//
+	// It is what tells a volume this product exported from a disk the fleet
+	// owns. Both are namespaces, both are presented as disks, and the transport
+	// separates them only by inference: what an NQN says is which cluster and
+	// which logical volume the bytes belong to, which is the answer a draft
+	// needs before it proposes handing them to a cluster.
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
 	// Available reports whether the device may be handed over: a whole disk, on
 	// a bus the scan recognized, that nothing is using and that positively
 	// reads as holding nothing.
@@ -259,6 +315,12 @@ type Controller struct {
 	// Driver is what owns it: the kernel's own driver for a controller whose
 	// namespaces it presents, uio_pci_generic or vfio-pci for one a userspace
 	// driver has, and empty for one nothing owns.
+	//
+	// All four states matter and none of them is derivable from the others,
+	// which is why the driver is reported rather than a flag saying whether it
+	// is a userspace one. uio_pci_generic and vfio-pci in particular differ in
+	// what they suggest about who bound it: the second is also how a disk is
+	// passed through to a guest.
 	Driver string `json:"driver,omitempty"`
 
 	// Vendor and Product are the raw PCI identifiers, which is what sysfs has:
@@ -269,17 +331,59 @@ type Controller struct {
 	// NUMANode is the memory node it hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
-	// TakenByUserspace reports whether a userspace-IO driver owns it, which on
-	// this product's hosts means SPDK has it or something left it taken.
-	TakenByUserspace bool `json:"takenByUserspace,omitempty"`
+	// InUse reports whether anything holds the controller open, and is absent
+	// for a controller the probe could not check.
+	//
+	// It is the question Driver cannot answer and the one that decides whether
+	// a controller can be reclaimed: a userspace binding nothing is driving is
+	// a leftover, and the same binding with a process behind it is a disk in
+	// service, which may belong to a hypervisor guest or another product rather
+	// than to this one.
+	//
+	// The third state is why this is a pointer. A controller nothing holds and
+	// a controller whose process table could not be read are different answers,
+	// and only the first is one a draft may act on: reading them as one value
+	// is how a disk something is driving gets proposed as free. Read it through
+	// Held and Free, which are the two questions a reader has and neither of
+	// which is the negation of the other.
+	InUse *bool `json:"inUse,omitempty"`
 }
 
-// ControllersTakenByUserspace is the controllers no block device corresponds
+// Held reports whether something is known to hold the controller open.
+func (c Controller) Held() bool { return c.InUse != nil && *c.InUse }
+
+// Free reports whether the probe checked the controller and found nothing
+// holding it, which is the only state a draft may claim it in.
+func (c Controller) Free() bool { return c.InUse != nil && !*c.InUse }
+
+// BoundToUserspace reports whether a userspace-IO driver owns the controller.
+//
+// It reads the driver and says nothing about who bound it or whether anything
+// is still driving it. InUse answers the second, and nothing answers the first,
+// because a binding carries no record of what made it.
+// HasDriver reports whether anything at all is bound to the controller.
+//
+// The state it distinguishes is the one a failed claim leaves: taking an NVMe
+// controller for a userspace driver unbinds it from the kernel first, so a run
+// that stops in between leaves a controller with no driver, no namespaces and no
+// block device. It is neither the kernel's nor a userspace driver's, and asking
+// who holds it is asking about a character device no driver has created.
+func (c Controller) HasDriver() bool { return c.Driver != "" }
+
+func (c Controller) BoundToUserspace() bool {
+	return c.Driver == pci.DriverUIOGeneric || c.Driver == pci.DriverVFIO
+}
+
+// ControllersBoundToUserspace is the controllers no block device corresponds
 // to, which is the answer to why a worker full of disks reported none.
-func (r Report) ControllersTakenByUserspace() []Controller {
+//
+// The classification lives here rather than at every call site because which
+// drivers are userspace drivers is something this product knows and a string
+// comparison spread across consumers would drift.
+func (r Report) ControllersBoundToUserspace() []Controller {
 	var taken []Controller
 	for _, controller := range r.NVMeControllers {
-		if controller.TakenByUserspace {
+		if controller.BoundToUserspace() {
 			taken = append(taken, controller)
 		}
 	}

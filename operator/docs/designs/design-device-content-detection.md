@@ -301,22 +301,23 @@ hangs and then exits 2.
 
 ## 5. Signature Catalog
 
-| Format           | `Content`           | Where                                         | Match                                                                        |
-|------------------|---------------------|-----------------------------------------------|------------------------------------------------------------------------------|
-| ext2, ext3, ext4 | `ContentFilesystem` | 1080, little-endian `uint16`                  | `0xEF53`, with the feature words at 1116, 1120, and 1124 deciding the family |
-| XFS              | `ContentFilesystem` | 0, big-endian `uint32`                        | `XFSB`                                                                       |
-| LVM2             | `ContentStackLayer` | start of one of the first four 512-byte units | `LABELONE`, with `LVM2 001` at offset 24 of the label                        |
-| LUKS             | `ContentForeign`    | 0                                             | `LUKS\xba\xbe`                                                               |
-| GPT              | `ContentForeign`    | LBA 1, and the last LBA for the backup header | `EFI PART`, the GPT header signature                                         |
-| MBR              | `ContentForeign`    | 510                                           | `0x55AA` with a non-empty partition entry                                    |
-| FAT12, FAT16     | `ContentForeign`    | 0x36, with the BPB at 0x0B validated          | `FAT12   `, `FAT16   `, or `FAT     `                                        |
-| FAT32            | `ContentForeign`    | 0x52, with the BPB at 0x0B validated          | `FAT32   `                                                                   |
-| exFAT            | `ContentForeign`    | 3                                             | `EXFAT   `                                                                   |
-| Btrfs            | `ContentForeign`    | 65600                                         | `_BHRfS_M`                                                                   |
-| swap             | `ContentForeign`    | page size minus 10                            | `SWAPSPACE2` or `SWAP-SPACE`                                                 |
-| md-raid          | `ContentForeign`    | 0, 4096, or 8 KiB from the end                | `0xa92b4efc`                                                                 |
-| ZFS              | `ContentForeign`    | vdev label offsets                            | `0x00bab10c`                                                                 |
-| anything else    | `ContentForeign`    | anywhere in the probed regions                | a non-zero byte                                                              |
+| Format           | `Content`            | Where                                         | Match                                                                        |
+|------------------|----------------------|-----------------------------------------------|------------------------------------------------------------------------------|
+| ext2, ext3, ext4 | `ContentFilesystem`  | 1080, little-endian `uint16`                  | `0xEF53`, with the feature words at 1116, 1120, and 1124 deciding the family |
+| XFS              | `ContentFilesystem`  | 0, big-endian `uint32`                        | `XFSB`                                                                       |
+| LVM2             | `ContentStackLayer`  | start of one of the first four 512-byte units | `LABELONE`, with `LVM2 001` at offset 24 of the label                        |
+| LUKS             | `ContentForeign`     | 0                                             | `LUKS\xba\xbe`                                                               |
+| GPT              | `ContentForeign`     | LBA 1, and the last LBA for the backup header | `EFI PART`, the GPT header signature                                         |
+| MBR              | `ContentForeign`     | 510                                           | `0x55AA` with a non-empty partition entry                                    |
+| FAT12, FAT16     | `ContentForeign`     | 0x36, with the BPB at 0x0B validated          | `FAT12   `, `FAT16   `, or `FAT     `                                        |
+| FAT32            | `ContentForeign`     | 0x52, with the BPB at 0x0B validated          | `FAT32   `                                                                   |
+| exFAT            | `ContentForeign`     | 3                                             | `EXFAT   `                                                                   |
+| Btrfs            | `ContentForeign`     | 65600                                         | `_BHRfS_M`                                                                   |
+| swap             | `ContentForeign`     | page size minus 10                            | `SWAPSPACE2` or `SWAP-SPACE`                                                 |
+| md-raid          | `ContentForeign`     | 0, 4096, or 8 KiB from the end                | `0xa92b4efc`                                                                 |
+| ZFS              | `ContentForeign`     | vdev label offsets                            | `0x00bab10c`                                                                 |
+| alceml           | `ContentSimplyblock` | 0                                             | `ALCEML_STORAGE\0\0`, the superblock a storage node writes                   |
+| anything else    | `ContentForeign`     | anywhere in the probed regions                | a non-zero byte                                                              |
 
 **An offset counted in logical blocks is resolved against the device, not against
 512.** The GPT header is at LBA 1 and its backup is at the last LBA, which is
@@ -358,6 +359,22 @@ two between 512 and 4096, a FAT count of one or two, and a media descriptor of
 therefore match the MBR row, and that ambiguity is cosmetic rather than
 consequential: both readings are `ContentForeign`, both refuse, and only the
 wording of the refusal differs.
+
+**The one signature this product writes is the one no external tool can.** An
+alceml superblock is written by a storage node rather than by any formatting
+tool, and neither `blkid` nor `wipefs` knows it, so before it was cataloged a
+device carrying one read as bytes matching nothing and was refused as foreign.
+A fleet that had held a simplyblock cluster therefore reported that it had no
+disks at all, which is the opposite of what a discovery run is for. It is its own
+`Content` rather than another `ContentForeign` row because the two answer
+different questions: foreign content is somebody else's and the answer is always
+no, while this content is a previous deployment's and the question is whether the
+deployment is still there. A device a storage node is driving is bound to a
+userspace driver, which takes the block device away entirely, so a device whose
+superblock can be read at all is one no node currently holds. That is why the
+reading offers it rather than refusing it, and why the offer costs nothing: the
+run still excludes a device an existing `StorageNode` names, and what it produces
+is a draft nobody has approved.
 
 **The order of evaluation is head signatures, then tail signatures, then the zero
 test.** A device carrying both an LVM label and a stale filesystem signature is

@@ -173,6 +173,17 @@ File: `operator/internal/controllers/cluster/storageclusterops_controller_test.g
 | U-77     | `CancelTask`: the cancel is issued once and the operation waits for the task to leave `status.tasks`                              | Positive | `TestCancelTaskWaitsForTheTaskToLeaveTheList`               |
 | U-78     | `CancelTask` naming a task already gone: succeeds with no call                                                                    | Boundary | `TestCancelingATaskThatIsAlreadyGoneSucceedsWithoutCalling` |
 | U-79     | `CancelTask` with no `spec.cancelTask.taskID`: terminal rather than requeued                                                      | Negative | `TestCancelTaskWithNoTaskIDFails`                           |
+| U-95     | `Activate` on a cluster with fewer nodes than its scheme needs: held, `StripeNodesNotReady`, no call                              | Negative | `TestAnActivationBelowTheStripesMinimumIsHeld`              |
+| U-96     | The same cluster once the missing node exists: the activation is requested                                                        | Positive | `TestAnActivationWithTheNodesTheStripeNeedsIsRequested`     |
+| U-97     | `Activate` on a cluster already `active` and below the minimum: not held, because its layout is already a fact                    | Boundary | `TestAReactivationOfALiveClusterIsNotHeld`                  |
+| U-98     | The node minimum itself, scheme by scheme, including the 1+0 that needs one node                                                  | Boundary | `TestTheActivationNodeCountRule`                            |
+
+`U-95` through `U-98` are in
+`operator/internal/controllers/cluster/erasurecoding_test.go`, beside the rule
+they exercise, and `U-95` is the only place this is refused. The control plane's
+own activation gate counts devices, `ndcs+npcs+1` of them, and never nodes, so a
+cluster whose fleet is too small for its stripe activates and serves from it
+([`design-storagecluster.md`](../designs/crd-redesign/design-storagecluster.md) §3.1).
 
 ### Operation Reconciler: Rolling Restart (design §7)
 
@@ -353,6 +364,8 @@ File: `operator/internal/controllers/cluster/cel_validation_test.go`
 | I-27 | `enableAtomic4kWrites` without `enableChecksumValidation`: rejected                                      | Negative | `TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation` |
 | I-28 | Either checksum field changed or cleared after creation: rejected as immutable                           | Negative | `TestStorageClusterChecksumValidationFieldsAreImmutable`              |
 | I-29 | The default pool a cluster is created with picks up the CRD's declared defaults                          | Positive | `TestTheDefaultPoolIsFormattedXFS`                                    |
+| I-30 | Each of the seven supported schemes at creation: accepted; 3+1, 8+2, 2+0, 4+0, 1+3, and 16+4: rejected   | Negative | `TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes`    |
+| I-31 | A stripe stating one half only: read as the control plane's default for the other, and accepted          | Boundary | `TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault`                |
 
 `I-01` is answered by a unit test rather than an integration one: a not-found read
 needs no API server to be a not-found read, and the row is kept because the ID is

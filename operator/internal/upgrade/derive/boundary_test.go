@@ -5,8 +5,9 @@
 // The expected numbers are the design's measured ones, so a test that disagrees
 // with one has found either a formula change or an error in the audit. They are
 // written as the fixed cost each formula spends, because that is what a reader
-// can check against the literal in the row: the design's "a 37-character cluster
-// name" is 63 less this table's 26.
+// can check against the literal in the row: §19.2's "a 27-character pool name"
+// is 63 less this table's five characters of prefix, two separators, and the
+// namespace and cluster names CI uses.
 //
 // Validity is asserted with k8s.io/apimachinery/pkg/util/validation rather than
 // with a regular expression written for the test, so the assertion tracks the

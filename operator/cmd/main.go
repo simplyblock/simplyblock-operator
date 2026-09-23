@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -59,11 +60,15 @@ import (
 	backupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/backup"
 	clustercontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	consistencygroupcontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/consistencygroup"
+	controlplanecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
+	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
+	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -156,6 +161,14 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var legacyVolumeMigration bool
+	flag.BoolVar(&legacyVolumeMigration, "legacy-volume-migration", false,
+		"Move volumes as the registered VolumeMigration kind rather than as "+
+			"PersistentVolumeOps. Off by default: the redesigned kind is what this API group "+
+			"documents, and the registered one is kept for one release so that an upgrade can "+
+			"turn it back on while migrations raised against it drain. A rename and a scope "+
+			"change make a new CRD rather than a new version, so an in-flight migration cannot "+
+			"be carried across.")
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
@@ -354,6 +367,35 @@ func main() {
 	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
 	// and StorageNode objects, and two replicas writing the same object would
 	// fight over it.
+	// The storage-plane side of a node, shared by the three reconcilers that touch
+	// it. The EndpointSlice a migration blocks on is read straight from the API
+	// server: a stale informer cache can miss a freshly published endpoint, and a
+	// migration would then wait on DNS forever while the name has in fact resolved
+	// for minutes (design-storagenode.md §5.4).
+	storageNodeWorkload := &nodecontroller.Workload{
+		Client:           mgr.GetClient(),
+		Uncached:         mgr.GetAPIReader(),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
+		// Which node the manager itself runs on, which the chart sets from
+		// spec.nodeName. It decides one question: whether a maintenance window
+		// is draining the manager's own host, in which case the manager holds
+		// its own eviction while it arranges the window. Empty where nothing
+		// set it, and then it holds nothing.
+		ManagerNode: os.Getenv("NODE_NAME"),
+	}
+
+	// A self-budget outlives a manager that crashed holding one, and would then
+	// make its worker undrainable by an object whose owner no longer exists.
+	// Clearing it is leader-only, because only the leader ever creates one: a
+	// replica clearing it on the way up would be clearing the leader's.
+	if err := mgr.Add(leaderOnly(func(ctx context.Context) error {
+		return storageNodeWorkload.ClearStaleSelfBudget(ctx, operatorNamespace)
+	})); err != nil {
+		setupLog.Error(err, "unable to schedule the stale self-budget cleanup")
+		os.Exit(1)
+	}
+
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
@@ -384,13 +426,13 @@ func main() {
 	// so it comes from Prometheus rather than from the API or the stream. An
 	// endpoint that cannot be reached leaves the capacity absent from the
 	// status and everything else in it correct.
-	var nodeCapacity controller.NodeCapacitySource
+	var nodeCapacity nodecontroller.NodeCapacitySource
 	if provider, err := atlasprom.New(prometheusURL); err != nil {
 		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		nodeCapacity = provider
 	}
-	if err := (&controller.StorageDeviceReconciler{
+	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Devices:  deviceSubscription,
@@ -403,13 +445,13 @@ func main() {
 	// continuously and comes from the same Prometheus the node capacity does. The
 	// collector publishes it as a gauge on a timer and warns about a device over
 	// its cluster's threshold, without writing any of it to an object.
-	var deviceCapacity controller.DeviceCapacitySource
+	var deviceCapacity nodecontroller.DeviceCapacitySource
 	if provider, err := atlasprom.New(prometheusURL); err != nil {
 		setupLog.Error(err, "storage-device capacity will be absent", "prometheusURL", prometheusURL)
 	} else {
 		deviceCapacity = provider
 	}
-	if err := mgr.Add(&controller.StorageDeviceCollector{
+	if err := mgr.Add(&nodecontroller.StorageDeviceCollector{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorder("storagedevice-collector"),
 		Capacity: deviceCapacity,
@@ -469,7 +511,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.ControlPlaneReconciler{
+	// Where the control plane is, read from the ControlPlane object rather than
+	// from the environment (design-controlplane.md §3.3). Every control-plane
+	// client below shares it, so an external control plane is reachable and a
+	// change to its endpoint reaches every caller without a rollout.
+	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
+		mgr.GetClient(), operatorNamespace)
+
+	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("controlplane-controller"),
@@ -477,11 +526,19 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
+	if err := (&controlplanecontroller.ControlPlaneOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("controlplaneops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ControlPlaneOps")
+		os.Exit(1)
+	}
 	if err := (&clustercontroller.StorageClusterReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -501,16 +558,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeSetReconciler{
+	if err := (&nodecontroller.StorageNodeWorkloadReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagenode-workload-controller"),
 		Namespace:        operatorNamespace,
 		TLSEnabled:       tlsEnabled,
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
-		Recorder:         mgr.GetEventRecorder("storagenodeset-controller"),
+		Workload:         storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeWorkload")
 		os.Exit(1)
 	}
 	if err := (&pool.StoragePoolReconciler{
@@ -535,16 +593,6 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Task")
-		os.Exit(1)
-	}
-	if err := (&controller.NodeDrainCoordinatorReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		ManagerNodeName:  os.Getenv("NODE_NAME"),
-		TLSEnabled:       tlsEnabled,
-		TLSMutualEnabled: tlsMutualEnabled,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
 	}
 	// The data-protection band. The mirror is what creates every StorageBackup
@@ -611,42 +659,73 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
-	if err := (&controller.VolumeMigrationReconciler{
+	// The kind a volume move is raised as, decided once and handed to all three
+	// controllers that raise one. None of them has any business knowing which.
+	volumeMover := volumemigration.NewMover(
+		mgr.GetClient(), mgr.GetScheme(), legacyVolumeMigration)
+
+	// The volume band. It shares the backup band's control-plane client because
+	// there is one control plane and one endpoint; what differs is which of its
+	// endpoints each band calls.
+	if err := (&volumecontrollers.PersistentVolumeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("volumemigration-controller"),
+		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
+		API:      backupAPI,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
+		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
+	}
+	// The registered kind's reconciler runs only where the registered kind is
+	// what raises moves. Registering it regardless would cost nothing while
+	// nothing creates one, and would quietly become the thing that reconciles a
+	// VolumeMigration somebody applied by hand against an operator that is
+	// otherwise driving the redesigned kind.
+	if legacyVolumeMigration {
+		if err := (&volumecontrollers.VolumeMigrationReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("volumemigration-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
+			os.Exit(1)
+		}
+		setupLog.Info("volume moves are raised as the registered VolumeMigration kind")
 	}
 	if err := (&controller.PersistentVolumeClaimReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("pinnedvolume-controller"),
+		Mover:    volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
-		TLSEnabled:       tlsEnabled,
-		TLSMutualEnabled: tlsMutualEnabled,
-		DeviceScopes:     deviceScopes,
-		NodeRegistries: []controller.NodeObjectRegistry{
+	if err := (&nodecontroller.StorageNodeReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenode-controller"),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
+		Nodes:    nodeSubscription,
+		Registries: []nodecontroller.NodeObjectRegistry{
 			deviceSubscription, nodeSubscription,
 		},
-		Nodes:    nodeSubscription,
-		Capacity: nodeCapacity,
+		DeviceScopes: deviceScopes,
+		Capacity:     nodeCapacity,
+		Workload:     storageNodeWorkload,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeOpsReconciler{
+	if err := (&nodecontroller.StorageNodeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
+		API:      nodecontroller.NewControlPlane(controlPlaneEndpoint),
+		Nodes:    nodeSubscription,
+		Clusters: clusterSubscription,
+		Workload: storageNodeWorkload,
+		Mover:    volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
@@ -665,6 +744,25 @@ func main() {
 	// image is read from the environment rather than from the running pod,
 	// because a pod may name its image by a tag the registry has since moved and
 	// what a Job needs is the reference the operator was deployed with.
+	// A fresh install raises one discovery run by itself, so an administrator
+	// finds a draft of what the fleet has rather than an empty namespace. It is
+	// declined the moment anything already exists (design-clusterdeploymentconfig.md §8).
+	if err := (&deployment.InitialDiscovery{
+		Client:    mgr.GetClient(),
+		Namespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to add the initial discovery check")
+		os.Exit(1)
+	}
+	if err := (&deployment.ClusterDeploymentConfigReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
+		Namespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
+		os.Exit(1)
+	}
 	if err := (&deployment.OperatorOpsReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
@@ -675,10 +773,29 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "OperatorOps")
 		os.Exit(1)
 	}
-	if err := (&driver.SimplyblockDriverReconciler{
+	// Whether the cluster serves the snapshot API decides both whether a
+	// VolumeSnapshotClass is applied and what status.snapshotSupport records
+	// (design-simplyblockdriver.md §4.1). The discovery client is the same one
+	// the discovery run uses; a driver reconcile without it refuses rather than
+	// guessing, because guessing either way breaks a cluster in one direction.
+	// One device is the narrowest thing that can be recycled, which is the whole
+	// of why the kind exists (design-storagedevice.md §6). Its four other actions
+	// wait on control-plane verbs the v2 API does not offer, and
+	// v1alpha2.ExternalDependencies is the list.
+	if err := (&nodecontroller.StorageDeviceOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("simplyblockdriver-controller"),
+		Recorder: mgr.GetEventRecorder("storagedeviceops-controller"),
+		API:      backupAPI,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageDeviceOps")
+		os.Exit(1)
+	}
+	if err := (&driver.SimplyblockDriverReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
+		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
@@ -687,7 +804,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
@@ -700,6 +817,7 @@ func main() {
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),
 		LatencyPercentile: latencyPercentile,
+		Mover:             volumeMover,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)
@@ -788,8 +906,11 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
 
-		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagenode",
-			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenode",
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{
+				Client:            mgr.GetClient(),
+				OperatorNamespace: operatorNamespace,
+			}})
 		setupLog.Info("registered storagenode validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-replicationops",
@@ -814,6 +935,13 @@ func main() {
 			}})
 		setupLog.Info("registered storagepool validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig",
+			&webhook.Admission{Handler: &internalwebhook.ClusterDeploymentConfigValidator{
+				Client:  mgr.GetClient(),
+				Decoder: admission.NewDecoder(mgr.GetScheme()),
+			}})
+		setupLog.Info("registered clusterdeploymentconfig validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackup",
 			&webhook.Admission{Handler: &internalwebhook.StorageBackupValidator{
 				Client:            mgr.GetClient(),
@@ -828,6 +956,28 @@ func main() {
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagebackupops",
 			&webhook.Admission{Handler: &internalwebhook.StorageBackupOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered storagebackupops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-controlplaneops",
+			&webhook.Admission{Handler: &internalwebhook.ControlPlaneOpsValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered controlplaneops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storageclusterops",
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterOpsValidator{}})
+		setupLog.Info("registered storageclusterops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-operatorops",
+			&webhook.Admission{Handler: &internalwebhook.OperatorOpsValidator{}})
+		setupLog.Info("registered operatorops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-storagenodeops",
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeOpsValidator{}})
+		setupLog.Info("registered storagenodeops validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha2-persistentvolumeops",
+			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeOpsValidator{
+				Client: mgr.GetClient(),
+			}})
+		setupLog.Info("registered persistentvolumeops validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
@@ -895,3 +1045,15 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// leaderOnly wraps a one-shot task the manager runs after it wins the leader
+// election, and not before.
+//
+// The distinction matters for anything that cleans up after a previous
+// instance: a replica that ran it on the way up would be undoing what the
+// current leader is in the middle of.
+type leaderOnly func(context.Context) error
+
+func (f leaderOnly) Start(ctx context.Context) error { return f(ctx) }
+
+func (leaderOnly) NeedLeaderElection() bool { return true }

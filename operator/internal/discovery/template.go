@@ -14,9 +14,12 @@ package discovery
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 )
 
 const (
@@ -62,7 +65,14 @@ func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
 	out := ClusterTemplate{Template: &simplyblockv1alpha2.ClusterTemplate{
 		Name:              name,
 		MaxSubsystemCount: ptr.To(DefaultMaxSubsystemCount),
+		EnableDriveFormat: ptr.To(true),
 	}}
+
+	out.Notes = append(out.Notes,
+		"enableDriveFormat is set, so every drive listed here is formatted before "+
+			"a storage node takes it: a drive that carries anything is not usable "+
+			"otherwise. This is the line to remove if any of them should be left "+
+			"alone.")
 
 	vcpus, note := vcpuCountFor(plan)
 	out.Template.VCPUCount = ptr.To(vcpus)
@@ -77,7 +87,100 @@ func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
 		out.Template.MinHugePagesSize = size
 		out.Notes = append(out.Notes, note)
 	}
+
+	stripe, note := stripeFor(plan)
+	out.Template.Stripe = stripe
+	out.Notes = append(out.Notes, note)
 	return out
+}
+
+// stripeFor proposes the erasure-coding scheme for the fleet the run found.
+//
+// It is stated rather than left out, and that is the whole point of it. An
+// unstated stripe is the control plane's 1+1, which needs three storage nodes,
+// so a draft that says nothing about erasure coding proposes a scheme a fleet of
+// one or two cannot carry — and says it in the one field a reviewer cannot
+// correct after approval, since the cluster's stripe is immutable.
+//
+// The ladder is deliberately short. 2+1 is the widest stripe the product
+// documentation recommends without knowing the workload, and it is proposed
+// wherever the fleet meets its minimum; 1+1 is what a fleet of exactly three
+// carries; 1+0 is what is left, and it protects nothing, which the note says in
+// those words. Everything beyond that — the tolerance of two failures that 1+2,
+// 2+2, and 4+2 buy, and the capacity 4+1 saves — is a trade the reviewer makes
+// against a workload this run knows nothing about, so the note names the
+// alternatives rather than picking one.
+func stripeFor(plan Plan) (*simplyblockv1alpha2.StripeSpec, string) {
+	nodes := fleetSize(plan)
+
+	scheme := erasurecoding.Scheme{DataChunks: 2, ParityChunks: 1}
+	switch {
+	case nodes < 3:
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 0}
+	case nodes < scheme.MinimumNodes():
+		scheme = erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}
+	}
+
+	stripe := &simplyblockv1alpha2.StripeSpec{
+		DataChunks:   ptr.To(int32(scheme.DataChunks)),
+		ParityChunks: ptr.To(int32(scheme.ParityChunks)),
+	}
+	return stripe, stripeNote(scheme, nodes)
+}
+
+// stripeNote accounts for the proposal, which for this field means saying what
+// the fleet rules out as well as what it allows.
+func stripeNote(scheme erasurecoding.Scheme, nodes int) string {
+	if scheme.ParityChunks == 0 {
+		return fmt.Sprintf(
+			"stripe is %s, which protects nothing: every redundant scheme needs at least "+
+				"three storage nodes and this fleet has %d, so a third worker is what makes "+
+				"1+1 possible. A cluster's stripe cannot be changed afterward",
+			scheme, nodes)
+	}
+
+	alternatives := alternativesFor(scheme, nodes)
+	if len(alternatives) == 0 {
+		return fmt.Sprintf(
+			"stripe is %s, the only redundant scheme a fleet of %d carries: it needs %d "+
+				"storage nodes and the next scheme up needs more. A cluster's stripe cannot "+
+				"be changed afterward",
+			scheme, nodes, scheme.MinimumNodes())
+	}
+	return fmt.Sprintf(
+		"stripe is %s, which needs %d storage nodes and this fleet of %d has them: it is "+
+			"the widest stripe to propose without knowing the workload. This fleet could "+
+			"also carry %s, which trade capacity for a second tolerated failure or the "+
+			"other way about, and a cluster's stripe cannot be changed afterward",
+		scheme, scheme.MinimumNodes(), nodes, strings.Join(alternatives, ", "))
+}
+
+// alternativesFor is every other supported scheme the fleet is large enough for,
+// in the documentation's order.
+func alternativesFor(chosen erasurecoding.Scheme, nodes int) []string {
+	var out []string
+	for _, scheme := range erasurecoding.Supported() {
+		if scheme == chosen || scheme.ParityChunks == 0 || scheme.MinimumNodes() > nodes {
+			continue
+		}
+		out = append(out, scheme.String())
+	}
+	return out
+}
+
+// fleetSize is how many storage nodes the draft produces, which is one per
+// worker: the template proposes neither socketsToUse nor nodesPerSocket, so
+// every worker runs a single node.
+func fleetSize(plan Plan) int {
+	workers := map[string]struct{}{}
+	for _, set := range plan.NodeSets {
+		for _, group := range set.Groups {
+			for _, worker := range group.Workers {
+				workers[worker] = struct{}{}
+			}
+		}
+	}
+	return len(workers)
 }
 
 // vcpuCountFor is the smallest chosen memory node's core count across the

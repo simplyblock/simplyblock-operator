@@ -1,4 +1,3 @@
-{{- if .Values.operator.enabled }}
 ---
 # Authored at v1alpha2, which is the storage version a fresh install gets.
 #
@@ -8,17 +7,86 @@
 # make the chart itself the one client that forces conversion, on a cluster where
 # nothing is serving it.
 #
-# The image moved under spec.source.managed with the rename
-# (design-controlplane.md §5.1). A v1alpha1 spec.image here would be pruned
-# rather than converted, because the apiVersion above declares which schema the
-# body is read against.
+# This object is the whole of what the chart renders for the control plane. Which
+# member of spec.source it names is what deployment.profile selects, and the
+# operator does the rest: it installs the control plane for the standalone
+# profile, and resolves and probes a remote one for the managed profile.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
   name: simplyblock
   namespace: {{ .Release.Namespace }}
+  annotations:
+    # Helm must not delete this object, and the reason is the database behind it.
+    # Deleting a ControlPlane whose source is local deletes the FoundationDB
+    # holding every cluster definition, node registration, and lvol record, so it
+    # is not something `helm uninstall` should do as a side effect. Removing a
+    # control plane stays a deliberate `kubectl delete controlplane`, performed
+    # while the operator is running so its finalizer can be honored.
+    #
+    # It also breaks a deadlock. Helm deletes the operator and this object in one
+    # uninstall, and with the operator gone first nothing is left to release the
+    # finalizer: the object cannot go, the uninstall cannot finish, and the
+    # release sits in `uninstalling` forever.
+    helm.sh/resource-policy: keep
 spec:
   source:
-    managed:
+{{- if eq .Values.deployment.profile "standalone" }}
+    # This cluster hosts its own control plane, and the operator installs it.
+    local:
       image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
+      imagePullPolicy: "{{ .Values.image.simplyblock.pullPolicy }}"
+      foundationDB:
+        # The chart states the redundancy mode and the operator states the
+        # coordinator count, and the two have to agree: triple redundancy needs
+        # five coordinators and double needs three.
+        replicas: {{ if eq (.Values.controlplane.foundationdb.redundancyMode | default "double") "triple" }}5{{ else }}3{{ end }}
+        {{- if .Values.controlplane.storageclass.name }}
+        storageClassName: {{ .Values.controlplane.storageclass.name }}
+        {{- end }}
+      # The chart states both halves explicitly rather than leaving the CR's
+      # defaults to decide. The CR defaults to serving TLS, and the chart's
+      # tls.enabled defaults to off, and a release that said nothing would get
+      # the CR's answer instead of the one its values state -- which is a
+      # deployment that comes up over TLS because a field was omitted.
+      tls:
+        enableTLS: {{ .Values.tls.enabled }}
+        enableMutualTLS: {{ and .Values.tls.enabled .Values.tls.mutual_enabled }}
+        # The chart spells the providers in lower case and this API spells
+        # OpenShift as the product does, the same translation
+        # simplyblockdriver_cr.yaml performs.
+        provider: {{ if eq .Values.tls.provider "openshift" }}OpenShift{{ else }}cert-manager{{ end }}
+      {{- if .Values.controlplane.nodeSelector.create }}
+      nodeSelector:
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
+      {{- end }}
+      {{- if .Values.controlplane.tolerations.create }}
+      tolerations:
+      {{- range .Values.controlplane.tolerations.list }}
+      - operator: {{ .operator | quote }}
+        {{- if .effect }}
+        effect: {{ .effect | quote }}
+        {{- end }}
+        {{- if .key }}
+        key: {{ .key | quote }}
+        {{- end }}
+        {{- if .value }}
+        value: {{ .value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+{{- else }}
+    # A control plane elsewhere manages this cluster's storage. The operator
+    # installs nothing here: it resolves the endpoint, probes it, and reports.
+    managed:
+      endpoint: {{ required "controlplane.managed.endpoint is required for the managed profile: it is where the control plane that manages this cluster answers" .Values.controlplane.managed.endpoint | quote }}
+      {{- if .Values.controlplane.managed.credentialsSecretRef }}
+      credentialsSecretRef:
+        name: {{ .Values.controlplane.managed.credentialsSecretRef | quote }}
+      {{- end }}
+      {{- if .Values.controlplane.managed.caBundleSecretRef }}
+      caBundleSecretRef:
+        name: {{ .Values.controlplane.managed.caBundleSecretRef | quote }}
+      {{- end }}
 {{- end }}
+

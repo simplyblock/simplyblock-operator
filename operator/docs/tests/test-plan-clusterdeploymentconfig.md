@@ -84,15 +84,22 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 
 ### Approval (design §5)
 
-| #    | Scenario                                                                        | Type     | Test |
-|------|---------------------------------------------------------------------------------|----------|------|
-| U-35 | `spec.approved` false: expansion is never entered                               | Negative | —    |
-| U-36 | `spec.approved` set true: expansion begins on the next reconcile                | Positive | —    |
-| U-37 | The `ready-to-deploy` label is written on an approved config                    | Positive | —    |
-| U-38 | The `ready-to-deploy` label is read from nowhere: setting it alone does nothing | Negative | —    |
-| U-39 | Expansion is held while the `ControlPlane` is not `Ready`                       | Negative | —    |
-| U-40 | The `ControlPlane` becomes `Ready`: the held expansion proceeds unattended      | Positive | —    |
-| U-41 | No `ControlPlane` at all: held with a clear reason, not failed                  | Negative | —    |
+| #     | Scenario                                                                        | Type       | Test                                                |
+|-------|---------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-35  | `spec.approved` false: expansion is never entered                               | Negative   | —                                                   |
+| U-36  | `spec.approved` set true: expansion begins on the next reconcile                | Positive   | —                                                   |
+| U-37  | The `ready-to-deploy` label is written on an approved config                    | Positive   | —                                                   |
+| U-38  | The `ready-to-deploy` label is read from nowhere: setting it alone does nothing | Negative   | —                                                   |
+| U-39  | Expansion is held while the `ControlPlane` is not `Ready`                       | Negative   | —                                                   |
+| U-40  | The `ControlPlane` becomes `Ready`: the held expansion proceeds unattended      | Positive   | —                                                   |
+| U-41  | No `ControlPlane` at all: held with a clear reason, not failed                  | Negative   | —                                                   |
+| U-178 | A `Degraded` control plane answers, so the expansion proceeds                   | Regression | `TestADegradedControlPlaneDoesNotHoldTheDeployment` |
+| U-179 | An `Available` control plane proceeds                                           | Positive   | `TestAnAvailableControlPlaneProceeds`               |
+| U-180 | An `Unavailable` control plane holds, with a reason                             | Negative   | `TestAnUnavailableControlPlaneHolds`                |
+| U-181 | A control plane still being installed, or reporting no phase, holds             | Boundary   | `TestAControlPlaneStillBeingBuiltHolds`             |
+| U-182 | A run naming workers inspects those and no others                               | Positive   | `TestOnlyTheNamedWorkersAreInspected`               |
+| U-183 | A named worker that does not exist is announced, not silently dropped           | Regression | `TestANamedWorkerThatDoesNotExistIsAnnounced`       |
+| U-184 | Naming no worker keeps nothing, and the caller skips the filter                 | Boundary   | `TestNamingNoWorkerKeepsNothing`                    |
 
 ### Deletion (design §4.3)
 
@@ -126,6 +133,36 @@ File: `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-60     | `spec.discover.configName` set: that name is used                                                            | Positive | —    |
 | U-61     | `configName` unset: a generated name that cannot collide with the first run                                  | Boundary | —    |
 | U-62     | Discovery changes nothing: no cluster, no node, no control-plane write                                       | Negative | —    |
+
+### The Automatic First Run (design §8.4)
+
+File: `operator/internal/controllers/deployment/bootstrap_test.go`
+
+The run these rows cover is the one nobody asks for. Probing puts a Job on every
+worker, so the guard is most of the behavior: `U-168` to `U-172` are the states
+that decline, and each of them is enough on its own.
+
+| #     | Scenario                                                                              | Type       | Test                                            |
+|-------|---------------------------------------------------------------------------------------|------------|-------------------------------------------------|
+| U-167 | An install with nothing in it: one `Discover` run, narrowing nothing                  | Positive   | `TestAFreshInstallRaisesOneDiscoveryRun`        |
+| U-168 | A previous result of any of the three kinds: declined, and it says which              | Negative   | `TestAPreviousResultDeclinesTheRun`             |
+| U-169 | A restart after the first run: nothing further is raised                              | Negative   | `TestARestartRaisesNothingFurther`              |
+| U-170 | An object already carrying that name: left as it is, not replaced                     | Boundary   | `TestAnObjectByThatNameIsNotReplaced`           |
+| U-171 | A cluster with no node to inspect: no run                                             | Negative   | `TestAClusterWithNothingToInspectRaisesNoRun`   |
+| U-172 | A fleet whose every worker is cordoned: no run                                        | Negative   | `TestACordonedFleetRaisesNoRun`                 |
+| U-173 | One usable worker: enough to raise it                                                 | Boundary   | `TestAWorkerIsEnoughToRaiseTheRun`              |
+| U-174 | The run waives a partition table, so a fleet that has held data is not reported empty | Positive   | `TestTheInitialRunWaivesAPartitionTable`        |
+| U-175 | One replica asks, because the three reads are not idempotent                          | Positive   | `TestTheCheckIsLeaderElected`                   |
+| U-176 | The operator's own webhook not serving yet: the create is waited out, not lost        | Regression | `TestTheRunOutlastsAWebhookThatIsNotServingYet` |
+| U-177 | A webhook that answered and refused: not retried, because waiting changes nothing     | Negative   | `TestARejectedRunIsNotRetried`                  |
+
+`U-176` is the row a fresh install turns on. An `OperatorOps` is validated by a
+webhook this same operator serves, so the create races the webhook server the
+manager is still starting, and `Start` is not a loop: the single attempt lost the
+draft for the lifetime of the installation, and an administrator found an empty
+namespace where the fleet's disks should have been (2026-09-20). `U-177` is what
+keeps the remedy from becoming a write repeated until the deadline against a
+webhook that already gave its answer.
 
 ### OperatorOps Lifecycle (design §7)
 
@@ -172,23 +209,30 @@ The handler is a pure function of an admission request and a lister, so every
 decision it makes is a unit test. Only its wiring needs `envtest`, which is
 `I-24` onward.
 
-| #     | Scenario                                                                                              | Type     | Test |
-|-------|-------------------------------------------------------------------------------------------------------|----------|------|
-| U-86  | Creating a draft naming a worker that does not exist: admitted                                        | Positive | —    |
-| U-87  | Creating a draft naming a device no node advertises: admitted                                         | Positive | —    |
-| U-88  | Editing an unapproved draft into a worse state: admitted                                              | Positive | —    |
-| U-89  | Approving a document whose workers all exist: admitted                                                | Positive | —    |
-| U-90  | Approving a document naming a worker that does not exist: denied, naming the worker                   | Negative | —    |
-| U-91  | Approving a document naming an unavailable device: admitted, since devices are not an admission check | Boundary | —    |
-| U-92  | Approving with `clusterRef` set to a cluster that does not exist: denied                              | Negative | —    |
-| U-93  | Approving with no `clusterRef` while the named cluster exists: denied                                 | Negative | —    |
-| U-94  | Approving while another approved config already owns the cluster: denied                              | Negative | —    |
-| U-95  | Editing an approved document: denied, naming the field and pointing at `clusterRef`                   | Negative | —    |
-| U-96  | Withdrawing approval: denied                                                                          | Negative | —    |
-| U-97  | Editing only `metadata` on an approved document: admitted                                             | Boundary | —    |
-| U-98  | A draft created by the operator's own service account: admitted on the same path                      | Boundary | —    |
-| U-99  | An approving edit by the operator's own service account: validated, not exempted                      | Negative | —    |
-| U-100 | A request whose object does not decode: `Errored`, not `Allowed`                                      | Negative | —    |
+| #     | Scenario                                                                                                | Type     | Test                                                  |
+|-------|---------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------|
+| U-86  | Creating a draft naming a worker that does not exist: admitted                                          | Positive | —                                                     |
+| U-87  | Creating a draft naming a device no node advertises: admitted                                           | Positive | —                                                     |
+| U-88  | Editing an unapproved draft into a worse state: admitted                                                | Positive | —                                                     |
+| U-89  | Approving a document whose workers all exist: admitted                                                  | Positive | —                                                     |
+| U-90  | Approving a document naming a worker that does not exist: denied, naming the worker                     | Negative | —                                                     |
+| U-91  | Approving a document naming an unavailable device: admitted, since devices are not an admission check   | Boundary | —                                                     |
+| U-92  | Approving with `clusterRef` set to a cluster that does not exist: denied                                | Negative | —                                                     |
+| U-93  | Approving with no `clusterRef` while the named cluster exists: denied                                   | Negative | —                                                     |
+| U-94  | Approving while another approved config already owns the cluster: denied                                | Negative | —                                                     |
+| U-95  | Editing an approved document: denied, naming the field and pointing at `clusterRef`                     | Negative | —                                                     |
+| U-96  | Withdrawing approval: denied                                                                            | Negative | —                                                     |
+| U-97  | Editing only `metadata` on an approved document: admitted                                               | Boundary | —                                                     |
+| U-98  | A draft created by the operator's own service account: admitted on the same path                        | Boundary | —                                                     |
+| U-99  | An approving edit by the operator's own service account: validated, not exempted                        | Negative | —                                                     |
+| U-100 | A request whose object does not decode: `Errored`, not `Allowed`                                        | Negative | —                                                     |
+| U-164 | Approving a document whose fleet is below its scheme's minimum: denied, naming the scheme and the count | Negative | `TestApprovingADocumentTooSmallForItsStripeIsRefused` |
+| U-165 | Approving a document stating a scheme the control plane refuses: denied                                 | Negative | `TestApprovingAnUnsupportedSchemeIsRefused`           |
+| U-166 | Approving a growth document: the cluster's existing nodes count toward the minimum                      | Positive | `TestApprovingAGrowthDocumentCountsTheClustersNodes`  |
+
+`U-164` is the last refusal there is. The control plane accepts a cluster whose
+fleet is too small for its stripe, activates it, and serves from it, so an
+approval admitted here is a deployment nothing else refuses.
 
 `U-98` and `U-99` are the pair that keeps design §5.2's rule true: discovery
 writes drafts and needs no exemption, and an exemption for approvals would be a
@@ -322,6 +366,37 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 `U-149` is the row that keeps the cap where it belongs. A per-node copy could only
 repeat the cluster's value, and design §3.1 leaves it out for that reason.
 
+### Erasure Coding and the Node Minimum (design §4.1, §5.1)
+
+Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
+`operator/internal/erasurecoding/scheme_test.go`,
+`operator/internal/discovery/template_stripe_test.go`
+
+| #     | Scenario                                                                                     | Type     | Test                                                             |
+|-------|----------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------|
+| U-151 | The supported set is the control plane's seven schemes and nothing else                      | Positive | `TestTheSupportedSchemesAreTheControlPlanes`                     |
+| U-152 | The minimum node count is the documented table, scheme by scheme                             | Positive | `TestTheMinimumNodeCountIsTheDocumentedOne`                      |
+| U-153 | An unstated stripe, and a half-stated one, are read as 1+1                                   | Boundary | `TestAnUnstatedStripeIsOnePlusOne`                               |
+| U-154 | A two-worker draft that states no stripe: `StripeBelowMinimumNodes`, still `Draft`           | Negative | `TestADraftTooSmallForTheDefaultStripeIsReported`                |
+| U-155 | A draft stating 3+1: `StripeUnsupported`, and no node count derived from it                  | Negative | `TestADraftWhoseSchemeTheControlPlaneRefusesIsReported`          |
+| U-156 | A two-worker draft stating 1+0: no finding, because the minimum is met                       | Positive | `TestADraftStatingNoRedundancyIsAccepted`                        |
+| U-157 | 1+1 reached by two nodes per socket on two workers: `StripeBelowMinimumWorkers`              | Negative | `TestNodesSharingAWorkerAreNotSpares`                            |
+| U-158 | A growth document: the cluster's existing nodes count toward the minimum                     | Positive | `TestAGrowthDocumentCountsTheNodesTheClusterHas`                 |
+| U-159 | A growth document still short: the message counts what the cluster ends up with              | Negative | `TestAGrowthDocumentThatStaysBelowTheMinimumIsReported`          |
+| U-160 | A growth document re-naming a worker the cluster already has a node on: the slot counts once | Boundary | `TestAGrowthDocumentDoesNotCountASlotTwice`                      |
+| U-161 | A discovery draft proposes a scheme its own fleet satisfies, at every fleet size             | Positive | `TestTheProposedSchemeIsOneTheFleetAndTheControlPlaneBothAccept` |
+| U-162 | A fleet of one or two is proposed 1+0, and the note says what a third worker would allow     | Boundary | `TestAFleetTooSmallForRedundancyIsSaidSo`                        |
+| U-163 | A fleet of four or more is proposed 2+1, with the alternatives named                         | Positive | `TestTheDraftAccountsForTheSchemeItProposed`                     |
+
+`U-157` is the row that makes the minimum mean what it says. The count is of
+storage nodes, and a fleet that reaches it by running several nodes on one worker
+has bought no independent spare, because every node of a worker fails with it.
+
+`U-161` is the invariant behind the generator rather than a case of it. A run
+writes a draft and the draft's own validation refuses a scheme its fleet cannot
+carry, so a generator that proposed one would produce documents nobody can
+approve.
+
 ---
 
 ## 2. Integration Tests
@@ -329,62 +404,63 @@ repeat the cluster's value, and design §3.1 leaves it out for that reason.
 Full reconcile loop against a real Kubernetes API server via `envtest`. The
 immutability rules are CEL and cannot be exercised any other way.
 
-| #        | Scenario                                                                                                               | Type     | Test |
-|----------|------------------------------------------------------------------------------------------------------------------------|----------|------|
-| I-01     | An approved config edited: rejected by the immutability rule                                                           | Negative | —    |
-| I-02     | An unapproved config edited: accepted                                                                                  | Positive | —    |
-| I-03     | `spec.approved` set true, then false: the withdrawal is rejected                                                       | Negative | —    |
-| I-04     | `spec.approved` false, then true: accepted                                                                             | Positive | —    |
-| I-05     | An approved config edited only in `metadata`: accepted, since the rule is on spec                                      | Boundary | —    |
-| I-06     | `spec.nodeSets` omitted: rejected as `Required`                                                                        | Negative | —    |
-| I-07     | `spec.nodeSets` empty: rejected by `MinItems`                                                                          | Boundary | —    |
-| I-08     | `spec.environment` outside the enum: rejected                                                                          | Negative | —    |
-| I-09     | A group with 201 workers: rejected by `MaxItems`                                                                       | Boundary | —    |
-| I-10     | A group with duplicate workers: rejected by `listType=set`                                                             | Negative | —    |
-| ~~I-11~~ | `spec.nodeSets[].sizing` omitted: rejected as `Required`. Withdrawn: the field is gone, and `I-52` is what replaces it | —        | —    |
-| I-12     | `OperatorOps.spec.action` outside the enum: rejected                                                                   | Negative | —    |
-| I-13     | `OperatorOps.spec.action` changed after creation: rejected as immutable                                                | Negative | —    |
-| I-14     | Short names `cdc` and `oops` resolve to the same lists as the full kinds                                               | Positive | —    |
-| I-15     | A full expansion against a real API server: cluster and nodes exist afterward                                          | Positive | —    |
-| I-16     | Deleting the config afterward: the cluster and nodes survive                                                           | Positive | —    |
-| I-17     | Two configs in two namespaces with the same name: neither reads the other                                              | Negative | —    |
-| I-18     | Two configs in one namespace naming one cluster: the second is refused                                                 | Negative | —    |
-| I-19     | The controller's role covers every object the expansion creates                                                        | Positive | —    |
-| I-20     | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                                            | Negative | —    |
-| I-21     | A `devices` block with only `nvme`: accepted                                                                           | Boundary | —    |
-| I-22     | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                                            | Negative | —    |
-| I-23     | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                                             | Negative | —    |
-| I-34     | `devices.nvme` holding a well-formed PCI address: accepted                                                             | Positive | —    |
-| I-35     | `devices.nvme` holding a device path: rejected by the item pattern                                                     | Negative | —    |
-| I-36     | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                                           | Negative | —    |
-| I-37     | `devices.block` holding a path under `/dev`: accepted                                                                  | Positive | —    |
-| I-38     | `devices.block` holding a bare device name: rejected by the item pattern                                               | Negative | —    |
-| I-39     | `devices.block` holding a path outside `/dev`: rejected by the item pattern                                            | Negative | —    |
-| I-24     | The webhook is registered for `create` and `update` on the kind                                                        | Positive | —    |
-| I-25     | An approving apply naming a missing worker: rejected by the API server                                                 | Negative | —    |
-| I-26     | The same document with the worker created first: accepted                                                              | Positive | —    |
-| I-27     | An invalid draft applied unapproved: accepted, and `status.message` reports it                                         | Positive | —    |
-| I-28     | An edit to an approved document: rejected, and the stored object is unchanged                                          | Negative | —    |
-| I-29     | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                                  | Negative | —    |
-| I-30     | A group whose `devices.block` names a path: accepted                                                                   | Positive | —    |
-| I-31     | `enablePartitionedDevices` outside a boolean: rejected by the schema                                                   | Negative | —    |
-| I-32     | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating`                  | Negative | —    |
-| I-33     | Approving a config naming a partitioned device: accepted and expanded                                                  | Positive | —    |
-| I-40     | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                                           | Negative | —    |
-| I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —    |
-| I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —    |
-| I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —    |
-| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                                   | Negative | —    |
-| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | —    |
-| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | —    |
-| I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —    |
-| I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | —    |
-| I-49     | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema                               | Boundary | —    |
-| I-50     | `spec.cluster.maxSubsystemCount` omitted on a creating document: rejected as `Required`                                | Negative | —    |
-| I-51     | A node set's `sizing` carrying `maxSubsystemCount`: pruned rather than stored                                          | Boundary | —    |
-| I-52     | A node set carrying a `sizing` block at all: pruned rather than stored                                                 | Boundary | —    |
-| I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —    |
-| I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —    |
+| #        | Scenario                                                                                                               | Type     | Test                                               |
+|----------|------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------|
+| I-01     | An approved config edited: rejected by the immutability rule                                                           | Negative | —                                                  |
+| I-02     | An unapproved config edited: accepted                                                                                  | Positive | —                                                  |
+| I-03     | `spec.approved` set true, then false: the withdrawal is rejected                                                       | Negative | —                                                  |
+| I-04     | `spec.approved` false, then true: accepted                                                                             | Positive | —                                                  |
+| I-05     | An approved config edited only in `metadata`: accepted, since the rule is on spec                                      | Boundary | —                                                  |
+| I-06     | `spec.nodeSets` omitted: rejected as `Required`                                                                        | Negative | —                                                  |
+| I-07     | `spec.nodeSets` empty: rejected by `MinItems`                                                                          | Boundary | —                                                  |
+| I-08     | `spec.environment` outside the enum: rejected                                                                          | Negative | —                                                  |
+| I-09     | A group with 201 workers: rejected by `MaxItems`                                                                       | Boundary | —                                                  |
+| I-10     | A group with duplicate workers: rejected by `listType=set`                                                             | Negative | —                                                  |
+| ~~I-11~~ | `spec.nodeSets[].sizing` omitted: rejected as `Required`. Withdrawn: the field is gone, and `I-52` is what replaces it | —        | —                                                  |
+| I-12     | `OperatorOps.spec.action` outside the enum: rejected                                                                   | Negative | —                                                  |
+| I-13     | `OperatorOps.spec.action` changed after creation: rejected as immutable                                                | Negative | —                                                  |
+| I-14     | Short names `cdc` and `oops` resolve to the same lists as the full kinds                                               | Positive | —                                                  |
+| I-15     | A full expansion against a real API server: cluster and nodes exist afterward                                          | Positive | —                                                  |
+| I-16     | Deleting the config afterward: the cluster and nodes survive                                                           | Positive | —                                                  |
+| I-17     | Two configs in two namespaces with the same name: neither reads the other                                              | Negative | —                                                  |
+| I-18     | Two configs in one namespace naming one cluster: the second is refused                                                 | Negative | —                                                  |
+| I-19     | The controller's role covers every object the expansion creates                                                        | Positive | —                                                  |
+| I-20     | A `devices` block with neither `nvme` nor `block`: rejected by the CEL rule                                            | Negative | —                                                  |
+| I-21     | A `devices` block with only `nvme`: accepted                                                                           | Boundary | —                                                  |
+| I-22     | A `devices` block with duplicate `nvme` entries: rejected by `listType=set`                                            | Negative | —                                                  |
+| I-23     | A `devices` block carrying a filter field such as `pcieDenyList`: rejected                                             | Negative | —                                                  |
+| I-34     | `devices.nvme` holding a well-formed PCI address: accepted                                                             | Positive | —                                                  |
+| I-35     | `devices.nvme` holding a device path: rejected by the item pattern                                                     | Negative | —                                                  |
+| I-36     | `devices.nvme` holding a truncated PCI address: rejected by the item pattern                                           | Negative | —                                                  |
+| I-37     | `devices.block` holding a path under `/dev`: accepted                                                                  | Positive | —                                                  |
+| I-38     | `devices.block` holding a bare device name: rejected by the item pattern                                               | Negative | —                                                  |
+| I-39     | `devices.block` holding a path outside `/dev`: rejected by the item pattern                                            | Negative | —                                                  |
+| I-24     | The webhook is registered for `create` and `update` on the kind                                                        | Positive | —                                                  |
+| I-25     | An approving apply naming a missing worker: rejected by the API server                                                 | Negative | —                                                  |
+| I-26     | The same document with the worker created first: accepted                                                              | Positive | —                                                  |
+| I-27     | An invalid draft applied unapproved: accepted, and `status.message` reports it                                         | Positive | —                                                  |
+| I-28     | An edit to an approved document: rejected, and the stored object is unchanged                                          | Negative | —                                                  |
+| I-29     | `enableLogicalBlockDevices` outside a boolean: rejected by the schema                                                  | Negative | —                                                  |
+| I-30     | A group whose `devices.block` names a path: accepted                                                                   | Positive | —                                                  |
+| I-31     | `enablePartitionedDevices` outside a boolean: rejected by the schema                                                   | Negative | —                                                  |
+| I-32     | Approving a config naming a mounted device: accepted by the API server, then `Failed` at `Validating`                  | Negative | —                                                  |
+| I-33     | Approving a config naming a partitioned device: accepted and expanded                                                  | Positive | —                                                  |
+| I-40     | A group naming both `nvme` and `block`: rejected by the selection's CEL rule                                           | Negative | —                                                  |
+| I-41     | Two groups of one node set naming different classes: rejected by the spec's CEL rule                                   | Negative | —                                                  |
+| I-42     | Two node sets naming different classes: rejected by the same rule                                                      | Negative | —                                                  |
+| I-43     | Every group of every node set naming `block`: accepted                                                                 | Positive | —                                                  |
+| I-44     | `enableLogicalBlockDevices` with a `pcieDenyList`: rejected by the filter's CEL rule                                   | Negative | —                                                  |
+| I-45     | `blockDenyList` with `enableLogicalBlockDevices` unset: rejected by the same rule                                      | Negative | —                                                  |
+| I-46     | `enableLogicalBlockDevices` with a `blockAllowList`: accepted                                                          | Positive | —                                                  |
+| I-47     | The PCI filters with `enableLogicalBlockDevices` unset: accepted                                                       | Positive | —                                                  |
+| I-48     | A group's `failureDomain` of `rack-b`: accepted                                                                        | Positive | —                                                  |
+| I-49     | A `failureDomain` holding a slash, and one of 64 characters: both rejected by the schema                               | Boundary | —                                                  |
+| I-50     | `spec.cluster.maxSubsystemCount` omitted on a creating document: rejected as `Required`                                | Negative | —                                                  |
+| I-51     | A node set's `sizing` carrying `maxSubsystemCount`: pruned rather than stored                                          | Boundary | —                                                  |
+| I-52     | A node set carrying a `sizing` block at all: pruned rather than stored                                                 | Boundary | —                                                  |
+| I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —                                                  |
+| I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —                                                  |
+| I-55     | A document whose cluster template states a scheme outside the supported seven: rejected by the schema                  | Negative | `TestTheDocumentsSchemaRefusesAnUnsupportedScheme` |
 
 ---
 

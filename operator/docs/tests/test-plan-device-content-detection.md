@@ -87,6 +87,9 @@ against its own manifest.
 | U-62 | Every fixture's bytes match the checksum its manifest records                                                     | Positive   | `TestFixturesMatchTheirManifests`                       |
 | U-63 | ext4 images captured from two `e2fsprogs` generations both decode as ext4                                         | Regression | —                                                       |
 | U-64 | An md metadata-1.1 member, which `blkid` reports nothing for and exits 2 on, is not `ContentBlank`                | Regression | `TestMdMetadata11IsNotBlankEvenThoughBlkidSaysNothing`  |
+| U-65 | An alceml superblock, which blkid and wipefs both read as nothing, is `ContentSimplyblock`                        | Regression | `TestReadingOfCapturedImages`                           |
+| U-66 | A device carrying only that superblock is offered, since a driven one is not a block device at all                | Regression | `TestADeviceThisProductWroteIsOffered`                  |
+| U-67 | The same device while the kernel will not hand it over is refused for the use                                     | Negative   | `TestADeviceThisProductWroteIsStillRefusedWhileHeld`    |
 
 ### The Blank Rule (design §4.1)
 
@@ -288,17 +291,17 @@ the old one accepted, before the shadow is removed.
 Which topologies the matrix exercises. An axis with no bearing on the reading is
 argued rather than listed as a gap.
 
-| Axis            | Values covered                                                                                                   | IDs                                   | Not covered                                                           |
-|-----------------|------------------------------------------------------------------------------------------------------------------|---------------------------------------|-----------------------------------------------------------------------|
-| Device content  | blank, ext2, ext3, ext4, XFS, LVM label, LUKS, GPT, MBR, FAT16, FAT32, exFAT, Btrfs, swap, md-raid, ZFS, garbage | U-01…U-15, U-54…U-61, I-01…I-04, I-13 | A second stack layer, which does not exist yet (design §14 Q4)        |
-| Device state    | healthy, all paths down, warm cache, slow                                                                        | U-24…U-28, I-05…I-08                  | **Serving zeros successfully: M-01, and it is design §7.2**           |
-| Device size     | smaller than two regions, exactly two regions, normal, zero-length                                               | U-21, U-22, U-23                      | Multi-terabyte, where only the tail seek's cost differs               |
-| Stack layer     | raw namespace, LVM physical volume                                                                               | U-45…U-50, I-04, E-07                 | VDO logical volume and a striped logical volume, both Phase 2         |
-| Block size      | 512-byte logical blocks, 4Kn                                                                                     | U-60, I-11                            | A 512e device, whose logical size is what these offsets follow anyway |
-| Cache state     | cold, stale after a content change                                                                               | I-08, I-09                            | —                                                                     |
-| Namespace scope | single namespace                                                                                                 | every `E-` row                        | Multi-namespace, argued below                                         |
-| Cluster size    | single node                                                                                                      | every `I-` row                        | Three-node and larger, argued below                                   |
-| Cluster count   | single cluster                                                                                                   | every `E-` row                        | Multi-cluster, argued below                                           |
+| Axis            | Values covered                                                                                                           | IDs                                   | Not covered                                                           |
+|-----------------|--------------------------------------------------------------------------------------------------------------------------|---------------------------------------|-----------------------------------------------------------------------|
+| Device content  | blank, ext2, ext3, ext4, XFS, LVM label, LUKS, GPT, MBR, FAT16, FAT32, exFAT, Btrfs, swap, md-raid, ZFS, alceml, garbage | U-01…U-15, U-54…U-67, I-01…I-04, I-13 | A second stack layer, which does not exist yet (design §14 Q4)        |
+| Device state    | healthy, all paths down, warm cache, slow                                                                                | U-24…U-28, I-05…I-08                  | **Serving zeros successfully: M-01, and it is design §7.2**           |
+| Device size     | smaller than two regions, exactly two regions, normal, zero-length                                                       | U-21, U-22, U-23                      | Multi-terabyte, where only the tail seek's cost differs               |
+| Stack layer     | raw namespace, LVM physical volume                                                                                       | U-45…U-50, I-04, E-07                 | VDO logical volume and a striped logical volume, both Phase 2         |
+| Block size      | 512-byte logical blocks, 4Kn                                                                                             | U-60, I-11                            | A 512e device, whose logical size is what these offsets follow anyway |
+| Cache state     | cold, stale after a content change                                                                                       | I-08, I-09                            | —                                                                     |
+| Namespace scope | single namespace                                                                                                         | every `E-` row                        | Multi-namespace, argued below                                         |
+| Cluster size    | single node                                                                                                              | every `I-` row                        | Three-node and larger, argued below                                   |
+| Cluster count   | single cluster                                                                                                           | every `E-` row                        | Multi-cluster, argued below                                           |
 
 The last three axes do not discriminate here. The reading is a node-local read of
 one device's bytes, taken with no reference to a namespace, a peer node, or a

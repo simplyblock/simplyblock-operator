@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,8 +30,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
@@ -163,11 +166,22 @@ type runner struct {
 // newRunner builds a reconciler over the objects given.
 func newRunner(t *testing.T, objects ...client.Object) *runner {
 	t.Helper()
+	return newRunnerWithInterceptors(t, interceptor.Funcs{}, objects...)
+}
+
+// newRunnerWithInterceptors is the same runner with the client's answers
+// scripted, which is how a test reaches the failures a real API server produces
+// and a fake one never does.
+func newRunnerWithInterceptors(
+	t *testing.T, funcs interceptor.Funcs, objects ...client.Object,
+) *runner {
+	t.Helper()
 	scheme := opsScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithStatusSubresource(&simplyblockv1alpha2.OperatorOps{}).
+		WithInterceptorFuncs(funcs).
 		Build()
 
 	return &runner{
@@ -275,9 +289,9 @@ func TestDiscoverSkipsWorkersAStorageNodeAlreadyRunsOn(t *testing.T) {
 	// A run reports only what is unclaimed, which is what makes re-running it
 	// useful: a run against a deployed fleet finds the machines nobody has
 	// taken yet.
-	taken := &simplyblockv1alpha1.StorageNode{
+	taken := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1", Namespace: opsNamespace},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: "worker-1"},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{WorkerNode: "worker-1"},
 	}
 	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"), taken)
 
@@ -315,7 +329,7 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
-	if !strings.Contains(ops.Status.Message, "no schedulable worker") {
+	if !strings.Contains(ops.Status.Message, "no worker is free") {
 		t.Errorf("the message is %q, and it does not say what was wrong", ops.Status.Message)
 	}
 }
@@ -595,5 +609,202 @@ func TestDiscoverAddsItsFinalizerBeforeDoingAnything(t *testing.T) {
 	}
 	if ops.Status.Phase != "" {
 		t.Error("the run started before its finalizer was recorded")
+	}
+}
+
+// heldReportConfigMap is a machine whose NVMe controllers are on a userspace
+// driver. The kernel presents no disk for such a controller, so the report
+// carries no device at all and the controllers say where the disks went.
+//
+// Something is driving them, which is what puts the machine out of reach: a
+// binding nothing is using is a disk the draft claims, and only a held one is a
+// disk in service. Whatever holds it need not be this product.
+func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1.ConfigMap {
+	t.Helper()
+
+	report := nodeprobe.Report{
+		Version: nodeprobe.ReportVersion,
+		Node:    node,
+		CPU: nodeprobe.CPU{
+			OnlineCPUs: 12, PhysicalCores: 12, Sockets: 1, ThreadsPerCore: 1,
+			NUMANodes: []nodeprobe.NUMACPUs{{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 12}},
+		},
+		HugePages: []nodeprobe.HugePagePool{{
+			SizeBytes: 1 << 21, Total: 3584, Free: 3584,
+			NUMANodes: []nodeprobe.NUMAHugePages{{Node: 0, Total: 3584, Free: 3584}},
+		}},
+	}
+	for _, address := range addresses {
+		report.NVMeControllers = append(report.NVMeControllers, nodeprobe.Controller{
+			Address:  address,
+			Driver:   "uio_pci_generic",
+			NUMANode: -1,
+			// Held rather than idle, which is what makes the machine unusable:
+			// an idle binding is a disk the draft now claims.
+			InUse: ptr.To(true),
+		})
+	}
+
+	cm, err := nodeprobe.ConfigMap(opsNamespace, opsName, nil, report)
+	if err != nil {
+		t.Fatalf("render the report ConfigMap: %v", err)
+	}
+	return cm
+}
+
+// A run that produces nothing owes the reason it produced nothing.
+//
+// The rules compute one: a worker whose controllers are held by a userspace
+// driver is refused with the controllers and the driver named, which is the
+// difference between a reviewer concluding the machines have no storage and
+// knowing to reclaim them. That explanation was computed and then dropped,
+// because the failure returned before anything reported a refusal, and what the
+// reviewer was left with was a count.
+func TestARunThatFindsNothingSaysWhy(t *testing.T) {
+	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probing: creates the Jobs
+
+	for _, node := range []string{"worker-1", "worker-2"} {
+		cm := heldReportConfigMap(t, node,
+			"0000:00:02.0", "0000:00:03.0", "0000:00:04.0", "0000:00:05.0")
+		if err := r.client.Create(context.Background(), cm); err != nil {
+			t.Fatalf("write a report: %v", err)
+		}
+	}
+
+	r.step() // probing: sees the reports, moves to Writing
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q, want Failed: %s", ops.Status.Phase, ops.Status.Message)
+	}
+	if len(r.configs()) != 0 {
+		t.Error("a run with no usable device wrote a document anyway")
+	}
+
+	// What the message has to carry is the reason, not the arithmetic of it.
+	for _, want := range []string{"uio_pci_generic", "0000:00:02.0", "worker-1"} {
+		if !strings.Contains(ops.Status.Message, want) {
+			t.Errorf("the failure does not mention %q: %s", want, ops.Status.Message)
+		}
+	}
+}
+
+// partitionedReportConfigMap is a machine whose NVMe disks are on the kernel
+// driver, whole, of the right class, and carrying a partition table somebody
+// left on them.
+//
+// It is the other half of a lab that ran simplyblock before: the controllers
+// were handed back to the kernel and the disks still hold the old table.
+func partitionedReportConfigMap(t *testing.T, node string, addresses ...string) *corev1.ConfigMap {
+	t.Helper()
+
+	const gb = uint64(1) << 30
+	report := nodeprobe.Report{
+		Version: nodeprobe.ReportVersion,
+		Node:    node,
+		CPU: nodeprobe.CPU{
+			OnlineCPUs: 12, PhysicalCores: 12, Sockets: 1, ThreadsPerCore: 1,
+			NUMANodes: []nodeprobe.NUMACPUs{{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 12}},
+		},
+		HugePages: []nodeprobe.HugePagePool{{
+			SizeBytes: 1 << 21, Total: 3584, Free: 3584,
+			NUMANodes: []nodeprobe.NUMAHugePages{{Node: 0, Total: 3584, Free: 3584}},
+		}},
+	}
+	for i, address := range addresses {
+		report.NVMeControllers = append(report.NVMeControllers, nodeprobe.Controller{
+			Address: address, Driver: "nvme", NUMANode: -1,
+		})
+		report.Devices = append(report.Devices, nodeprobe.Device{
+			Name:       fmt.Sprintf("nvme%dn1", i),
+			Path:       fmt.Sprintf("/dev/nvme%dn1", i),
+			PCIAddress: address,
+			SizeBytes:  70 * gb,
+			Kind:       string(blockdev.KindDisk),
+			Transport:  string(blockdev.TransportNVMe),
+			NUMANode:   -1,
+			Available:  false,
+			Content:    "Foreign",
+			Rejections: []nodeprobe.Rejection{{
+				Reason: string(blockdev.ReasonPartitioned),
+				Detail: "GPT header at 4096 (LBA 1), MBR partition table at 446",
+			}},
+		})
+		// The machine also presents the devices nothing would ever take, which
+		// is what makes the reporting hard: they outnumber the disks that
+		// matter and they are refused for reasons nobody needs.
+		report.Devices = append(report.Devices, nodeprobe.Device{
+			Name: fmt.Sprintf("nbd%d", i), Path: fmt.Sprintf("/dev/nbd%d", i),
+			Kind: string(blockdev.KindNetwork), NUMANode: -1,
+		})
+	}
+
+	cm, err := nodeprobe.ConfigMap(opsNamespace, opsName, nil, report)
+	if err != nil {
+		t.Fatalf("render the report ConfigMap: %v", err)
+	}
+	return cm
+}
+
+// A worker refused one device at a time still owes the reason.
+//
+// Its worker-level refusal reads "no device of it survived the device rules."
+// That is the arithmetic and not the reason. The reason is on the devices, and
+// it has to reach the message past the devices refused for being loopback or
+// network block devices, which outnumber it and explain nothing.
+func TestARunRefusedDeviceByDeviceSaysWhichReasonMatters(t *testing.T) {
+	r := newRunner(t, discoverRun(nil), worker("worker-1"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probing: creates the Jobs
+
+	cm := partitionedReportConfigMap(t, "worker-1",
+		"0000:00:02.0", "0000:00:03.0", "0000:00:04.0", "0000:00:05.0")
+	if err := r.client.Create(context.Background(), cm); err != nil {
+		t.Fatalf("write a report: %v", err)
+	}
+
+	r.step() // probing: sees the report, moves to Writing
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q, want Failed: %s", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, string(blockdev.ReasonPartitioned)) {
+		t.Errorf("the failure does not say the disks are partitioned: %s", ops.Status.Message)
+	}
+	// The devices that were never candidates are noise, and a message they
+	// reach is one nobody finishes reading.
+	if strings.Contains(ops.Status.Message, "whole disk") {
+		t.Errorf("the failure reports devices that were never candidates: %s", ops.Status.Message)
+	}
+}
+
+// A step that outlives its deadline says what outliving it means for this run,
+// not only that it happened. Probing's partial reports survive in ConfigMaps
+// labeled for the run, and a failure message that did not say so would leave a
+// reviewer with the evidence in the cluster and no way to know it is there.
+func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
+	ops := discoverRun(nil)
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
+	ops.Status.Workers = []string{"worker-1"}
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+
+	r := newRunner(t, ops, worker("worker-1"))
+	_, got := r.step()
+
+	if got.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed on a step past its deadline", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "ConfigMaps") {
+		t.Errorf("the failure does not say where the reports that did arrive are: %q",
+			got.Status.Message)
 	}
 }

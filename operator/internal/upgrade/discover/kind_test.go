@@ -13,6 +13,7 @@ import (
 	"errors"
 	"testing"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -332,5 +333,28 @@ func TestCatalog_EveryOwnedKindWaitsForTheCustomResources(t *testing.T) {
 			t.Errorf("%s reads everywhere, and the workload it looks for is only "+
 				"where the custom resources are", kind.RuleID)
 		}
+	}
+}
+
+// TestSnapshotContentsAreDiscovered pins that §16.4's second kind is read.
+//
+// It is the half a step cannot supply for itself: normalize-volume-handles
+// answers correctly about a VolumeSnapshotContent, and would never be handed
+// one if the graph did not hold it. A kind that is handled and not discovered
+// looks exactly like a cluster with no snapshots in it.
+func TestSnapshotContentsAreDiscovered(t *testing.T) {
+	var found bool
+	for _, discoverer := range CoreKinds() {
+		kind, ok := discoverer.(Kind)
+		if !ok {
+			continue
+		}
+		if _, isContent := kind.List.(*snapshotv1.VolumeSnapshotContentList); isContent {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no discoverer reads VolumeSnapshotContent, so §16.4's handles on snapshots " +
+			"are normalized by a step that is never handed one")
 	}
 }

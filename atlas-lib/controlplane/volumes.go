@@ -79,27 +79,37 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 		if conn.NSID == 0 && e.NsId != nil && *e.NsId > 0 {
 			conn.NSID = uint32(*e.NsId)
 		}
-		conn.Endpoints = append(conn.Endpoints, lvol.Endpoint{
-			Transport:         e.Transport,
-			Address:           e.Ip,
-			Port:              e.Port,
-			NrIOQueues:        e.NrIoQueues,
-			ReconnectDelaySec: e.ReconnectDelay,
-			KeepAliveTMOSec:   e.KeepAliveTmo,
-			// The spec makes both timeouts required, so whatever arrives is
-			// the control plane's answer, including 0 ("fail I/O
-			// immediately"), which must not degrade into "unspecified."
-			CtrlLossTMOSec:   ptr.To(e.CtrlLossTmo),
-			FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
-			HostIface:        ptr.From(e.HostIface, ""),
-			TLS:              ptr.BoolFromOrFalse(e.Tls),
-			// The secrets have no fields of their own in the response, and
-			// the prebuilt command line is where the control plane puts them.
-			DHCHAPSecret:     connectFlag(e.Connect, "--dhchap-secret"),
-			DHCHAPCtrlSecret: connectFlag(e.Connect, "--dhchap-ctrl-secret"),
-		})
+		conn.Endpoints = append(conn.Endpoints, endpointOf(cpapi.NvmeConnectEntry(e)))
 	}
 	return conn, nil
+}
+
+// endpointOf reads one of the control plane's connect entries.
+//
+// It is shared with a migration's paths rather than written twice, because they
+// are the same model answered by two endpoints: /connect says how to reach a
+// volume where it is, and a created migration says how to reach the target it
+// is about to be on (see migrations.go).
+func endpointOf(e cpapi.NvmeConnectEntry) lvol.Endpoint {
+	return lvol.Endpoint{
+		Transport:         e.Transport,
+		Address:           e.Ip,
+		Port:              e.Port,
+		NrIOQueues:        e.NrIoQueues,
+		ReconnectDelaySec: e.ReconnectDelay,
+		KeepAliveTMOSec:   e.KeepAliveTmo,
+		// The spec makes both timeouts required, so whatever arrives is
+		// the control plane's answer, including 0 ("fail I/O
+		// immediately"), which must not degrade into "unspecified."
+		CtrlLossTMOSec:   ptr.To(e.CtrlLossTmo),
+		FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
+		HostIface:        ptr.From(e.HostIface, ""),
+		TLS:              ptr.BoolFromOrFalse(e.Tls),
+		// The secrets have no fields of their own in the response, and
+		// the prebuilt command line is where the control plane puts them.
+		DHCHAPSecret:     connectFlag(e.Connect, "--dhchap-secret"),
+		DHCHAPCtrlSecret: connectFlag(e.Connect, "--dhchap-ctrl-secret"),
+	}
 }
 
 // connectFlag pulls one `--flag`'s value out of the prebuilt `nvme connect ...`
@@ -149,6 +159,42 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 		})
 	}
 	return out, nil
+}
+
+// SubsystemVolumes returns every volume published under the given NVMe-oF
+// subsystem NQN, across every pool of the cluster.
+//
+// It exists because a migration moves a subsystem rather than one volume inside
+// it: whoever asks for one has to know which volumes travel along, and the
+// control plane addresses volumes by pool rather than by subsystem. The
+// members are not required to share a pool, since a subsystem is a
+// cluster-level object, so every pool is asked.
+//
+// An empty NQN is refused rather than answered. Nothing publishes under no
+// name, so the honest answer would be no volumes, and the useful one is that
+// the caller has not resolved the subsystem yet.
+func (c *Client) SubsystemVolumes(ctx context.Context, clusterID, nqn string) ([]lvol.Volume, error) {
+	if nqn == "" {
+		return nil, fmt.Errorf("list the volumes of a subsystem: no NQN was given")
+	}
+	pools, err := c.ListStoragePools(ctx, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("list the volumes of subsystem %s: %w", nqn, err)
+	}
+
+	var members []lvol.Volume
+	for _, pool := range pools {
+		volumes, err := c.ListVolumes(ctx, clusterID, pool.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list the volumes of subsystem %s: pool %s: %w", nqn, pool.ID, err)
+		}
+		for _, volume := range volumes {
+			if volume.NQN == nqn {
+				members = append(members, volume)
+			}
+		}
+	}
+	return members, nil
 }
 
 // ResizeVolume grows the volume to sizeBytes.

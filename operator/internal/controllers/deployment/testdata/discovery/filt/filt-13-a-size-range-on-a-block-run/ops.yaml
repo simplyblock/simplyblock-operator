@@ -1,0 +1,16 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-filt-13
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    deviceFilter:
+      driveSizeRange: 3T-8T
+      enableLogicalBlockDevices: true
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01

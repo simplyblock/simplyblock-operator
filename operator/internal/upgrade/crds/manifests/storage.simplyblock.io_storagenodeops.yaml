@@ -195,11 +195,12 @@ spec:
         - jsonPath: .status.phase
           name: Phase
           type: string
-        - jsonPath: .status.subPhase
-          name: SubPhase
+        - jsonPath: .status.step.state
+          name: Step
           type: string
         - jsonPath: .status.message
           name: Message
+          priority: 1
           type: string
         - jsonPath: .metadata.creationTimestamp
           name: Age
@@ -208,10 +209,9 @@ spec:
       schema:
         openAPIV3Schema:
           description: |-
-            StorageNodeOps is a one-shot operational CR targeting a single StorageNode.
-            Analogous to a Kubernetes Job — it drives an action (Shutdown, Restart, Suspend,
-            Resume, Remove, Migrate) to completion and records the result. Only one
-            StorageNodeOps can be active per StorageNode at a time.
+            StorageNodeOps is a single operation performed against one StorageNode. It runs
+            to a terminal phase and stays afterward as the audit record of what was done, to
+            which node, with which parameters, and how it ended.
           properties:
             apiVersion:
               description: |-
@@ -231,10 +231,18 @@ spec:
             metadata:
               type: object
             spec:
-              description: StorageNodeOpsSpec defines the desired state of a StorageNodeOps.
+              description: StorageNodeOpsSpec is one operation to perform against one StorageNode.
               properties:
+                abort:
+                  description: |-
+                    Abort asks a running operation to stop at its next step and unwind. It is
+                    the only mutable field on this spec, because it is the only thing about an
+                    operation that can legitimately be decided after it started. Whether an
+                    abort is expressible from the current step is declared by that action's
+                    graph rather than checked here.
+                  type: boolean
                 action:
-                  description: Action is the operation to perform. Immutable.
+                  description: Action is the operation to perform.
                   enum:
                     - Shutdown
                     - Restart
@@ -242,28 +250,30 @@ spec:
                     - Resume
                     - Remove
                     - Migrate
+                    - HostMaintenance
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
                 force:
-                  description: Force enables forced execution where the backend supports it.
+                  description: |-
+                    Force passes the control plane's force flag where the action supports it.
+                    Migrate defaults it to true, because the control plane rejects a non-forced
+                    restart of a node that is not already offline.
                   type: boolean
                 migrate:
                   description: Migrate parameterizes action Migrate and is ignored by the others.
                   properties:
                     newSsdPcie:
                       description: |-
-                        NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-                        during a migration. Passed through to the control-plane restart as
-                        new_ssd_pcie.
+                        NewSsdPcie lists additional NVMe PCI addresses to bind on the target host,
+                        passed through to the control-plane restart as new_ssd_pcie and merged into
+                        the node's effective allow list so they survive a later rebuild.
                       items:
                         type: string
                       type: array
                     targetWorkerNode:
-                      description: |-
-                        TargetWorkerNode is the Kubernetes worker hostname the storage node is
-                        relocated onto.
+                      description: TargetWorkerNode is the Kubernetes worker the node is relocated onto.
                       type: string
                       x-kubernetes-validations:
                         - message: field is immutable
@@ -272,25 +282,28 @@ spec:
                     - targetWorkerNode
                   type: object
                 nodeRef:
-                  description: NodeRef is the name of the target StorageNode. Immutable.
+                  description: |-
+                    NodeRef names the StorageNode this operation acts on. The operation never
+                    owns its target, because deleting the record of an operation must not delete
+                    the node it operated on.
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
                 reattachVolume:
                   description: |-
-                    ReattachVolume reattaches volumes during the node restart.
-                    Applicable when action=Restart or action=Migrate.
+                    ReattachVolume asks the control plane to reattach this node's volumes as
+                    part of a restart. Applies to Restart, Migrate, and HostMaintenance.
                   type: boolean
                 remove:
                   description: Remove parameterizes action Remove and is ignored by the others.
                   properties:
                     systemVolumeFilterRegex:
+                      default: ^sb-fio-baseline-.*
                       description: |-
-                        SystemVolumeFilterRegex is a Go regular expression matched against backend
-                        volume names. Matching volumes are treated as system volumes: excluded from
-                        drain migration and deleted inline during the Verifying phase.
-                        Defaults to `^sb-fio-baseline-.*`.
+                        SystemVolumeFilterRegex matches backend volume names that are system
+                        volumes: excluded from the drain's migration and deleted during
+                        verification rather than blocking it.
                       type: string
                   type: object
               required:
@@ -298,50 +311,79 @@ spec:
                 - nodeRef
               type: object
             status:
-              description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
+              description: StorageNodeOpsStatus is the observed state of one node operation.
               properties:
                 completedAt:
-                  description: CompletedAt is when the operation finished (successfully or not).
+                  description: CompletedAt is when it reached a terminal phase.
                   format: date-time
                   type: string
+                drain:
+                  description: |-
+                    Drain is the drain's progress over the node's volumes, set only for action
+                    Remove.
+                  properties:
+                    volumesMigrated:
+                      description: VolumesMigrated is how many of them have completed.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    volumesTotal:
+                      description: |-
+                        VolumesTotal is the number of PV-managed volumes the drain has to move,
+                        written once at the end of Validating and not modified afterward.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                  required:
+                    - volumesMigrated
+                    - volumesTotal
+                  type: object
                 message:
-                  description: Message is a human-readable description of the current state or failure reason.
+                  description: |-
+                    Message is the reason the phase is what it is: one sentence, replaced as the
+                    operation moves, and never a log.
                   type: string
+                observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
+                  format: int64
+                  type: integer
                 phase:
-                  description: Phase is the high-level lifecycle phase.
+                  description: Phase is the operation's own progress.
                   enum:
                     - Pending
                     - Running
                     - Succeeded
                     - Failed
+                    - Aborted
                   type: string
                 startedAt:
-                  description: StartedAt is when the operation began.
+                  description: StartedAt is when the operation acquired its target's lock.
                   format: date-time
                   type: string
-                subPhase:
-                  description: SubPhase tracks the active drain step when action=Remove and phase=Running.
-                  enum:
-                    - Validating
-                    - Suspending
-                    - Migrating
-                    - Verifying
-                    - Removing
-                    - Preparing
-                    - Restarting
-                    - Promoting
-                  type: string
-                triggered:
+                step:
                   description: |-
-                    Triggered indicates the backend action POST has been sent (used during
-                    Suspending to avoid duplicate POSTs across reconcile iterations).
-                  type: boolean
-                volumesMigrated:
-                  description: VolumesMigrated is the count of volumes successfully migrated (drain only).
-                  type: integer
-                volumesPending:
-                  description: VolumesPending is the count of volumes awaiting migration (drain only).
-                  type: integer
+                    Step is the position of the running action's state machine, as the shared
+                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
+                    marker could reach a field of a shared type.
+                  properties:
+                    deadline:
+                      description: |-
+                        Deadline is when that state expires, absent when it has none. It is an
+                        absolute instant, so a state whose deadline passed while the controller
+                        was down restores as already expired.
+                      format: date-time
+                      type: string
+                    state:
+                      description: |-
+                        State is the state the machine was in. Empty means the resource has not
+                        been reconciled yet, and restores to the graph's initial state.
+                      type: string
+                  type: object
+                  x-kubernetes-validations:
+                    - message: unknown step
+                      rule: '!has(self.state) || self.state in [''Requesting'',''Awaiting'',''Validating'',''Suspending'',''MigratingVolumes'',''Verifying'',''Removing'',''Preparing'',''Relocating'',''AwaitingNode'',''Promoting'',''Holding'',''ShuttingDown'',''Releasing'',''AwaitingHost'',''Restarting'',''Cleanup'']'
               type: object
           type: object
       served: true

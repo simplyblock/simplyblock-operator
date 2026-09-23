@@ -22,16 +22,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - namespaces
   - pods/log
   verbs:
@@ -65,6 +55,7 @@ rules:
   - create
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -74,9 +65,15 @@ rules:
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - admissionregistration.k8s.io
   resources:
@@ -103,6 +100,7 @@ rules:
   - storageclusterops.storage.simplyblock.io
   - storageclusters.storage.simplyblock.io
   - storagenodeops.storage.simplyblock.io
+  - storagenodes.storage.simplyblock.io
   - storagepools.storage.simplyblock.io
   resources:
   - customresourcedefinitions
@@ -124,7 +122,21 @@ rules:
   - apps
   resources:
   - daemonsets
+  - deployments
   - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps.foundationdb.org
+  resources:
+  - foundationdbbackups
+  - foundationdbclusters
   verbs:
   - create
   - delete
@@ -174,13 +186,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
   - groupsnapshot.storage.k8s.io
   resources:
   - volumegroupsnapshotclasses
@@ -207,6 +212,8 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
+  - rolebindings
+  - roles
   verbs:
   - bind
   - create
@@ -265,8 +272,10 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - controlplaneops
   - controlplanes
   - operatorops
+  - persistentvolumeops
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -277,10 +286,10 @@ rules:
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedeviceops
   - storagedevices
   - storagenodeops
   - storagenodes
-  - storagenodesets
   - storagepoolops
   - storagepools
   - tasks
@@ -299,7 +308,11 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - clusterdeploymentconfigs/finalizers
+  - controlplaneops/finalizers
+  - controlplanes/finalizers
   - operatorops/finalizers
+  - persistentvolumeops/finalizers
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
@@ -309,9 +322,9 @@ rules:
   - storagebackuppolicies/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
+  - storagedeviceops/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
-  - storagenodesets/finalizers
   - storagepoolops/finalizers
   - storagepools/finalizers
   - tasks/finalizers
@@ -325,8 +338,10 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - clusterdeploymentconfigs/status
+  - controlplaneops/status
   - controlplanes/status
   - operatorops/status
+  - persistentvolumeops/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -337,6 +352,7 @@ rules:
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedeviceops/status
   - storagedevices/status
   - storagenodeops/status
   - storagenodes/status
@@ -364,6 +380,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storagenodesets
   - volumegroupsnapshotops
   verbs:
   - get

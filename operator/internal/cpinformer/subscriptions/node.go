@@ -16,7 +16,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
@@ -106,7 +106,7 @@ func (s *NodeSubscription) enqueue(ctx context.Context, nodeID string) {
 	if !ok {
 		return
 	}
-	sn := &simplyblockv1alpha1.StorageNode{}
+	sn := &simplyblockv1alpha2.StorageNode{}
 	sn.SetNamespace(key.Namespace)
 	sn.SetName(key.Name)
 	select {

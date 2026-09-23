@@ -96,6 +96,7 @@ func NewServer(
 	deviceCapacity DeviceCapacitySource,
 	poolCapacity PoolCapacitySource,
 	clusterCapacity ClusterCapacitySource,
+	nodeCapacity NodeCapacitySource,
 	log logr.Logger,
 ) (*Server, error) {
 	opts.withDefaults()
@@ -157,6 +158,7 @@ func NewServer(
 		DeviceResourceName:  NewDeviceStorage(reader, deviceCapacity),
 		PoolResourceName:    NewPoolStorage(reader, poolCapacity),
 		ClusterResourceName: NewClusterStorage(reader, clusterCapacity),
+		NodeResourceName:    NewNodeStorage(reader, nodeCapacity),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		return nil, fmt.Errorf("metricsapi: install api group: %w", err)

@@ -1,0 +1,45 @@
+{{/*
+The ways a control-plane profile can be asked for something it cannot do.
+
+They fail at render time rather than at apply time, because each produces a
+deployment that comes up and is quietly wrong: one pointed at no control plane
+at all, and one whose upgrade would prune the database.
+
+A TLS standalone deployment used to be refused here. The ControlPlane spec now
+carries spec.source.local.tls, the operator's install honors it, and
+controlplane_cr.yaml renders it from tls.enabled, so the deployment that could
+only come up in plaintext is expressible and the refusal is gone.
+*/}}
+
+
+{{- if not (has .Values.deployment.profile (list "standalone" "managed")) -}}
+{{- fail (printf "deployment.profile is %q: it is one of standalone (this cluster hosts its own control plane) or managed (a control plane elsewhere manages this cluster's storage)." .Values.deployment.profile) -}}
+{{- end -}}
+
+{{/*
+The managed profile needs somewhere to point. The CR template requires the
+endpoint too, and this exists so the message names the value rather than the
+field of a CRD the reader has not seen.
+*/}}
+{{- if and (eq .Values.deployment.profile "managed") (not .Values.controlplane.managed.endpoint) -}}
+{{- fail "deployment.profile=managed needs controlplane.managed.endpoint: it is where the control plane that manages this cluster answers, and nothing is installed locally to fall back to." -}}
+{{- end -}}
+
+{{/*
+An in-place upgrade from a release that installed the control plane itself would
+prune it.
+
+Helm deletes what the old release manifest held and the new one does not, and
+before profiles the chart's manifest held the FoundationDBCluster. That database
+is every cluster definition, node registration, and lvol record, and none of
+those objects carries a keep policy, so the upgrade would take the fleet's state
+with it and the operator would then build an empty one.
+
+The lookup finds nothing on a fresh install, so only an upgrade can trip this.
+*/}}
+{{- $running := lookup "apps/v1" "Deployment" .Release.Namespace "simplyblock-webappapi" -}}
+{{- if and $running (index $running.metadata.annotations "meta.helm.sh/release-name") -}}
+{{- fail "this namespace holds a control plane installed by an earlier release of this chart, and upgrading in place would delete it, FoundationDB included. Annotate what it owns so Helm keeps it first:\n\n  for k in deployment/simplyblock-webappapi deployment/simplyblock-tasks deployment/simplyblock-monitoring deployment/simplyblock-admin-control deployment/simplyblock-fdb-controller-manager deployment/simplyblock-fdb-exporter statefulset/simplyblock-minio foundationdbcluster/simplyblock-fdb-cluster; do\n    kubectl -n <namespace> annotate $k helm.sh/resource-policy=keep --overwrite\n  done\n\nthen upgrade. The operator adopts them in place." -}}
+{{- end -}}
+
+

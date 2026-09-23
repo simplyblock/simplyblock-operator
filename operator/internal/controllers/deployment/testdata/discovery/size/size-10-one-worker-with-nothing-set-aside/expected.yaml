@@ -1,0 +1,34 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: discover-size-10
+  name: discovered-discover-size-10
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    enableDriveFormat: true
+    maxSubsystemCount: 30
+    name: discovered-discover-size-10-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    vcpuCount: 8
+  environment: K3s
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5e:00.1
+      mgmtInterface: eth0
+      name: group-1-nvme-2x3T
+      workers:
+      - worker-01
+      - worker-02
+      - worker-03
+    name: discovered
+status:
+  step: {}

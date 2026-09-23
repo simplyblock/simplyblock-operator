@@ -46,6 +46,18 @@ const (
 	// ContentForeign means the device carries something else: a recognized
 	// format this driver does not create, or bytes that match nothing known.
 	ContentForeign
+
+	// ContentSimplyblock means the device carries this product's own storage
+	// superblock, written by a storage node rather than by any formatting tool.
+	//
+	// It is separate from ContentForeign because the two answer different
+	// questions for a caller deciding what to offer. Foreign content belongs to
+	// somebody else and the answer is always no. This content belongs to a
+	// simplyblock deployment, so the question becomes which one: a device a
+	// storage node is driving is bound to a userspace driver and is not a block
+	// device at all, so one that is readable here is a device no node currently
+	// holds.
+	ContentSimplyblock
 )
 
 // String names the content for a log line, an event, and a test failure.
@@ -59,6 +71,8 @@ func (c Content) String() string {
 		return "StackLayer"
 	case ContentForeign:
 		return "Foreign"
+	case ContentSimplyblock:
+		return "Simplyblock"
 	case ContentUnknown:
 		return "Unknown"
 	default:

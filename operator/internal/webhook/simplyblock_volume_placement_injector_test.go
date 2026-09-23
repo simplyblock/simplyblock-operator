@@ -65,7 +65,7 @@ func makePlacementCluster(autoRebalancing *simplyblockv1alpha2.VolumeAutoPlaceme
 }
 
 // applyPVCPatches applies the RFC6902 patch set produced by Handle to the original PVC
-// via a real JSON-patch library, mirroring what the k8s apiserver does — avoids having to
+// via a real JSON-patch library, mirroring what the K8s apiserver does — avoids having to
 // guess the exact path granularity the diff library chose for the annotations map.
 func applyPVCPatches(t *testing.T, pvc *corev1.PersistentVolumeClaim, patches []jsonpatch.JsonPatchOperation) *corev1.PersistentVolumeClaim {
 	t.Helper()
@@ -114,7 +114,8 @@ type promSample struct {
 
 // fakePrometheusServer serves a canned instant-query vector result for any GET request to
 // /api/v1/query, in the exact envelope prometheus/client_golang's API client expects:
-// {"status":"success","data":{"resultType":"vector","result":[...]}}.
+// The body is a Prometheus vector response: a success status carrying a data
+// object whose resultType is vector and whose result list is the samples.
 func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -345,7 +346,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		PrometheusURL:          ptr.To(promSrv.URL),
 		// This case seeds fixed per-node baselines on the CR status and varies only the
 		// current (instant) Prometheus reading to produce known deviations — that is the
-		// "benchmark" baseline model, so pin the strategy to it.
+		// "Benchmark" baseline model, so pin the strategy to it.
 		BaselineStrategy: ptr.To(simplyblockv1alpha2.BaselineStrategyBenchmark),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})

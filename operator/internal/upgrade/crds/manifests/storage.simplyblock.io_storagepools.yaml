@@ -295,9 +295,10 @@ spec:
               properties:
                 allowedNodes:
                   description: |-
-                    AllowedNodes restricts which storage nodes may host this pool's volumes.
-                    Empty means every node in the cluster. Narrowing it stops new volumes
-                    landing on the removed nodes and leaves the existing ones where they are.
+                    AllowedNodes restricts which hosts may carry this pool's volumes, by
+                    Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+                    stops new volumes landing on the removed nodes and leaves the existing
+                    ones where they are.
 
                     The list is left exactly as authored: a name that no longer resolves is
                     dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -315,6 +316,12 @@ spec:
                     pool's own finalizer while classes are assigned or volumes are bound.
 
                     Immutable from creation: which cluster a pool is in is its identity.
+
+                    The maximum is what a StorageCluster name may be rather than what a
+                    reference may be: a longer value names nothing that can exist, and the
+                    reference is immutable, so admitting one creates a pool whose only
+                    remedy is deletion (design-api-upgrade.md §19.4).
+                  maxLength: 63
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -490,10 +497,11 @@ spec:
                   type: string
                 allowedNodes:
                   description: |-
-                    AllowedNodes is Spec.AllowedNodes resolved against the StorageNodes that
-                    exist, which is what the control plane is sent. An empty list here is not
-                    the same as an absent Spec.AllowedNodes: absent means every node, and
-                    empty after resolution means the pool can place nothing.
+                    AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+                    exist, which is what the control plane's host list and the per-pool node
+                    labels are derived from. An empty list here is not the same as an absent
+                    Spec.AllowedNodes: absent means every node, and empty after resolution
+                    means the pool can place nothing.
                   items:
                     type: string
                   type: array
@@ -580,6 +588,9 @@ spec:
                   type: string
               type: object
           type: object
+          x-kubernetes-validations:
+            - message: a StoragePool name is at most 63 characters, because it is written into the storage.simplyblock.io/pool label that assigns StorageClasses to this pool
+              rule: size(self.metadata.name) <= 63
       served: true
       storage: true
       subresources:

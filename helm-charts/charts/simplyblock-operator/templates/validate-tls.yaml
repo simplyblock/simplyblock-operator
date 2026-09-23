@@ -1,11 +1,20 @@
+{{/*
+TLS needs an issuer, and which issuers exist is a property of the cluster rather
+than of the values.
+
+Both messages name the way out as well as the problem, because TLS is on by
+default: a deployment reaching either of these did not ask for the thing it is
+being refused, so a message that only states what is missing leaves a reader to
+work out that there was a choice at all.
+*/}}
 {{- if .Values.tls.enabled -}}
 {{-   if eq .Values.tls.provider "openshift" -}}
 {{-     if not (.Capabilities.APIVersions.Has "config.openshift.io/v1/ClusterVersion") -}}
-{{-       fail "tls.provider=openshift requires installing on an OpenShift cluster" -}}
+{{-       fail "tls.provider=openshift signs through the OpenShift service CA, and this is not an OpenShift cluster. Set tls.provider=cert-manager where cert-manager is installed, or tls.enabled=false to deploy without TLS." -}}
 {{-     end -}}
 {{-   else if eq .Values.tls.provider "cert-manager" -}}
 {{-     if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") -}}
-{{-       fail "tls.provider=cert-manager requires cert-manager.io/v1 to be installed in the cluster" -}}
+{{-       fail "TLS is on by default and cert-manager issues its certificates, and cert-manager.io/v1 is not served by this cluster. Install cert-manager (helm repo add jetstack https://charts.jetstack.io && helm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set installCRDs=true), or set tls.enabled=false to deploy without TLS." -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}

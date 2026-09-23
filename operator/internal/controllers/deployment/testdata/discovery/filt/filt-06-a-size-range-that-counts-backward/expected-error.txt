@@ -1,0 +1,1 @@
+spec.discover.deviceFilter.driveSizeRange is "2T-1T", which cannot be read: the size range "2T-1T" counts backward. A run whose range cannot be read applies no size filter at all, so the draft would name every disk on every worker rather than the ones asked for

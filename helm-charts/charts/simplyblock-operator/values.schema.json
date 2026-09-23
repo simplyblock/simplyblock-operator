@@ -6,53 +6,93 @@
     "tls": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled"],
+      "required": [
+        "enabled"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "provider": { "enum": ["openshift", "cert-manager"] },
-        "mutual_enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "enum": [
+            "openshift",
+            "cert-manager"
+          ]
+        },
+        "mutual_enabled": {
+          "type": "boolean"
+        },
         "cert-manager": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "createSelfSignedIssuer": { "type": "boolean" },
-            "cluster-issuer": { "type": "string" },
-            "namespace": { "type": "string" }
+            "createSelfSignedIssuer": {
+              "type": "boolean"
+            },
+            "cluster-issuer": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            }
           }
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": { "enabled": { "const": true } },
-            "required": ["enabled"]
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
           },
           "then": {
-            "required": ["provider"]
+            "required": [
+              "provider"
+            ]
           }
         },
         {
           "if": {
             "properties": {
-              "enabled": { "const": true },
-              "provider": { "const": "cert-manager" }
+              "enabled": {
+                "const": true
+              },
+              "provider": {
+                "const": "cert-manager"
+              }
             },
-            "required": ["enabled", "provider"]
+            "required": [
+              "enabled",
+              "provider"
+            ]
           },
           "then": {
-            "required": ["cert-manager"],
+            "required": [
+              "cert-manager"
+            ],
             "properties": {
               "cert-manager": {
-                "required": ["cluster-issuer"],
+                "required": [
+                  "cluster-issuer"
+                ],
                 "properties": {
-                  "cluster-issuer": { "minLength": 1 }
+                  "cluster-issuer": {
+                    "minLength": 1
+                  }
                 }
               }
             }
           },
           "else": {
             "properties": {
-              "mutual_enabled": { "const": false }
+              "mutual_enabled": {
+                "const": false
+              }
             }
           }
         }
@@ -78,18 +118,34 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "enabled": { "type": "boolean" },
-                        "url": { "type": "string" }
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
                       },
                       "allOf": [
                         {
                           "if": {
-                            "properties": { "enabled": { "const": true } },
-                            "required": ["enabled"]
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "enabled"
+                            ]
                           },
                           "then": {
-                            "required": ["url"],
-                            "properties": { "url": { "minLength": 1 } }
+                            "required": [
+                              "url"
+                            ],
+                            "properties": {
+                              "url": {
+                                "minLength": 1
+                              }
+                            }
                           }
                         }
                       ]
@@ -98,18 +154,34 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "enabled": { "type": "boolean" },
-                        "url": { "type": "string" }
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
                       },
                       "allOf": [
                         {
                           "if": {
-                            "properties": { "enabled": { "const": true } },
-                            "required": ["enabled"]
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "enabled"
+                            ]
                           },
                           "then": {
-                            "required": ["url"],
-                            "properties": { "url": { "minLength": 1 } }
+                            "required": [
+                              "url"
+                            ],
+                            "properties": {
+                              "url": {
+                                "minLength": 1
+                              }
+                            }
                           }
                         }
                       ]
@@ -118,22 +190,51 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "enabled": { "type": "boolean" },
-                        "integrationKey": { "type": "string" },
-                        "severity": { "enum": ["info", "warning", "error", "critical"] },
-                        "class": { "type": "string" },
-                        "component": { "type": "string" },
-                        "group": { "type": "string" }
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "integrationKey": {
+                          "type": "string"
+                        },
+                        "severity": {
+                          "enum": [
+                            "info",
+                            "warning",
+                            "error",
+                            "critical"
+                          ]
+                        },
+                        "class": {
+                          "type": "string"
+                        },
+                        "component": {
+                          "type": "string"
+                        },
+                        "group": {
+                          "type": "string"
+                        }
                       },
                       "allOf": [
                         {
                           "if": {
-                            "properties": { "enabled": { "const": true } },
-                            "required": ["enabled"]
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "enabled"
+                            ]
                           },
                           "then": {
-                            "required": ["integrationKey"],
-                            "properties": { "integrationKey": { "minLength": 1 } }
+                            "required": [
+                              "integrationKey"
+                            ],
+                            "properties": {
+                              "integrationKey": {
+                                "minLength": 1
+                              }
+                            }
                           }
                         }
                       ]
@@ -142,22 +243,50 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "enabled": { "type": "boolean" },
-                        "apiKey": { "type": "string" },
-                        "apiUrl": { "type": "string" },
-                        "autoClose": { "type": "boolean" },
-                        "overridePriority": { "type": "boolean" },
-                        "sendTagsAs": { "enum": ["tags", "details", "both"] }
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "apiKey": {
+                          "type": "string"
+                        },
+                        "apiUrl": {
+                          "type": "string"
+                        },
+                        "autoClose": {
+                          "type": "boolean"
+                        },
+                        "overridePriority": {
+                          "type": "boolean"
+                        },
+                        "sendTagsAs": {
+                          "enum": [
+                            "tags",
+                            "details",
+                            "both"
+                          ]
+                        }
                       },
                       "allOf": [
                         {
                           "if": {
-                            "properties": { "enabled": { "const": true } },
-                            "required": ["enabled"]
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "enabled"
+                            ]
                           },
                           "then": {
-                            "required": ["apiKey"],
-                            "properties": { "apiKey": { "minLength": 1 } }
+                            "required": [
+                              "apiKey"
+                            ],
+                            "properties": {
+                              "apiKey": {
+                                "minLength": 1
+                              }
+                            }
                           }
                         }
                       ]
@@ -166,24 +295,56 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "enabled": { "type": "boolean" },
-                        "url": { "type": "string" },
-                        "httpMethod": { "enum": ["POST", "PUT"] },
-                        "username": { "type": "string" },
-                        "password": { "type": "string" },
-                        "authorizationScheme": { "type": "string" },
-                        "authorizationCredentials": { "type": "string" },
-                        "maxAlerts": { "type": "integer", "minimum": 0 }
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "httpMethod": {
+                          "enum": [
+                            "POST",
+                            "PUT"
+                          ]
+                        },
+                        "username": {
+                          "type": "string"
+                        },
+                        "password": {
+                          "type": "string"
+                        },
+                        "authorizationScheme": {
+                          "type": "string"
+                        },
+                        "authorizationCredentials": {
+                          "type": "string"
+                        },
+                        "maxAlerts": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
                       },
                       "allOf": [
                         {
                           "if": {
-                            "properties": { "enabled": { "const": true } },
-                            "required": ["enabled"]
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "enabled"
+                            ]
                           },
                           "then": {
-                            "required": ["url"],
-                            "properties": { "url": { "minLength": 1 } }
+                            "required": [
+                              "url"
+                            ],
+                            "properties": {
+                              "url": {
+                                "minLength": 1
+                              }
+                            }
                           }
                         }
                       ]
@@ -191,6 +352,87 @@
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "driverName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "Never",
+                "IfNotPresent"
+              ]
+            }
+          }
+        },
+        "controllerReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "controllerNodeSelector": {
+          "type": "object"
+        },
+        "controllerTolerations": {
+          "type": "array"
+        },
+        "enableVolumeSnapshots": {
+          "type": "boolean"
+        },
+        "enableServiceAccountAuth": {
+          "type": "boolean"
+        },
+        "sidecarImages": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provisioner": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "attacher": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "resizer": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "snapshotter": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "healthMonitor": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "nodeDriverRegistrar": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
             }
           }
         }

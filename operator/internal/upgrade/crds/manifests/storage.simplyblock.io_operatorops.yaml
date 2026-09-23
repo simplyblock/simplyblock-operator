@@ -93,6 +93,10 @@ spec:
                       creates. It is copied to the draft's own clusterRef, so that re-running
                       discovery after an expansion produces a growth document naming the same
                       cluster.
+
+                      Bounded at what a StorageCluster name may be, since a longer value names
+                      nothing that can exist (design-api-upgrade.md §19.4).
+                    maxLength: 63
                     type: string
                   configName:
                     description: |-
@@ -183,14 +187,54 @@ spec:
                         devices and require enableLogicalBlockDevices
                       rule: (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices)
                         || !(has(self.blockAllowList) || has(self.blockDenyList))
+                  enableControlPlaneNodes:
+                    description: |-
+                      EnableControlPlaneNodes lets the run consider machines that run the API
+                      server and etcd.
+
+                      It is off by default because a storage node is a data path, and putting one
+                      on an etcd host is a placement almost nobody intends. The approval gate is a
+                      poor place to catch it: a fifty-worker draft is not a document anybody reads
+                      closely enough to spot three control-plane nodes in it. A combined three-node
+                      or single-node deployment is the case that wants it, and those are set up
+                      deliberately.
+
+                      There is no field beside it for infrastructure nodes, because those are used
+                      without asking: an OpenShift infra node is the tier a cluster's own
+                      infrastructure runs on, and simplyblock storage is infrastructure. A fleet
+                      with disks in its infra nodes meant those disks to be the storage, so a draft
+                      proposes them ahead of the workers rather than leaving them out.
+                    type: boolean
                   nodeSelector:
                     additionalProperties:
                       type: string
                     description: |-
                       NodeSelector restricts which workers are inspected. Empty inspects every
-                      schedulable worker.
+                      schedulable worker, and it is exclusive with Workers.
                     type: object
+                  workers:
+                    description: |-
+                      Workers are the workers to inspect, by node name.
+
+                      It is the answer to inspecting two named machines, which a label selector
+                      can only express by labeling them first: a selector's entries are ANDed,
+                      so two hostnames in one selector match nothing at all.
+
+                      A named worker that does not exist, or that is declined for one of the
+                      reasons any worker is declined, is reported by the same event the selector
+                      path reports it by. Naming a worker is a statement about which machines to
+                      consider, not a claim that each of them will be used.
+                    items:
+                      maxLength: 253
+                      type: string
+                    maxItems: 128
+                    type: array
                 type: object
+                x-kubernetes-validations:
+                - message: spec.discover names workers and also carries a nodeSelector;
+                    state one or the other
+                  rule: '!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector)
+                    && size(self.nodeSelector) > 0)'
             required:
             - action
             type: object
