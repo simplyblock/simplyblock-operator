@@ -302,6 +302,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// resolved to how. NVMe is the class the cluster's own field covers, and
 		// the logical-block half has no field to carry it yet.
 		workload.EnableFormat4K = template.EnableDriveFormat
+		// The journal layout is the cluster's and immutable on it, so the
+		// document is the only place it can still be stated. Dropping it here
+		// partitioned a journal out of every drive on a deployment reviewed for
+		// a dedicated one.
+		workload.EnableJournalDevice = template.EnableJournalDevice
 	}
 
 	for _, set := range config.Spec.NodeSets {

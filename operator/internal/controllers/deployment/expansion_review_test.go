@@ -364,3 +364,31 @@ func TestTheDriveFormatDecisionReachesTheCluster(t *testing.T) {
 		}
 	}
 }
+
+// The document's journal-device decision reaches the cluster it creates.
+//
+// Whether the journal manager is given a device of its own or a partition of
+// every device is the on-disk layout the nodes are built with, and the cluster's
+// field is immutable once it exists. A document that cannot state it leaves
+// every deployment it produces carving a journal partition out of each drive,
+// whatever layout the deployment was reviewed for.
+func TestTheJournalDeviceDecisionReachesTheCluster(t *testing.T) {
+	for _, stated := range []*bool{ptr.To(true), ptr.To(false), nil} {
+		config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+			c.Spec.Cluster.EnableJournalDevice = stated
+		})
+		r := reconcilerFor(t)
+
+		workload := r.buildWorkload(config)
+		switch {
+		case stated == nil && workload.EnableJournalDevice != nil:
+			t.Errorf("a document that says nothing produced %v",
+				*workload.EnableJournalDevice)
+		case stated != nil && workload.EnableJournalDevice == nil:
+			t.Errorf("a document that said %v produced nothing", *stated)
+		case stated != nil && *workload.EnableJournalDevice != *stated:
+			t.Errorf("the cluster got %v, want the document's %v",
+				*workload.EnableJournalDevice, *stated)
+		}
+	}
+}

@@ -791,6 +791,18 @@ spec:
                       EnableFailureDomains opts the cluster into failure-domain mode, in which
                       every group must label the fault group its workers belong to.
                     type: boolean
+                  enableJournalDevice:
+                    description: |-
+                      EnableJournalDevice dedicates the smallest NVMe device on each of this
+                      deployment's workers to the journal manager, instead of carving a journal
+                      partition out of every device.
+
+                      It is here rather than on a node set because it is immutable on the cluster
+                      it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
+                      built with is not one a later document can vary. It also costs a drive of
+                      capacity per node, which is a trade a reviewer approves rather than one a
+                      default makes for them.
+                    type: boolean
                   fabricType:
                     description: FabricType is the storage fabric.
                     maxLength: 32
