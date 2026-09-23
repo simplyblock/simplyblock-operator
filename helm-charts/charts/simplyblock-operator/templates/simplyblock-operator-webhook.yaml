@@ -132,8 +132,6 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
-<<<<<<< HEAD
-=======
       path: /validate-v1-pvc-vdo-size
   failurePolicy: Ignore
   name: vdo-size-floor-validator.simplyblock.io
@@ -153,7 +151,6 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
->>>>>>> main
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
   failurePolicy: Fail
   name: voperatorops.simplyblock.io

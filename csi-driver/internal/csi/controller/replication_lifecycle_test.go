@@ -42,7 +42,9 @@ func TestPromoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *t
 	mock := newMockSBCLI()
 	defer mock.Close()
 	cs := newReplicationTestServer(t, mock)
-	mock.volumes[testReplTargetVolumeID] = &mockVolume{UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30}
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30,
+	}
 	mock.replicationRelationship[testReplVolumeID] = map[string]any{
 		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		"direction":         "to_target",
@@ -61,7 +63,8 @@ func TestPromoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *t
 		t.Fatal(err)
 	}
 	if mock.lastFailoverVolumeID != testReplTargetVolumeID {
-		t.Errorf("failover landed on volume %q, want the resolved target %q", mock.lastFailoverVolumeID, testReplTargetVolumeID)
+		t.Errorf("failover landed on volume %q, want the resolved target %q",
+			mock.lastFailoverVolumeID, testReplTargetVolumeID)
 	}
 }
 

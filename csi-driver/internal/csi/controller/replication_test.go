@@ -101,7 +101,9 @@ func TestEnableVolumeReplicationResolvesToTargetWhenGivenTheSourceSideOfARelatio
 	mock := newMockSBCLI()
 	defer mock.Close()
 	cs := newReplicationTestServer(t, mock)
-	mock.volumes[testReplTargetVolumeID] = &mockVolume{UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30}
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30,
+	}
 	mock.replicationRelationship[testReplVolumeID] = map[string]any{
 		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		"direction":         "to_target",
