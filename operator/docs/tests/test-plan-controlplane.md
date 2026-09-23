@@ -33,14 +33,6 @@ and `status.endpoint` after design §3.3.
 Pure functions and single reconcile calls against a fake client, with the control
 plane replaced by a mock HTTP server. No Kubernetes API server is involved.
 
-### Helm Helper Scripts
-
-File: `helm-charts/scripts/tests/setup-kms_test.sh`
-
-| #     | Scenario                                                                                                | Type       | Test                |
-|-------|---------------------------------------------------------------------------------------------------------|------------|---------------------|
-| U-149 | OpenBao's KV mount is version 2, matching the control plane's KV v2 client (`2026-09-23-openbao-kv-v1`) | Regression | `setup-kms_test.sh` |
-
 ### The Singleton Guard (design §3.1)
 
 File: `operator/internal/controllers/controlplane/controlplane_controller_unit_test.go`
