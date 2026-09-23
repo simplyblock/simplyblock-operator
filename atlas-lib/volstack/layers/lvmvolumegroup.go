@@ -195,7 +195,7 @@ func (l *LVMVolumeGroup) Release(ctx context.Context, below volstack.Artifact) e
 	// fails the release a volume's whole teardown depends on.
 	for _, dev := range below.Devices {
 		if err := l.cfg.Manager.ForgetDevice(ctx, dev.Path); err != nil {
-			warnf("lvmVolumeGroup: forget device %s: %v", dev.Path, err)
+			volstack.Warnf("lvmVolumeGroup: forget device %s: %v", dev.Path, err)
 		}
 	}
 	return nil

@@ -111,7 +111,20 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 		if attempted != nil && !attempted[i] {
 			continue
 		}
-		if states != nil && states[i] == StateAbsent {
+		// Already down, so a release has nothing to do to it. Absent is nothing
+		// of the layer being there at all, and Inactive is the state Release
+		// itself leaves behind: complete, and not mapped on this host. A
+		// teardown resuming over a stack something already took part of down
+		// meets both, and acting on either is work against an object that is in
+		// the state the caller is asking for.
+		//
+		// Said out loud, because otherwise it cannot be told apart from the
+		// teardown that did the work: both return the same nothing.
+		//
+		// Partial is not among them, and must not be. A fabric device that is
+		// present and cannot serve is still the device a release has to detach.
+		if states != nil && (states[i] == StateAbsent || states[i] == StateInactive) {
+			Infof("volstack: release %s skipped, already down (%s)", plan[i].Name(), states[i])
 			continue
 		}
 		if err := plan[i].Release(ctx, inputs[i]); err != nil {
