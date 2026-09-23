@@ -130,6 +130,33 @@ func TestEnableVolumeReplicationResolvesToTargetWhenGivenTheSourceSideOfARelatio
 	}
 }
 
+// simplyblock's replication is one-way and the destination never carries a
+// persistent, independently-provisioned LVol of its own (confirmed live
+// 2026-09-23, relocate M-02): the writable clone only comes into existence
+// when PromoteVolume clones the last replicated snapshot. csi-addons always
+// calls EnableVolumeReplication before PromoteVolume, unconditionally, for
+// the side that's becoming Primary -- so on a first-ever relocate (no prior
+// relationship for resolveToLocalReplica to redirect through either), Enable
+// is handed a handle that legitimately names nothing yet. That must no-op
+// rather than fail: PromoteVolume is what actually creates and validates the
+// volume, and is what surfaces a real error if there's genuinely nothing to
+// clone from.
+func TestEnableVolumeReplicationNoOpsWhenVolumeDoesNotExistYet(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	notYetClonedVolumeID := "99999999-8888-8888-8888-888888888888"
+	notYetClonedVolID := sanityClusterID + ":" + sanityPoolUUID + ":" + notYetClonedVolumeID
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		VolumeId:   notYetClonedVolID,
+		Parameters: map[string]string{replicationPolicyParam: testReplPolicyID},
+	})
+	if err != nil {
+		t.Errorf("EnableVolumeReplication = %v, want nil (no-op: nothing to attach a policy to yet)", err)
+	}
+}
+
 func TestEnableVolumeReplicationMissingPolicyParam(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

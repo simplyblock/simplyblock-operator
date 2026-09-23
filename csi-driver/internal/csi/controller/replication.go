@@ -126,6 +126,22 @@ func (cs *Server) EnableVolumeReplication(
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := client.EnableVolumeReplication(ctx, h.Handle(), policyID); err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			// This backend's replication is one-way: the destination never
+			// carries a persistent, independently-provisioned LVol of its
+			// own -- the writable clone only comes into existence when
+			// PromoteVolume clones the last replicated snapshot. csi-addons
+			// always calls Enable before Promote, unconditionally, for
+			// whichever side is becoming Primary, so on a first-ever
+			// relocate (nothing for resolveToLocalReplica to redirect
+			// through either, since no relationship exists until a promote
+			// has actually happened) Enable is legitimately handed a handle
+			// that names nothing yet. There is nothing to attach a policy
+			// to, and nothing wrong either -- PromoteVolume is what actually
+			// creates and validates the volume, and is what surfaces a real
+			// error if there truly is nothing to clone from.
+			return &replication.EnableVolumeReplicationResponse{}, nil
+		}
 		return nil, classifyEnableVolumeReplicationError(err)
 	}
 	return &replication.EnableVolumeReplicationResponse{}, nil
