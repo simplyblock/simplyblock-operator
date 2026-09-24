@@ -226,7 +226,7 @@ func (cs *Server) DeleteVolume(
 func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string) error {
 	h, err := csicommon.ParseVolumeHandle(volumeID)
 	if err != nil {
-		return nil // unparseable handles were already tolerated as deleted above
+		return nil // unparsable handles were already tolerated as deleted above
 	}
 	cur := h
 	for range 8 { // one hop per past fail-over; capped far above any real chain
