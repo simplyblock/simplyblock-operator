@@ -289,6 +289,37 @@ type ClusterTemplate struct {
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
+	// ReservedSystemCPU is the CPU set held back from SPDK for system workloads,
+	// as a cpuset list such as "0,1".
+	//
+	// It belongs beside SocketsToUse and NodesPerSocket, which already divide a
+	// worker's CPUs on the document: this says which of them SPDK may not have.
+	// Nothing defaults it, so a document that omits it reserves nothing, and on a
+	// cluster whose kubelet is configured for static CPUs that is a choice a
+	// reviewer should make rather than inherit.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
+	// EnableCpuTopology turns on topology-aware CPU assignment.
+	//
+	// Environment already answers this for the environments that have an answer,
+	// and leaving it unset keeps that answer. It is here for the two cases the
+	// shorthand cannot serve: asking for topology on an environment whose default
+	// is to leave it off, and declining it on one whose default is to turn it on.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
+	// EnableKubeletConfiguration lets the node write the kubelet configuration
+	// that topology-aware CPU assignment needs.
+	//
+	// Set with EnableCpuTopology rather than instead of it: on a cluster whose
+	// kubelet is not configured for static CPUs, asking for topology alone gets a
+	// node that wants pinned CPUs from a kubelet that will not pin any. Like
+	// EnableCpuTopology, unset keeps whatever Environment decided.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
 	// NodeProvisioningBudget is how many workers the expansion may have in the
 	// node-add process at once. It expands into the cluster's own
 	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap

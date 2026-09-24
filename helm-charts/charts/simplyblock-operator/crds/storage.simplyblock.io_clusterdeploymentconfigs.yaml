@@ -96,6 +96,15 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  enableCpuTopology:
+                    description: |-
+                      EnableCpuTopology turns on topology-aware CPU assignment.
+
+                      Environment already answers this for the environments that have an answer,
+                      and leaving it unset keeps that answer. It is here for the two cases the
+                      shorthand cannot serve: asking for topology on an environment whose default
+                      is to leave it off, and declining it on one whose default is to turn it on.
+                    type: boolean
                   enableDriveFormat:
                     description: |-
                       EnableDriveFormat formats every device the document names before a storage
@@ -129,6 +138,16 @@ spec:
                       built with is not one a later document can vary. It also costs a drive of
                       capacity per node, which is a trade a reviewer approves rather than one a
                       default makes for them.
+                    type: boolean
+                  enableKubeletConfiguration:
+                    description: |-
+                      EnableKubeletConfiguration lets the node write the kubelet configuration
+                      that topology-aware CPU assignment needs.
+
+                      Set with EnableCpuTopology rather than instead of it: on a cluster whose
+                      kubelet is not configured for static CPUs, asking for topology alone gets a
+                      node that wants pinned CPUs from a kubelet that will not pin any. Like
+                      EnableCpuTopology, unset keeps whatever Environment decided.
                     type: boolean
                   fabricType:
                     description: FabricType is the storage fabric.
@@ -184,6 +203,18 @@ spec:
                     maximum: 8
                     minimum: 1
                     type: integer
+                  reservedSystemCPU:
+                    description: |-
+                      ReservedSystemCPU is the CPU set held back from SPDK for system workloads,
+                      as a cpuset list such as "0,1".
+
+                      It belongs beside SocketsToUse and NodesPerSocket, which already divide a
+                      worker's CPUs on the document: this says which of them SPDK may not have.
+                      Nothing defaults it, so a document that omits it reserves nothing, and on a
+                      cluster whose kubelet is configured for static CPUs that is a choice a
+                      reviewer should make rather than inherit.
+                    maxLength: 128
+                    type: string
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty

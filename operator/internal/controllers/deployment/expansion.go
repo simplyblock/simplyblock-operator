@@ -312,6 +312,13 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// partitioned a journal out of every drive on a deployment reviewed for
 		// a dedicated one.
 		workload.EnableJournalDevice = template.EnableJournalDevice
+		// Nothing else states this one: no default, and the environment shorthand
+		// below does not reach it. A document that omits it reserves nothing.
+		workload.ReservedSystemCPU = template.ReservedSystemCPU
+		// Copied before the environment switch, which defers to whatever is set
+		// here. See the switch.
+		workload.EnableCpuTopology = template.EnableCpuTopology
+		workload.EnableKubeletConfiguration = template.EnableKubeletConfiguration
 	}
 
 	for _, set := range config.Spec.NodeSets {
@@ -328,23 +335,37 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 	// The environment is a shorthand and this is where it is spent. Naming
 	// OpenShift once decides all four, after which nothing reads the field again
 	// and the nodes carry the resolved flags (§3.1).
+	//
+	// It is a default, not an override: a document that states one of these flags
+	// keeps it. Assigning unconditionally here would have read the document's
+	// value above and then thrown it away, leaving a field that validates, round
+	// trips, and changes nothing -- the failure this file already carries a
+	// warning about.
 	switch config.Spec.Environment {
 	case simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
 		workload.OpenShiftCluster = ptr.To(true)
-		workload.EnableCpuTopology = ptr.To(true)
+		if workload.EnableCpuTopology == nil {
+			workload.EnableCpuTopology = ptr.To(true)
+		}
 		// Stated rather than left nil. The renderer reads an unset flag as skipping
 		// the kubelet configuration, and the settings this product has shipped
 		// for OpenShift all configure it, so silence here would change what an
 		// OpenShift deployment does.
-		workload.EnableKubeletConfiguration = ptr.To(true)
+		if workload.EnableKubeletConfiguration == nil {
+			workload.EnableKubeletConfiguration = ptr.To(true)
+		}
 	case simplyblockv1alpha2.KubernetesEnvironmentTalos:
 		// Talos has no writable kubelet configuration and no package manager, so
 		// the node applies neither.
-		workload.EnableKubeletConfiguration = ptr.To(false)
+		if workload.EnableKubeletConfiguration == nil {
+			workload.EnableKubeletConfiguration = ptr.To(false)
+		}
 	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
 		simplyblockv1alpha2.KubernetesEnvironmentRancher,
 		simplyblockv1alpha2.KubernetesEnvironmentK3s:
-		workload.EnableKubeletConfiguration = ptr.To(true)
+		if workload.EnableKubeletConfiguration == nil {
+			workload.EnableKubeletConfiguration = ptr.To(true)
+		}
 	}
 	return workload
 }
