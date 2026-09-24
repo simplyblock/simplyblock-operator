@@ -22,7 +22,9 @@ type fakeRelationshipAPI struct {
 	conn map[string]map[string]string
 }
 
-func (f *fakeRelationshipAPI) GetRelationship(_ context.Context, lvolID string) (*controlplane.ReplicationRelationship, error) {
+func (f *fakeRelationshipAPI) GetRelationship(
+	_ context.Context, lvolID string,
+) (*controlplane.ReplicationRelationship, error) {
 	rel, ok := f.rels[lvolID]
 	if !ok {
 		return nil, errors.New("no replication relationship")

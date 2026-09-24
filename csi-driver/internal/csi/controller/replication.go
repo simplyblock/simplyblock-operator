@@ -255,7 +255,50 @@ func (cs *Server) PromoteVolume(
 	if err := client.PromoteVolume(ctx, h.Handle(), req.GetForce()); err != nil {
 		return nil, classifyPromoteVolumeError(err)
 	}
+	if err := attachPolicyToPromotedVolume(ctx, req); err != nil {
+		return nil, err
+	}
 	return &replication.PromoteVolumeResponse{}, nil
+}
+
+// attachPolicyToPromotedVolume re-resolves the request's handle AFTER a
+// successful promote and attaches the VolumeReplicationClass's policy to the
+// volume the walk now reaches -- the clone the promote just created. The
+// vendored csi-addons controller calls EnableVolumeReplication only at VR
+// creation, which on a relocate is BEFORE that clone exists: Enable lands on
+// the pre-promote side and no later reconcile re-issues it (confirmed live
+// 2026-09-24, twice -- the new primary ran unprotected, policy=NONE, while
+// the retired clone kept the policy). Promote is the one call that knows the
+// new primary exists, and the class parameters ride on every RPC, so it
+// finishes the job itself. No policy parameter means nothing to attach:
+// promote outside a policy stays exactly what it was.
+func attachPolicyToPromotedVolume(ctx context.Context, req *replication.PromoteVolumeRequest) error {
+	policyID := req.GetParameters()[replicationPolicyParam]
+	if policyID == "" {
+		return nil
+	}
+	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
+	if err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
+	if err != nil {
+		return status.Error(codes.Unavailable, err.Error())
+	}
+	if err := client.EnableVolumeReplication(ctx, h.Handle(), policyID); err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			// The backend has not registered the promoted clone yet; the
+			// controller re-drives promote (idempotent) and the attach lands
+			// on a later pass.
+			return nil
+		}
+		return classifyEnableVolumeReplicationError(err)
+	}
+	return nil
 }
 
 // DemoteVolume fences the source and confirms the last write replicated
