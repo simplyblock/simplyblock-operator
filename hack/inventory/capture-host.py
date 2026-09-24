@@ -17,6 +17,7 @@ import json
 import os
 
 SYS = "/sys"
+DEV = "/dev"
 
 # The seeds are the readers' own entry points: interfaces, NVMe controllers,
 # block devices, the PCI bus, CPU topology, NUMA, and huge pages.
@@ -28,6 +29,23 @@ SEEDS = [
     "devices/system/cpu",
     "devices/system/node",
     "kernel/mm/hugepages",
+]
+
+# The udev link directories worth keeping, and the two that are not.
+#
+# by-id and by-path name a device: by-id from what the device says it is (a
+# serial, a WWN, or the identification page a driver exposes instead), by-path
+# from where it is attached. Both survive a reboot, which the kernel name does
+# not -- sd letters are handed out in probe order, so the disk that was sdb
+# comes back as sdc and a document naming the first now names the second.
+#
+# by-uuid and by-label are deliberately not taken. They name the filesystem a
+# device carries rather than the device, so they are content: they change when
+# somebody reformats a disk that is otherwise the same one, and a transcript of
+# what a machine *is* should not turn over when its data does.
+DEV_LINK_DIRS = [
+    "disk/by-id",
+    "disk/by-path",
 ]
 
 MAX_FILE_BYTES = 64 * 1024
@@ -97,6 +115,41 @@ for rel, path in (("meminfo", "/proc/meminfo"), ("swaps", "/proc/swaps"),
         continue
 dirs.add("self")
 
+# The udev links, in a section of their own.
+#
+# dirs, files, and links stay what they were: paths under /sys, plus the handful
+# of procfs files the readers take from the same root. These are neither, and
+# they do not ride in those maps under a dev/ prefix, because /sys/dev is itself
+# a real directory -- /sys/dev/block and /sys/dev/char. Nothing seeds it today,
+# so nothing collides today, and a prefix that is safe only until somebody adds
+# a seed is a prefix that will be unsafe silently.
+#
+# Paths are relative to /dev, which is what blockdev.ScanConfig.DevRoot is
+# pointed at, and the value is the link's target as the kernel wrote it --
+# usually ../../sda. Only the link and its target are taken, never the device
+# node behind it: the target is what answers which kernel name a stable name
+# resolves to, and a transcript carrying device nodes would be one nobody could
+# materialize without root.
+#
+# Additive on purpose. A transcript written before this has no devlinks at all,
+# which decodes to an empty map and reads as a host whose udev made no links --
+# which is what the committed fixtures need it to mean.
+devlinks = {}
+for link_dir in DEV_LINK_DIRS:
+    absolute = os.path.join(DEV, link_dir)
+    try:
+        names = os.listdir(absolute)
+    except OSError:
+        continue
+    for name in names:
+        path = os.path.join(absolute, name)
+        try:
+            if os.path.islink(path):
+                devlinks[os.path.join(link_dir, name)] = os.readlink(path)
+        except OSError:
+            continue
+
 print(json.dumps(
-    {"dirs": sorted(dirs), "files": dict(sorted(files.items())), "links": dict(sorted(links.items()))},
+    {"dirs": sorted(dirs), "files": dict(sorted(files.items())),
+     "links": dict(sorted(links.items())), "devlinks": dict(sorted(devlinks.items()))},
     indent=1, sort_keys=True))
