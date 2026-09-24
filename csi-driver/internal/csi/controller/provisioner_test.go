@@ -35,7 +35,7 @@ func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 	})
 
 	ids := identity.New(cd)
-	cs, err := New(cd, nil)
+	cs, err := New(cd, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

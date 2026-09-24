@@ -22,12 +22,14 @@ import (
 	k8smount "k8s.io/mount-utils"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/layers"
 
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/initiator"
 	"github.com/simplyblock/csi-driver/internal/mount"
 )
 
@@ -201,7 +203,7 @@ func TestConnectionFromResponsesCarriesEveryPathAndItsCredentials(t *testing.T) 
 		},
 	}
 
-	connection, hostNQN := connectionFromResponses(responses, pvcTestLvol)
+	connection, hostNQN := initiator.ConnectionFrom(responses, pvcTestLvol)
 
 	if len(connection.Endpoints) != 2 {
 		t.Fatalf("the connection carries %d endpoints, want both published paths", len(connection.Endpoints))
@@ -360,6 +362,67 @@ func TestUnstageKeepsARetainedVolume(t *testing.T) {
 
 	if runner.called("destroy") {
 		t.Fatal("a retained volume's objects were destroyed on an ordinary unstage")
+	}
+}
+
+// Regression: 2026-09-23-pnfs-unstage-state-leak -- pNFS unstage returned
+// success while leaving its staging directory and volume-context stash behind,
+// and caller cancellation could interrupt the detach halfway through.
+func TestPNFSUnstageUsesCleanupContextAndRemovesStagedState(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	target := filepath.Join(parent, pvcTestHandle)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create staging target: %v", err)
+	}
+
+	var teardownContextWasCanceled bool
+	ns.unstagePNFSFn = func(ctx context.Context, gotTarget string, _ export.Spec) error {
+		teardownContextWasCanceled = ctx.Err() != nil
+		if gotTarget != target {
+			t.Errorf("staging target = %q, want %q", gotTarget, target)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ns.NodeUnstageVolume(ctx, &csi.NodeUnstageVolumeRequest{
+		VolumeId: pvcTestHandle, StagingTargetPath: parent,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+
+	if teardownContextWasCanceled {
+		t.Error("pNFS teardown inherited the canceled RPC context")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("staging target still exists after successful unstage: %v", err)
+	}
+	if _, err := lookupVolumeContext(parent); err == nil {
+		t.Error("volume context still exists after successful unstage")
+	}
+}
+
+// A failed pNFS detach must retain the stash, because kubelet's retry receives
+// no volume context and needs that record to choose the pNFS teardown path.
+func TestPNFSUnstageFailureRetainsStagedStateForRetry(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	ns.unstagePNFSFn = func(context.Context, string, export.Spec) error {
+		return errors.New("detach failed")
+	}
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId: pvcTestHandle, StagingTargetPath: parent,
+	}); err == nil {
+		t.Fatal("NodeUnstageVolume succeeded when detach failed")
+	}
+	if _, err := lookupVolumeContext(parent); err != nil {
+		t.Fatalf("volume context was removed before detach succeeded: %v", err)
 	}
 }
 
@@ -732,5 +795,81 @@ func TestTheStackFillsEverySeamItsPlansReach(t *testing.T) {
 		if !filled {
 			t.Errorf("the %s seam is nil; a layer reaching it panics rather than failing", name)
 		}
+	}
+}
+
+// Regression: expanding a pNFS volume silently took its data path away.
+//
+// Growing the namespace invalidates the client's cached pNFS block device, so
+// the next layout has to resolve it again. That resolution happens in the mount
+// namespace of whatever caused the I/O, and if a pod gets there first its /dev
+// is kubelet's minimal one with no disk/, so the resolve fails:
+//
+//	pNFS: no device found for volume 645a3751476137484763794b45497251
+//
+// The fail bit is then set and every write routes through the metadata server,
+// which is the whole feature gone. Nothing reports it: the writes succeed and
+// the data is correct.
+//
+// So an expand re-primes rather than doing nothing. This container has the
+// host's /dev, and kubelet calls this RPC on every node holding the volume.
+// Measured on a cluster: 128MiB after an expand cost 128 NFS WRITEs without the
+// prime and none with it.
+//
+// It must not walk the stack either. The metadata server grew the filesystem on
+// its own host, and the layer here is named for a filesystem with no resize
+// tool, so a walk fails outright.
+func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	if err := os.MkdirAll(filepath.Join(parent, pvcTestHandle), 0o755); err != nil {
+		t.Fatalf("create the staging path: %v", err)
+	}
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume on a pNFS volume: %v", err)
+	}
+
+	if runner.called("grow") {
+		t.Errorf("the expansion walked a stack a pNFS client does not have: %v", runner.plans["grow"])
+	}
+}
+
+// The prime is the work this RPC does for a pNFS volume, so a prime that could
+// not run is the RPC failing rather than the RPC having nothing to do. Without
+// it the failure is silent and permanent: the next pod write resolves the
+// device in the pod's own namespace, fails, and routes through the metadata
+// server from then on.
+func TestExpandOfAPNFSVolumeReportsALayoutItCouldNotPrime(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	// The staging path is deliberately absent, which is what a probe that
+	// cannot be written looks like.
+	parent := stashedAt(t, vc)
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err == nil {
+		t.Fatal("NodeExpandVolume reported success without priming the layout")
+	}
+	if !strings.Contains(err.Error(), "layout") {
+		t.Errorf("error = %v, want it to name the layout it could not take", err)
 	}
 }

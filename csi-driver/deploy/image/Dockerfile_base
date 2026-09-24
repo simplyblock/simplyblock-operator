@@ -24,7 +24,12 @@ RUN dnf update -y  --nogpgcheck
 # missing package is a volume that cannot be staged. It also brings
 # device-mapper, and with it the dmsetup that clears the nodes a volume leaves
 # behind when its backing device is gone.
-RUN dnf install -y nvme-cli iscsi-initiator-utils e2fsprogs xfsprogs lvm2 util-linux kmod wget sudo rpm --nogpgcheck && \
+#
+# nfs-utils is the same arrangement for pNFS: exportfs publishes an export and
+# mount.nfs mounts one, both from this container, against the host's nfsd state
+# mounted in. The host still provides nfsd itself and blkmapd, which are
+# services rather than tools and cannot be shipped here.
+RUN dnf install -y nvme-cli nfs-utils iscsi-initiator-utils e2fsprogs xfsprogs lvm2 util-linux kmod wget sudo rpm --nogpgcheck && \
     dnf clean all
 
 # vdo provides vdoformat, which lvcreate --type vdo invokes internally to

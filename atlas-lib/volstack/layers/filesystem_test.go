@@ -592,3 +592,28 @@ func TestReleaseForcesWhenAPlainUnmountRefuses(t *testing.T) {
 		t.Fatal("a plain unmount refused and the release did not fall back to its force path")
 	}
 }
+
+// A stack layer is a signature the probe positively recognized, so finding one
+// means the plan is wrong rather than that the bytes were undecipherable. The
+// encryption relaxation does not reach it: an LVM physical-volume or RAID label
+// under a plan that names no such layer is somebody else's volume.
+func TestAnEncryptedVolumeCarryingAStackLayerIsStillRefused(t *testing.T) {
+	fs := newFakeFS()
+	l := NewFilesystem(FilesystemConfig{
+		FsType:      "xfs",
+		StagingPath: stagingPath,
+		Ops:         fs,
+		Content: fakeReader{reading: blockdev.Reading{
+			Content: blockdev.ContentStackLayer,
+			Detail:  "LVM2_member",
+		}},
+		Encrypted: true,
+	})
+
+	if _, _, err := l.Observe(context.Background(), belowArtifact()); err == nil {
+		t.Fatal("Observe accepted an encrypted device carrying an LVM label")
+	}
+	if len(fs.formatted) > 0 {
+		t.Errorf("the device was formatted over a stack layer: %+v", fs.formatted)
+	}
+}

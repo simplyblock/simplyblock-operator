@@ -33,6 +33,16 @@ func (ns *Server) NodePublishVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// A pNFS volume is bound straight from its staging mount: it has no volume
+	// stack, so the plan below cannot be built for one.
+	if isPNFSVolume(volumeContext) {
+		if err := ns.publishPNFSVolume(ctx, req, getStagingTargetPath(req)); err != nil {
+			klog.Errorf("failed to publish pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
 	// One plan for the whole RPC: the heal below and the bind-mount after it act
 	// on the same stack, and resolving where the volume is published twice would
 	// be one control-plane round trip too many.
