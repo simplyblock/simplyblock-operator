@@ -205,7 +205,26 @@ func renderNodeConfig(
 	fmt.Fprintf(&entry, "PCI_ALLOWED=%s\n",
 		utils.ShellQuote(strings.Join(mergePCIAddresses(config.PcieAllowList, addresses), ",")))
 	fmt.Fprintf(&entry, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(config.PcieDenyList, ",")))
-	fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+
+	// Which channel the device names leave through is the cluster's class, not
+	// the spelling of the names. Both classes name a device by a string the
+	// backend has to resolve, and it resolves them by different means:
+	// --nvme-devices is matched against the namespace names `nvme list` reports,
+	// and --blk-names against block device paths. A path sent through the first
+	// matches nothing.
+	//
+	// LBLK is what carries the class itself. The init container passes --lblk on
+	// that word alone, and without it the backend is asked for NVMe devices
+	// however the names are spelled -- which is not a failure it reports, but a
+	// configure that selects no device and a node that never comes up.
+	block := cluster.Spec.DeviceClass == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
+	if block {
+		entry.WriteString("LBLK=true\n")
+		fmt.Fprintf(&entry, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+		entry.WriteString("NVME_DEVICES=''\n")
+	} else {
+		fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
 	if jm := config.JournalManager; jm != nil {
