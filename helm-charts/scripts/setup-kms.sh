@@ -129,7 +129,7 @@ bao write auth/cert/certs/simplyblock-webappapi \
 
 info "Enabling secrets engines..."
 bao secrets enable -path=simplyblock/transit transit        || warn "transit already enabled, continuing..."
-bao secrets enable -path=simplyblock/kv kv  || warn "kv already enabled, continuing..."
+bao secrets enable -path=simplyblock/kv -version=2 kv  || warn "kv already enabled, continuing..."
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 info "Done."
