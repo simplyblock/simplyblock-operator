@@ -330,6 +330,9 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 			Minor:             minor,
 			LogicalBlockSize:  sysfs.Uint32(dir, "queue", "logical_block_size"),
 			PhysicalBlockSize: sysfs.Uint32(dir, "queue", "physical_block_size"),
+			// Optional, and their absence is not a zero: see Device.
+			AtomicWriteUnitMaxBytes: optionalUint32(dir, "queue", "atomic_write_unit_max_bytes"),
+			AtomicWriteUnitMinBytes: optionalUint32(dir, "queue", "atomic_write_unit_min_bytes"),
 			SizeBytes:         sysfs.Uint64(dir, "size") * sectorSize,
 			ReadOnly:          sysfs.Bool(dir, "ro"),
 		},
@@ -627,4 +630,21 @@ func isDir(path string) bool {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// optionalUint32 reads an attribute a kernel may not publish at all, and tells
+// the two cases apart: a missing file is nil, and a file holding 0 is a stated
+// zero. sysfs.Uint32 collapses both to 0, which is the right reading for an
+// attribute that has always existed and the wrong one for these.
+func optionalUint32(elem ...string) *uint32 {
+	raw, err := os.ReadFile(filepath.Join(elem...))
+	if err != nil {
+		return nil
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+	if err != nil {
+		return nil
+	}
+	out := uint32(value)
+	return &out
 }

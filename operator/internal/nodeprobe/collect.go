@@ -120,20 +120,23 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	out := make([]Device, 0, len(candidates))
 	for _, c := range candidates {
 		device := Device{
-			Name:         c.Name,
-			Path:         c.Path,
-			PCIAddress:   c.PCIAddress,
-			SizeBytes:    c.SizeBytes,
-			Kind:         string(c.Kind),
-			Transport:    string(c.Transport),
-			Vendor:       c.Vendor,
-			Model:        c.Model,
-			Serial:       c.Serial,
-			Rotational:   c.Rotational,
-			NUMANode:     c.NUMANode,
-			SubsystemNQN: c.SubsystemNQN,
-			Available:    c.Available(),
-			ContentType:  c.Reading.Type,
+			Name:       c.Name,
+			Path:       c.Path,
+			PCIAddress: c.PCIAddress,
+			SizeBytes:  c.SizeBytes,
+			Kind:       string(c.Kind),
+			Transport:  string(c.Transport),
+			Vendor:     c.Vendor,
+			Model:      c.Model,
+			Serial:     c.Serial,
+			Rotational: c.Rotational,
+			// Carried as the scan read them, nil included: see Device.
+			AtomicWriteUnitMaxBytes: c.AtomicWriteUnitMaxBytes,
+			AtomicWriteUnitMinBytes: c.AtomicWriteUnitMinBytes,
+			NUMANode:                c.NUMANode,
+			SubsystemNQN:            c.SubsystemNQN,
+			Available:               c.Available(),
+			ContentType:             c.Reading.Type,
 		}
 		// A device refused before anything was opened carries ContentUnknown,
 		// and the report leaves the field empty rather than writing "Unknown":

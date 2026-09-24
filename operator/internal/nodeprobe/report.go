@@ -277,6 +277,19 @@ type Device struct {
 	Serial     string `json:"serial,omitempty"`
 	Rotational bool   `json:"rotational,omitempty"`
 
+	// AtomicWriteUnitMaxBytes is the largest write this device completes whole
+	// across a power failure, and AtomicWriteUnitMinBytes the smallest it makes
+	// that promise about. They are what says whether a cluster may run checksum
+	// validation on a device whose logical block size is under the data plane's
+	// minimum, which is otherwise a claim somebody has to make by hand.
+	//
+	// Absent rather than zero when the kernel does not publish them, which it
+	// did not before 6.11. The distinction is the point: a device that says it
+	// guarantees nothing and a kernel that was never able to ask are different
+	// findings, and only the first is evidence.
+	AtomicWriteUnitMaxBytes *uint32 `json:"atomicWriteUnitMaxBytes,omitempty"`
+	AtomicWriteUnitMinBytes *uint32 `json:"atomicWriteUnitMinBytes,omitempty"`
+
 	// NUMANode is the memory node the device hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`
 
