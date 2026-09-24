@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -199,7 +201,60 @@ func (cs *Server) DeleteVolume(
 		return nil, classifyDeleteVolumeError(err)
 	}
 
+	if err := cs.deleteRetiredReplicaChain(ctx, volumeID); err != nil {
+		klog.Errorf("failed to delete retired replication copies of volume %s: %v", volumeID, err)
+		return nil, classifyDeleteVolumeError(err)
+	}
+
 	return &csi.DeleteVolumeResponse{}, nil
+}
+
+// deleteRetiredReplicaChain removes the RETIRED members of the volume's
+// replication pairing chain. Ramen's S3-restore keeps every PV on the
+// ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that cleans up
+// a retired side arrives carrying an identity whose own lvol record is
+// already reaped, while the actual local copy -- the pairing's superseded
+// target clone -- lives on untouched (confirmed live 2026-09-24, relocate
+// M-02's round trip: cluster B kept clone 6102a48e, policy still attached,
+// after its PV was deleted). Walking source->target and deleting every member
+// that is NOT the pairing's active volume removes exactly those leftovers.
+//
+// The active volume is never deleted through a stale handle: the workload is
+// running on it, and its own deletion arrives through this same path once no
+// pairing supersedes it. A missing ActiveLvolID (backend predating the field)
+// deletes nothing, erring toward leaking a clone over destroying live data.
+func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string) error {
+	h, err := csicommon.ParseVolumeHandle(volumeID)
+	if err != nil {
+		return nil // unparseable handles were already tolerated as deleted above
+	}
+	cur := h
+	for range 8 { // one hop per past fail-over; capped far above any real chain
+		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
+		if err != nil {
+			return err
+		}
+		rel, err := client.GetVolumeReplicationRelationship(ctx, cur.Handle())
+		if err != nil {
+			if errors.Is(err, errs.ErrNotFound) {
+				return nil // no pairing: an ordinary volume, nothing retired to clean
+			}
+			return err
+		}
+		if rel.ActiveLvolID == "" || rel.TargetLvolID == "" || rel.TargetLvolID == rel.ActiveLvolID {
+			return nil
+		}
+		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
+		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
+		if err != nil {
+			return err
+		}
+		if err := targetClient.DeleteVolume(ctx, target.Handle()); err != nil {
+			return err
+		}
+		cur = target
+	}
+	return nil
 }
 
 func (cs *Server) prepareCreateVolumeReq(

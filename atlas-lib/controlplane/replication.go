@@ -247,22 +247,31 @@ type Relationship struct {
 	TargetClusterID string
 	TargetPoolID    string
 	TargetLvolID    string
+
+	// ActiveLvolID names the volume currently serving the pairing's data,
+	// resolved transitively by the backend across chained fail-overs (a
+	// relocate round trip leaves the FIRST pairing's target pointing at a
+	// clone that a SECOND pairing has since superseded). A caller cleaning up
+	// retired copies keys off this: any member that is not the active volume
+	// is garbage, and the active one must never be touched through a stale
+	// handle. Empty when the backend predates the field.
+	ActiveLvolID string
 }
 
 // GetVolumeReplicationRelationship resolves h to its replication pairing.
 // This is what a caller handed a volume identity inherited from the OTHER
-// side of a pairing (e.g. a destination PVC whose PV was restored carrying
+// side of a pairing (e.g., a destination PVC whose PV was restored carrying
 // the source's own volumeHandle) uses to find the volume it should actually
 // operate on locally: TargetClusterID/TargetPoolID/TargetLvolID name that
 // volume regardless of which side h itself named. Returns an error
 // unwrapping to errs.ErrNotFound when h has no replication relationship at
-// all yet (e.g. a volume never enabled for replication) -- callers treat that
+// all yet (e.g., a volume never enabled for replication) -- callers treat that
 // as "use h unchanged," not a failure.
 // GetVolumeReplicationRelationship reads the relationship through the
 // cluster-scoped endpoint, not the pool-scoped one: the pool-scoped route
 // requires the queried volume to still exist (sbcli's FastAPI Volume
 // dependency 404s before the handler body runs), but a relationship must stay
-// resolvable by SOURCE id after the source volume itself is deleted -- e.g. a
+// resolvable by SOURCE id after the source volume itself is deleted -- e.g., a
 // demoted volume whose fail-over already completed and was reaped by
 // lvol_monitor's deferred-removal hold, confirmed live 2026-09-24 (relocate
 // M-02's round trip: resolveToLocalReplica needs exactly this to redirect
@@ -288,5 +297,6 @@ func (c *Client) GetVolumeReplicationRelationship(ctx context.Context, h lvol.Vo
 		TargetClusterID: uuidPtrString(d.TargetClusterId),
 		TargetPoolID:    uuidPtrString(d.TargetPoolId),
 		TargetLvolID:    uuidPtrString(d.TargetLvolId),
+		ActiveLvolID:    uuidPtrString(d.ActiveLvolId),
 	}, nil
 }

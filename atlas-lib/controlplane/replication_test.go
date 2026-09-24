@@ -138,8 +138,8 @@ func TestClientGetVolumeReplicationInfo(t *testing.T) {
 	}
 }
 
-// A volume that never replicated is a valid, non-error answer: role "none",
-// state "not_replicating", and every timing/lag field null.
+// A volume that never replicated is a valid, non-error answer: role "none,"
+// state "not_replicating," and every timing/lag field null.
 func TestClientGetVolumeReplicationInfoNeverReplicated(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -313,13 +313,13 @@ const (
 // the pool-scoped route requires the queried volume to still exist (sbcli's
 // FastAPI Volume dependency 404s before the handler body even runs), but a
 // relationship must stay resolvable by SOURCE id after the source volume
-// itself is gone -- e.g. a demoted volume whose fail-over already completed
+// itself is gone -- e.g., a demoted volume whose fail-over already completed
 // and was reaped by lvol_monitor's deferred-removal hold (confirmed live
 // 2026-09-24, relocate M-02's round trip: DemoteVolume/DisableVolumeReplication
 // on the SECOND hop 404'd resolving through the pool-scoped endpoint against
 // exactly this). sbcli's cluster-scoped endpoint is built for this case --
 // its own docstring: "resolvable even when the source volume has been
-// deleted... The CSI driver uses this to redirect".
+// deleted... The CSI driver uses this to redirect."
 func TestClientGetVolumeReplicationRelationship(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		wantPath := "/api/v2/clusters/" + testCluster + "/replication/relationships/" + testVolume
@@ -354,6 +354,40 @@ func TestClientGetVolumeReplicationRelationship(t *testing.T) {
 		t.Errorf("target = %s/%s/%s, want %s/%s/%s",
 			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID,
 			testTargetCluster, testTargetPool, testTargetVolume)
+	}
+}
+
+// Regression: 2026-09-24-delete-foreign-handle-leak — the backend resolves
+// active_lvol_id transitively across chained fail-overs, and the driver's
+// retired-copy cleanup keys off it: without it parsed, the cleanup cannot
+// tell a stale clone from the volume the workload currently runs on.
+func TestClientGetVolumeReplicationRelationshipParsesTheActiveVolume(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"replication_id": "` + testCluster + `",
+			"direction": "to_target",
+			"mode": "failover",
+			"state": "failed_over",
+			"is_source": true,
+			"source_cluster_id": "` + testCluster + `",
+			"source_lvol_id": "` + testVolume + `",
+			"target_cluster_id": "` + testTargetCluster + `",
+			"target_pool_id": "` + testTargetPool + `",
+			"target_lvol_id": "` + testTargetVolume + `",
+			"target_nqn": "nqn.test",
+			"target_ns_id": 1,
+			"active": "target",
+			"active_lvol_id": "` + testTargetVolume + `"
+		}`))
+	})
+
+	rel, err := c.GetVolumeReplicationRelationship(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.ActiveLvolID != testTargetVolume {
+		t.Errorf("ActiveLvolID = %q, want %q", rel.ActiveLvolID, testTargetVolume)
 	}
 }
 
