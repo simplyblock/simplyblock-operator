@@ -585,7 +585,7 @@ type StorageNodesSpec struct {
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomic4kWrites requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -682,16 +682,30 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
 
-	// EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
-	// write atomicity even with a smaller logical block size, as AWS NVMe does
-	// at 512 bytes, which lets checksum fallback mode run on them despite the
-	// data plane's usual 4K minimum. It means nothing unless
-	// EnableChecksumValidation is set, and it cannot change under a live
-	// cluster.
+	// EnableAtomicity4K enforces 4K write atomicity on devices that report a
+	// smaller logical block size, which lets checksum fallback mode run on them
+	// despite the data plane's usual 4K minimum.
+	//
+	// It is an enforcement rather than a reading, and that is what it is for.
+	// A device may complete a 4K write whole across a power failure and have no
+	// way to say so: a SATA drive presenting 512-byte logical blocks over a 4K
+	// physical sector reports 512 and nothing else, and a kernel older than 6.11
+	// publishes no atomic write attributes at all, so the fleet it runs on
+	// cannot be asked. Where the hardware can answer, the storage node's report
+	// carries what it said; where it cannot, this is how an administrator states
+	// what they know and the cluster proceeds on it.
+	//
+	// Which is why it is the setting that loses data when it is wrong. An
+	// enforced guarantee the hardware does not keep is a torn write under a
+	// checksum that disagrees with it, so it is approved against the devices'
+	// own report where one exists.
+	//
+	// It means nothing unless EnableChecksumValidation is set, and it cannot
+	// change under a live cluster.
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
-	EnableAtomic4kWrites *bool `json:"enableAtomic4kWrites,omitempty"`
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// DeviceClass is the class of backend storage every node in this cluster
 	// hands over: NVMe devices named by PCI address, or logical block devices

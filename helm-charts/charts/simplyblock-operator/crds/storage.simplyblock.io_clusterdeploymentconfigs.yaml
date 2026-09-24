@@ -96,25 +96,28 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
-                  enableAtomic4kWrites:
+                  enableAtomicity4K:
                     description: |-
-                      EnableAtomic4kWrites declares that every device this deployment names
-                      completes a 4K write whole across a power failure, which is what lets
-                      checksum validation run on devices whose logical block size is under the
-                      data plane's 4K minimum.
+                      EnableAtomicity4K enforces 4K write atomicity on every device this
+                      deployment names, which is what lets checksum validation run on devices
+                      whose logical block size is under the data plane's 4K minimum.
 
-                      It is a claim about the hardware rather than a setting on it, and it is
-                      the only route to checked I/O on a device that cannot be reformatted: a
+                      It is the route to checked I/O on a device that cannot be reformatted: a
                       logical block device's block size is fixed by the drive, and some NVMe
                       devices offer no 4K format either. Where a device can be reformatted,
                       EnableDriveFormat is the other route and this is unnecessary.
 
+                      It is an enforcement because the question is often unanswerable. A SATA
+                      drive presenting 512-byte logical blocks over a 4K physical sector reports
+                      512 and nothing more, and a kernel older than 6.11 publishes no atomic
+                      write attributes at all. Where a device does answer, the storage node's
+                      report carries it, and a reviewer approves this against that rather than
+                      against a vendor's datasheet -- because enforcing a guarantee the hardware
+                      does not keep is how a torn write becomes a checksum that silently
+                      disagrees with it.
+
                       It means nothing unless EnableChecksumValidation is set, which is the
-                      cluster's own rule and is left to the cluster to enforce. Declaring it of
-                      hardware that does not guarantee it is how a torn write becomes a checksum
-                      that silently disagrees, so the storage node's report carries what each
-                      device said about its atomic write unit and a reviewer approves this
-                      against that rather than against a vendor's datasheet.
+                      cluster's own rule and is left to the cluster to enforce.
                     type: boolean
                   enableChecksumValidation:
                     description: |-

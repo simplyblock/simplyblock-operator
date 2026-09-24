@@ -955,7 +955,7 @@ func (r *StorageClusterReconciler) creationParams(
 		HashicorpVaultSettings: vault,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomic4kWrites),
+		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
 	}, nil
 }

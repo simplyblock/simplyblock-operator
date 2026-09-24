@@ -333,8 +333,8 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableAtomic4kWrites != nil {
-		in, out := &in.EnableAtomic4kWrites, &out.EnableAtomic4kWrites
+	if in.EnableAtomicity4K != nil {
+		in, out := &in.EnableAtomicity4K, &out.EnableAtomicity4K
 		*out = new(bool)
 		**out = **in
 	}
@@ -2339,8 +2339,8 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableAtomic4kWrites != nil {
-		in, out := &in.EnableAtomic4kWrites, &out.EnableAtomic4kWrites
+	if in.EnableAtomicity4K != nil {
+		in, out := &in.EnableAtomicity4K, &out.EnableAtomicity4K
 		*out = new(bool)
 		**out = **in
 	}

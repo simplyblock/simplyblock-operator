@@ -6,7 +6,7 @@
 // The suite installs CRDs and nothing else — no webhook server, no
 // ValidatingWebhookConfiguration — so a rejection here can only have come from
 // the schema. That is the point of the test: it is what lets the
-// enableAtomic4kWrites-requires-enableChecksumValidation rule live in the CRD
+// enableAtomicity4K-requires-enableChecksumValidation rule live in the CRD
 // instead of in a validating webhook of its own.
 //
 // Every case is written against v1alpha2, which is the storage version. The
@@ -31,7 +31,7 @@ import (
 
 // TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation covers
 // every combination of the top-level checksum validation fields.
-// enableAtomic4kWrites is only meaningful as an inline-checksum fallback-path
+// enableAtomicity4K is only meaningful as an inline-checksum fallback-path
 // escape hatch, so it requires enableChecksumValidation. Every other
 // combination is legal.
 func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *testing.T) {
@@ -40,15 +40,15 @@ func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *test
 	for _, tc := range []struct {
 		name                     string
 		enableChecksumValidation *bool
-		enableAtomic4kWrites     *bool
+		enableAtomicity4K     *bool
 		wantDenied               bool
 	}{
 		{name: "both unset"},
-		{name: "both false", enableChecksumValidation: ptr.To(false), enableAtomic4kWrites: ptr.To(false)},
-		{name: "enableChecksumValidation alone", enableChecksumValidation: ptr.To(true), enableAtomic4kWrites: ptr.To(false)},
-		{name: "both true", enableChecksumValidation: ptr.To(true), enableAtomic4kWrites: ptr.To(true)},
-		{name: "enableAtomic4kWrites alone", enableChecksumValidation: ptr.To(false), enableAtomic4kWrites: ptr.To(true), wantDenied: true},
-		{name: "enableAtomic4kWrites with nil enableChecksumValidation", enableAtomic4kWrites: ptr.To(true), wantDenied: true},
+		{name: "both false", enableChecksumValidation: ptr.To(false), enableAtomicity4K: ptr.To(false)},
+		{name: "enableChecksumValidation alone", enableChecksumValidation: ptr.To(true), enableAtomicity4K: ptr.To(false)},
+		{name: "both true", enableChecksumValidation: ptr.To(true), enableAtomicity4K: ptr.To(true)},
+		{name: "enableAtomicity4K alone", enableChecksumValidation: ptr.To(false), enableAtomicity4K: ptr.To(true), wantDenied: true},
+		{name: "enableAtomicity4K with nil enableChecksumValidation", enableAtomicity4K: ptr.To(true), wantDenied: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// vcpuCount and maxSubsystemCount are the spec's only required
@@ -59,7 +59,7 @@ func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *test
 					MaxSubsystemCount:        ptr.To(int32(10)),
 					VCPUCount:                ptr.To(int32(6)),
 					EnableChecksumValidation: tc.enableChecksumValidation,
-					EnableAtomic4kWrites:     tc.enableAtomic4kWrites,
+					EnableAtomicity4K:     tc.enableAtomicity4K,
 				},
 			}
 
@@ -69,7 +69,7 @@ func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *test
 					t.Fatal("expected the apiserver to reject the cluster, but it was accepted")
 				}
 				if !strings.Contains(err.Error(),
-					"enableAtomic4kWrites requires enableChecksumValidation to be true") {
+					"enableAtomicity4K requires enableChecksumValidation to be true") {
 					t.Fatalf("rejected for the wrong reason: %v", err)
 				}
 				return
@@ -91,7 +91,7 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 
 	for _, tc := range []struct {
 		name                        string
-		initialEnableAtomic4kWrites *bool
+		initialEnableAtomicity4K *bool
 		// mutate changes an admitted cluster in the way the test expects the
 		// apiserver to refuse.
 		mutate  func(*simplyblockv1alpha2.StorageCluster)
@@ -112,25 +112,25 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 			wantErr: "field is immutable",
 		},
 		{
-			name: "changing enableAtomic4kWrites",
+			name: "changing enableAtomicity4K",
 			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
-				c.Spec.EnableAtomic4kWrites = ptr.To(true)
+				c.Spec.EnableAtomicity4K = ptr.To(true)
 			},
 			wantErr: "field is immutable",
 		},
 		{
-			name:                        "removing enableAtomic4kWrites",
-			initialEnableAtomic4kWrites: ptr.To(true),
+			name:                        "removing enableAtomicity4K",
+			initialEnableAtomicity4K: ptr.To(true),
 			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
-				c.Spec.EnableAtomic4kWrites = nil
+				c.Spec.EnableAtomicity4K = nil
 			},
 			wantErr: "field is immutable",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			enableAtomic4kWrites := ptr.To(false)
-			if tc.initialEnableAtomic4kWrites != nil {
-				enableAtomic4kWrites = tc.initialEnableAtomic4kWrites
+			enableAtomicity4K := ptr.To(false)
+			if tc.initialEnableAtomicity4K != nil {
+				enableAtomicity4K = tc.initialEnableAtomicity4K
 			}
 			cluster := &simplyblockv1alpha2.StorageCluster{
 				ObjectMeta: metav1.ObjectMeta{GenerateName: "immutable-", Namespace: "default"},
@@ -138,7 +138,7 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 					MaxSubsystemCount:        ptr.To(int32(10)),
 					VCPUCount:                ptr.To(int32(6)),
 					EnableChecksumValidation: ptr.To(true),
-					EnableAtomic4kWrites:     enableAtomic4kWrites,
+					EnableAtomicity4K:     enableAtomicity4K,
 				},
 			}
 			if err := apiClient.Create(context.Background(), cluster); err != nil {

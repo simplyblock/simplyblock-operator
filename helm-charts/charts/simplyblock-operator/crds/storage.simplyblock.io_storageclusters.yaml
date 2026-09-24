@@ -719,15 +719,29 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                enableAtomic4kWrites:
+                enableAtomicity4K:
                   default: false
                   description: |-
-                    EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
-                    write atomicity even with a smaller logical block size, as AWS NVMe does
-                    at 512 bytes, which lets checksum fallback mode run on them despite the
-                    data plane's usual 4K minimum. It means nothing unless
-                    EnableChecksumValidation is set, and it cannot change under a live
-                    cluster.
+                    EnableAtomicity4K enforces 4K write atomicity on devices that report a
+                    smaller logical block size, which lets checksum fallback mode run on them
+                    despite the data plane's usual 4K minimum.
+
+                    It is an enforcement rather than a reading, and that is what it is for.
+                    A device may complete a 4K write whole across a power failure and have no
+                    way to say so: a SATA drive presenting 512-byte logical blocks over a 4K
+                    physical sector reports 512 and nothing else, and a kernel older than 6.11
+                    publishes no atomic write attributes at all, so the fleet it runs on
+                    cannot be asked. Where the hardware can answer, the storage node's report
+                    carries what it said; where it cannot, this is how an administrator states
+                    what they know and the cluster proceeds on it.
+
+                    Which is why it is the setting that loses data when it is wrong. An
+                    enforced guarantee the hardware does not keep is a torn write under a
+                    checksum that disagrees with it, so it is approved against the devices'
+                    own report where one exists.
+
+                    It means nothing unless EnableChecksumValidation is set, and it cannot
+                    change under a live cluster.
                   type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -1359,14 +1373,14 @@ spec:
                   rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
                 - message: field enableChecksumValidation is immutable once set
                   rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
-                - message: field enableAtomic4kWrites is immutable once set
-                  rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
+                - message: field enableAtomicity4K is immutable once set
+                  rule: '!has(oldSelf.enableAtomicity4K) || has(self.enableAtomicity4K)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
                 - message: kms is immutable once set
                   rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
-                - message: enableAtomic4kWrites requires enableChecksumValidation to be true
-                  rule: '!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                - message: enableAtomicity4K requires enableChecksumValidation to be true
+                  rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
             status:
               properties:
                 activeOpsRef:

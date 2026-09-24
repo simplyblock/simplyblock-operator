@@ -32,13 +32,13 @@ func TestADocumentStatesChecksumValidation(t *testing.T) {
 func TestADocumentStatesFourKiBAtomicity(t *testing.T) {
 	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 		c.Spec.Cluster.EnableChecksumValidation = ptr.To(true)
-		c.Spec.Cluster.EnableAtomic4kWrites = ptr.To(true)
+		c.Spec.Cluster.EnableAtomicity4K = ptr.To(true)
 	})
 
 	cluster := builtCluster(t, config)
 
-	if got := cluster.Spec.EnableAtomic4kWrites; got == nil || !*got {
-		t.Fatalf("EnableAtomic4kWrites = %v", got)
+	if got := cluster.Spec.EnableAtomicity4K; got == nil || !*got {
+		t.Fatalf("EnableAtomicity4K = %v", got)
 	}
 }
 
@@ -50,8 +50,8 @@ func TestADocumentStatingNeitherLeavesBothToTheCluster(t *testing.T) {
 	if got := cluster.Spec.EnableChecksumValidation; got != nil {
 		t.Errorf("EnableChecksumValidation = %v, want unset", *got)
 	}
-	if got := cluster.Spec.EnableAtomic4kWrites; got != nil {
-		t.Errorf("EnableAtomic4kWrites = %v, want unset", *got)
+	if got := cluster.Spec.EnableAtomicity4K; got != nil {
+		t.Errorf("EnableAtomicity4K = %v, want unset", *got)
 	}
 }
 
