@@ -2090,6 +2090,16 @@ spec:
                   which makes an unwritten block read as pseudo-random plaintext rather
                   than as zeros. Assembly needs it: without it an empty encrypted volume
                   is mistaken for an occupied one, never formatted, and never mounts.
+
+                  No omitempty: the field is immutable once set (below), and the CRD
+                  enforces that by requiring it stay present once it is. The CSI
+                  controller's unstructured Create always writes it explicitly, so an
+                  unencrypted export's record already carries `encrypted: false` in
+                  etcd; a typed client's own writes have to carry it too; omitempty
+                  drops a false value from the JSON entirely, which reads to the CRD as
+                  the field being removed and every subsequent write from this type --
+                  starting with the reconciler's own finalizer add -- is then refused,
+                  permanently, before the export can even begin assembling.
                 type: boolean
                 x-kubernetes-validations:
                 - message: field is immutable
