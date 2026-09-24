@@ -70,25 +70,43 @@ func volumeIDFrom(req volumeIDCarrier) string {
 // (errs.ErrNotFound -- the ordinary case for a volume never enabled for
 // replication, e.g., M-01's first-ever protect) or when h already names the
 // target side.
+//
+// The resolution WALKS chained pairings rather than taking one step: a
+// relocate round trip leaves original -> hop-1 clone -> hop-2 clone, and the
+// volume actually serving the workload is the LAST hop (each record names it
+// as active_lvol_id, resolved transitively by the backend). Stopping at the
+// first pairing's target landed every post-round-trip verb -- including the
+// policy attach Enable performs -- on the retired middle clone, on the wrong
+// cluster (confirmed live 2026-09-24). Each hop uses that record's own
+// target triple, whose cluster/pool/lvol are consistent with each other;
+// combining active_lvol_id with ANOTHER record's cluster is exactly the bug
+// this walk exists to avoid. An empty ActiveLvolID (backend predating the
+// field) stops after the first hop, the old single-step behavior.
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
 ) (*lvol.Handle, *atlascp.Client, error) {
-	rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
-	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
+	for range 8 { // one hop per past fail-over; capped far above any real chain
+		rel, err := client.GetVolumeReplicationRelationship(ctx, h.Handle())
+		if err != nil {
+			if errors.Is(err, errs.ErrNotFound) {
+				return h, client, nil
+			}
+			return nil, nil, err
+		}
+		if !rel.IsSource {
 			return h, client, nil
 		}
-		return nil, nil, err
+		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
+		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
+		if err != nil {
+			return nil, nil, err
+		}
+		h, client = target, targetClient
+		if rel.ActiveLvolID == "" || rel.ActiveLvolID == rel.TargetLvolID {
+			return h, client, nil
+		}
 	}
-	if !rel.IsSource {
-		return h, client, nil
-	}
-	target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
-	targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return target, targetClient, nil
+	return h, client, nil
 }
 
 // EnableVolumeReplication attaches the volume to the policy named by the

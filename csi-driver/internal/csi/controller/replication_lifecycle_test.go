@@ -473,6 +473,63 @@ func TestGetVolumeReplicationInfoResolvesToTargetWhenGivenTheSourceSideOfARelati
 	}
 }
 
+// Regression: 2026-09-24-chained-relationship-resolves-one-hop-short — a
+// relocate ROUND TRIP leaves two chained pairings: original -> hop-1 clone
+// (cluster B), and hop-1 clone -> hop-2 clone (cluster A, the volume actually
+// serving the workload, named by active_lvol_id on every record in the
+// chain). Single-step resolution stopped at the FIRST pairing's target -- the
+// retired hop-1 clone -- so post-round-trip Replication verbs (and the policy
+// attach that Enable performs) landed on a superseded volume on the wrong
+// cluster (confirmed live 2026-09-24: the policy stuck to B's clone while A's
+// new primary ran unprotected). Resolution must walk hop by hop, using each
+// record's own consistent target triple, until the hop whose target IS the
+// active volume.
+func TestPromoteVolumeResolvesAcrossAChainedRelationshipToTheActiveVolume(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-hop1-clone", Size: 1 << 30,
+	}
+	mock.volumes[testReplActiveVolumeID] = &mockVolume{
+		UUID: testReplActiveVolumeID, Name: "repl-vol-active", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee1",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplActiveVolumeID,
+	}
+	mock.replicationRelationship[testReplTargetVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee2",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplTargetVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplActiveVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplActiveVolumeID,
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
+		VolumeId: testReplVolID, Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailoverVolumeID != testReplActiveVolumeID {
+		t.Errorf("failover landed on volume %q, want the chain's ACTIVE volume %q, not the retired middle hop",
+			mock.lastFailoverVolumeID, testReplActiveVolumeID)
+	}
+}
+
 func TestResyncVolumeBackendFailureIsUnavailable(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
