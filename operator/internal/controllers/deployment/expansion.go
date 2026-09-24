@@ -275,6 +275,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			Stripe:                   template.Stripe,
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
+			KMS:                      template.KMS,
 			DeviceClass:              class,
 			// The workload every node runs as. The document's per-group network
 			// interfaces are the same for every group of a cluster in practice,

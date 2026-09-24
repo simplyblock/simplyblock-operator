@@ -53,8 +53,8 @@ func TestStorageClusterConvertToRenamesAndRegroups(t *testing.T) {
 	if dst.Spec.KMS == nil || dst.Spec.KMS.Vault == nil {
 		t.Fatalf("spec.kms = %+v, want the vault the cluster named", dst.Spec.KMS)
 	}
-	if got := dst.Spec.KMS.Vault.BaseURL; got != "https://vault.example.com:8200" {
-		t.Errorf("spec.kms.vault.baseURL = %q", got)
+	if got := dst.Spec.KMS.Vault.Endpoint; got != "https://vault.example.com:8200" {
+		t.Errorf("spec.kms.vault.endpoint = %q", got)
 	}
 	if dst.Spec.Backup == nil {
 		t.Fatal("spec.backup is absent")

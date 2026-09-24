@@ -592,14 +592,14 @@ func kmsToHub(v *HashicorpVaultSettings) *v1alpha2.KMSSpec {
 	if v == nil || v.BaseURL == "" {
 		return nil
 	}
-	return &v1alpha2.KMSSpec{Vault: &v1alpha2.VaultKMS{BaseURL: v.BaseURL}}
+	return &v1alpha2.KMSSpec{Vault: &v1alpha2.VaultKMS{Endpoint: v.BaseURL}}
 }
 
 func kmsFromHub(k *v1alpha2.KMSSpec) *HashicorpVaultSettings {
-	if k == nil || k.Vault == nil || k.Vault.BaseURL == "" {
+	if k == nil || k.Vault == nil || k.Vault.Endpoint == "" {
 		return nil
 	}
-	return &HashicorpVaultSettings{BaseURL: k.Vault.BaseURL}
+	return &HashicorpVaultSettings{BaseURL: k.Vault.Endpoint}
 }
 
 // thresholdToHub widens a threshold's two components. The direction is free;

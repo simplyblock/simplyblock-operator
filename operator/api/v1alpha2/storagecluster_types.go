@@ -135,11 +135,11 @@ type CapacityThresholdSpec struct {
 
 // VaultKMS configures the HashiCorp Vault key store.
 type VaultKMS struct {
-	// BaseURL is the Vault endpoint, for example, https://vault.example.com:8200.
+	// Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
 	// Rejected unless it resolves to an external address.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
-	BaseURL string `json:"baseURL"`
+	Endpoint string `json:"endpoint"`
 }
 
 // KMSSpec selects where the cluster stores volume encryption keys. It is a

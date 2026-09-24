@@ -168,6 +168,28 @@ spec:
                     description: FabricType is the storage fabric.
                     maxLength: 32
                     type: string
+                  kms:
+                    description: |-
+                      KMS selects where the cluster stores volume encryption keys. It is here
+                      rather than left to be set on the StorageCluster afterward because the
+                      expansion's own reconciler reads it back off that object on the very next
+                      pass, before anything external could patch it in; stating it on the
+                      document is what makes it present at the cluster's creation rather than a
+                      race with one.
+                    properties:
+                      vault:
+                        description: Vault stores keys in HashiCorp Vault.
+                        properties:
+                          endpoint:
+                            description: |-
+                              Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
+                              Rejected unless it resolves to an external address.
+                            pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                            type: string
+                        required:
+                        - endpoint
+                        type: object
+                    type: object
                   maxSubsystemCount:
                     description: |-
                       MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage

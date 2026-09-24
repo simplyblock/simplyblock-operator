@@ -55,6 +55,25 @@ func TestADocumentStatingNeitherLeavesBothToTheCluster(t *testing.T) {
 	}
 }
 
+// KMS is immutable on the StorageCluster too (storagecluster_types.go's kms
+// CEL rule), and the expansion's own reconciler reads it back off that object
+// on its very next pass — before anything outside the cluster could patch it
+// in. So a document that cannot state it is a cluster whose key store can
+// never be anything but the cluster's own default.
+func TestADocumentStatesKMS(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.KMS = &simplyblockv1alpha2.KMSSpec{
+			Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://vault.example.com:8200"},
+		}
+	})
+
+	cluster := builtCluster(t, config)
+
+	if got := cluster.Spec.KMS; got == nil || got.Vault == nil || got.Vault.Endpoint != "https://vault.example.com:8200" {
+		t.Fatalf("KMS = %+v, want the document's vault endpoint carried through", got)
+	}
+}
+
 // builtCluster is the StorageCluster a document's template describes.
 func builtCluster(
 	t *testing.T, config *simplyblockv1alpha2.ClusterDeploymentConfig,

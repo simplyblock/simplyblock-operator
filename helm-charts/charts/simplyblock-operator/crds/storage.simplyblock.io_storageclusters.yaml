@@ -804,14 +804,14 @@ spec:
                     vault:
                       description: Vault stores keys in HashiCorp Vault.
                       properties:
-                        baseURL:
+                        endpoint:
                           description: |-
-                            BaseURL is the Vault endpoint, for example, https://vault.example.com:8200.
+                            Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
                             Rejected unless it resolves to an external address.
                           pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                           type: string
                       required:
-                        - baseURL
+                        - endpoint
                       type: object
                   type: object
                 maxConcurrentWorkerRestarts:
