@@ -37,6 +37,15 @@
 // advertise a TLS listener presents a certificate or does not connect, and that
 // certificate is issued by the step that created the database.
 //
+// A Job that has used up its attempts fails the installation. The indices are
+// complete the moment they are declared ready on a database this install just
+// created, so a Job that cannot get there is the image or the database rather
+// than the data, and running it again on an interval reports the same failure
+// every fifteen seconds. The install stops on the step, says so on the object
+// and in an event, and moves again when something it can act on changes: the
+// spec naming another image replaces the Job, and deleting the Job by hand
+// creates it again.
+//
 // Nothing here runs on an upgrade. The installation machine is entered once, so
 // an index declared by a later release reaches an existing deployment through
 // `sbctl cluster build-indices` after the rollout, never from this step.
@@ -59,11 +68,12 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
-// indexJobAttempts is how often Kubernetes restarts the backfill before
-// reporting it failed. The command is idempotent and a first attempt that dies
-// on a database still settling is the case worth retrying, so a small budget
-// covers the transient half without hiding a real refusal for long.
-const indexJobAttempts = 2
+// indexJobAttempts is how many times the backfill runs before Kubernetes
+// reports the Job failed and the installation fails on it. The command is
+// idempotent and a first attempt that dies on a database still settling is the
+// case worth retrying, so a small budget covers the transient half without
+// hiding a real refusal for long.
+const indexJobAttempts = 3
 
 // indexJobDeadline is the wall clock the whole Job gets, and it is what makes a
 // backfill that never starts fail rather than sit active forever: attempts are
@@ -128,7 +138,8 @@ func indexJob(cp *simplyblockv1alpha2.ControlPlane) *batchv1.Job {
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:          ptr.To(int32(indexJobAttempts)),
+			// BackoffLimit counts the restarts after the first run.
+			BackoffLimit:          ptr.To(int32(indexJobAttempts - 1)),
 			ActiveDeadlineSeconds: ptr.To(int64(indexJobDeadline.Seconds())),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -151,10 +162,10 @@ func indexJob(cp *simplyblockv1alpha2.ControlPlane) *batchv1.Job {
 // in the way the machine expects, since a Job that is already there is a
 // backfill that is already running.
 //
-// A failed Job holds the step. The indices are complete the moment they are
-// declared ready on a database this install just created, so a failure is the
-// database or the image rather than the data, and the step's deadline is what
-// reports it.
+// A failed Job fails the installation, as an installFailure the machine turns
+// into the event and the message. The one exception is a failed Job running an
+// image the spec no longer names: the administrator changed the thing that
+// failed, so the Job is removed here and created again on the next pass.
 func (r *ControlPlaneReconciler) buildIndices(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (done bool, held string, err error) {
@@ -174,10 +185,14 @@ func (r *ControlPlaneReconciler) buildIndices(
 	case jobSucceeded:
 		return true, "", nil
 	case jobFailed:
-		return false, fmt.Sprintf(
-			"%s failed after %d attempt(s); the database's secondary indices are not "+
-				"usable and every lookup that needs one falls back to a full scan",
-			indexJobName, indexJobAttempts+1), nil
+		if image := jobImage(&job); image != localImage(cp) {
+			if err := r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+				return false, "", fmt.Errorf("remove the failed Job %s: %w", indexJobName, err)
+			}
+			return false, fmt.Sprintf("%s failed under %s and is being replaced with one running %s",
+				indexJobName, image, localImage(cp)), nil
+		}
+		return false, "", &installFailure{message: indexFailureMessage(&job)}
 	default:
 		return false, fmt.Sprintf("%s is still building the database's secondary indices",
 			indexJobName), nil
@@ -206,6 +221,29 @@ func indexFailureMessage(job *batchv1.Job) string {
 	return fmt.Sprintf("%s; the database's secondary indices are not usable, so the "+
 		"installation has stopped. %s, then name another image in spec.source.local.image "+
 		"or delete the Job to run it again", what, where)
+}
+
+// jobImage is the image the backfill container runs, which is what a spec
+// change is compared against. A Job somebody built by hand with no container
+// compares as no image, and is replaced.
+func jobImage(job *batchv1.Job) string {
+	containers := job.Spec.Template.Spec.Containers
+	if len(containers) == 0 {
+		return ""
+	}
+	return containers[0].Image
+}
+
+// installFailure is a step reporting that the installation cannot finish from
+// where it is. The machine emits it and stops requeueing rather than treating
+// it as a transient error to back off on or a hold to poll, because neither a
+// backoff nor a poll changes what the step will find.
+type installFailure struct {
+	message string
+}
+
+func (f *installFailure) Error() string {
+	return f.message
 }
 
 // outcome is what a Job's conditions say about it, which is the only reading of

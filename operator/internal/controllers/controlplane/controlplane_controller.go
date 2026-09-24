@@ -249,6 +249,16 @@ func (r *ControlPlaneReconciler) install(
 	}
 
 	done, held, err := r.performInstallStep(ctx, cp, current)
+	var failure *installFailure
+	if errorsAs(err, &failure) {
+		// The install stops here. No requeue is scheduled because nothing a
+		// timer finds will differ. The Job watch and the generation predicate
+		// wake the reconcile when the Job is removed or the spec changes, which
+		// are the two things the message asks for.
+		r.emit(cp, corev1.EventTypeWarning, InstallationFailed, failure.message)
+		return ctrl.Result{}, r.report(ctx, cp,
+			simplyblockv1alpha2.ControlPlanePhaseInstalling, failure.message)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}

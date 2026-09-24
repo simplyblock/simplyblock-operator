@@ -897,6 +897,7 @@ Events land on the object an administrator has open. For this kind that is the
 | The readiness probe recovered                                          | `Normal`  | `ControlPlaneReady`    | `ControlPlane`    |
 | An installation step is waiting on FoundationDB or on the index `Job`  | `Normal`  | `AwaitingDependency`   | `ControlPlane`    |
 | An installation step's deadline expired                                | `Warning` | `StepDeadlineExceeded` | `ControlPlane`    |
+| The index `Job` used up its attempts and the installation stopped      | `Warning` | `InstallationFailed`   | `ControlPlane`    |
 | A deletion is held because clusters still exist                        | `Warning` | `ClustersStillPresent` | `ControlPlane`    |
 | A managed endpoint could not be resolved or reached                    | `Warning` | `EndpointUnreachable`  | `ControlPlane`    |
 | The credentials Secret is missing or malformed                         | `Warning` | `CredentialsError`     | `ControlPlane`    |

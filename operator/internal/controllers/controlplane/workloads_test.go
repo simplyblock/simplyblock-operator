@@ -128,6 +128,13 @@ func TestTheIndexJobRunsTheBackfillAgainstTheDatabase(t *testing.T) {
 		t.Errorf("restart policy is %q, want Never: a backfill that cannot finish is "+
 			"reported rather than restarted forever", spec.RestartPolicy)
 	}
+	if job.Spec.BackoffLimit == nil {
+		t.Fatal("no backoffLimit, so a backfill that keeps failing is restarted forever")
+	}
+	if *job.Spec.BackoffLimit != indexJobAttempts-1 {
+		t.Errorf("backoffLimit is %d, want %d: the backfill gets %d attempts before the "+
+			"install fails on it", *job.Spec.BackoffLimit, indexJobAttempts-1, indexJobAttempts)
+	}
 	if spec.ServiceAccountName != "" {
 		t.Errorf("the job runs as %q, want no account of its own: the backfill speaks to "+
 			"FoundationDB and to nothing in Kubernetes, and every account the install "+

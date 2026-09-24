@@ -436,7 +436,7 @@ fake client.
 
 | Axis                     | Value                          | Scenarios                                                    |
 |--------------------------|--------------------------------|--------------------------------------------------------------|
-| Control-plane source     | Managed                        | U-19, U-28 … U-38, U-44, U-172 … U-178, E-01                 |
+| Control-plane source     | Managed                        | U-19, U-28 … U-38, U-44, U-172 … U-181, E-01                 |
 |                          | External                       | U-18, U-20 … U-27, U-39, U-43, E-02, M-02                    |
 | Namespace count          | Single namespace               | Every scenario except those below                            |
 |                          | Multiple namespaces            | I-19                                                         |
