@@ -255,6 +255,40 @@ func TestDisableVolumeReplicationNotAttachedIsSuccess(t *testing.T) {
 	}
 }
 
+// Same relationship-resolution requirement as DemoteVolume/PromoteVolume/
+// EnableVolumeReplication: Ramen's own teardown sequence calls Disable right
+// after a successful demote, on the SAME volume -- so it inherits the SAME
+// foreign, pre-promote handle and must resolve to the local replica before
+// the policy detach is attempted against it.
+func TestDisableVolumeReplicationResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30, ReplicationPolicyID: testReplPolicyID,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+
+	_, err := cs.DisableVolumeReplication(context.Background(), &replication.DisableVolumeReplicationRequest{
+		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.volumes[testReplTargetVolumeID].ReplicationPolicyID; got != "" {
+		t.Errorf("target volume's ReplicationPolicyID = %q, want cleared", got)
+	}
+}
+
 func TestDisableVolumeReplicationUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

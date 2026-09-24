@@ -190,6 +190,47 @@ func TestPromoteVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	}
 }
 
+// Same relationship-resolution requirement as PromoteVolume/EnableVolumeReplication
+// (see TestPromoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship):
+// a second (or later) relocate demotes a volume that itself came into
+// existence via an earlier promote, so its PV/PVC still carries the
+// ORIGINAL, foreign source's volumeHandle. Confirmed live 2026-09-24 (relocate
+// M-02's round trip, B -> A): DemoteVolume issued the RPC against that
+// foreign, pre-promote lvol id and got a 404 from the control plane, well
+// before ever reaching the actual local replica that had been serving as
+// primary. DemoteVolume must resolve a handle whose relationship says
+// IsSource and redirect to TargetLvolId first, exactly like Promote and
+// Enable already do.
+func TestDemoteVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+
+	_, err := cs.DemoteVolume(context.Background(), &replication.DemoteVolumeRequest{
+		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastDemoteVolumeID != testReplTargetVolumeID {
+		t.Errorf("demote landed on volume %q, want the resolved target %q",
+			mock.lastDemoteVolumeID, testReplTargetVolumeID)
+	}
+}
+
 func TestDemoteVolumeDone(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

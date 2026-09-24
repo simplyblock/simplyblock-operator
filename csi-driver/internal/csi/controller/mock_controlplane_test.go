@@ -148,6 +148,10 @@ type mockSBCLI struct {
 	// demoteStatus, when set, is the HTTP status POST .../demote answers with
 	// instead of its default success (204). 202 models "still converging."
 	demoteStatus int
+	// lastDemoteVolumeID captures which volume's path the last demote call
+	// landed on, so a test can assert a relationship-resolved call reached
+	// the TARGET volume rather than the one it was originally given.
+	lastDemoteVolumeID string
 
 	// failbackStatus, when set, is the HTTP status POST .../failback answers
 	// with instead of its default success (204).
@@ -415,6 +419,7 @@ func (m *mockSBCLI) handleDemote(w http.ResponseWriter, r *http.Request) {
 	if m.lookupVolume(w, volumeID) == nil {
 		return
 	}
+	m.lastDemoteVolumeID = volumeID
 	if m.demoteStatus != 0 {
 		writeJSON(w, m.demoteStatus, map[string]bool{"demoted": m.demoteStatus == http.StatusNoContent})
 		return

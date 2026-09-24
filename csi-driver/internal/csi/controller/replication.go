@@ -162,6 +162,10 @@ func (cs *Server) DisableVolumeReplication(
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	if err := client.DisableVolumeReplication(ctx, h.Handle()); err != nil {
 		return nil, classifyDisableVolumeReplicationError(err)
 	}
@@ -244,6 +248,10 @@ func (cs *Server) DemoteVolume(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
