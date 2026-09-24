@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,7 +30,7 @@ const (
 )
 
 // EnsureNFSD makes the host's NFS server ready to serve an export. Idempotent,
-// and three reads when everything is already up. The steps report separately
+// and four reads when everything is already up. The steps report separately
 // because they fail for different reasons: a missing module is a kernel with no
 // NFS server, a failed mount or start is usually a lost privilege.
 func EnsureNFSD(ctx context.Context, run runner) error {
@@ -39,7 +40,10 @@ func EnsureNFSD(ctx context.Context, run runner) error {
 	if err := ensureNFSDFilesystem(ctx, run); err != nil {
 		return err
 	}
-	return ensureNFSDThreads(ctx, run)
+	if err := ensureNFSDThreads(ctx, run); err != nil {
+		return err
+	}
+	return ensureIdmapd(ctx, run)
 }
 
 // runner is atlas/blockdev's command shape, named so a test can substitute.
@@ -97,6 +101,66 @@ func ensureNFSDThreads(ctx context.Context, run runner) error {
 		return fmt.Errorf("nfsd: rpc.nfsd exited %d: %s", code, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// ensureIdmapd starts rpc.idmapd if it is not already running.
+//
+// NFSv4 represents every owner and group as a string, never a raw id, so the
+// kernel needs a translation for essentially every GETATTR -- which is most
+// of them -- even under sec=sys, where nothing about the credential itself
+// needs mapping. Without idmapd servicing that upcall the kernel is left
+// waiting for an answer that will never come: found live, a client's mount
+// hung in D state indefinitely rather than failing, on a host that had
+// nfsd's own threads running and nothing else about the export wrong.
+//
+// It has to be checked before it is started. idmapd keeps no pidfile, daemonizes
+// without refusing a second copy, and EnsureNFSD runs before every assembly (see
+// the package comment) -- a start that assumed "not running" would leak one
+// idmapd per reconcile, forever.
+func ensureIdmapd(ctx context.Context, run runner) error {
+	running, err := idmapdRunning()
+	if err != nil {
+		return fmt.Errorf("nfsd: checking for a running rpc.idmapd: %w", err)
+	}
+	if running {
+		return nil
+	}
+	// No -f: idmapd's own default is to daemonize, which is what leaves it
+	// running after this call returns. A foreground run would block here for
+	// as long as idmapd stays up, which is indefinitely.
+	out, code, err := run(ctx, "rpc.idmapd")
+	if err != nil {
+		return fmt.Errorf("nfsd: running rpc.idmapd: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("nfsd: rpc.idmapd exited %d: %s", code, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// idmapdRunning reports whether an rpc.idmapd process already exists.
+//
+// Reads /proc directly rather than shelling out to pgrep or ps: idmapd writes
+// no pidfile of its own to check instead, and this way costs nothing this
+// image might not carry.
+func idmapdRunning() (bool, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false, fmt.Errorf("listing /proc: %w", err)
+	}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue // not a pid directory
+		}
+		comm, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
+		if err != nil {
+			continue // the process exited between ReadDir and here
+		}
+		if strings.TrimSpace(string(comm)) == "rpc.idmapd" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // WithNFSD brings the host's NFS server up before an export is built on it.
