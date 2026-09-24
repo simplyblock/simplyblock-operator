@@ -307,10 +307,24 @@ const (
 	testTargetVolume  = "66666666-6666-6666-6666-666666666667"
 )
 
+// GetVolumeReplicationRelationship must call the CLUSTER-scoped endpoint
+// (GET /clusters/{cluster_id}/replication/relationships/{lvol_id}), never the
+// pool-scoped one (.../storage-pools/{pool}/volumes/{volume}/replication/):
+// the pool-scoped route requires the queried volume to still exist (sbcli's
+// FastAPI Volume dependency 404s before the handler body even runs), but a
+// relationship must stay resolvable by SOURCE id after the source volume
+// itself is gone -- e.g. a demoted volume whose fail-over already completed
+// and was reaped by lvol_monitor's deferred-removal hold (confirmed live
+// 2026-09-24, relocate M-02's round trip: DemoteVolume/DisableVolumeReplication
+// on the SECOND hop 404'd resolving through the pool-scoped endpoint against
+// exactly this). sbcli's cluster-scoped endpoint is built for this case --
+// its own docstring: "resolvable even when the source volume has been
+// deleted... The CSI driver uses this to redirect".
 func TestClientGetVolumeReplicationRelationship(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/replication/") && !strings.HasSuffix(r.URL.Path, "/replication") {
-			t.Errorf("unexpected path %q", r.URL.Path)
+		wantPath := "/api/v2/clusters/" + testCluster + "/replication/relationships/" + testVolume
+		if r.URL.Path != wantPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, wantPath)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{

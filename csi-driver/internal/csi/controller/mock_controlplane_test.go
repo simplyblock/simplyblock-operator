@@ -190,7 +190,12 @@ func newMockSBCLI() *mockSBCLI {
 		m.locked(m.handleReplicationStatus),
 	)
 	mux.HandleFunc(
-		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/replication/",
+		// Cluster-scoped, not pool-scoped: GetVolumeReplicationRelationship
+		// must stay resolvable by source id after the source volume itself is
+		// deleted, which the pool-scoped route (requiring the volume to still
+		// exist) cannot do -- see TestClientGetVolumeReplicationRelationship
+		// in atlas-lib/controlplane for the live-confirmed reason.
+		"GET /api/v2/clusters/{clusterID}/replication/relationships/{volumeID}",
 		m.locked(m.handleReplicationRelationship),
 	)
 	mux.HandleFunc(

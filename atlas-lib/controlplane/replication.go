@@ -258,13 +258,22 @@ type Relationship struct {
 // unwrapping to errs.ErrNotFound when h has no replication relationship at
 // all yet (e.g. a volume never enabled for replication) -- callers treat that
 // as "use h unchanged," not a failure.
+// GetVolumeReplicationRelationship reads the relationship through the
+// cluster-scoped endpoint, not the pool-scoped one: the pool-scoped route
+// requires the queried volume to still exist (sbcli's FastAPI Volume
+// dependency 404s before the handler body runs), but a relationship must stay
+// resolvable by SOURCE id after the source volume itself is deleted -- e.g. a
+// demoted volume whose fail-over already completed and was reaped by
+// lvol_monitor's deferred-removal hold, confirmed live 2026-09-24 (relocate
+// M-02's round trip: resolveToLocalReplica needs exactly this to redirect
+// DemoteVolume/DisableVolumeReplication on the SECOND hop of a relocate).
 func (c *Client) GetVolumeReplicationRelationship(ctx context.Context, h lvol.VolumeHandle) (Relationship, error) {
-	cluster, pool, volume, err := h.Split()
+	cluster, _, volume, err := h.Split()
 	if err != nil {
 		return Relationship{}, err
 	}
-	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGetWithResponse(
-		ctx, cluster, pool, volume)
+	resp, err := c.api.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGetWithResponse(
+		ctx, cluster, volume)
 	if err != nil {
 		return Relationship{}, fmt.Errorf("replication relationship of volume %s: %w", h, err)
 	}
