@@ -549,9 +549,36 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				JournalManager:   group.JournalManager,
+				// The document's image pin, spent here because the node is where
+				// the field lives: nothing between the two carries it, so a pin
+				// dropped here would be a document that states an image and a
+				// fleet that runs another.
+				SpdkImage:      spdkImageOf(config),
+				SpdkProxyImage: spdkProxyImageOf(config),
 			},
 		},
 	}
+}
+
+// spdkImageOf is the document's SPDK image pin, or empty for the control plane's
+// own choice.
+//
+// Separate from buildNode's literal because the cluster template is nullable and
+// a growth document that omits it would otherwise panic on the way to stating no
+// pin at all.
+func spdkImageOf(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	if config.Spec.Cluster == nil {
+		return ""
+	}
+	return config.Spec.Cluster.SpdkImage
+}
+
+// spdkProxyImageOf is the proxy half of spdkImageOf.
+func spdkProxyImageOf(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	if config.Spec.Cluster == nil {
+		return ""
+	}
+	return config.Spec.Cluster.SpdkProxyImage
 }
 
 // decomposeSlot renders a slot as the socket and the position within it, which is

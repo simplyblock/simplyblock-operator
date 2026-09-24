@@ -310,6 +310,26 @@ type ClusterTemplate struct {
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 
+	// SpdkImage pins the SPDK image the control plane starts for every node of
+	// this deployment, instead of the one the control plane would choose.
+	//
+	// It is a deployment-wide statement rather than a per-node one because the
+	// data plane of one cluster running two builds is a state nobody asks for on
+	// purpose. StorageNode keeps its own field for the exception, and a node that
+	// states one keeps it.
+	//
+	// Empty means the control plane's own choice, which is what a deployment
+	// should normally take: pinning it here is for qualifying a build against a
+	// fleet, and a document that carries a pin outlives the reason for it.
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	SpdkImage string `json:"spdkImage,omitempty"`
+
+	// SpdkProxyImage pins the SPDK proxy image, on the same terms as SpdkImage.
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
+
 	// EnableKubeletConfiguration lets the node write the kubelet configuration
 	// that topology-aware CPU assignment needs.
 	//
