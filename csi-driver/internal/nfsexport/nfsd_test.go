@@ -99,48 +99,48 @@ func startFakeProcess(t *testing.T, name string) {
 	})
 }
 
-// waitForIdmapdRunning polls idmapdRunning until it reports want, or fails
-// the test: Start() returns once the fork succeeds, not once exec() has
+// waitForProcessRunning polls processRunning(comm) until it reports want, or
+// fails the test: Start() returns once the fork succeeds, not once exec() has
 // replaced the image and the kernel has set comm, and killing a process is
 // exactly as asynchronous from the caller's side.
-func waitForIdmapdRunning(t *testing.T, want bool) {
+func waitForProcessRunning(t *testing.T, comm string, want bool) {
 	t.Helper()
-	// idmapdRunning reads /proc, which only Linux has; nfsd itself is
+	// processRunning reads /proc, which only Linux has; nfsd itself is
 	// Linux-only in production, but a contributor's own machine is not.
 	if runtime.GOOS != "linux" {
-		t.Skipf("idmapdRunning reads /proc, which %s does not have", runtime.GOOS)
+		t.Skipf("processRunning reads /proc, which %s does not have", runtime.GOOS)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		running, err := idmapdRunning()
+		running, err := processRunning(comm)
 		if err != nil {
-			t.Fatalf("idmapdRunning: %v", err)
+			t.Fatalf("processRunning(%q): %v", comm, err)
 		}
 		if running == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("idmapdRunning still reports %v after 2s, want %v", running, want)
+			t.Fatalf("processRunning(%q) still reports %v after 2s, want %v", comm, running, want)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // The one signal available without a pidfile or shelling out to pgrep/ps:
-// scanning /proc for a process whose comm is rpc.idmapd.
-func TestIdmapdRunningDetectsARealProcessByComm(t *testing.T) {
-	waitForIdmapdRunning(t, false)
+// scanning /proc for a process whose comm matches.
+func TestProcessRunningDetectsARealProcessByComm(t *testing.T) {
+	waitForProcessRunning(t, "rpc.idmapd", false)
 	startFakeProcess(t, "rpc.idmapd")
-	waitForIdmapdRunning(t, true)
+	waitForProcessRunning(t, "rpc.idmapd", true)
 }
 
-// ensureIdmapd starts rpc.idmapd exactly when idmapdRunning says it is
+// ensureIdmapd starts rpc.idmapd exactly when processRunning says it is
 // missing -- both directions matter: a start that never happens leaves the
 // client hanging (§ package comment), and a start that always happens leaks
 // one idmapd per reconcile, since EnsureNFSD runs before every assembly and
 // idmapd itself does not refuse a second copy.
 func TestEnsureIdmapdStartsItWhenNotRunning(t *testing.T) {
-	waitForIdmapdRunning(t, false)
+	waitForProcessRunning(t, "rpc.idmapd", false)
 
 	var calls []string
 	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
@@ -157,7 +157,7 @@ func TestEnsureIdmapdStartsItWhenNotRunning(t *testing.T) {
 
 func TestEnsureIdmapdSkipsStartingItWhenAlreadyRunning(t *testing.T) {
 	startFakeProcess(t, "rpc.idmapd")
-	waitForIdmapdRunning(t, true)
+	waitForProcessRunning(t, "rpc.idmapd", true)
 
 	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
 		t.Fatalf("run was called with %q; ensureIdmapd should have found the existing process first", name)
@@ -165,5 +165,40 @@ func TestEnsureIdmapdSkipsStartingItWhenAlreadyRunning(t *testing.T) {
 	}
 	if err := ensureIdmapd(context.Background(), run); err != nil {
 		t.Fatalf("ensureIdmapd: %v", err)
+	}
+}
+
+// ensureNfsdcld mirrors ensureIdmapd's own idempotency, and separately pins
+// the one thing that makes nfsdcld's absence dangerous rather than merely
+// wasteful: it has to run before nfsd's threads do (EnsureNFSD's own
+// ordering), which these tests cannot see from here -- that ordering is what
+// § ensureNfsdcld's package comment is about, not something a unit test on
+// the function alone can assert.
+func TestEnsureNfsdcldStartsItWhenNotRunning(t *testing.T) {
+	waitForProcessRunning(t, "nfsdcld", false)
+
+	var calls []string
+	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
+		calls = append(calls, name)
+		return nil, 0, nil
+	}
+	if err := ensureNfsdcld(context.Background(), run); err != nil {
+		t.Fatalf("ensureNfsdcld: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "nfsdcld" {
+		t.Errorf("calls = %v, want exactly one call to nfsdcld", calls)
+	}
+}
+
+func TestEnsureNfsdcldSkipsStartingItWhenAlreadyRunning(t *testing.T) {
+	startFakeProcess(t, "nfsdcld")
+	waitForProcessRunning(t, "nfsdcld", true)
+
+	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
+		t.Fatalf("run was called with %q; ensureNfsdcld should have found the existing process first", name)
+		return nil, 0, nil
+	}
+	if err := ensureNfsdcld(context.Background(), run); err != nil {
+		t.Fatalf("ensureNfsdcld: %v", err)
 	}
 }

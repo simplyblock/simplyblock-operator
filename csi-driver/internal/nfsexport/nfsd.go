@@ -30,14 +30,22 @@ const (
 )
 
 // EnsureNFSD makes the host's NFS server ready to serve an export. Idempotent,
-// and four reads when everything is already up. The steps report separately
+// and five reads when everything is already up. The steps report separately
 // because they fail for different reasons: a missing module is a kernel with no
 // NFS server, a failed mount or start is usually a lost privilege.
+//
+// nfsdcld before the threads, deliberately: nfsd reads its persisted
+// client-recovery database the moment its threads start, and that read is
+// what the package comment on ensureNfsdcld explains hangs indefinitely
+// without nfsdcld there yet to answer for it.
 func EnsureNFSD(ctx context.Context, run runner) error {
 	if err := ensureNFSDModule(ctx, run); err != nil {
 		return err
 	}
 	if err := ensureNFSDFilesystem(ctx, run); err != nil {
+		return err
+	}
+	if err := ensureNfsdcld(ctx, run); err != nil {
 		return err
 	}
 	if err := ensureNFSDThreads(ctx, run); err != nil {
@@ -103,6 +111,49 @@ func ensureNFSDThreads(ctx context.Context, run runner) error {
 	return nil
 }
 
+// ensureNfsdcld starts nfsdcld if it is not already running, before nfsd's
+// own threads (see EnsureNFSD).
+//
+// nfsdcld is the userspace half of nfsd's client-recovery tracking: nfsd
+// keeps a small stable-storage record of which clients held state, so that a
+// server restart can tell a genuinely reconnecting client from a network
+// partition's stale one (RFC 3530 §8.6.3). That record lives in
+// /var/lib/nfs/nfsdcld, which this package's caller mounts in from the host
+// specifically so it survives a container restart -- and that persistence is
+// exactly what makes the ordering here matter. nfsd reads it the moment its
+// threads start, concludes (correctly, since the record is real) that it is
+// recovering rather than starting clean, and opens a grace period against it.
+// Found live: with nfsdcld not yet running to service that recovery over,
+// the grace period a fresh nfsd entered on a host whose /var/lib/nfs held a
+// record from an earlier instance never resolved -- every client's very
+// first NFSv4.1 call (EXCHANGE_ID) hung indefinitely, well past the bounded
+// lease time a grace period is supposed to take, rather than nfsd falling
+// back or failing visibly. Starting nfsdcld first, before nfsd ever reads
+// that record, does not hang.
+//
+// Checked before it is started for the same reason idmapd is: nfsdcld keeps
+// no pidfile, daemonizes without refusing a second copy, and EnsureNFSD runs
+// before every assembly.
+func ensureNfsdcld(ctx context.Context, run runner) error {
+	running, err := processRunning("nfsdcld")
+	if err != nil {
+		return fmt.Errorf("nfsd: checking for a running nfsdcld: %w", err)
+	}
+	if running {
+		return nil
+	}
+	// No -F: nfsdcld's own default is to daemonize, which is what leaves it
+	// running after this call returns.
+	out, code, err := run(ctx, "nfsdcld")
+	if err != nil {
+		return fmt.Errorf("nfsd: running nfsdcld: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("nfsd: nfsdcld exited %d: %s", code, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // ensureIdmapd starts rpc.idmapd if it is not already running.
 //
 // NFSv4 represents every owner and group as a string, never a raw id, so the
@@ -118,7 +169,7 @@ func ensureNFSDThreads(ctx context.Context, run runner) error {
 // the package comment) -- a start that assumed "not running" would leak one
 // idmapd per reconcile, forever.
 func ensureIdmapd(ctx context.Context, run runner) error {
-	running, err := idmapdRunning()
+	running, err := processRunning("rpc.idmapd")
 	if err != nil {
 		return fmt.Errorf("nfsd: checking for a running rpc.idmapd: %w", err)
 	}
@@ -138,12 +189,13 @@ func ensureIdmapd(ctx context.Context, run runner) error {
 	return nil
 }
 
-// idmapdRunning reports whether an rpc.idmapd process already exists.
+// processRunning reports whether a process with the given kernel comm
+// already exists.
 //
-// Reads /proc directly rather than shelling out to pgrep or ps: idmapd writes
-// no pidfile of its own to check instead, and this way costs nothing this
-// image might not carry.
-func idmapdRunning() (bool, error) {
+// Reads /proc directly rather than shelling out to pgrep or ps: neither
+// idmapd nor nfsdcld write a pidfile to check instead, and this way costs
+// nothing this image might not carry.
+func processRunning(comm string) (bool, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return false, fmt.Errorf("listing /proc: %w", err)
@@ -152,11 +204,11 @@ func idmapdRunning() (bool, error) {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue // not a pid directory
 		}
-		comm, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
+		got, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
 		if err != nil {
 			continue // the process exited between ReadDir and here
 		}
-		if strings.TrimSpace(string(comm)) == "rpc.idmapd" {
+		if strings.TrimSpace(string(got)) == comm {
 			return true, nil
 		}
 	}
