@@ -328,6 +328,16 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.EnableChecksumValidation != nil {
+		in, out := &in.EnableChecksumValidation, &out.EnableChecksumValidation
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableAtomic4kWrites != nil {
+		in, out := &in.EnableAtomic4kWrites, &out.EnableAtomic4kWrites
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Stripe != nil {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)

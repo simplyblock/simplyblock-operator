@@ -263,13 +263,19 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
-			MaxSubsystemCount:    template.MaxSubsystemCount,
-			VCPUCount:            template.VCPUCount,
-			MinHugePagesSize:     template.MinHugePagesSize,
-			Stripe:               template.Stripe,
-			FabricType:           template.FabricType,
-			EnableFailureDomains: template.EnableFailureDomains,
-			DeviceClass:          class,
+			MaxSubsystemCount: template.MaxSubsystemCount,
+			VCPUCount:         template.VCPUCount,
+			// Both are immutable on the cluster, so this is the only moment
+			// either can be set at all. Copied as stated, nil included: an
+			// unstated setting leaves the cluster's own default to decide
+			// rather than having the expansion invent one.
+			EnableChecksumValidation: template.EnableChecksumValidation,
+			EnableAtomic4kWrites:     template.EnableAtomic4kWrites,
+			MinHugePagesSize:         template.MinHugePagesSize,
+			Stripe:                   template.Stripe,
+			FabricType:               template.FabricType,
+			EnableFailureDomains:     template.EnableFailureDomains,
+			DeviceClass:              class,
 			// The workload every node runs as. The document's per-group network
 			// interfaces are the same for every group of a cluster in practice,
 			// and the cluster is where a DaemonSet can carry them at all
