@@ -98,6 +98,40 @@ spec:
                     description: Cluster is the StorageCluster to create. Ignored
                       when ClusterRef is set.
                     properties:
+                      enableAtomicity4K:
+                        description: |-
+                          EnableAtomicity4K enforces 4K write atomicity on every device this
+                          deployment names, which is what lets checksum validation run on devices
+                          whose logical block size is under the data plane's 4K minimum.
+
+                          It is the route to checked I/O on a device that cannot be reformatted: a
+                          logical block device's block size is fixed by the drive, and some NVMe
+                          devices offer no 4K format either. Where a device can be reformatted,
+                          EnableDriveFormat is the other route and this is unnecessary.
+
+                          It is an enforcement because the question is often unanswerable. A SATA
+                          drive presenting 512-byte logical blocks over a 4K physical sector reports
+                          512 and nothing more, and a kernel older than 6.11 publishes no atomic
+                          write attributes at all. Where a device does answer, the storage node's
+                          report carries it, and a reviewer approves this against that rather than
+                          against a vendor's datasheet -- because enforcing a guarantee the hardware
+                          does not keep is how a torn write becomes a checksum that silently
+                          disagrees with it.
+
+                          It means nothing unless EnableChecksumValidation is set, which is the
+                          cluster's own rule and is left to the cluster to enforce.
+                        type: boolean
+                      enableChecksumValidation:
+                        description: |-
+                          EnableChecksumValidation turns on inline CRC validation of every I/O, for
+                          silent-data-error protection.
+
+                          It is on the document because it is immutable on the cluster it lands on:
+                          the backend bakes the checksum method into each device when the cluster is
+                          created and never re-applies it, so a cluster created without this is one
+                          nobody can turn it on for. A deployment that wants its data checked has to
+                          say so here or not at all.
+                        type: boolean
                       enableDriveFormat:
                         description: |-
                           EnableDriveFormat formats every device the document names before a storage
@@ -162,6 +196,22 @@ spec:
                           (design-api-upgrade.md §19.4).
                         maxLength: 63
                         type: string
+                      nodeProvisioningBudget:
+                        description: |-
+                          NodeProvisioningBudget is how many workers the expansion may have in the
+                          node-add process at once. It expands into the cluster's own
+                          spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+                          is counted by distinct worker, so a two-socket host spends one of the
+                          budget, and a worker hosting a FoundationDB pod is sequential whatever the
+                          budget says.
+
+                          It is on the document because a document is what states the size of a
+                          deployment, and a deployment of thirty workers added one at a time is the
+                          difference between an afternoon and a week. Omitted, the cluster's default
+                          of one applies, which is the serial behavior.
+                        format: int32
+                        minimum: 1
+                        type: integer
                       nodesPerSocket:
                         description: |-
                           NodesPerSocket is how many storage nodes run per NUMA socket. See

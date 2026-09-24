@@ -328,6 +328,16 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.EnableChecksumValidation != nil {
+		in, out := &in.EnableChecksumValidation, &out.EnableChecksumValidation
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableAtomicity4K != nil {
+		in, out := &in.EnableAtomicity4K, &out.EnableAtomicity4K
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Stripe != nil {
 		in, out := &in.Stripe, &out.Stripe
 		*out = new(StripeSpec)
@@ -2329,8 +2339,8 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableAtomic4kWrites != nil {
-		in, out := &in.EnableAtomic4kWrites, &out.EnableAtomic4kWrites
+	if in.EnableAtomicity4K != nil {
+		in, out := &in.EnableAtomicity4K, &out.EnableAtomicity4K
 		*out = new(bool)
 		**out = **in
 	}
@@ -3109,6 +3119,11 @@ func (in *StorageNodesSpec) DeepCopyInto(out *StorageNodesSpec) {
 	}
 	if in.EnableFormat4K != nil {
 		in, out := &in.EnableFormat4K, &out.EnableFormat4K
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableBlockFormat != nil {
+		in, out := &in.EnableBlockFormat, &out.EnableBlockFormat
 		*out = new(bool)
 		**out = **in
 	}

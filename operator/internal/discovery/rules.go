@@ -224,24 +224,41 @@ func addressKind(class DeviceClass) string {
 	return "PCI address"
 }
 
-// WholeDiskRule admits only a whole disk.
+// WholeDiskRule admits a whole disk, and a partition where the class can take
+// one.
 //
-// The probe already refuses everything else, so this is belt and braces — but
-// it is the one rule whose absence would be silent: a partition admitted by a
-// waiver would be handed to a cluster as though it were a disk.
-type WholeDiskRule struct{}
+// Which class can take one follows from how the device is reached. SPDK binds an
+// NVMe controller through vfio-pci and is handed the whole device, so a
+// partition of one was never something a run could propose: admitting it would
+// hand a cluster a partition as though it were a disk, which is the silent
+// failure this rule exists for. A logical block device is reached through the
+// kernel, where a partition is an ordinary block device and the backend takes
+// one — the journal share is documented for the case where the smallest device
+// selected is a partition.
+//
+// Nothing else is admitted in either class. A loopback device and a
+// device-mapper node are no more candidates for the block class than for NVMe,
+// so the relaxation is the partition and not the rule.
+type WholeDiskRule struct {
+	// Class is what the run is scanning, which decides whether a partition is a
+	// device this deployment could be handed at all.
+	Class DeviceClass
+}
 
 func (WholeDiskRule) Name() string { return "whole disk" }
 
-// PreFilter: a partition or a loopback device was never a disk this run could
-// have taken, so refusing it explains nothing about the fleet's storage.
+// PreFilter: a device this class could never have taken is not an answer to
+// why a fleet proposed no storage, so refusing it explains nothing.
 func (WholeDiskRule) PreFilter() bool { return true }
 
-func (WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
-	if device.Kind != string(blockdev.KindDisk) {
-		return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
+func (r WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
+	if device.Kind == string(blockdev.KindDisk) {
+		return true, ""
 	}
-	return true, ""
+	if r.Class == ClassBlock && device.Kind == string(blockdev.KindPartition) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
 }
 
 // AllowDenyRule admits a device whose address is in the allow list, when there

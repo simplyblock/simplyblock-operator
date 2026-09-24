@@ -540,6 +540,25 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
 
+	// EnableBlockFormat wipes the partition tables and filesystem signatures
+	// from this cluster's logical block devices, so that a disk carrying
+	// something already becomes one a storage node can take.
+	//
+	// It is the block class's half of the document's enableDriveFormat, and a
+	// separate field because it is a separate operation on a separate channel:
+	// EnableFormat4K is a reformat the control plane performs at node-add, and
+	// this is a wipefs node_configure.py performs on the worker before the node
+	// is added at all. A block device's block size is fixed by the drive, so
+	// there is no reformat to ask for, and an NVMe controller is handed to SPDK
+	// whole, so there are no signatures to wipe. Neither operation is available
+	// in the other's class.
+	//
+	// Destructive, and immutable for the reason the other is: it describes what
+	// was done to the disks a fleet was built on.
+	// +optional
+	// +k8s:immutable
+	EnableBlockFormat *bool `json:"enableBlockFormat,omitempty"`
+
 	// EnableCpuTopology turns on topology-aware CPU assignment.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
@@ -585,7 +604,7 @@ type StorageNodesSpec struct {
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomic4kWrites requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -682,16 +701,30 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
 
-	// EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
-	// write atomicity even with a smaller logical block size, as AWS NVMe does
-	// at 512 bytes, which lets checksum fallback mode run on them despite the
-	// data plane's usual 4K minimum. It means nothing unless
-	// EnableChecksumValidation is set, and it cannot change under a live
-	// cluster.
+	// EnableAtomicity4K enforces 4K write atomicity on devices that report a
+	// smaller logical block size, which lets checksum fallback mode run on them
+	// despite the data plane's usual 4K minimum.
+	//
+	// It is an enforcement rather than a reading, and that is what it is for.
+	// A device may complete a 4K write whole across a power failure and have no
+	// way to say so: a SATA drive presenting 512-byte logical blocks over a 4K
+	// physical sector reports 512 and nothing else, and a kernel older than 6.11
+	// publishes no atomic write attributes at all, so the fleet it runs on
+	// cannot be asked. Where the hardware can answer, the storage node's report
+	// carries what it said; where it cannot, this is how an administrator states
+	// what they know and the cluster proceeds on it.
+	//
+	// Which is why it is the setting that loses data when it is wrong. An
+	// enforced guarantee the hardware does not keep is a torn write under a
+	// checksum that disagrees with it, so it is approved against the devices'
+	// own report where one exists.
+	//
+	// It means nothing unless EnableChecksumValidation is set, and it cannot
+	// change under a live cluster.
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
-	EnableAtomic4kWrites *bool `json:"enableAtomic4kWrites,omitempty"`
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// DeviceClass is the class of backend storage every node in this cluster
 	// hands over: NVMe devices named by PCI address, or logical block devices

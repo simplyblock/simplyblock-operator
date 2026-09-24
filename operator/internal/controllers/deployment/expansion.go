@@ -263,13 +263,19 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
-			MaxSubsystemCount:    template.MaxSubsystemCount,
-			VCPUCount:            template.VCPUCount,
-			MinHugePagesSize:     template.MinHugePagesSize,
-			Stripe:               template.Stripe,
-			FabricType:           template.FabricType,
-			EnableFailureDomains: template.EnableFailureDomains,
-			DeviceClass:          class,
+			MaxSubsystemCount: template.MaxSubsystemCount,
+			VCPUCount:         template.VCPUCount,
+			// Both are immutable on the cluster, so this is the only moment
+			// either can be set at all. Copied as stated, nil included: an
+			// unstated setting leaves the cluster's own default to decide
+			// rather than having the expansion invent one.
+			EnableChecksumValidation: template.EnableChecksumValidation,
+			EnableAtomicity4K:        template.EnableAtomicity4K,
+			MinHugePagesSize:         template.MinHugePagesSize,
+			Stripe:                   template.Stripe,
+			FabricType:               template.FabricType,
+			EnableFailureDomains:     template.EnableFailureDomains,
+			DeviceClass:              class,
 			// The workload every node runs as. The document's per-group network
 			// interfaces are the same for every group of a cluster in practice,
 			// and the cluster is where a DaemonSet can carry them at all
@@ -304,9 +310,17 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// Unstated stays unstated, so the cluster's own default decides it.
 		workload.NodeProvisioningBudget = template.NodeProvisioningBudget
 		// The document says a drive is to be formatted; this is where that is
-		// resolved to how. NVMe is the class the cluster's own field covers, and
-		// the logical-block half has no field to carry it yet.
-		workload.EnableFormat4K = template.EnableDriveFormat
+		// resolved to how, because the how is not the same operation twice. An
+		// NVMe device is reformatted to a 4K block size by the control plane at
+		// node-add, and a logical block device has its signatures wiped on the
+		// worker before the node is added. Setting the NVMe field for a block
+		// cluster asked a control plane to reformat a namespace the cluster does
+		// not have, and left the wipe undone.
+		if DeviceClassOf(config) == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+			workload.EnableBlockFormat = template.EnableDriveFormat
+		} else {
+			workload.EnableFormat4K = template.EnableDriveFormat
+		}
 		// The journal layout is the cluster's and immutable on it, so the
 		// document is the only place it can still be stated. Dropping it here
 		// partitioned a journal out of every drive on a deployment reviewed for

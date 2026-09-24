@@ -21,6 +21,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -205,14 +206,50 @@ func renderNodeConfig(
 	fmt.Fprintf(&entry, "PCI_ALLOWED=%s\n",
 		utils.ShellQuote(strings.Join(mergePCIAddresses(config.PcieAllowList, addresses), ",")))
 	fmt.Fprintf(&entry, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(config.PcieDenyList, ",")))
-	fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+
+	// Which channel the device names leave through is the cluster's class, not
+	// the spelling of the names. Both classes name a device by a string the
+	// backend has to resolve, and it resolves them by different means:
+	// --nvme-devices is matched against the namespace names `nvme list` reports,
+	// and --blk-names against block device paths. A path sent through the first
+	// matches nothing.
+	//
+	// LBLK is what carries the class itself. The init container passes --lblk on
+	// that word alone, and without it the backend is asked for NVMe devices
+	// however the names are spelled -- which is not a failure it reports, but a
+	// configure that selects no device and a node that never comes up.
+	block := cluster.Spec.DeviceClass == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
+	if block {
+		entry.WriteString("LBLK=true\n")
+		fmt.Fprintf(&entry, "BLK_NAMES=%s\n",
+			utils.ShellQuote(strings.Join(kernelNames(names), ",")))
+		entry.WriteString("NVME_DEVICES=''\n")
+		// The wipe, which is local: node_configure.py performs it on the worker
+		// before the node is added, so it travels in this file rather than in
+		// the node-add call the NVMe reformat rides on.
+		if workload := cluster.Spec.StorageNodes; workload != nil &&
+			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
+			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
+		}
+	} else {
+		fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
+	// The journal share leaves through the variable its class is read by, for
+	// the reason the device names do. --jm-percent is passed from
+	// LBLK_JM_PERCENT, and the block branch of the init script never looks at
+	// JM_PERCENT.
+	percentVariable := "JM_PERCENT"
+	if block {
+		percentVariable = "LBLK_JM_PERCENT"
+	}
 	if jm := config.JournalManager; jm != nil {
-		fmt.Fprintf(&entry, "JM_PERCENT=%s\n", ptr.StringOrDefault(jm.PercentPerDevice, ""))
+		fmt.Fprintf(&entry, "%s=%s\n", percentVariable,
+			ptr.StringOrDefault(jm.PercentPerDevice, ""))
 		fmt.Fprintf(&entry, "HA_JM_COUNT=%s\n", ptr.StringOrDefault(jm.Count, ""))
 	} else {
-		entry.WriteString("JM_PERCENT=\n")
+		fmt.Fprintf(&entry, "%s=\n", percentVariable)
 		entry.WriteString("HA_JM_COUNT=\n")
 	}
 	return entry.String()
@@ -307,4 +344,26 @@ func equalConfigData(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// kernelNames is how --blk-names is spelled, which is not how the document
+// spells it.
+//
+// A document names a block device by path, because that is what a reviewer
+// reads and what DeviceSelection's pattern requires. node_configure.py looks
+// the requested strings up in a map keyed by the kernel name -- sdb, and sdb1
+// for a partition -- so a path matches nothing and the node add fails with
+// "requested block devices are not eligible", naming the path as not present.
+//
+// The last element is the kernel name for every path discovery writes, which is
+// /dev/<name>. It is not the kernel name for a udev link: /dev/disk/by-id/foo
+// would yield foo, which names nothing. Nothing writes those today, and the
+// resolution they need is a readlink on the node rather than a rewrite here,
+// since the link exists only where the device does.
+func kernelNames(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, device := range paths {
+		out = append(out, path.Base(device))
+	}
+	return out
 }

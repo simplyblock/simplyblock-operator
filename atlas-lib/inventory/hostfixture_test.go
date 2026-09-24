@@ -32,6 +32,16 @@ type hostTranscript struct {
 	Dirs  []string          `json:"dirs"`
 	Files map[string]string `json:"files"`
 	Links map[string]string `json:"links"`
+
+	// DevLinks are the udev links under /dev/disk, keyed relative to /dev
+	// rather than to /sys. They are a section of their own because /sys/dev is
+	// itself a directory, so the two trees cannot share one namespace safely.
+	//
+	// A transcript captured before the section existed has none, which decodes
+	// to nil and materializes as a host whose udev made no links. That is the
+	// reading the committed fixtures need, and TestATranscriptWithoutDevLinks
+	// holds it.
+	DevLinks map[string]string `json:"devlinks"`
 }
 
 // materialized caches one transcript per process. A host is sixteen thousand
@@ -99,8 +109,25 @@ func hostFixture(t *testing.T, name string) string {
 		}
 		_ = os.Symlink(target, full)
 	}
+	// Under dev/ inside the same temporary root, so one fixture serves a reader
+	// pointed at either tree: SysfsRoot is the root and DevRoot is devRootOf it.
+	for path, target := range host.DevLinks {
+		full := filepath.Join(root, "dev", path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("create the parent of %s: %v", path, err)
+		}
+		_ = os.Symlink(target, full)
+	}
 	materialized.Store(name, root)
 	return root
+}
+
+// devRootOf is the device-node directory of a materialized fixture, which is
+// what a reader takes as DevRoot. It is a directory that may not exist: a
+// transcript with no udev links creates nothing, and a reader listing it gets
+// the same "not found" it would get on a host where udev made none.
+func devRootOf(root string) string {
+	return filepath.Join(root, "dev")
 }
 
 // TestTheCapturedHostAnswersEveryReader is what makes the transcript worth
