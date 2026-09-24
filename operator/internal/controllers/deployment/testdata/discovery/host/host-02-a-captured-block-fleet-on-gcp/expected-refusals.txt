@@ -1,0 +1,77 @@
+githubactions-lblk-exra-node-1/nbd0: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd1: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd10: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd11: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd12: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd13: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd14: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd15: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd2: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd3: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd4: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd5: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd6: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd7: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd8: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nbd9: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-exra-node-1/nvme0n1: declined by device class because this run scans logical block devices and the device is on NVMe
+githubactions-lblk-exra-node-1/nvme0n1p1: declined by device class because this run scans logical block devices and the device is on NVMe
+githubactions-lblk-exra-node-1/nvme0n1p2: declined by device class because this run scans logical block devices and the device is on NVMe
+githubactions-lblk-exra-node-1: declined by has devices because no device of it survived the device rules
+githubactions-lblk-storage-node-1/nbd0: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd1: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd10: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd11: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd12: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd13: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd14: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd15: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd2: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd3: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd4: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd5: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd6: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd7: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd8: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/nbd9: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-1/sda: declined by available because the probe refused it: Partitioned
+githubactions-lblk-storage-node-1/sda1: declined by available because the probe refused it: NotAWholeDisk
+githubactions-lblk-storage-node-1/sda2: declined by available because the probe refused it: NotAWholeDisk
+githubactions-lblk-storage-node-2/nbd0: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd1: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd10: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd11: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd12: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd13: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd14: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd15: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd2: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd3: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd4: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd5: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd6: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd7: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd8: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/nbd9: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-2/sda: declined by available because the probe refused it: Partitioned
+githubactions-lblk-storage-node-2/sda1: declined by available because the probe refused it: NotAWholeDisk
+githubactions-lblk-storage-node-2/sda2: declined by available because the probe refused it: NotAWholeDisk
+githubactions-lblk-storage-node-3/nbd0: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd1: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd10: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd11: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd12: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd13: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd14: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd15: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd2: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd3: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd4: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd5: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd6: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd7: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd8: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/nbd9: declined by whole disk because it is a Network rather than a whole disk
+githubactions-lblk-storage-node-3/sda: declined by available because the probe refused it: Partitioned
+githubactions-lblk-storage-node-3/sda1: declined by available because the probe refused it: NotAWholeDisk
+githubactions-lblk-storage-node-3/sda2: declined by available because the probe refused it: NotAWholeDisk

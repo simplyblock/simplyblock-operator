@@ -37,7 +37,7 @@ type Row struct {
 // families are listed rather than matched loosely, so that a table of something
 // else that happens to start with a dashed word is not read as a case.
 var caseRow = regexp.MustCompile(
-	`^\|\s*((?:DEV|NUMA|SIZE|PCI|FLEET|NET|ROLE|FILT|HELD|FAIL|CM|TMPL)-\d+)\s*\|(.*)$`)
+	`^\|\s*((?:DEV|NUMA|SIZE|PCI|FLEET|NET|ROLE|FILT|HELD|FAIL|CM|TMPL|HOST)-\d+)\s*\|(.*)$`)
 
 // readRows reads every case the document states, keyed by identifier.
 func readRows(path string) (map[string]Row, error) {

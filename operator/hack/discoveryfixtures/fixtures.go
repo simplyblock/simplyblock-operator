@@ -384,6 +384,15 @@ func under(upper ...string) ifaceOpt {
 	return func(i *nodeprobe.Interface) { i.Upper = upper }
 }
 
+// peered is an interface that names another device as its link, which is what
+// one end of a veth pair does and what a VLAN does to its parent. The
+// management-interface rule reads it: an unidentified virtual device that names
+// a peer is a pod's link into the host, and admitting one admits every link the
+// cluster's CNI leaves behind (discovery/mgmtiface.go).
+func peered() ifaceOpt {
+	return func(i *nodeprobe.Interface) { i.Peered = true }
+}
+
 // frames is the interface's MTU, for a case about jumbo frames.
 func frames(mtu int) ifaceOpt {
 	return func(i *nodeprobe.Interface) { i.MTU = mtu }
