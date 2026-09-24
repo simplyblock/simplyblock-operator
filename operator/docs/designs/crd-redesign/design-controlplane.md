@@ -2,7 +2,7 @@
 
 **Status:** Implemented, with the exceptions §12 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-17)  
+**Date:** 2026-08-29 (last updated 2026-09-24)  
 **Test Plan:** [`tests/test-plan-controlplane.md`](../../tests/test-plan-controlplane.md)
 
 This document specifies the model both kinds now carry. `ControlPlane` moved to
@@ -336,6 +336,9 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   AwaitingFoundationDB  ← wait for the cluster to report available
     │
     ▼
+  BuildingIndices       ← the database's secondary indices are declared ready
+    │
+    ▼
   ApplyingDatastore     ← the document store the management API needs
     │
     ▼
@@ -348,8 +351,8 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
   phase: Available
 ```
 
-**Every step is an apply, so re-entering one is a no-op.** The objects are
-server-side applied with the `ControlPlane` as their owner, which means a step
+**Every applying step is an apply, so re-entering one is a no-op.** The objects
+are server-side applied with the `ControlPlane` as their owner, which means a step
 recorded whose apply never landed re-applies to the same result. That is what
 lets the machine carry no `triggered` flag, exactly as an `Ops` kind does
 ([`design-crd-model.md`](design-crd-model.md) §3.1). `BuildingIndices` is the one
@@ -419,9 +422,10 @@ install names the coordinator rather than the operator.
 ### 4.3 Steady state
 
 With `phase: Available`, the controller re-applies what §5.1 installs, probes
-readiness, and republishes the endpoint and version. Re-applying is what keeps an
-object somebody deleted or edited from staying that way, and it is why no operation
-exists for checking the install (§6). The probe is a direct `GET` rather than a streamed value, because it
+readiness, and republishes the endpoint and version. The index backfill `Job` of
+§4.2 is not re-applied, since a backfill that ran once has nothing left to do.
+Re-applying is what keeps an object somebody deleted or edited from staying that
+way, and it is why no operation exists for checking the install (§6). The probe is a direct `GET` rather than a streamed value, because it
 is the check that the stream itself can be established
 ([`design-crd-model.md`](design-crd-model.md) §7.7 makes the stream the way state
 arrives, and this is the one read that cannot depend on it).
@@ -843,10 +847,11 @@ The release path this kind adds is the finalizer
 
 ## 8. Backend API Requirements
 
-| Method | Endpoint                | Notes                                                                                            |
-|--------|-------------------------|--------------------------------------------------------------------------------------------------|
-| `GET`  | `/api/v2/_meta/ready`   | The readiness probe, and the one read that cannot come from the stream because it establishes it |
-| `GET`  | `/api/v2/_meta/version` | The reported version. Not provided today, and a prerequisite for §6 and §9.2                     |
+| Method | Endpoint                      | Notes                                                                                                                                                                                   |
+|--------|-------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GET`  | `/api/v2/_meta/ready`         | The readiness probe, and the one read that cannot come from the stream because it establishes it                                                                                        |
+| `GET`  | `/api/v2/_meta/version`       | The reported version. Not provided today, and a prerequisite for §6 and §9.2                                                                                                            |
+| CLI    | `sbctl cluster build-indices` | The backfill §4.2 runs as a `Job`. Idempotent, takes no cluster id, and exits non-zero when an index could not be completed. An image without it holds the install in `BuildingIndices` |
 
 **`/_meta/version` does not exist, and three things in this document wait on it.**
 `status.version` has nothing to publish (§3.3), the `Upgrade` action's `Verifying`
@@ -890,7 +895,7 @@ Events land on the object an administrator has open. For this kind that is the
 | The readiness probe failed and the phase became `Unavailable`          | `Warning` | `ControlPlaneNotReady` | `ControlPlane`    |
 | A component is below its desired count and the phase became `Degraded` | `Warning` | `ControlPlaneDegraded` | `ControlPlane`    |
 | The readiness probe recovered                                          | `Normal`  | `ControlPlaneReady`    | `ControlPlane`    |
-| An installation step is waiting on FoundationDB                        | `Normal`  | `AwaitingDependency`   | `ControlPlane`    |
+| An installation step is waiting on FoundationDB or on the index `Job`  | `Normal`  | `AwaitingDependency`   | `ControlPlane`    |
 | An installation step's deadline expired                                | `Warning` | `StepDeadlineExceeded` | `ControlPlane`    |
 | A deletion is held because clusters still exist                        | `Warning` | `ClustersStillPresent` | `ControlPlane`    |
 | A managed endpoint could not be resolved or reached                    | `Warning` | `EndpointUnreachable`  | `ControlPlane`    |
@@ -970,7 +975,9 @@ applies a `FoundationDBCluster` and waits on an operator this repository does no
 build. Proving that `AwaitingFoundationDB` reports what it is waiting for, and
 that a FoundationDB which never reaches quorum expires the step rather than
 hanging, needs `envtest` with the FoundationDB CRDs installed and a real cluster
-for the timing.
+for the timing. `BuildingIndices` is unit-testable up to the `Job`'s conditions,
+which a fake client sets by hand, and only a live deployment proves that the
+image's `sbctl cluster build-indices` reaches the database and returns.
 
 The managed mode's risk is different and smaller: it is a URL, a Secret, and a
 probe, and all three are unit-testable. What is not is a shared control plane with
@@ -1188,15 +1195,19 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
 type ControlPlaneStep string
 
 const (
 	ControlPlaneStepApplyingFoundationDB ControlPlaneStep = "ApplyingFoundationDB"
 	ControlPlaneStepAwaitingFoundationDB ControlPlaneStep = "AwaitingFoundationDB"
-	ControlPlaneStepApplyingDatastore    ControlPlaneStep = "ApplyingDatastore"
-	ControlPlaneStepApplyingAPI          ControlPlaneStep = "ApplyingAPI"
-	ControlPlaneStepAwaitingAPI          ControlPlaneStep = "AwaitingAPI"
+	// ControlPlaneStepBuildingIndices runs the control plane's own index
+	// backfill against the database that just became available, and holds until
+	// it reports success.
+	ControlPlaneStepBuildingIndices   ControlPlaneStep = "BuildingIndices"
+	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
+	ControlPlaneStepApplyingAPI       ControlPlaneStep = "ApplyingAPI"
+	ControlPlaneStepAwaitingAPI       ControlPlaneStep = "AwaitingAPI"
 )
 
 // FoundationDBSpec is the sizing of the FoundationDB the operator installs.
@@ -1374,7 +1385,7 @@ type ControlPlaneStatus struct {
 	Phase ControlPlanePhase `json:"phase,omitempty"`
 
 	// Step is the position of the installation machine within Installing.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

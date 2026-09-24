@@ -403,11 +403,12 @@ forever, and that its message names the coordinator rather than the operator.
 | Manual      | 3         | 0       | 3           |
 | **Total**   | **224**   | **39**  | **185**     |
 
-Nothing is covered. `ControlPlaneReconciler` has no test file at any level, which
-is the finding rather than a matter of this plan being new: it is the root of the
-ownership spine, every other controller holds on its verdict, and its entire
-behavior is untested. `ControlPlaneOps` does not exist yet,
-so their rows are specifications rather than gaps.
+Every covered row is a unit test in `operator/internal/controllers/controlplane/`.
+Nothing at the integration or end-to-end level asserts anything about either kind,
+which is the finding: `ControlPlane` is the root of the ownership spine, every
+other controller holds on its verdict, and the install path that applies a
+`FoundationDBCluster` and runs the index backfill `Job` is proven only against a
+fake client.
 
 ---
 
@@ -435,7 +436,7 @@ so their rows are specifications rather than gaps.
 
 | Axis                     | Value                          | Scenarios                                                    |
 |--------------------------|--------------------------------|--------------------------------------------------------------|
-| Control-plane source     | Managed                        | U-19, U-28 … U-38, U-44, E-01                                |
+| Control-plane source     | Managed                        | U-19, U-28 … U-38, U-44, U-172 … U-178, E-01                 |
 |                          | External                       | U-18, U-20 … U-27, U-39, U-43, E-02, M-02                    |
 | Namespace count          | Single namespace               | Every scenario except those below                            |
 |                          | Multiple namespaces            | I-19                                                         |
