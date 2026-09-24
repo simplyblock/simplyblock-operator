@@ -129,10 +129,22 @@ spec:
             {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
+          # One list: a second `ports:` key here, rather than an entry appended
+          # to this one, replaces this block instead of adding to it -- YAML
+          # keeps only the later of two same-named keys in one mapping. That
+          # silently dropped csi-link's own containerPort whenever
+          # metricsAPI.enabled rendered its block after this one (the default),
+          # leaving the Service's named targetPort: csi-link matching nothing
+          # on the pod and the csi-link Service resolving to zero endpoints.
           ports:
             - containerPort: {{ .Values.csiLink.port }}
               name: csi-link
               protocol: TCP
+            {{- if .Values.metricsAPI.enabled }}
+            - name: metrics-api
+              containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -145,12 +157,6 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
-          {{- if .Values.metricsAPI.enabled }}
-          ports:
-            - name: metrics-api
-              containerPort: {{ .Values.metricsAPI.port }}
-              protocol: TCP
-          {{- end }}
       volumes:
         # Self-signed mode (cert-controller) only writes the serving cert to the
         # webhook-server-cert Secret, so that Secret must be mounted here for the
