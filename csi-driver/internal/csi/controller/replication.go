@@ -68,7 +68,7 @@ func volumeIDFrom(req volumeIDCarrier) string {
 //
 // Returns h and client unchanged when h has no replication relationship yet
 // (errs.ErrNotFound -- the ordinary case for a volume never enabled for
-// replication, e.g. M-01's first-ever protect) or when h already names the
+// replication, e.g., M-01's first-ever protect) or when h already names the
 // target side.
 func resolveToLocalReplica(
 	ctx context.Context, h *lvol.Handle, client *atlascp.Client,
@@ -128,7 +128,7 @@ func (cs *Server) EnableVolumeReplication(
 	if err := client.EnableVolumeReplication(ctx, h.Handle(), policyID); err != nil {
 		if errors.Is(err, errs.ErrNotFound) {
 			// This backend's replication is one-way: the destination never
-			// carries a persistent, independently-provisioned LVol of its
+			// carries a persistent, independently provisioned LVol of its
 			// own -- the writable clone only comes into existence when
 			// PromoteVolume clones the last replicated snapshot. csi-addons
 			// always calls Enable before Promote, unconditionally, for
@@ -172,7 +172,10 @@ func (cs *Server) DisableVolumeReplication(
 	return &replication.DisableVolumeReplicationResponse{}, nil
 }
 
-// GetVolumeReplicationInfo returns the volume's replicated-life status.
+// GetVolumeReplicationInfo returns the volume's replicated-life status,
+// resolved to the local replica first for the same reason as every other
+// verb: Ramen polls this with the S3-restored, foreign volumeHandle, whose
+// own lvol record may already be reaped (see ResyncVolume).
 //
 // The spec's response carries only LastSyncTime in this version
 // (github.com/csi-addons/spec v0.2.0); lastSyncBytes/lastSyncDuration are not
@@ -188,6 +191,10 @@ func (cs *Server) GetVolumeReplicationInfo(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
@@ -270,6 +277,13 @@ func (cs *Server) DemoteVolume(
 // off the ordinary lag read -- it never cuts over, matching the design's own
 // "it never merges" (§5.2): cutover is PromoteVolume's job, on a separate,
 // later call.
+//
+// The resolveToLocalReplica step is what keeps a relocate's round trip alive:
+// the Secondary side's VR carries the ORIGINAL source's volumeHandle
+// (S3-restored verbatim), and by the second hop that source lvol record has
+// been reaped by lvol_monitor's post-failover hold -- confirmed live
+// 2026-09-24, when resync (then the only verb without the resolution) 404ed
+// against the dead handle on every reconcile and stalled the relocate back.
 func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
@@ -279,6 +293,10 @@ func (cs *Server) ResyncVolume(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	client, err := clusters.ReplicationClient(ctx, h.ClusterID)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	h, client, err = resolveToLocalReplica(ctx, h, client)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}

@@ -316,7 +316,7 @@ func TestResyncVolumeUsesReplicationSourceWhenVolumeIdIsEmpty(t *testing.T) {
 	}
 }
 
-func TestResyncVolumeForwardsTheSourceClusterParameter(t *testing.T) {
+func TestResyncVolumeSendsTheSourceClusterParameter(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
 	cs := newReplicationTestServer(t, mock)
@@ -374,6 +374,102 @@ func TestResyncVolumeNotReadyWhileLagExceedsBudget(t *testing.T) {
 	}
 	if resp.Ready {
 		t.Error("Ready = true, want false: lag (1800s) exceeds the budget (900s)")
+	}
+}
+
+// Regression: 2026-09-24-resync-foreign-handle-404 — on relocate M-02's round
+// trip (B -> A), cluster B's Secondary-role VolumeReplication still carries the
+// ORIGINAL cluster-A volumeHandle (Ramen's S3-restore preserves it verbatim),
+// and by then the A-side lvol record has been reaped by lvol_monitor's
+// LVOL_DEMOTE_FAILOVER_HOLD_SEC deferred removal. ResyncVolume was the only
+// Replication verb that skipped resolveToLocalReplica, so it fired the
+// failback call at that dead, foreign lvol and got a permanent 404 ("LVol
+// 00660ccf... not found") on every reconcile -- the VR never finished becoming
+// Secondary and the whole relocate-back stalled. The demote in the very same
+// reconcile succeeded, because DemoteVolume resolves. Resync must redirect a
+// handle whose relationship says IsSource to the live local replica
+// (TargetLvolId), and the relationship must carry it there even though the
+// source volume itself no longer exists (the cluster-scoped relationship
+// endpoint stays resolvable by a deleted source id, confirmed live
+// 2026-09-24).
+func TestResyncVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+	// The source lvol record is gone -- reaped after the failover hold -- so
+	// any call landing on it 404s, exactly as the live control plane did.
+	delete(mock.volumes, testReplVolumeID)
+
+	resp, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFailbackVolumeID != testReplTargetVolumeID {
+		t.Errorf("failback landed on volume %q, want the resolved target %q",
+			mock.lastFailbackVolumeID, testReplTargetVolumeID)
+	}
+	if !resp.Ready {
+		t.Error("Ready = false, want true: the resolved target reports no lag at all")
+	}
+}
+
+// Regression: 2026-09-24-resync-foreign-handle-404 — the same missing
+// resolution as TestResyncVolumeResolvesToTargetWhenGivenTheSourceSideOfARelationship,
+// on the standalone info read: Ramen polls GetVolumeReplicationInfo for
+// lastSyncTime against the same S3-restored, foreign volumeHandle, so once the
+// source record is reaped the read 404s instead of reporting the local
+// replica's status.
+func TestGetVolumeReplicationInfoResolvesToTargetWhenGivenTheSourceSideOfARelationship(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-target", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+	}
+	mock.replicationStatus[testReplTargetVolumeID] = map[string]any{
+		"role": "target", "state": "in_sync",
+		"last_replicated_at": "2026-09-24T13:00:00Z",
+		"outstanding_count":  0, "outstanding_bytes": 0,
+		"failing_count": 0, "max_retry_reached": false, "resyncing": false,
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	resp, err := cs.GetVolumeReplicationInfo(context.Background(), &replication.GetVolumeReplicationInfoRequest{
+		VolumeId: testReplVolID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.LastSyncTime == nil {
+		t.Fatal("LastSyncTime = nil, want the resolved target's last_replicated_at")
+	}
+	if got := resp.LastSyncTime.AsTime().UTC().Format("2006-01-02T15:04:05Z"); got != "2026-09-24T13:00:00Z" {
+		t.Errorf("LastSyncTime = %s, want the resolved target's 2026-09-24T13:00:00Z", got)
 	}
 }
 

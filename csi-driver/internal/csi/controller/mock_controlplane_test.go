@@ -128,7 +128,7 @@ type mockSBCLI struct {
 
 	// replicationPUTStatus, when set, makes every PUT carrying
 	// replication_policy_id respond with this HTTP status instead of the
-	// normal idempotent update, modeling a backend refusal (e.g. a policy
+	// normal idempotent update, modeling a backend refusal (e.g., a policy
 	// that is not active) or a transient failure.
 	replicationPUTStatus int
 
@@ -158,6 +158,10 @@ type mockSBCLI struct {
 	failbackStatus int
 	// lastFailbackBody captures the raw JSON body of the last failback call.
 	lastFailbackBody []byte
+	// lastFailbackVolumeID captures which volume's path the last failback
+	// call landed on, so a test can assert the relationship resolution
+	// redirected it -- the same capture handleFailover keeps for promote.
+	lastFailbackVolumeID string
 }
 
 func newMockSBCLI() *mockSBCLI {
@@ -438,6 +442,7 @@ func (m *mockSBCLI) handleFailback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.lastFailbackBody, _ = io.ReadAll(r.Body)
+	m.lastFailbackVolumeID = volumeID
 	if m.failbackStatus != 0 {
 		writeJSON(w, m.failbackStatus, map[string]string{"detail": "injected status"})
 		return
