@@ -227,11 +227,20 @@ func renderNodeConfig(
 	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
+	// The journal share leaves through the variable its class is read by, for
+	// the reason the device names do. --jm-percent is passed from
+	// LBLK_JM_PERCENT, and the block branch of the init script never looks at
+	// JM_PERCENT.
+	percentVariable := "JM_PERCENT"
+	if block {
+		percentVariable = "LBLK_JM_PERCENT"
+	}
 	if jm := config.JournalManager; jm != nil {
-		fmt.Fprintf(&entry, "JM_PERCENT=%s\n", ptr.StringOrDefault(jm.PercentPerDevice, ""))
+		fmt.Fprintf(&entry, "%s=%s\n", percentVariable,
+			ptr.StringOrDefault(jm.PercentPerDevice, ""))
 		fmt.Fprintf(&entry, "HA_JM_COUNT=%s\n", ptr.StringOrDefault(jm.Count, ""))
 	} else {
-		entry.WriteString("JM_PERCENT=\n")
+		fmt.Fprintf(&entry, "%s=\n", percentVariable)
 		entry.WriteString("HA_JM_COUNT=\n")
 	}
 	return entry.String()
