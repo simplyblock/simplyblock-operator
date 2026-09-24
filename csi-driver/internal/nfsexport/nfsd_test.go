@@ -99,6 +99,60 @@ func startFakeProcess(t *testing.T, name string) {
 	})
 }
 
+// processStatusIsZombie is processRunning's decision, pulled out so it is
+// testable against a "State:" line directly rather than a live zombie.
+func TestProcessStatusIsZombie(t *testing.T) {
+	cases := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{"running", "Name:\tsleep\nState:\tR (running)\n", false},
+		{"sleeping", "Name:\tsleep\nState:\tS (sleeping)\n", false},
+		{"zombie", "Name:\trpc.idmapd\nState:\tZ (zombie)\n", true},
+		{"no state line", "Name:\tsleep\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := processStatusIsZombie([]byte(c.status)); got != c.want {
+				t.Errorf("processStatusIsZombie(%q) = %v, want %v", c.status, got, c.want)
+			}
+		})
+	}
+}
+
+// startFakeZombie launches a process under the given comm that exits
+// immediately, and deliberately never reaps it, producing a genuine zombie:
+// the same state idmapd's own double-fork daemonizing left behind live, on a
+// host where processRunning's earlier, comm-only check kept reporting the
+// dead process as present.
+func startFakeZombie(t *testing.T, name string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("zombie state is a Linux /proc concept, which %s does not have", runtime.GOOS)
+	}
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("no true binary on PATH to fake a process with: %v", err)
+	}
+	data, err := os.ReadFile(truePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", truePath, err)
+	}
+	fake := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(fake, data, 0o755); err != nil {
+		t.Fatalf("writing %s: %v", fake, err)
+	}
+	cmd := exec.Command(fake)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting %s: %v", fake, err)
+	}
+	// No Wait(): the process exits on its own almost immediately, and stays
+	// a zombie, unreaped, for exactly as long as nothing calls Wait() on it
+	// -- which is the point.
+	t.Cleanup(func() { _ = cmd.Wait() })
+}
+
 // waitForProcessRunning polls processRunning(comm) until it reports want, or
 // fails the test: Start() returns once the fork succeeds, not once exec() has
 // replaced the image and the kernel has set comm, and killing a process is
@@ -132,6 +186,17 @@ func TestProcessRunningDetectsARealProcessByComm(t *testing.T) {
 	waitForProcessRunning(t, "rpc.idmapd", false)
 	startFakeProcess(t, "rpc.idmapd")
 	waitForProcessRunning(t, "rpc.idmapd", true)
+}
+
+// Found live: idmapd's own daemonizing fork left the exec'd process a
+// zombie, its comm entry intact, and processRunning reported it present from
+// that entry alone -- so ensureIdmapd never started a replacement for a
+// process that was, in fact, dead. A zombie with a matching comm must read
+// as not running.
+func TestProcessRunningIgnoresAZombie(t *testing.T) {
+	waitForProcessRunning(t, "rpc.idmapd", false)
+	startFakeZombie(t, "rpc.idmapd")
+	waitForProcessRunning(t, "rpc.idmapd", false)
 }
 
 // ensureIdmapd starts rpc.idmapd exactly when processRunning says it is

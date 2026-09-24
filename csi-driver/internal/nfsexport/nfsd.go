@@ -189,12 +189,20 @@ func ensureIdmapd(ctx context.Context, run runner) error {
 	return nil
 }
 
-// processRunning reports whether a process with the given kernel comm
-// already exists.
+// processRunning reports whether a process with the given kernel comm is
+// actually running.
 //
 // Reads /proc directly rather than shelling out to pgrep or ps: neither
 // idmapd nor nfsdcld write a pidfile to check instead, and this way costs
 // nothing this image might not carry.
+//
+// A zombie's comm survives until something reaps it, indistinguishable by
+// name alone from a live process -- found live, on a host where idmapd had
+// exited (its double-fork daemonizing left the original, exec'd process
+// unreaped) and this check kept reporting it present from that entry alone,
+// so ensureIdmapd never started a replacement. Excluded here rather than
+// reaped: reaping is this process's own child's job, and does not belong to
+// a query about whether a name is running.
 func processRunning(comm string) (bool, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -208,11 +216,31 @@ func processRunning(comm string) (bool, error) {
 		if err != nil {
 			continue // the process exited between ReadDir and here
 		}
-		if strings.TrimSpace(string(got)) == comm {
-			return true, nil
+		if strings.TrimSpace(string(got)) != comm {
+			continue
 		}
+		status, err := os.ReadFile(filepath.Join("/proc", e.Name(), "status"))
+		if err != nil {
+			continue // exited between the comm and status reads
+		}
+		if processStatusIsZombie(status) {
+			continue // a dead process, not a running one, whatever its comm still says
+		}
+		return true, nil
 	}
 	return false, nil
+}
+
+// processStatusIsZombie is processRunning's decision pulled out of the /proc
+// scan, so it is testable directly against a "State:" line rather than a
+// live zombie process.
+func processStatusIsZombie(status []byte) bool {
+	for _, line := range strings.Split(string(status), "\n") {
+		if state, ok := strings.CutPrefix(line, "State:"); ok {
+			return strings.Contains(state, "Z")
+		}
+	}
+	return false
 }
 
 // WithNFSD brings the host's NFS server up before an export is built on it.
