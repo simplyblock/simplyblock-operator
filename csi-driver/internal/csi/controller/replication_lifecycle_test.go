@@ -530,68 +530,17 @@ func TestPromoteVolumeResolvesAcrossAChainedRelationshipToTheActiveVolume(t *tes
 	}
 }
 
-// Regression: 2026-09-24-promote-leaves-new-primary-unprotected — the
-// vendored csi-addons controller calls EnableVolumeReplication only at VR
-// creation, which on a relocate happens BEFORE the promote creates the new
-// primary clone: Enable lands on the pre-promote side and nothing ever
-// attaches the policy to the volume the workload actually ends up on
-// (confirmed live 2026-09-24, twice: the policy stayed on the retired clone
-// while the new primary ran with policy=NONE, do_replicate=False, and even a
-// forced reconcile-all after a manager restart issued no further Enable).
-// The VolumeReplicationClass parameters ride on EVERY replication RPC,
-// promote included, so PromoteVolume itself must re-resolve after a
-// successful promote -- the walk now reaches the newly created clone -- and
-// attach the class's policy there.
-func TestPromoteVolumeAttachesThePolicyToTheNewlyActiveVolume(t *testing.T) {
-	mock := newMockSBCLI()
-	defer mock.Close()
-	cs := newReplicationTestServer(t, mock)
-	mock.volumes[testReplTargetVolumeID] = &mockVolume{
-		UUID: testReplTargetVolumeID, Name: "repl-vol-hop1-clone", Size: 1 << 30,
-	}
-	mock.volumes[testReplActiveVolumeID] = &mockVolume{
-		UUID: testReplActiveVolumeID, Name: "repl-vol-new-primary", Size: 1 << 30,
-	}
-	mock.replicationRelationship[testReplVolumeID] = map[string]any{
-		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee1",
-		"direction":         "to_target",
-		"mode":              "failover",
-		"state":             "failed_over",
-		"is_source":         true,
-		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
-		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
-		"target_nqn": "nqn.test", "target_ns_id": 1,
-		"active": "target", "active_lvol_id": testReplActiveVolumeID,
-	}
-	mock.replicationRelationship[testReplTargetVolumeID] = map[string]any{
-		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeee2",
-		"direction":         "to_target",
-		"mode":              "failover",
-		"state":             "failed_over",
-		"is_source":         true,
-		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplTargetVolumeID,
-		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplActiveVolumeID,
-		"target_nqn": "nqn.test", "target_ns_id": 1,
-		"active": "target", "active_lvol_id": testReplActiveVolumeID,
-	}
-	delete(mock.volumes, testReplVolumeID)
-
-	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
-		VolumeId:   testReplVolID,
-		Force:      true,
-		Parameters: map[string]string{replicationPolicyParam: testReplPolicyID},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := mock.volumes[testReplActiveVolumeID].ReplicationPolicyID; got != testReplPolicyID {
-		t.Errorf("new primary's policy = %q, want %q attached by the promote itself", got, testReplPolicyID)
-	}
-}
-
-// Without the class parameter there is nothing to attach, and promote must
-// stay exactly what it was -- some callers drive promote outside any policy.
-func TestPromoteVolumeWithoutThePolicyParameterAttachesNothing(t *testing.T) {
+// Regression: 2026-09-24-promote-must-not-attach-the-policy — attaching the
+// class's policy to the promoted volume inside PromoteVolume was tried (to
+// close the "new primary comes up with policy=NONE" gap) and confirmed
+// harmful live the same day: the attach starts policy-driven replication of
+// the fresh clone immediately, the relocate's fail-back then re-points the
+// SAME volume's replication at the original source node, and the two chains
+// collide -- the fail-over clone build died on "Failed to create BDev" and
+// the whole relocate wedged at WaitForReadiness. Promote must promote and
+// nothing else, even when the class parameters (which ride on every RPC)
+// name a policy; re-protection is the planned-cutover flow's job.
+func TestPromoteVolumeDoesNotAttachThePolicyItWasHanded(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
 	cs := newReplicationTestServer(t, mock)
@@ -607,16 +556,20 @@ func TestPromoteVolumeWithoutThePolicyParameterAttachesNothing(t *testing.T) {
 		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
 		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
 		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplTargetVolumeID,
 	}
+	delete(mock.volumes, testReplVolumeID)
 
 	_, err := cs.PromoteVolume(context.Background(), &replication.PromoteVolumeRequest{
-		VolumeId: testReplVolID, Force: true,
+		VolumeId:   testReplVolID,
+		Force:      true,
+		Parameters: map[string]string{replicationPolicyParam: testReplPolicyID},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := mock.volumes[testReplTargetVolumeID].ReplicationPolicyID; got != "" {
-		t.Errorf("policy = %q attached with no class parameter, want none", got)
+		t.Errorf("promote attached policy %q to the promoted volume; it must attach nothing", got)
 	}
 }
 
