@@ -12,6 +12,7 @@ package controlplane
 import (
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -103,6 +104,218 @@ func TestEveryWorkloadOfTheControlPlaneRunsTheSpecsImage(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The index job runs the control plane's own backfill, on the control plane's
+// image, against the database it just became able to reach. It runs to
+// completion once rather than being restarted, which is what a Job is for.
+func TestTheIndexJobRunsTheBackfillAgainstTheDatabase(t *testing.T) {
+	job := indexJob(localControlPlane())
+
+	spec := job.Spec.Template.Spec
+	if len(spec.Containers) != 1 {
+		t.Fatalf("the job runs %d containers, want the backfill alone", len(spec.Containers))
+	}
+	container := spec.Containers[0]
+
+	if container.Image != testImage {
+		t.Errorf("the job runs %q, want the spec's %q", container.Image, testImage)
+	}
+	if command := strings.Join(container.Command, " "); command != "sbctl cluster build-indices" {
+		t.Errorf("the job runs %q, want the backfill command", command)
+	}
+	if spec.RestartPolicy != corev1.RestartPolicyNever {
+		t.Errorf("restart policy is %q, want Never: a backfill that cannot finish is "+
+			"reported rather than restarted forever", spec.RestartPolicy)
+	}
+	if spec.ServiceAccountName != "" {
+		t.Errorf("the job runs as %q, want no account of its own: the backfill speaks to "+
+			"FoundationDB and to nothing in Kubernetes, and every account the install "+
+			"creates is created after this step", spec.ServiceAccountName)
+	}
+
+	mountsClusterFile := false
+	for _, mount := range container.VolumeMounts {
+		if mount.MountPath == clusterFilePath {
+			mountsClusterFile = true
+		}
+	}
+	if !mountsClusterFile {
+		t.Error("the job mounts no cluster file, so it cannot reach the database")
+	}
+}
+
+// The job is a client of a database that may demand a certificate of one, and
+// FoundationDB's TLS is mutual: a client reaching coordinators that advertise a
+// TLS listener presents its own material or it does not connect. What it
+// presents is the database's peer certificate, issued by the FoundationDB step,
+// rather than the management API's serving certificate, which is issued two
+// steps later and would leave the pod waiting on a Secret nothing has created.
+func TestTheIndexJobPresentsTheDatabasesPeerCertificate(t *testing.T) {
+	job := indexJob(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}))
+
+	spec := job.Spec.Template.Spec
+	container := spec.Containers[0]
+
+	carries := map[string]bool{}
+	for _, env := range container.Env {
+		carries[env.Name] = true
+	}
+	for _, name := range []string{"FDB_TLS_CERTIFICATE_FILE", "FDB_TLS_KEY_FILE", "FDB_TLS_CA_FILE"} {
+		if !carries[name] {
+			t.Errorf("the job carries no %s, so it cannot authenticate to the database", name)
+		}
+	}
+
+	mounted := false
+	for _, mount := range container.VolumeMounts {
+		if mount.MountPath == fdbTLSMountPath {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Error("the job mounts nothing where its FDB_TLS_* variables look, so the paths " +
+			"it names hold nothing")
+	}
+
+	presented := ""
+	for _, volume := range spec.Volumes {
+		if volume.Secret != nil {
+			presented = volume.Secret.SecretName
+		}
+	}
+	if presented != FDBPeerCertSecret {
+		t.Errorf("the job presents %q, want %q: the serving certificate is issued by a later "+
+			"step, so a pod naming it here never starts", presented, FDBPeerCertSecret)
+	}
+}
+
+// A deployment that serves TLS without demanding a client certificate leaves the
+// database's own connections plaintext, so the backfill has nothing to present
+// and needs no material at all. Carrying it anyway would tie this step to a
+// Secret issued for a listener the job does not run.
+func TestTheIndexJobCarriesNoCertificateWhenTheDatabaseAsksForNone(t *testing.T) {
+	job := indexJob(aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{
+		EnableMutualTLS: ptr.To(false),
+	}))
+
+	spec := job.Spec.Template.Spec
+	for _, volume := range spec.Volumes {
+		if volume.Secret != nil {
+			t.Errorf("the job mounts Secret %q against a database that asks for no "+
+				"certificate", volume.Secret.SecretName)
+		}
+	}
+	for _, env := range spec.Containers[0].Env {
+		if strings.HasPrefix(env.Name, "FDB_TLS_") {
+			t.Errorf("the job carries %s against a database that asks for no certificate",
+				env.Name)
+		}
+	}
+}
+
+// The backfill runs two steps before the management API's objects are applied,
+// so every object its pod names has to be one that exists by then. Nothing about
+// a name that does not resolve is loud: an account that is missing means no pod
+// is ever created, a ConfigMap key holds the container in
+// CreateContainerConfigError, and a Secret volume holds it in ContainerCreating.
+// In all three the job stays active, carries neither the Complete nor the Failed
+// condition, and the install waits on it.
+func TestTheIndexJobNamesNothingTheInstallHasNotCreatedYet(t *testing.T) {
+	available := map[string]bool{
+		// Written by the FoundationDB operator once the database is up, which is
+		// what AwaitingFoundationDB waits for.
+		"ConfigMap/" + clusterFileConfigMapName: true,
+		// Issued by the Certificate the ApplyingFoundationDB step applies, and
+		// present for the same reason: the database mounts it itself.
+		"Secret/" + FDBPeerCertSecret: true,
+	}
+
+	for _, tc := range []struct {
+		name string
+		tls  simplyblockv1alpha2.ControlPlaneTLS
+	}{
+		{"mutual TLS", simplyblockv1alpha2.ControlPlaneTLS{}},
+		{"serving TLS alone", simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: ptr.To(false)}},
+		{"plaintext", simplyblockv1alpha2.ControlPlaneTLS{EnableTLS: ptr.To(false)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := indexJob(aLocalControlPlane(tc.tls))
+			for _, ref := range podReferences(job.Spec.Template.Spec) {
+				if !available[ref] {
+					t.Errorf("the job names %s, which no earlier step creates", ref)
+				}
+			}
+		})
+	}
+}
+
+// A job whose pods cannot be created, or are created and never start, carries
+// neither the Complete nor the Failed condition: backoffLimit counts pods that
+// ran and failed, and there are none. Its own wall-clock deadline is what turns
+// that into the Failed condition the install stops on, rather than a step that
+// holds until somebody looks at it.
+func TestTheIndexJobFailsOnItsOwnDeadline(t *testing.T) {
+	job := indexJob(localControlPlane())
+
+	if job.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatal("the job has no deadline, so one that cannot start is never reported failed")
+	}
+	if budget := time.Duration(*job.Spec.ActiveDeadlineSeconds) * time.Second; budget > buildingIndicesDeadline {
+		t.Errorf("the job's deadline is %s, want it within the step's %s: a step that expires "+
+			"first only reports that it is late", budget, buildingIndicesDeadline)
+	}
+}
+
+// podReferences is every object a pod spec names, as "Kind/name," which is the
+// set that has to exist before the pod can run.
+func podReferences(spec corev1.PodSpec) []string {
+	var refs []string
+	if spec.ServiceAccountName != "" {
+		refs = append(refs, "ServiceAccount/"+spec.ServiceAccountName)
+	}
+
+	for _, volume := range spec.Volumes {
+		switch {
+		case volume.ConfigMap != nil:
+			refs = append(refs, "ConfigMap/"+volume.ConfigMap.Name)
+		case volume.Secret != nil:
+			refs = append(refs, "Secret/"+volume.Secret.SecretName)
+		case volume.Projected != nil:
+			for _, source := range volume.Projected.Sources {
+				if source.ConfigMap != nil {
+					refs = append(refs, "ConfigMap/"+source.ConfigMap.Name)
+				}
+				if source.Secret != nil {
+					refs = append(refs, "Secret/"+source.Secret.Name)
+				}
+			}
+		}
+	}
+
+	for _, container := range spec.Containers {
+		for _, env := range container.Env {
+			if env.ValueFrom == nil {
+				continue
+			}
+			if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
+				refs = append(refs, "ConfigMap/"+ref.Name)
+			}
+			if ref := env.ValueFrom.SecretKeyRef; ref != nil {
+				refs = append(refs, "Secret/"+ref.Name)
+			}
+		}
+		for _, source := range container.EnvFrom {
+			if source.ConfigMapRef != nil {
+				refs = append(refs, "ConfigMap/"+source.ConfigMapRef.Name)
+			}
+			if source.SecretRef != nil {
+				refs = append(refs, "Secret/"+source.SecretRef.Name)
+			}
+		}
+	}
+
+	return refs
 }
 
 // The exporter is deliberately not on that image: it is upstream's, and its

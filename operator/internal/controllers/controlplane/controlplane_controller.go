@@ -21,6 +21,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -76,6 +77,7 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;escalate;bind
@@ -291,6 +293,9 @@ func (r *ControlPlaneReconciler) performInstallStep(
 			return false, waiting, nil
 		}
 		return true, "", nil
+
+	case stepBuildingIndices:
+		return r.buildIndices(ctx, cp)
 
 	case stepApplyingDatastore:
 		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
@@ -738,7 +743,9 @@ func errorsAs[T error](err error, target *T) bool {
 // The workloads are watched as well as the ControlPlane itself: a component's
 // ready count changing is what moves the phase between Available and Degraded,
 // and the watch is what keeps that within the event rather than the
-// steady-state interval.
+// steady-state interval. The index Job is watched for the same reason, so that
+// its completion advances the installation rather than the retry interval doing
+// it.
 //
 // The ControlPlane's own watch is filtered to generation changes. Every probe
 // stamps status.lastChecked, and an unfiltered watch turns that write into
@@ -749,6 +756,7 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&batchv1.Job{}).
 		Named("controlplane").
 		Complete(r)
 }

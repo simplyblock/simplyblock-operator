@@ -352,7 +352,62 @@ declares one graph, because it has no `spec.action` to key a `MultiConfig` on.
 server-side applied with the `ControlPlane` as their owner, which means a step
 recorded whose apply never landed re-applies to the same result. That is what
 lets the machine carry no `triggered` flag, exactly as an `Ops` kind does
-([`design-crd-model.md`](design-crd-model.md) §3.1).
+([`design-crd-model.md`](design-crd-model.md) §3.1). `BuildingIndices` is the one
+step that reads before it writes, for the reason below.
+
+**`BuildingIndices` runs the control plane's own index backfill as a Job, and
+holds until Kubernetes reports it complete.** The control plane answers every
+lookup that is not by primary key from a declared secondary index, and readers
+trust an index only once it has been walked and declared `ready`. Until then they
+fall back to a full scan of the table, which is correct and grows slower with
+every record. The walk is the control plane's code and lives in its image, so the
+operator runs `sbctl cluster build-indices` there, as an administrator would. It
+sits directly after the database becomes available because the index keyspace
+belongs to the deployment rather than to a cluster, so nothing has to exist yet
+for the backfill to run, and a database with no records is the one moment where
+every declared index is complete the instant it is declared ready.
+
+The work is a `Job` named `simplyblock-build-indices`, owned by the
+`ControlPlane` and running the image of `spec.source.local`. A `Job`'s pod
+template is immutable, so the step reads the `Job` before it writes: a pass that
+finds none creates it, a pass that finds one leaves it as it is, and only its
+`Complete` condition advances the step. The `Job` is not among the objects §4.3
+re-applies, and nothing runs it on an upgrade: the installation machine is
+entered once, and an index a later release declares reaches an existing
+deployment through the control plane's own upgrade path.
+
+**The `Job` names nothing the install has not created yet**, which is the price
+of the position it holds. The service account, the shared `ConfigMap`, and the
+management API's serving certificate all belong to `ApplyingAPI`, two steps
+later, and a pod naming one of them does not fail: a missing account means no pod
+is ever created, a missing `ConfigMap` key holds the container in
+`CreateContainerConfigError`, and a missing `Secret` holds it in
+`ContainerCreating`. In each the `Job` stays active with neither condition and the
+step waits on it forever. So the backfill claims no account, since `sbctl cluster
+build-indices` speaks to FoundationDB and to nothing in Kubernetes, and carries
+its log level literally rather than from the `ConfigMap` a one-shot `Job` has no
+reason to be able to reload. Where the database demands a client certificate the
+backfill presents `simplyblock-foundationdb-tls`, issued by the step that created
+the database, rather than the management API's serving certificate: FoundationDB's
+TLS is mutual, so a client reaching coordinators advertised with `:tls` presents
+material or does not connect, and the material it presents has to be material
+that already exists. What is left is the cluster file, which the FoundationDB
+operator writes and `AwaitingFoundationDB` is what waits for.
+
+**A `Failed` condition fails the installation**, and the `Job` carries two ways
+of reaching one. It runs the backfill three times before Kubernetes reports
+`BackoffLimitExceeded`, and it carries an `activeDeadlineSeconds` inside the
+step's own budget, which is what reports `DeadlineExceeded` for a backfill that
+never started at all — attempts are counted from pods that ran and failed, so a
+pod that is never created counts against nothing. Either way the machine emits
+`InstallationFailed` (§9.1), writes the failure to `status.message` with the
+phase still `Installing`, and schedules no requeue, because nothing a timer finds
+would differ. The message names which of the two happened, since a `Job` that ran
+and refused sends its reader to the pods' logs and a `Job` that ran out of clock
+sends them to whether a pod exists. The reconcile moves again on the two changes
+the message asks for. A spec naming another image replaces the failed `Job`,
+since the administrator changed the thing that failed and a `Job` cannot be
+patched, and deleting the `Job` by hand makes the next pass create it again.
 
 **`AwaitingFoundationDB` is the step that can take the longest and the one whose
 deadline matters.** A three-coordinator FoundationDB on slow storage is minutes,

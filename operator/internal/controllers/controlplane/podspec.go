@@ -45,8 +45,11 @@ const (
 	prometheusPort = "9090"
 
 	// logLevelKey is the key in the shared ConfigMap every workload reads its
-	// log level from.
-	logLevelKey = "LOG_LEVEL"
+	// log level from, and defaultLogLevel is what the install writes there. The
+	// default is named because a workload that runs before the ConfigMap exists
+	// carries it literally, and the two have to say the same thing.
+	logLevelKey     = "LOG_LEVEL"
+	defaultLogLevel = "DEBUG"
 )
 
 // serviceResources is the envelope every service container runs in. It is the

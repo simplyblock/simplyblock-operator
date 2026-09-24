@@ -571,7 +571,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
                 version:
                   description: Version is the version the management API reports.
                   type: string
