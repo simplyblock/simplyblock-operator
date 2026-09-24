@@ -96,7 +96,7 @@ func TestAnUnstatedThresholdIsZeroOnTheWire(t *testing.T) {
 // fix, and it is refused before a cluster is created rather than after.
 func TestAVaultURLThatIsNotExternalIsRefused(t *testing.T) {
 	_, err := vaultConfig(&simplyblockv1alpha2.KMSSpec{
-		Vault: &simplyblockv1alpha2.VaultKMS{BaseURL: "https://127.0.0.1:8200"},
+		Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://127.0.0.1:8200"},
 	})
 	if err == nil {
 		t.Error("a loopback vault endpoint was accepted")
@@ -106,7 +106,7 @@ func TestAVaultURLThatIsNotExternalIsRefused(t *testing.T) {
 	// and a test must not depend on DNS. 203.0.113.0/24 is TEST-NET-3, which
 	// is routable as far as the check is concerned and reaches nothing.
 	got, err := vaultConfig(&simplyblockv1alpha2.KMSSpec{
-		Vault: &simplyblockv1alpha2.VaultKMS{BaseURL: "https://203.0.113.10:8200"},
+		Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://203.0.113.10:8200"},
 	})
 	if err != nil {
 		t.Fatalf("an external vault endpoint was refused: %v", err)

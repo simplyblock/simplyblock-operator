@@ -1035,13 +1035,13 @@ func (r *StorageClusterReconciler) backupConfig(
 // regrouping under spec.kms is Kubernetes-side only: the control plane keeps
 // hashicorp_vault_settings.base_url, and this is where the two meet.
 func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (*utils.HashicorpVaultConfig, error) {
-	if kms == nil || kms.Vault == nil || kms.Vault.BaseURL == "" {
+	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
 		return nil, nil
 	}
-	if err := atlasnet.ValidateExternalURL(kms.Vault.BaseURL); err != nil {
-		return nil, fmt.Errorf("spec.kms.vault.baseURL: %w", err)
+	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
+		return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
 	}
-	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.BaseURL}, nil
+	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.Endpoint}, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object

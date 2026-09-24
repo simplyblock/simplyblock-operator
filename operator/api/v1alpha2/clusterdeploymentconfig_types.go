@@ -351,6 +351,15 @@ type ClusterTemplate struct {
 	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// KMS selects where the cluster stores volume encryption keys. It is here
+	// rather than left to be set on the StorageCluster afterward because the
+	// expansion's own reconciler reads it back off that object on the very next
+	// pass, before anything external could patch it in; stating it on the
+	// document is what makes it present at the cluster's creation rather than a
+	// race with one.
+	// +optional
+	KMS *KMSSpec `json:"kms,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one

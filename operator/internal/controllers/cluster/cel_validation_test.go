@@ -186,7 +186,7 @@ func TestStorageClusterKMSIsImmutableOnceSet(t *testing.T) {
 
 	// Filling it in later is the case the rule allows.
 	cluster.Spec.KMS = &simplyblockv1alpha2.KMSSpec{
-		Vault: &simplyblockv1alpha2.VaultKMS{BaseURL: "https://vault.example.com:8200"},
+		Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: "https://vault.example.com:8200"},
 	}
 	if err := apiClient.Update(ctx, cluster); err != nil {
 		t.Fatalf("a first assignment of spec.kms should be accepted, got: %v", err)
@@ -194,7 +194,7 @@ func TestStorageClusterKMSIsImmutableOnceSet(t *testing.T) {
 
 	for name, mutate := range map[string]func(*simplyblockv1alpha2.StorageCluster){
 		"changing the endpoint": func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Spec.KMS.Vault.BaseURL = "https://vault.elsewhere.com:8200"
+			c.Spec.KMS.Vault.Endpoint = "https://vault.elsewhere.com:8200"
 		},
 		"clearing the block": func(c *simplyblockv1alpha2.StorageCluster) {
 			c.Spec.KMS = nil
