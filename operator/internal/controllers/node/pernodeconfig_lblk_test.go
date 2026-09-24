@@ -23,6 +23,12 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// stated is the word the init container tests LBLK against. It is spelled once
+// because the script spells it once: `[ "${LBLK}" = "true" ]` matches that and
+// nothing else, so a case asserting some other truthy spelling would pass here
+// and mean nothing on a node.
+const stated = "true"
+
 // renderedWithJournal is renderedFor with a journal share stated, which is the
 // one setting the two classes read through different variables.
 func renderedWithJournal(
@@ -72,7 +78,7 @@ func TestABlockClusterSaysSo(t *testing.T) {
 	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
 		"/dev/sda")
 
-	if lblk := got["LBLK"]; lblk != "true" {
+	if lblk := got["LBLK"]; lblk != stated {
 		t.Errorf("LBLK = %q, and the init container passes --lblk on that word alone", lblk)
 	}
 }
@@ -83,7 +89,7 @@ func TestAnNVMeClusterDoesNotSayItIsBlock(t *testing.T) {
 	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassNVMe,
 		"0000:01:00.0", "nvme0n1")
 
-	if lblk := got["LBLK"]; lblk == "true" {
+	if lblk := got["LBLK"]; lblk == stated {
 		t.Error("LBLK is true on an NVMe cluster, which would ask the backend for the wrong class")
 	}
 	if names := got["BLK_NAMES"]; names != "" {
@@ -99,7 +105,7 @@ func TestAnNVMeClusterDoesNotSayItIsBlock(t *testing.T) {
 func TestAnUnstatedClassIsNotBlock(t *testing.T) {
 	got := renderedFor(t, "", "nvme0n1")
 
-	if lblk := got["LBLK"]; lblk == "true" {
+	if lblk := got["LBLK"]; lblk == stated {
 		t.Error("an unstated device class rendered as the block one")
 	}
 }

@@ -333,8 +333,8 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 			// Optional, and their absence is not a zero: see Device.
 			AtomicWriteUnitMaxBytes: optionalUint32(dir, "queue", "atomic_write_unit_max_bytes"),
 			AtomicWriteUnitMinBytes: optionalUint32(dir, "queue", "atomic_write_unit_min_bytes"),
-			SizeBytes:         sysfs.Uint64(dir, "size") * sectorSize,
-			ReadOnly:          sysfs.Bool(dir, "ro"),
+			SizeBytes:               sysfs.Uint64(dir, "size") * sectorSize,
+			ReadOnly:                sysfs.Bool(dir, "ro"),
 		},
 		Removable:  sysfs.Bool(dir, "removable"),
 		Rotational: sysfs.Bool(dir, "queue", "rotational"),

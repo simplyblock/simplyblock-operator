@@ -112,13 +112,6 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 // Multi-cluster utility functions
 // ---------------------------------------------------------------------------
 
-func envOrDefault(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
 func envList(key string, fallback []string) []string {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

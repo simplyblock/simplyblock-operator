@@ -40,7 +40,7 @@ func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *test
 	for _, tc := range []struct {
 		name                     string
 		enableChecksumValidation *bool
-		enableAtomicity4K     *bool
+		enableAtomicity4K        *bool
 		wantDenied               bool
 	}{
 		{name: "both unset"},
@@ -59,7 +59,7 @@ func TestStorageClusterCELRejectsAtomic4kWritesWithoutChecksumValidation(t *test
 					MaxSubsystemCount:        ptr.To(int32(10)),
 					VCPUCount:                ptr.To(int32(6)),
 					EnableChecksumValidation: tc.enableChecksumValidation,
-					EnableAtomicity4K:     tc.enableAtomicity4K,
+					EnableAtomicity4K:        tc.enableAtomicity4K,
 				},
 			}
 
@@ -90,7 +90,7 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 	apiClient := apiServer(t)
 
 	for _, tc := range []struct {
-		name                        string
+		name                     string
 		initialEnableAtomicity4K *bool
 		// mutate changes an admitted cluster in the way the test expects the
 		// apiserver to refuse.
@@ -119,7 +119,7 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 			wantErr: "field is immutable",
 		},
 		{
-			name:                        "removing enableAtomicity4K",
+			name:                     "removing enableAtomicity4K",
 			initialEnableAtomicity4K: ptr.To(true),
 			mutate: func(c *simplyblockv1alpha2.StorageCluster) {
 				c.Spec.EnableAtomicity4K = nil
@@ -138,7 +138,7 @@ func TestStorageClusterChecksumValidationFieldsAreImmutable(t *testing.T) {
 					MaxSubsystemCount:        ptr.To(int32(10)),
 					VCPUCount:                ptr.To(int32(6)),
 					EnableChecksumValidation: ptr.To(true),
-					EnableAtomicity4K:     enableAtomicity4K,
+					EnableAtomicity4K:        enableAtomicity4K,
 				},
 			}
 			if err := apiClient.Create(context.Background(), cluster); err != nil {

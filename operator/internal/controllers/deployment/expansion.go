@@ -270,7 +270,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			// unstated setting leaves the cluster's own default to decide
 			// rather than having the expansion invent one.
 			EnableChecksumValidation: template.EnableChecksumValidation,
-			EnableAtomicity4K:     template.EnableAtomicity4K,
+			EnableAtomicity4K:        template.EnableAtomicity4K,
 			MinHugePagesSize:         template.MinHugePagesSize,
 			Stripe:                   template.Stripe,
 			FabricType:               template.FabricType,
