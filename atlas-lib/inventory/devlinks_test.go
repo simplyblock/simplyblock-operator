@@ -9,10 +9,12 @@
 package inventory
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/inventory/transcript"
 )
 
 // A transcript captured before the section existed decodes, materializes, and
@@ -44,7 +46,7 @@ func TestATranscriptWithoutDevLinksStillMaterializes(t *testing.T) {
 // contract: an old reader ignores it and a new reader uses it, so one capture
 // serves both.
 func TestATranscriptWithDevLinksDecodes(t *testing.T) {
-	raw := []byte(`{
+	raw := `{
 	  "dirs": ["block"],
 	  "files": {"block/sda/size": "1024\n"},
 	  "links": {"block/sda": "../devices/pci0000:00/block/sda"},
@@ -53,10 +55,10 @@ func TestATranscriptWithDevLinksDecodes(t *testing.T) {
 	    "disk/by-id/scsi-36000c29-part1": "../../sda1",
 	    "disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0": "../../sda"
 	  }
-	}`)
+	}`
 
-	var host hostTranscript
-	if err := json.Unmarshal(raw, &host); err != nil {
+	host, err := transcript.Decode(strings.NewReader(string(raw)), false)
+	if err != nil {
 		t.Fatalf("decode a transcript carrying devlinks: %v", err)
 	}
 
