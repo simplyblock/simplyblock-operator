@@ -133,3 +133,63 @@ func TestTheJournalShareOfAnNVMeClusterIsUnchanged(t *testing.T) {
 		t.Errorf("LBLK_JM_PERCENT = %q on an NVMe cluster", percent)
 	}
 }
+
+// The wipe reaches the init container, which is the only place it can: it is
+// performed on the worker by node_configure.py before the node is added, unlike
+// the NVMe reformat that rides on the node-add call itself.
+func TestABlockClusterAsksForTheWipeWhenItWasApproved(t *testing.T) {
+	got := renderedWithBlockFormat(t,
+		simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock, true)
+
+	if force := got["LBLK_FORCE_FORMAT"]; force != stated {
+		t.Errorf("LBLK_FORCE_FORMAT = %q, and --force-format is passed on that word", force)
+	}
+}
+
+// Destructive, so silence is no. A cluster that was not asked wipes nothing.
+func TestABlockClusterThatWasNotAskedWipesNothing(t *testing.T) {
+	got := renderedWithBlockFormat(t,
+		simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock, false)
+
+	if force, there := got["LBLK_FORCE_FORMAT"]; there && force == stated {
+		t.Error("a cluster nobody asked to format wiped its disks")
+	}
+}
+
+// An NVMe cluster never states it, whatever its own format setting says: its
+// reformat is the control plane's and travels on the node-add call.
+func TestAnNVMeClusterNeverAsksForTheWipe(t *testing.T) {
+	got := renderedWithBlockFormat(t, simplyblockv1alpha2.StorageClusterDeviceClassNVMe, true)
+
+	if force, there := got["LBLK_FORCE_FORMAT"]; there && force == stated {
+		t.Error("an NVMe cluster asked for a block device's signatures to be wiped")
+	}
+}
+
+// renderedWithBlockFormat is renderedFor with the cluster's block-format
+// decision stated on its storage-node workload.
+func renderedWithBlockFormat(
+	t *testing.T, class simplyblockv1alpha2.StorageClusterDeviceClass, format bool,
+) map[string]string {
+	t.Helper()
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			DeviceClass: class,
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				EnableBlockFormat: ptr.To(format),
+			},
+		},
+	}
+	node := &simplyblockv1alpha2.StorageNode{
+		Spec: simplyblockv1alpha2.StorageNodeSpec{
+			Config: simplyblockv1alpha2.StorageNodeConfig{DeviceNames: []string{"/dev/sda"}},
+		},
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(renderNodeConfig(cluster, node), "\n") {
+		if key, value, found := strings.Cut(line, "="); found {
+			out[key] = strings.Trim(value, "'")
+		}
+	}
+	return out
+}

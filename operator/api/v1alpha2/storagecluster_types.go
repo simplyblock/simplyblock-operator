@@ -540,6 +540,25 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
 
+	// EnableBlockFormat wipes the partition tables and filesystem signatures
+	// from this cluster's logical block devices, so that a disk carrying
+	// something already becomes one a storage node can take.
+	//
+	// It is the block class's half of the document's enableDriveFormat, and a
+	// separate field because it is a separate operation on a separate channel:
+	// EnableFormat4K is a reformat the control plane performs at node-add, and
+	// this is a wipefs node_configure.py performs on the worker before the node
+	// is added at all. A block device's block size is fixed by the drive, so
+	// there is no reformat to ask for, and an NVMe controller is handed to SPDK
+	// whole, so there are no signatures to wipe. Neither operation is available
+	// in the other's class.
+	//
+	// Destructive, and immutable for the reason the other is: it describes what
+	// was done to the disks a fleet was built on.
+	// +optional
+	// +k8s:immutable
+	EnableBlockFormat *bool `json:"enableBlockFormat,omitempty"`
+
 	// EnableCpuTopology turns on topology-aware CPU assignment.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`

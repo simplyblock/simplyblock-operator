@@ -310,9 +310,17 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// Unstated stays unstated, so the cluster's own default decides it.
 		workload.NodeProvisioningBudget = template.NodeProvisioningBudget
 		// The document says a drive is to be formatted; this is where that is
-		// resolved to how. NVMe is the class the cluster's own field covers, and
-		// the logical-block half has no field to carry it yet.
-		workload.EnableFormat4K = template.EnableDriveFormat
+		// resolved to how, because the how is not the same operation twice. An
+		// NVMe device is reformatted to a 4K block size by the control plane at
+		// node-add, and a logical block device has its signatures wiped on the
+		// worker before the node is added. Setting the NVMe field for a block
+		// cluster asked a control plane to reformat a namespace the cluster does
+		// not have, and left the wipe undone.
+		if DeviceClassOf(config) == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+			workload.EnableBlockFormat = template.EnableDriveFormat
+		} else {
+			workload.EnableFormat4K = template.EnableDriveFormat
+		}
 		// The journal layout is the cluster's and immutable on it, so the
 		// document is the only place it can still be stated. Dropping it here
 		// partitioned a journal out of every drive on a deployment reviewed for

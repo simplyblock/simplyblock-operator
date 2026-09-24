@@ -222,6 +222,13 @@ func renderNodeConfig(
 		entry.WriteString("LBLK=true\n")
 		fmt.Fprintf(&entry, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 		entry.WriteString("NVME_DEVICES=''\n")
+		// The wipe, which is local: node_configure.py performs it on the worker
+		// before the node is added, so it travels in this file rather than in
+		// the node-add call the NVMe reformat rides on.
+		if workload := cluster.Spec.StorageNodes; workload != nil &&
+			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
+			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
+		}
 	} else {
 		fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 	}

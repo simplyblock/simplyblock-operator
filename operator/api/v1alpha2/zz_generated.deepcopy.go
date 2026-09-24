@@ -3122,6 +3122,11 @@ func (in *StorageNodesSpec) DeepCopyInto(out *StorageNodesSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableBlockFormat != nil {
+		in, out := &in.EnableBlockFormat, &out.EnableBlockFormat
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableCpuTopology != nil {
 		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
 		*out = new(bool)
