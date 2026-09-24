@@ -57,14 +57,15 @@ func renderedWithJournal(
 	return out
 }
 
-// The device paths of a block cluster go to BLK_NAMES, which is the channel
-// --blk-names reads, and not to the one that resolves namespace names.
+// A block cluster's devices go to BLK_NAMES, which is the channel --blk-names
+// reads, and not to the one that resolves namespace names.
 func TestBlockPathsReachTheBlockNameList(t *testing.T) {
 	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
 		"/dev/sda", "/dev/sdb")
 
-	if names := got["BLK_NAMES"]; names != "/dev/sda,/dev/sdb" {
-		t.Errorf("BLK_NAMES = %q, and a block cluster's devices are named by path", names)
+	// As kernel names: TestBlockPathsReachTheBackendAsKernelNames is why.
+	if names := got["BLK_NAMES"]; names != "sda,sdb" {
+		t.Errorf("BLK_NAMES = %q, and --blk-names takes names like sda,sdb", names)
 	}
 	if devices := got["NVME_DEVICES"]; devices != "" {
 		t.Errorf("NVME_DEVICES = %q, which the backend matches against `nvme list` "+
@@ -192,4 +193,30 @@ func renderedWithBlockFormat(
 		}
 	}
 	return out
+}
+
+// --blk-names is matched against the kernel name -- node_configure.py builds
+// {d["name"]: d} and looks the requested strings up in it -- so a path selects
+// nothing and fails the add with "requested block devices are not eligible".
+// The document names devices by path because that is what a reviewer reads and
+// what DeviceSelection's pattern requires, and this is where the one becomes
+// the other.
+func TestBlockPathsReachTheBackendAsKernelNames(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
+		"/dev/sdb", "/dev/sdc")
+
+	if names := got["BLK_NAMES"]; names != "sdb,sdc" {
+		t.Errorf("BLK_NAMES = %q, and --blk-names takes names like sdb,sdc", names)
+	}
+}
+
+// A partition is named the way its disk is, which is what lets a block
+// deployment claim one at all.
+func TestAPartitionReachesTheBackendAsItsOwnName(t *testing.T) {
+	got := renderedFor(t, simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock,
+		"/dev/sdb1")
+
+	if names := got["BLK_NAMES"]; names != "sdb1" {
+		t.Errorf("BLK_NAMES = %q, want sdb1", names)
+	}
 }

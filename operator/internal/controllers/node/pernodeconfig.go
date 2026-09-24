@@ -21,6 +21,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -220,7 +221,8 @@ func renderNodeConfig(
 	block := cluster.Spec.DeviceClass == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
 	if block {
 		entry.WriteString("LBLK=true\n")
-		fmt.Fprintf(&entry, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
+		fmt.Fprintf(&entry, "BLK_NAMES=%s\n",
+			utils.ShellQuote(strings.Join(kernelNames(names), ",")))
 		entry.WriteString("NVME_DEVICES=''\n")
 		// The wipe, which is local: node_configure.py performs it on the worker
 		// before the node is added, so it travels in this file rather than in
@@ -342,4 +344,26 @@ func equalConfigData(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// kernelNames is how --blk-names is spelled, which is not how the document
+// spells it.
+//
+// A document names a block device by path, because that is what a reviewer
+// reads and what DeviceSelection's pattern requires. node_configure.py looks
+// the requested strings up in a map keyed by the kernel name -- sdb, and sdb1
+// for a partition -- so a path matches nothing and the node add fails with
+// "requested block devices are not eligible", naming the path as not present.
+//
+// The last element is the kernel name for every path discovery writes, which is
+// /dev/<name>. It is not the kernel name for a udev link: /dev/disk/by-id/foo
+// would yield foo, which names nothing. Nothing writes those today, and the
+// resolution they need is a readlink on the node rather than a rewrite here,
+// since the link exists only where the device does.
+func kernelNames(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, device := range paths {
+		out = append(out, path.Base(device))
+	}
+	return out
 }
