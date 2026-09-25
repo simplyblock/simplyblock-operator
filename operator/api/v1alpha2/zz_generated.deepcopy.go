@@ -333,6 +333,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.InitContainerResources != nil {
+		in, out := &in.InitContainerResources, &out.InitContainerResources
+		*out = new(v1.ResourceRequirements)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Tolerations != nil {
 		in, out := &in.Tolerations, &out.Tolerations
 		*out = make([]v1.Toleration, len(*in))

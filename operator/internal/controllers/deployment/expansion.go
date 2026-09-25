@@ -328,6 +328,11 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		if template.ContainerResources != nil {
 			workload.ContainerResources = *template.ContainerResources
 		}
+		// And the init containers, which are sized apart from it: both are gone
+		// before the container the fleet's sizing is about starts.
+		if template.InitContainerResources != nil {
+			workload.InitContainerResources = *template.InitContainerResources
+		}
 		// What the storage-node pods tolerate. A fleet that dedicates machines
 		// to storage taints them, and a DaemonSet that tolerates nothing lands
 		// on none of them: the document that described the deployment would

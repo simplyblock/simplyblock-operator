@@ -344,6 +344,19 @@ type ClusterTemplate struct {
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
+	// InitContainerResources sizes both of the storage node's init containers,
+	// and expands into the cluster's own spec.storageNodes.initContainerResources.
+	//
+	// They are sized apart from the container because they do a different job
+	// and are gone before it starts: one writes the node's env file and the
+	// other runs node_configure.py once, so what they need is a short burst
+	// rather than the footprint of a process that runs for the node's life.
+	//
+	// Stating either half replaces both, as with containerResources, and it is
+	// a pointer for the same reason.
+	// +optional
+	InitContainerResources *corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+
 	// Tolerations are what the storage-node pods tolerate, and they expand into
 	// the cluster's own spec.storageNodes.tolerations.
 	//

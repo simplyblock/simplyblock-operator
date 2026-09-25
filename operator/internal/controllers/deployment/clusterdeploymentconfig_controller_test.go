@@ -566,3 +566,36 @@ func TestADocumentWithNoContainerResourcesLeavesTheClustersUnset(t *testing.T) {
 		t.Errorf("the cluster is sized %+v with nothing stated", workload.ContainerResources)
 	}
 }
+
+// The init containers are sized separately, because they do a different job:
+// one writes an env file and the other runs node_configure.py once, and both
+// are done before the container the fleet's sizing is about starts.
+func TestTheDocumentsInitContainerResourcesReachTheStorageNodes(t *testing.T) {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+	}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.InitContainerResources = &resources
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !workload.InitContainerResources.Limits.Memory().Equal(resource.MustParse("1Gi")) {
+		t.Errorf("the init containers are limited to %v, want 1Gi",
+			workload.InitContainerResources.Limits.Memory())
+	}
+	// The two blocks are independent: sizing the init containers says nothing
+	// about the container that runs for the node's life.
+	if len(workload.ContainerResources.Requests) != 0 {
+		t.Errorf("sizing the init containers also sized the container: %+v", workload.ContainerResources)
+	}
+}
+
+func TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if len(workload.InitContainerResources.Requests) != 0 || len(workload.InitContainerResources.Limits) != 0 {
+		t.Errorf("the init containers are sized %+v with nothing stated", workload.InitContainerResources)
+	}
+}

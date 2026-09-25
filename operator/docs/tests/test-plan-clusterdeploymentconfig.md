@@ -248,43 +248,46 @@ hole in the gate rather than a convenience.
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #         | Scenario                                                                                                                     | Type     | Test                                                          |
-|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
-| U-116     | `environment: OpenShift`: every node gets the three flags that distribution implies                                          | Positive | —                                                             |
-| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —                                                             |
-| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —                                                             |
-| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —                                                             |
-| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —                                                             |
-| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —                                                             |
-| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —                                                             |
-| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —                                                             |
-| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —                                                             |
-| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —                                                             |
-| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —                                                             |
-| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —                                                             |
-| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —                                                             |
-| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —                                                             |
-| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —                                                             |
-| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —                                                             |
-| U-187     | `hostOS.distro: ubuntu`: the cluster gets `ubuntuHost` set                                                                   | Positive | `TestTheHostOSResolvesIntoUbuntuHost`                         |
-| U-188     | `hostOS.distro: rocky`: the cluster gets `ubuntuHost` unset, not absent                                                      | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                         |
-| U-189     | `hostOS.distro: debian`: the family is Debian and `ubuntuHost` is still false                                                | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                         |
-| U-190     | `hostOS` absent: `ubuntuHost` is left alone and the cluster's own default decides                                            | Boundary | `TestADocumentWithNoHostOSLeavesUbuntuHostUnset`              |
-| U-191     | A fleet whose workers all report one distribution: the draft states it                                                       | Positive | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                  |
-| U-192     | A fleet running two distributions: the draft states none and the event names which worker runs what                          | Negative | `TestHostOSForRefusesToStateOneForAFleetThatDisagrees`        |
-| U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                            | Boundary | `TestHostOSForRefusesToStateOneNobodyRead`                    |
-| U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                       | Positive | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot` |
-| U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`              |
-| U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                    | Positive | `TestTheDocumentsTolerationsReachTheStorageNodes`             |
-| U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                           | Boundary | `TestAGrowthDocumentStatesNoTolerations`                      |
-| U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                   | Positive | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`               |
-| U-199     | The same run's draft states those tolerations for the cluster it proposes                                                    | Positive | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`           |
-| U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                             | Boundary | `TestAGrowthDraftCarriesNoTolerations`                        |
-| U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                         | Positive | `TestJobPlacementCarriesTheClustersTolerations`               |
-| U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                        | Boundary | `TestJobPlacementOfAClusterThatTakesNoTaint`                  |
-| U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                        | Positive | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`            |
-| U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                      | Positive | `TestTheDocumentsContainerResourcesReachTheStorageNodes`      |
-| U-205     | A document that states no container resources: the cluster states none either, and the default decides                       | Boundary | `TestADocumentWithNoContainerResourcesLeavesTheClustersUnset` |
+| #         | Scenario                                                                                                                     | Type     | Test                                                              |
+|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
+| U-116     | `environment: OpenShift`: every node gets the three flags that distribution implies                                          | Positive | —                                                                 |
+| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —                                                                 |
+| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —                                                                 |
+| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —                                                                 |
+| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —                                                                 |
+| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —                                                                 |
+| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —                                                                 |
+| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —                                                                 |
+| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —                                                                 |
+| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —                                                                 |
+| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —                                                                 |
+| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —                                                                 |
+| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —                                                                 |
+| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —                                                                 |
+| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —                                                                 |
+| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —                                                                 |
+| U-187     | `hostOS.distro: ubuntu`: the cluster gets `ubuntuHost` set                                                                   | Positive | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-188     | `hostOS.distro: rocky`: the cluster gets `ubuntuHost` unset, not absent                                                      | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-189     | `hostOS.distro: debian`: the family is Debian and `ubuntuHost` is still false                                                | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-190     | `hostOS` absent: `ubuntuHost` is left alone and the cluster's own default decides                                            | Boundary | `TestADocumentWithNoHostOSLeavesUbuntuHostUnset`                  |
+| U-191     | A fleet whose workers all report one distribution: the draft states it                                                       | Positive | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                      |
+| U-192     | A fleet running two distributions: the draft states none and the event names which worker runs what                          | Negative | `TestHostOSForRefusesToStateOneForAFleetThatDisagrees`            |
+| U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                            | Boundary | `TestHostOSForRefusesToStateOneNobodyRead`                        |
+| U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                       | Positive | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot`     |
+| U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`                  |
+| U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                    | Positive | `TestTheDocumentsTolerationsReachTheStorageNodes`                 |
+| U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                           | Boundary | `TestAGrowthDocumentStatesNoTolerations`                          |
+| U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                   | Positive | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`                   |
+| U-199     | The same run's draft states those tolerations for the cluster it proposes                                                    | Positive | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`               |
+| U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                             | Boundary | `TestAGrowthDraftCarriesNoTolerations`                            |
+| U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                         | Positive | `TestJobPlacementCarriesTheClustersTolerations`                   |
+| U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                        | Boundary | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
+| U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                        | Positive | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
+| U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                      | Positive | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
+| U-205     | A document that states no container resources: the cluster states none either, and the default decides                       | Boundary | `TestADocumentWithNoContainerResourcesLeavesTheClustersUnset`     |
+| U-206     | `spec.cluster.initContainerResources`: the cluster's init containers are sized as the document states                        | Positive | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
+| U-207     | Sizing the init containers alone: the container that runs for the node's life is left unsized                                | Boundary | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
+| U-208     | A document that states no init container resources: the cluster states none either                                           | Boundary | `TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset` |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -600,11 +603,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 156       | 23      | 133         | 9         |
+| Unit        | 159       | 26      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **226**   | **26**  | **200**     | **12**    |
+| **Total**   | **229**   | **29**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
