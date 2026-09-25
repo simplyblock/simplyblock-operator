@@ -309,12 +309,15 @@ hub-first direction in `operator/api/v1alpha1/hub_roundtrip_test.go`.
 | U-CV-22 | A deliberate `LogicalBlock` survives being stored and read back                                       | Positive | `TestStorageClusterADeliberateDeviceClassSurvives`            |
 | U-CV-23 | A removed-field annotation is cleared when the field it notes states nothing                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsValueDoes`    |
 | U-CV-24 | A removed-field annotation is cleared when the block it belongs to is absent                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsBlockDoes`    |
+| U-CV-25 | The realignment switch reaches the hub unstated and needs no conversion note                          | Negative | `TestStorageClusterRealignmentIsCarriedWithoutANote`          |
 
-`U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for.
-`enableDataRealignment` is the one row in the whole migration whose default
-changes direction — the registered field was on unless refused, and the
-enable-formed one is off unless asked for — so the conversion records which side
-wrote it rather than guessing.
+`U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for,
+and `U-CV-25` is what the pair rests on. `disableDataRealignment` inverts the
+registered `enabled` and keeps its default, so a cluster that never mentioned
+realignment has to reach the hub still not mentioning it: any value written there
+is a statement the cluster did not make, and it is what an off default would have
+cost. `U-CV-25` asserts both halves without naming the field, because what is
+wanted is that nothing is said rather than that a particular word is said.
 
 ---
 

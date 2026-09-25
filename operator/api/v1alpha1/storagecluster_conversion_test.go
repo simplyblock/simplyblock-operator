@@ -12,11 +12,14 @@
 //     (design-property-renames.md §3.4): migrationEnabled and disableMigration
 //     are both booleans, so a conversion that copied instead of negating turns
 //     the rebalancer's dry run on for every cluster that asked for the
-//     opposite. Those get their own assertions rather than a diff.
+//     opposite. The realignment switch inverts the same way. Those get their
+//     own assertions rather than a diff.
 
 package v1alpha1
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -142,8 +145,9 @@ func TestStorageClusterSwitchesMoveUpAndBackDown(t *testing.T) {
 	if err := src.ConvertTo(&dst); err != nil {
 		t.Fatalf("ConvertTo: %v", err)
 	}
-	if e := dst.Spec.EnableDataRealignment; e == nil || !*e {
-		t.Errorf("spec.enableDataRealignment = %v, want true", e)
+	if d := dst.Spec.DisableDataRealignment; d == nil || *d {
+		t.Errorf("spec.disableDataRealignment = %v, want false for a cluster that turned "+
+			"realignment on", d)
 	}
 	if e := dst.Spec.EnableVolumeAutoPlacement; e == nil || !*e {
 		t.Errorf("spec.enableVolumeAutoPlacement = %v, want true", e)
@@ -180,9 +184,7 @@ func TestStorageClusterAnEmptySpecGainsNoBlocks(t *testing.T) {
 		"volumeMigrationSettings": dst.Spec.VolumeMigrationSettings,
 		"volumeAutoPlacement":     dst.Spec.VolumeAutoPlacement,
 		"stripe":                  dst.Spec.Stripe,
-		// spec.enableDataRealignment is deliberately not in this list: it is
-		// written for a cluster that stated nothing, which is what keeps the
-		// registered default's behavior across the upgrade.
+		"disableDataRealignment":  dst.Spec.DisableDataRealignment,
 	} {
 		if !isAbsent(block) {
 			t.Errorf("spec.%s = %+v, want nil", name, block)
@@ -416,26 +418,19 @@ func TestStorageClusterRoundTripsThroughTheHub(t *testing.T) {
 		t.Fatalf("ConvertFrom: %v", err)
 	}
 
-	// The realignment note is expected and is not part of what was applied:
-	// it records which side wrote the switch, which is the one thing the
-	// stored shape cannot say on its own.
-	delete(back.Annotations, annoClusterEnableRealign)
-	if len(back.Annotations) == 0 {
-		back.Annotations = nil
-	}
-
 	if diff := cmp.Diff(obj, &back); diff != "" {
 		t.Errorf("round trip changed the object (-before +after):\n%s", diff)
 	}
 }
 
-// The behavior test design-property-renames.md §3.4 asks for, and the one row
-// of §2.3 whose default changes direction.
+// One of the two behavior tests design-property-renames.md §3.4 asks for.
 //
 // What is asserted is the effective configuration rather than the field value:
 // a cluster that had realignment on because that was this version's default
-// must still have it on after the conversion, and the hub's enable-formed
-// field is off when absent, so the conversion has to write it.
+// must still have it on after the conversion. The hub's disable-formed field
+// carries that by staying absent, so the conversion writes nothing, and a
+// conversion that copied instead of negating would write true here and turn
+// the feature off on every cluster that never mentioned it.
 func TestStorageClusterRealignmentStaysOnForAClusterNobodyEdited(t *testing.T) {
 	for name, settings := range map[string]*VolumeMigrationSettings{
 		"no settings block at all":       nil,
@@ -449,18 +444,17 @@ func TestStorageClusterRealignmentStaysOnForAClusterNobodyEdited(t *testing.T) {
 			if err := src.ConvertTo(&hub); err != nil {
 				t.Fatalf("ConvertTo: %v", err)
 			}
-			if e := hub.Spec.EnableDataRealignment; e == nil || !*e {
-				t.Errorf("spec.enableDataRealignment = %v, want realignment still on for a "+
-					"cluster that never turned it off", e)
+			if d := hub.Spec.DisableDataRealignment; d != nil {
+				t.Errorf("spec.disableDataRealignment = %v, want realignment still on for a "+
+					"cluster that never turned it off", *d)
 			}
 		})
 	}
 }
 
 // The other half of the same rule: a cluster that turned realignment off keeps
-// it off, and one the hub deliberately left off does not have it turned on by
-// a conversion applying this version's default to an object that is not this
-// version's.
+// it off, and a hub object that said nothing comes back saying nothing rather
+// than acquiring a value the round trip invented.
 func TestStorageClusterRealignmentRespectsWhatWasStated(t *testing.T) {
 	t.Run("v1alpha1 turned it off", func(t *testing.T) {
 		src := &StorageCluster{Spec: StorageClusterSpec{
@@ -472,8 +466,8 @@ func TestStorageClusterRealignmentRespectsWhatWasStated(t *testing.T) {
 		if err := src.ConvertTo(&hub); err != nil {
 			t.Fatalf("ConvertTo: %v", err)
 		}
-		if e := hub.Spec.EnableDataRealignment; e == nil || *e {
-			t.Errorf("spec.enableDataRealignment = %v, want false to be preserved", e)
+		if d := hub.Spec.DisableDataRealignment; d == nil || !*d {
+			t.Errorf("spec.disableDataRealignment = %v, want the refusal to be preserved", d)
 		}
 	})
 
@@ -488,11 +482,55 @@ func TestStorageClusterRealignmentRespectsWhatWasStated(t *testing.T) {
 		if err := stored.ConvertTo(&back); err != nil {
 			t.Fatalf("ConvertTo: %v", err)
 		}
-		if back.Spec.EnableDataRealignment != nil {
-			t.Errorf("spec.enableDataRealignment = %v, want a hub object's own absence kept",
-				*back.Spec.EnableDataRealignment)
+		if back.Spec.DisableDataRealignment != nil {
+			t.Errorf("spec.disableDataRealignment = %v, want a hub object's own absence kept",
+				*back.Spec.DisableDataRealignment)
 		}
 	})
+}
+
+// The realignment switch carries the same default on both sides, so the
+// conversion has nothing to record and writes nothing down.
+//
+// Both halves are asserted without naming the hub's field, because what is
+// wanted is that nothing is said rather than that a particular word is said. A
+// cluster that never mentioned realignment reaches the hub still not
+// mentioning it, and comes back down carrying no conversion note: a note is
+// how the conversion used to tell "never stated" from "deliberately off," and
+// the two versions agreeing on the default is what removes the question.
+func TestStorageClusterRealignmentIsCarriedWithoutANote(t *testing.T) {
+	src := &StorageCluster{Spec: StorageClusterSpec{MaxSubsystemCount: ptr.To(int32(20))}}
+
+	var hub v1alpha2.StorageCluster
+	if err := src.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	encoded, err := json.Marshal(hub.Spec)
+	if err != nil {
+		t.Fatalf("marshal the hub spec: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal the hub spec: %v", err)
+	}
+	for name := range fields {
+		if strings.Contains(strings.ToLower(name), "realignment") {
+			t.Errorf("spec.%s = %v, want a cluster that never stated realignment to reach "+
+				"the hub still not stating it", name, fields[name])
+		}
+	}
+
+	var back StorageCluster
+	if err := back.ConvertFrom(&hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	for key := range back.Annotations {
+		if strings.Contains(strings.ToLower(key), "realignment") {
+			t.Errorf("annotation %s is written, want the realignment switch to need no "+
+				"conversion note", key)
+		}
+	}
 }
 
 // The two findings of the review on #536 that land in the conversion, each as

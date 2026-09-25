@@ -11,10 +11,15 @@
 //     gains a bucket, a prefix, and a region it never had (§2.1).
 //   - spec.hashicorpVaultSettings.baseURL regroups under spec.kms.vault (§2.4).
 //   - Three bare `enabled` toggles resolve: the realignment's and the
-//     auto-placement's move up to spec.enableDataRealignment and
+//     auto-placement's move up to spec.disableDataRealignment and
 //     spec.enableVolumeAutoPlacement, and the migration's is removed (§2.3).
-//   - volumeAutoPlacement.migrationEnabled inverts into disableMigration, and
-//     latencyBenchmarkEnabled becomes enableLatencyBenchmark (§2.3).
+//   - Two toggles invert, and for the same reason: each governs behavior that
+//     is on by default, so only the negative spelling makes an unset field mean
+//     the default. volumeAutoPlacement.migrationEnabled becomes
+//     disableMigration, and the realignment's `enabled` becomes
+//     spec.disableDataRealignment. latencyBenchmarkEnabled becomes
+//     enableLatencyBenchmark and keeps its polarity, because it is off by
+//     default (§2.3).
 //   - MetricsBackend's values recase (§2.5).
 //   - The capacity thresholds widen from int32 to int64.
 //
@@ -82,18 +87,9 @@ const (
 	annoClusterBackupRegion = "storage.simplyblock.io/conversion-spec.backup.region"
 	annoClusterDeviceClass  = "storage.simplyblock.io/conversion-spec.deviceClass"
 
-	// enableDataRealignment is stashed for a reason none of the others has,
-	// and it is the one row of design-property-renames.md §2.3 whose default
-	// changes direction. The registered field defaulted to on and the hub's
-	// enable-formed one defaults to off, so an object nobody edited would lose
-	// its realignment on upgrade, which §3.1 forbids. What separates "a
-	// v1alpha1 object that never stated it" from "a v1alpha2 object that
-	// deliberately left it off" is nothing in the stored shape, so the
-	// conversion records it: the annotation is written on every trip down,
-	// including for an absent value, and its absence on the way up is what
-	// identifies an object a real v1alpha1 client wrote.
-	annoClusterEnableRealign = "storage.simplyblock.io/conversion-spec.enableDataRealignment"
-
+	// The realignment switch needs no key here. Both versions default it to on
+	// and the hub states that default by negation, so the pair round-trips
+	// through negate alone and there is nothing the stored shape cannot say.
 	annoClusterStatusPhase    = "storage.simplyblock.io/conversion-status.phase"
 	annoClusterStatusStep     = "storage.simplyblock.io/conversion-status.step"
 	annoClusterStatusTasks    = "storage.simplyblock.io/conversion-status.tasks"
@@ -194,15 +190,17 @@ func (src *StorageCluster) ConvertTo(dstRaw conversion.Hub) error {
 		VolumeAutoPlacement:         autoPlacementToHub(src.Spec.VolumeAutoPlacement),
 	}
 
-	// The two switches move up out of the blocks they governed, and they need
-	// different treatment because their registered defaults differ.
-	//
-	// Auto-placement was off unless asked for, and the hub's enable-formed
-	// field is too, so absent below stays absent above.
+	// The two switches move up out of the blocks they governed, and each keeps
+	// the default it had. Auto-placement was off unless asked for and the hub's
+	// enable-formed field is too, so absent below stays absent above.
+	// Realignment was on unless refused and the hub's disable-formed field is
+	// too, so the value inverts and absence stays absence.
 	if s := src.Spec.VolumeAutoPlacement; s != nil {
 		dst.Spec.EnableVolumeAutoPlacement = s.Enabled
 	}
-	dst.Spec.EnableDataRealignment = realignmentToHub(&dst.ObjectMeta, src.Spec.VolumeMigrationSettings)
+	if s := src.Spec.VolumeMigrationSettings; s != nil && s.DataRealignment != nil {
+		dst.Spec.DisableDataRealignment = negate(s.DataRealignment.Enabled)
+	}
 
 	// The removals of §2.3, kept as the text that was applied. Every key is
 	// written on every pass, and an absent block is read as absent fields
@@ -288,26 +286,18 @@ func (dst *StorageCluster) ConvertFrom(srcRaw conversion.Hub) error {
 		VolumeAutoPlacement:         autoPlacementFromHub(src.Spec.VolumeAutoPlacement),
 	}
 
-	// The two switches move back down into the blocks they came from. Each
-	// allocates its parent only when there is something to put in it, so a
-	// cluster that stated neither the toggle nor the block does not acquire an
-	// empty one.
-	//
-	// The realignment's value is also recorded whole, absence included,
-	// because the two versions default it differently and the stored shape
-	// cannot otherwise say which of them wrote it.
-	if err := stash(&dst.ObjectMeta, annoClusterEnableRealign,
-		nullable(src.Spec.EnableDataRealignment)); err != nil {
-		return err
-	}
-	if e := src.Spec.EnableDataRealignment; e != nil {
+	// The two switches move back down into the blocks they came from, the
+	// realignment's inverting again. Each allocates its parent only when there
+	// is something to put in it, so a cluster that stated neither the toggle
+	// nor the block does not acquire an empty one.
+	if d := src.Spec.DisableDataRealignment; d != nil {
 		if dst.Spec.VolumeMigrationSettings == nil {
 			dst.Spec.VolumeMigrationSettings = &VolumeMigrationSettings{}
 		}
 		if dst.Spec.VolumeMigrationSettings.DataRealignment == nil {
 			dst.Spec.VolumeMigrationSettings.DataRealignment = &DataRealignmentSettings{}
 		}
-		dst.Spec.VolumeMigrationSettings.DataRealignment.Enabled = e
+		dst.Spec.VolumeMigrationSettings.DataRealignment.Enabled = negate(d)
 	}
 	if e := src.Spec.EnableVolumeAutoPlacement; e != nil {
 		if dst.Spec.VolumeAutoPlacement == nil {
@@ -535,40 +525,6 @@ func fitsInt32(v *int64) bool {
 	const maxInt32, minInt32 = int64(1)<<31 - 1, -(int64(1) << 31)
 	return v == nil || (*v >= minInt32 && *v <= maxInt32)
 }
-
-// realignmentToHub decides what spec.enableDataRealignment says for an object
-// converting up, which is the one place in this migration where a default
-// changes direction (design-property-renames.md §2.3, §3.4).
-//
-// Three cases, and only the third is interesting. An object the hub wrote
-// carries its own value in an annotation and gets it back verbatim, absence
-// included. An object a real v1alpha1 client wrote and that stated the nested
-// field gets what it stated. An object a real v1alpha1 client wrote and that
-// stated nothing had realignment on, because that was this version's default,
-// so the field is written true rather than left absent: leaving it absent
-// would turn realignment off on a cluster nobody edited.
-func realignmentToHub(meta *metav1.ObjectMeta, settings *VolumeMigrationSettings) *bool {
-	var recorded nullableBool
-	if err := unstash(meta, annoClusterEnableRealign, &recorded); err == nil && recorded.Present {
-		return recorded.Value
-	}
-	if settings != nil && settings.DataRealignment != nil && settings.DataRealignment.Enabled != nil {
-		return settings.DataRealignment.Enabled
-	}
-	return ptr.To(true)
-}
-
-// nullableBool is an optional boolean that can be written down as absent, which
-// a bare *bool cannot: stash writes nothing at all for a nil pointer, and
-// nothing is what an object that never went through this conversion also has.
-type nullableBool struct {
-	// Present is false only for a value that was never recorded, which is what
-	// the zero value of this type decodes to.
-	Present bool  `json:"present"`
-	Value   *bool `json:"value,omitempty"`
-}
-
-func nullable(v *bool) nullableBool { return nullableBool{Present: true, Value: v} }
 
 func stripeToHub(s *StripeSpec) *v1alpha2.StripeSpec {
 	if s == nil {

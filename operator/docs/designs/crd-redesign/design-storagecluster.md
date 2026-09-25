@@ -318,13 +318,23 @@ a store swapped for another leaves the first store's backups where they are and 
 representing them. Unsetting the field is the same statement with an empty answer.
 
 **Each policy's on-off switch is a field of the spec, and there are two of them.**
-`spec.enableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
+`spec.disableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
 they govern rather than inside them, because a toggle named for its subject repeats
 itself when the subject is also its parent:
 `spec.volumeAutoPlacement.enableVolumeAutoPlacement` says the same word twice. Only the
 switches move up. Each block keeps its tuning fields, so the grouping §3.1 is built on
 survives and the thing a reader turns on is one field at the top rather than one buried
 in each block.
+
+**The two are spelled differently because their defaults differ**, and
+[`design-crd-model.md`](design-crd-model.md) §7.5 makes the form follow the default.
+Auto-placement is off until a cluster asks for it, so it is `enable`-formed. Realignment
+is on until a cluster refuses it, so it is `disable`-formed: realignment restores the
+fault-tolerance and node-affinity guarantees every volume move invalidates, and a cluster
+that never says the word should get them back rather than accumulate unaligned structures
+it never agreed to. Turning it off is for a cluster that migrates continuously, where a
+run that blocks migrations for tens of minutes costs more than the delay in realigning,
+and `minMoves` below is the gentler answer to that same problem.
 
 **There is no switch for volume migration, because migration cannot be turned off.**
 The registered `volumeMigrationSettings.enabled` implies a cluster that refuses to move
@@ -571,7 +581,6 @@ spec:
     credentialsSecretRef:
       name: backup-credentials
 
-  enableDataRealignment: true
   enableVolumeAutoPlacement: true
 
   volumeMigrationSettings:
@@ -1505,7 +1514,7 @@ has to carry it.
 | No `spec.storageNodes`                                                              | The workload group (Appendix A)                                           | Additive, and required by the `StorageNodeSet` retirement. `design-storagenode.md` §5 specifies it                                                                                                                                                                                                                                                                        |
 | No device class anywhere                                                            | `spec.deviceClass`, defaulted to `NVMe` (§3.1)                            | Additive, and inert for every cluster that exists: `NVMe` is the only class the backend accepted before 26.4, so the default describes the registered fleet and the immutability rule starts holding from the first write                                                                                                                                                 |
 | Six misnamed boolean toggles                                                        | `enableXyz` or `disableXyz` (`design-crd-model.md` §7.5)                  | Spec renames, owned by `design-crd-model.md` §9.6, and §3.1 for the two this kind names                                                                                                                                                                                                                                                                                   |
-| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.enableDataRealignment` (§3.1)                                       | Spec rename and a move up one level, and the `enable` form fixes the default at off                                                                                                                                                                                                                                                                                       |
+| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.disableDataRealignment` (§3.1)                                      | Spec rename, a move up one level, and an inversion. The behavior is on by default, and the `disable` form is what keeps an unset field meaning that                                                                                                                                                                                                                       |
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                                   | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
 | `volumeMigrationSettings.enabled`                                                   | Removed (§3.1)                                                            | Behavioral. Migration cannot be turned off, because a drain, a rebalance, and a device replacement are performed by moving volumes                                                                                                                                                                                                                                        |
 | `spec.backup`, typed `BackupSpec`                                                   | The same field, typed `BackupStoreSpec` (Appendix A)                      | Type rename. `design-controlplane.md` declares a different `BackupSpec` in the same package, and two cannot coexist                                                                                                                                                                                                                                                       |
@@ -2010,14 +2019,19 @@ type StorageClusterSpec struct {
 	// +optional
 	StorageNodes *StorageNodesSpec `json:"storageNodes,omitempty"`
 
-	// EnableDataRealignment turns on the post-migration data realignment. It is a
-	// field of the spec rather than of the block it governs, because
-	// volumeMigrationSettings.dataRealignment.enableDataRealignment says the same
-	// word twice (§3.1). There is no EnableVolumeMigration beside it: migration
+	// DisableDataRealignment turns off the post-migration data realignment, which
+	// runs by default. It is spelled as a disable because the behavior it governs
+	// is on: realignment restores the fault-tolerance and node-affinity guarantees
+	// every volume move invalidates, so a cluster that says nothing gets them back
+	// rather than silently accumulating unaligned structures.
+	//
+	// It is a field of the spec rather than of the block it governs, because
+	// volumeMigrationSettings.dataRealignment.disableDataRealignment says the same
+	// word twice (§3.1). There is no DisableVolumeMigration beside it: migration
 	// cannot be turned off, since a drain, a rebalance, and a device replacement
 	// are all performed by moving volumes.
 	// +optional
-	EnableDataRealignment *bool `json:"enableDataRealignment,omitempty"`
+	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional

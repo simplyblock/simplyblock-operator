@@ -43,10 +43,12 @@ that silently never ran. This is the one class that needs no data migration and
 only a deprecation window for the sake of scripts and runbooks.
 
 **A renamed toggle that also inverts is the worst case**, because the mechanical
-migration produces the opposite of the intended behavior. One row is in it,
-`migrationEnabled` becoming `disableMigration`. One more is adjacent:
-`enableDataRealignment` keeps its polarity and changes its default, so an object
-nobody edited loses the feature unless the conversion records what was stated.
+migration produces the opposite of the intended behavior. Two rows are in it, and
+both govern behavior that is on by default: `migrationEnabled` becomes
+`disableMigration`, and the realignment's `enabled` becomes
+`spec.disableDataRealignment`. In each the conversion has to negate a stated value
+and leave an unstated one unstated, because absence is what carries the default on
+both sides.
 
 ---
 
@@ -101,20 +103,20 @@ rename and belongs with the rolling-restart work.
 across five kinds; nine of them are registered, one is registered in two places,
 and one is not registered at all.
 
-| Struct                        | Registered                 | Target                             | Default | Class                |
-|-------------------------------|----------------------------|------------------------------------|---------|----------------------|
-| `StorageNodeSpec`             | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal              |
-| `StorageNodeSetSpec`          | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal              |
-| `VolumeAutoPlacementSettings` | `migrationEnabled`         | `disableMigration`                 | on      | Inverting            |
-| `VolumeAutoPlacementSettings` | `latencyBenchmarkEnabled`  | `enableLatencyBenchmark`           | off     | Silent               |
-| `VolumeAutoPlacementSettings` | `enabled`                  | `spec.enableVolumeAutoPlacement`   | off     | Silent, and moves up |
-| `DataRealignmentSettings`     | `enabled`                  | `spec.enableDataRealignment`       | on      | Silent, and moves up |
-| `VolumeMigrationSettings`     | `enabled`                  | Removed                            | on      | Removal              |
-| `BackupSpec`                  | `withCompression`          | Removed                            | off     | Removal              |
-| `BackupSpec`                  | `snapshotBackups`          | Removed                            | off     | Removal              |
-| `BackupSpec`                  | `localTesting`             | Removed                            | off     | Removal              |
-| `StorageClassParameters`      | `encryption`               | `enableEncryption`                 | off     | Silent               |
-| `StoragePoolSpec`             | `dhchap`                   | `spec.volumeDefaults.enableDHCHAP` | off     | Silent, and regroups |
+| Struct                        | Registered                 | Target                             | Default | Class                   |
+|-------------------------------|----------------------------|------------------------------------|---------|-------------------------|
+| `StorageNodeSpec`             | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal                 |
+| `StorageNodeSetSpec`          | `skipKubeletConfiguration` | Removed, re-landed per cluster     | off     | Removal                 |
+| `VolumeAutoPlacementSettings` | `migrationEnabled`         | `disableMigration`                 | on      | Inverting               |
+| `VolumeAutoPlacementSettings` | `latencyBenchmarkEnabled`  | `enableLatencyBenchmark`           | off     | Silent                  |
+| `VolumeAutoPlacementSettings` | `enabled`                  | `spec.enableVolumeAutoPlacement`   | off     | Silent, and moves up    |
+| `DataRealignmentSettings`     | `enabled`                  | `spec.disableDataRealignment`      | on      | Inverting, and moves up |
+| `VolumeMigrationSettings`     | `enabled`                  | Removed                            | on      | Removal                 |
+| `BackupSpec`                  | `withCompression`          | Removed                            | off     | Removal                 |
+| `BackupSpec`                  | `snapshotBackups`          | Removed                            | off     | Removal                 |
+| `BackupSpec`                  | `localTesting`             | Removed                            | off     | Removal                 |
+| `StorageClassParameters`      | `encryption`               | `enableEncryption`                 | off     | Silent                  |
+| `StoragePoolSpec`             | `dhchap`                   | `spec.volumeDefaults.enableDHCHAP` | off     | Silent, and regroups    |
 
 **`replicate` is in the design's list and not in the API.**
 `design-crd-model.md` §9.6 and `design-storagepool.md` §11 both name
@@ -377,13 +379,13 @@ migrate volumes after the upgrade. Asserting `disableMigration == true` would pa
 against a conversion that got the polarity right and against one that never ran at
 all, since the stored object carries a value either way.
 
-`enableDataRealignment` needs the same test for a different reason. Its polarity
-holds and its default changes, from on to off, so an object that stated nothing is
-indistinguishable in the stored shape from one that deliberately turned the feature
-off. The conversion writes the value into an annotation on every trip down and
-reads that annotation's absence on the way up as the mark of a client that only
-ever spoke `v1alpha1`, which is the discrimination a test has to exercise from both
-sides.
+`disableDataRealignment` needs the same test for the same reason, and one more
+besides. It inverts, so a copy would turn realignment off for every cluster that
+turned it on; and the behavior it governs is the one a cluster gets by saying
+nothing, so a test has to exercise the unstated case from both sides rather than
+only the stated one. What proves it is that the hub field stays absent for a
+cluster that never mentioned realignment, because a value written there — either
+value — is a statement the cluster did not make.
 
 The same test has to run in both directions. A conversion that negates going up and
 copies going down is a bug that a one-way test cannot see, and it corrupts on the
@@ -646,7 +648,7 @@ answer does not block the work, because every row lands the same way regardless.
 **Q2: Whether the three `enabled` toggles are flattened or renamed in place.**
 `design-crd-model.md` §9.6 defers this and `design-storagecluster.md` §3.1 answers
 it for two of the three by moving them to the cluster's top level as
-`spec.enableVolumeAutoPlacement` and `spec.enableDataRealignment`. What is not
+`spec.enableVolumeAutoPlacement` and `spec.disableDataRealignment`. What is not
 settled is `VolumeMigrationSettings.enabled`, which §12 removes outright, leaving
 `VolumeMigrationSettings` with only its remaining members and no toggle. Whether
 the struct survives that is not decided.

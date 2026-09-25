@@ -2379,8 +2379,8 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(BackupStoreSpec)
 		**out = **in
 	}
-	if in.EnableDataRealignment != nil {
-		in, out := &in.EnableDataRealignment, &out.EnableDataRealignment
+	if in.DisableDataRealignment != nil {
+		in, out := &in.DisableDataRealignment, &out.DisableDataRealignment
 		*out = new(bool)
 		**out = **in
 	}

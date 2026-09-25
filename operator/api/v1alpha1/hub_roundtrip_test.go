@@ -397,7 +397,7 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 				Region:               "eu-central-1",
 				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 			},
-			EnableDataRealignment:     ptr.To(true),
+			DisableDataRealignment:    ptr.To(true),
 			EnableVolumeAutoPlacement: ptr.To(true),
 			VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
 				DisableMigration: ptr.To(true),

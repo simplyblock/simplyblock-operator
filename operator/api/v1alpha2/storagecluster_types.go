@@ -262,7 +262,7 @@ const (
 // volumes now are and restores the fault-tolerance and node-affinity guarantees
 // a move invalidated.
 //
-// Whether it runs at all is StorageClusterSpec.EnableDataRealignment, a field
+// Whether it runs at all is StorageClusterSpec.DisableDataRealignment, a field
 // of the spec rather than of this block: a toggle named for its subject repeats
 // itself when the subject is also its parent.
 type DataRealignmentSettings struct {
@@ -780,14 +780,23 @@ type StorageClusterSpec struct {
 	// +optional
 	Backup *BackupStoreSpec `json:"backup,omitempty"`
 
-	// EnableDataRealignment turns on the post-migration data realignment. It is
-	// a field of the spec rather than of the block it governs, because
-	// volumeMigrationSettings.dataRealignment.enableDataRealignment says the
-	// same word twice. There is no EnableVolumeMigration beside it: migration
+	// DisableDataRealignment turns off the post-migration data realignment,
+	// which runs by default. It is spelled as a disable because the behavior it
+	// governs is on: realignment restores the fault-tolerance and node-affinity
+	// guarantees every volume move invalidates, so a cluster that says nothing
+	// gets them back rather than silently accumulating unaligned structures.
+	// Turning it off is for a cluster migrating continuously, where a run that
+	// blocks migrations for tens of minutes costs more than the delay in
+	// realigning; volumeMigrationSettings.dataRealignment.minMoves is the
+	// gentler answer to the same problem.
+	//
+	// It is a field of the spec rather than of the block it governs, because
+	// volumeMigrationSettings.dataRealignment.disableDataRealignment says the
+	// same word twice. There is no DisableVolumeMigration beside it: migration
 	// cannot be turned off, since a drain, a rebalance, and a device
 	// replacement are all performed by moving volumes.
 	// +optional
-	EnableDataRealignment *bool `json:"enableDataRealignment,omitempty"`
+	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional
