@@ -1011,12 +1011,47 @@ func applyReading(status *simplyblockv1alpha2.StorageNodeStatus, reading NodeRea
 			Total:  reading.DevicesCount,
 		}
 	}
-	status.Ports = &simplyblockv1alpha2.StorageNodePorts{
+	status.Ports = portsFrom(status.Ports, reading)
+}
+
+// portsFrom is what the node listens on, with a reading that states nothing
+// leaving what was already recorded.
+//
+// A port moves: the control plane assigns it when the node starts, so a restart
+// can hand back a different one and the status has to follow. What it is not is
+// a value a reading may take away. Zero is not a port, so a reading carrying one
+// is a reading that did not say rather than a node that stopped listening, and
+// writing it over a good port takes away the address the latency probe dials and
+// the one the SPDK proxy's endpoints are built from. The device counts above
+// carry forward for the same reason.
+func portsFrom(
+	previous *simplyblockv1alpha2.StorageNodePorts, reading NodeReading,
+) *simplyblockv1alpha2.StorageNodePorts {
+	ports := &simplyblockv1alpha2.StorageNodePorts{
 		Management: reading.ManagementIP,
 		NvmeOf:     ptr.To(reading.NVMeOFPort),
 		Lvol:       ptr.To(reading.LvolPort),
 		Rpc:        ptr.To(reading.RPCPort),
 	}
+	if previous == nil {
+		return ports
+	}
+	if ports.Management == "" {
+		ports.Management = previous.Management
+	}
+	ports.NvmeOf = keptPort(reading.NVMeOFPort, previous.NvmeOf)
+	ports.Lvol = keptPort(reading.LvolPort, previous.Lvol)
+	ports.Rpc = keptPort(reading.RPCPort, previous.Rpc)
+	return ports
+}
+
+// keptPort is the reported port, or the recorded one where the reading carries
+// none.
+func keptPort(reported int32, previous *int32) *int32 {
+	if reported != 0 {
+		return ptr.To(reported)
+	}
+	return previous
 }
 
 // phaseOf is the operator's reading of the lifecycle the control plane reports.
