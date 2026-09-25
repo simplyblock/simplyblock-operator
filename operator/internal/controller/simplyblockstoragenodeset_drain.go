@@ -218,11 +218,33 @@ func getNodeBackendStatus(
 	return resp.Status, nil
 }
 
-// roundRobinTargetNodes lists all online nodes (excluding the drained node) and
-// assigns each PV name a target node UUID using round-robin order. The i-th PV
-// in pvNames is assigned to onlineNodes[i % len(onlineNodes)], distributing
-// migrations evenly across the cluster without requiring persistent state.
-// Returns an error if no online peer node is available.
+// roundRobinTargetNodes assigns each PV name a target node UUID, round-robin
+// over the online nodes that are eligible to receive a volume from the node
+// being drained. The i-th eligible PV goes to eligible[i % len(eligible)],
+// spreading the migrations without needing persistent state.
+//
+// A node is not eligible if it is HA-paired with the node being drained, in
+// either direction:
+//
+//   - it IS the drained node's secondary, or
+//   - the drained node is ITS secondary.
+//
+// A migration does not just write to the target: it creates the volume on the
+// target's whole HA pair. So if either half of that pair is the node on its way
+// out, the control plane refuses, and the drain stops dead. Observed on a
+// 7-node cluster (2026-09-25): the target picked was a node whose secondary was
+// the drained node, and the migration sat in snap_copy for 75 minutes on
+//
+//	Target secondary node <drained> is in state 'pending_removal';
+//	cannot create on target primary
+//
+// with no retry able to help — with one PV the assignment is always
+// eligible[0], so the same invalid target was chosen deterministically. Of six
+// peers, exactly one was invalid and round-robin picked it.
+//
+// Excluding the drained node's own secondary as well is the other half of the
+// same rule: that node is the one taking over the drained node's HA role, so it
+// must not simultaneously be absorbing its volumes.
 func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -235,19 +257,42 @@ func roundRobinTargetNodes(
 		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
 	}
 
-	var online []string
+	var drainedSecondary string
 	for _, n := range nodes {
-		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
-			online = append(online, n.UUID)
+		if n.UUID == excludeNodeUUID {
+			drainedSecondary = n.SecondaryNodeID
+			break
 		}
 	}
-	if len(online) == 0 {
+
+	var eligible []string
+	var pairedWithDrained int
+	for _, n := range nodes {
+		if n.UUID == excludeNodeUUID || n.Status != utils.NodeStatusOnline {
+			continue
+		}
+		if n.UUID == drainedSecondary || n.SecondaryNodeID == excludeNodeUUID {
+			pairedWithDrained++
+			continue
+		}
+		eligible = append(eligible, n.UUID)
+	}
+	if len(eligible) == 0 {
+		// Distinguished from "no online peer at all", because the operator's next
+		// move differs: bring a node back, versus the cluster being too small or
+		// too tightly paired for this node to be drained at all.
+		if pairedWithDrained > 0 {
+			return nil, fmt.Errorf(
+				"roundRobinTargetNodes: every online peer of %s is HA-paired with it "+
+					"(%d paired); a migration would have to create on the drained node",
+				excludeNodeUUID, pairedWithDrained)
+		}
 		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
 	}
 
 	assignment := make(map[string]string, len(pvNames))
 	for i, pv := range pvNames {
-		assignment[pv] = online[i%len(online)]
+		assignment[pv] = eligible[i%len(eligible)]
 	}
 	return assignment, nil
 }

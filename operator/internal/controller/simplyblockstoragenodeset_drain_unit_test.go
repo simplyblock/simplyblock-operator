@@ -51,6 +51,68 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 	}
 }
 
+// A drain migration creates the volume on the target's whole HA pair, so a
+// target paired with the drained node is refused by the control plane. These
+// tests therefore have to state each node's secondary; a node with none is
+// unpaired and always eligible.
+func TestRoundRobinSkipsNodesPairedWithTheDrainedNode(t *testing.T) {
+	// node-2 is the drained node's secondary, node-3 has the drained node as its
+	// secondary. Both are HA-paired with node-1 and neither can receive its
+	// volumes; only node-4 can.
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+	defer mock.Close()
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
+			{"id":"node-1","status":"online","secondary_node_id":"node-2"},
+			{"id":"node-2","status":"online","secondary_node_id":"node-4"},
+			{"id":"node-3","status":"online","secondary_node_id":"node-1"},
+			{"id":"node-4","status":"online","secondary_node_id":"node-3"}
+		]`},
+	)
+
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b", "pv-c"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for pv, target := range assignment {
+		switch target {
+		case "node-2":
+			t.Errorf("pv %s went to node-2, the drained node's secondary", pv)
+		case "node-3":
+			t.Errorf("pv %s went to node-3, whose secondary is the drained node -- "+
+				"the migration cannot create on its HA pair", pv)
+		case "node-1":
+			t.Errorf("pv %s went to the drained node itself", pv)
+		}
+	}
+}
+
+func TestRoundRobinErrorsWhenEveryPeerIsPairedWithTheDrainedNode(t *testing.T) {
+	// Stalling with a clear reason beats assigning a target that can never work:
+	// with one PV the choice is eligible[0] every time, so an invalid assignment
+	// is retried identically for ever rather than eventually succeeding.
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+	defer mock.Close()
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
+			{"id":"node-1","status":"online","secondary_node_id":"node-2"},
+			{"id":"node-2","status":"online","secondary_node_id":"node-1"}
+		]`},
+	)
+
+	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, "node-1", []string{"pv-a"})
+	if err == nil {
+		t.Fatal("a target HA-paired with the drained node was assigned anyway")
+	}
+	if !strings.Contains(err.Error(), "HA-paired") {
+		t.Errorf("error should say why no target is eligible, got: %v", err)
+	}
+}
+
 func TestRoundRobinDistributesEvenly(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
