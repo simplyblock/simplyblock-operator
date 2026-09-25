@@ -1007,16 +1007,23 @@ spec:
                   Images are the container images this deployment pins. Unstated, each field
                   the expansion would write keeps its own default.
                 properties:
-                  cluster:
+                  nodeAgent:
                     description: |-
-                      Cluster is the storage-node workload image, which the expansion writes to
-                      StorageCluster.spec.storageNodes. This is where the retired
+                      NodeAgent is the image the storage-node DaemonSet runs: the agent the
+                      control plane drives a worker through, and the two init containers that
+                      configure the host before it starts. The expansion writes it to
+                      StorageCluster.spec.storageNodes, which is where the retired
                       StorageNodeSet.spec.clusterImage went.
 
+                      It is the same artifact the control plane itself runs, which is why
+                      spec.storageNodes.image defaults to the ControlPlane singleton's: the agent
+                      and the tasks that call it are one codebase, and version skew between them
+                      is what breaks a node add.
+
                       It is spent only where the document creates the cluster. A document that
-                      names an existing one in ClusterRef adds nodes to a workload that is
-                      already running under an image the cluster states, and this slot is
-                      ignored the same way Cluster is.
+                      names an existing one in ClusterRef adds nodes to a DaemonSet that is
+                      already running under an image the cluster states, and this slot is ignored
+                      the same way Cluster is.
                     properties:
                       image:
                         description: |-

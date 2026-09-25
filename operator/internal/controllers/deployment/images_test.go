@@ -1,6 +1,6 @@
 // What spec.images reaches. The document states each image once, and the
-// expansion spends the three slots on two different objects: the storage-node
-// workload is the cluster's, and the two SPDK images are every node's.
+// expansion spends the three slots on two different objects: the node agent is
+// the cluster's workload, and the two SPDK images are every node's own config.
 //
 // The reason to test the spending rather than the field is that the split is the
 // part that can be got wrong. A policy written onto the cluster instead of the
@@ -21,15 +21,15 @@ import (
 const (
 	theSpdkImage    = "public.ecr.aws/simply-block/ultra:main-latest"
 	theProxyImage   = "public.ecr.aws/simply-block/simplyblock:main"
-	theClusterImage = "public.ecr.aws/simply-block/simplyblock-operator:initialize-indices"
+	theNodeAgentImage = "public.ecr.aws/simply-block/simplyblock-operator:initialize-indices"
 )
 
 // withImages is the document fixture with all three slots stated, which is what
 // an air-gapped deployment writes.
 func withImages(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 	c.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-		Cluster: &simplyblockv1alpha2.ImageSpec{
-			Image:           theClusterImage,
+		NodeAgent: &simplyblockv1alpha2.ImageSpec{
+			Image:           theNodeAgentImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 		},
 		SPDK: &simplyblockv1alpha2.ImageSpec{
@@ -45,16 +45,16 @@ func withImages(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
 
 // The cluster slot is the storage-node workload's image, which is where the
 // v1alpha1 clusterImage went.
-func TestTheClusterImageReachesTheWorkload(t *testing.T) {
+func TestTheNodeAgentImageReachesTheWorkload(t *testing.T) {
 	config := aDocument(withImages)
 	r := reconcilerFor(t)
 
 	workload := r.buildWorkload(config)
-	if workload.Image != theClusterImage {
-		t.Errorf("the workload runs %q, want the document's %q", workload.Image, theClusterImage)
+	if workload.Image != theNodeAgentImage {
+		t.Errorf("the agent runs %q, want the document's %q", workload.Image, theNodeAgentImage)
 	}
 	if workload.ImagePullPolicy != corev1.PullIfNotPresent {
-		t.Errorf("the workload pulls %q, want the document's %q",
+		t.Errorf("the agent pulls %q, want the document's %q",
 			workload.ImagePullPolicy, corev1.PullIfNotPresent)
 	}
 }
@@ -97,7 +97,7 @@ func TestADocumentWithNoImagesStatesNone(t *testing.T) {
 
 	workload := r.buildWorkload(config)
 	if workload.Image != "" || workload.ImagePullPolicy != "" {
-		t.Errorf("an unstated cluster image reached the workload as %q/%q",
+		t.Errorf("an unstated node-agent image reached the workload as %q/%q",
 			workload.Image, workload.ImagePullPolicy)
 	}
 
@@ -123,7 +123,7 @@ func TestOneStatedSlotLeavesTheOthersUnstated(t *testing.T) {
 	r := reconcilerFor(t)
 
 	if workload := r.buildWorkload(config); workload.Image != "" {
-		t.Errorf("an unstated cluster slot reached the workload as %q", workload.Image)
+		t.Errorf("an unstated nodeAgent slot reached the workload as %q", workload.Image)
 	}
 
 	got := r.buildNode(config, cluster,
@@ -175,7 +175,7 @@ func TestTheApiserverStampsAndPolicesTheImageSlots(t *testing.T) {
 	t.Run("an image outside the trusted registries is refused", func(t *testing.T) {
 		config := aStoredDocument(t, apiClient, "images-bad-registry")
 		config.Spec.Images = &simplyblockv1alpha2.DeploymentImages{
-			Cluster: &simplyblockv1alpha2.ImageSpec{Image: "docker.io/someone/else:latest"},
+			NodeAgent: &simplyblockv1alpha2.ImageSpec{Image: "docker.io/someone/else:latest"},
 		}
 		err := apiClient.Update(ctx, config)
 		if err == nil {

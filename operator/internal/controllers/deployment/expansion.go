@@ -329,14 +329,14 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.EnableJournalDevice = template.EnableJournalDevice
 	}
 
-	// The cluster slot of spec.images. It is read here rather than in
+	// The nodeAgent slot of spec.images. It is read here rather than in
 	// buildCluster because the field it fills is on the workload, and it is
 	// spent only on this path: a document naming an existing cluster in
 	// clusterRef never reaches buildCluster at all, so the slot is ignored for
 	// the same reason spec.cluster is.
-	if images := config.Spec.Images; images != nil && images.Cluster != nil {
-		workload.Image = images.Cluster.Image
-		workload.ImagePullPolicy = images.Cluster.ImagePullPolicy
+	if images := config.Spec.Images; images != nil && images.NodeAgent != nil {
+		workload.Image = images.NodeAgent.Image
+		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
 
 	for _, set := range config.Spec.NodeSets {

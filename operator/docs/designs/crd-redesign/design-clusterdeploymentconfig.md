@@ -146,7 +146,7 @@ spec:
   environment: OpenShift
   edgeCluster: false
   images:
-    cluster:
+    nodeAgent:
       image: public.ecr.aws/simply-block/simplyblock:main
       imagePullPolicy: Always
     spdk:
@@ -180,20 +180,39 @@ spec:
             nvme: ["0000:5e:00.0"]
 ```
 
-**Every image the deployment pins is in one block, and the expansion spends it on
-two objects.** `images.cluster` is the storage-node workload image and is written
-to `StorageCluster.spec.storageNodes`, which is where the retired
+**Every image the deployment pins is in one block, and all three are software that
+runs on a storage node.** `images.nodeAgent` is what the storage-node DaemonSet
+runs: the agent the control plane drives a worker through, and the two init
+containers that configure the host before it starts. It is written to
+`StorageCluster.spec.storageNodes`, which is where the retired
 `StorageNodeSet.spec.clusterImage` went. `images.spdk` and `images.spdkProxy` are
 written onto every `StorageNode.spec.config` the expansion creates, because those
 two fields are per node so that a later rollout can walk the fleet one machine at
 a time ([`design-storagenode.md`](design-storagenode.md) §3.2) and a document
 states the fleet's starting point.
 
+The slot is `nodeAgent` and not `cluster`, which is what it was called first. The
+earlier name said where the value lands and not what it is, and a reader who had
+to ask what a cluster image was had already lost the fact the block turns on: these
+are three processes on a worker, two of them in a pod the control plane creates
+and one in a DaemonSet the operator creates.
+
+`images.nodeAgent` and `images.spdkProxy` are ordinarily the same image, since the
+agent and the proxy are one Python codebase. They are two slots because their
+lifetimes differ: the agent is replaced by rolling the DaemonSet, and the proxy
+only when the SPDK pod it is a sidecar of is torn down and restarted.
+
 They are together here rather than each beside the object it configures because
 pinning images is one decision taken once. An air-gapped installation overrides
 all three against its own registry, and a reviewer reading the document has one
 place to check what this deployment will run, which is the property the whole kind
 exists for.
+
+The control plane's own image is not one of the slots. This kind creates a
+`StorageCluster` and its `StorageNode` objects and neither creates nor adopts the
+`ControlPlane`, so a slot for it would be a field the expansion has nowhere to
+write. It is `ControlPlane.spec.source.local.image`, and the CSI driver's is
+`SimplyblockDriver.spec.image`.
 
 Each slot is an image and a pull policy, and either may be stated without the
 other: an override of the image keeps the default policy, and a pin of the policy
@@ -202,8 +221,8 @@ the field it would have filled keeps its own default rather than being overridde
 with an empty string. Every image is held to the trusted-registry set the rest of
 this API holds them to.
 
-`images.cluster` is spent only where the document creates the cluster. A document
-naming an existing one in `spec.clusterRef` adds nodes to a workload already
+`images.nodeAgent` is spent only where the document creates the cluster. A document
+naming an existing one in `spec.clusterRef` adds nodes to a DaemonSet already
 running under an image that cluster states, and the slot is ignored the same way
 `spec.cluster` is.
 
@@ -1389,15 +1408,15 @@ type ImageSpec struct {
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
-// DeploymentImages is every image a deployment pins, in one block. The expansion
-// spends them on two objects: the cluster slot is the workload's, and the two
-// SPDK slots are every node's.
+// DeploymentImages is every image a deployment pins, in one block. All three run
+// on a storage node. The expansion spends them on two objects: the node agent is
+// the cluster's workload, and the two SPDK slots are every node's own config.
 type DeploymentImages struct {
-	// Cluster is the storage-node workload image, written to
+	// NodeAgent is the image the storage-node DaemonSet runs, written to
 	// StorageCluster.spec.storageNodes and ignored when ClusterRef names an
 	// existing cluster.
 	// +optional
-	Cluster *ImageSpec `json:"cluster,omitempty"`
+	NodeAgent *ImageSpec `json:"nodeAgent,omitempty"`
 
 	// SPDK is the SPDK image, written onto every StorageNode.spec.config the
 	// expansion creates.

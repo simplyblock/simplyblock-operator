@@ -372,12 +372,12 @@ repeat the cluster's value, and design §3.1 leaves it out for that reason.
 
 File: `operator/internal/controllers/deployment/images_test.go`
 
-| #     | Scenario                                                                      | Type     | Test                                       |
-|-------|-------------------------------------------------------------------------------|----------|--------------------------------------------|
-| U-151 | `images.cluster` reaches `StorageCluster.spec.storageNodes`, image and policy | Positive | `TestTheClusterImageReachesTheWorkload`    |
-| U-152 | `images.spdk` and `images.spdkProxy` reach every node's `spec.config`         | Positive | `TestTheSPDKImagesReachEveryNode`          |
-| U-153 | A document stating no images writes no image and no policy anywhere           | Boundary | `TestADocumentWithNoImagesStatesNone`      |
-| U-154 | One slot stated: the others are written as unstated rather than as empty      | Boundary | `TestOneStatedSlotLeavesTheOthersUnstated` |
+| #     | Scenario                                                                        | Type     | Test                                       |
+|-------|---------------------------------------------------------------------------------|----------|--------------------------------------------|
+| U-151 | `images.nodeAgent` reaches `StorageCluster.spec.storageNodes`, image and policy | Positive | `TestTheNodeAgentImageReachesTheWorkload`  |
+| U-152 | `images.spdk` and `images.spdkProxy` reach every node's `spec.config`           | Positive | `TestTheSPDKImagesReachEveryNode`          |
+| U-153 | A document stating no images writes no image and no policy anywhere             | Boundary | `TestADocumentWithNoImagesStatesNone`      |
+| U-154 | One slot stated: the others are written as unstated rather than as empty        | Boundary | `TestOneStatedSlotLeavesTheOthersUnstated` |
 
 `U-153` and `U-154` are the rows that keep an unstated slot from overriding a
 downstream default with an empty string, which is the failure a struct of plain

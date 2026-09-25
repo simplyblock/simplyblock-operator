@@ -393,23 +393,37 @@ type ImageSpec struct {
 
 // DeploymentImages is every image a deployment pins, in one block.
 //
-// They are together rather than each beside the object it configures because
-// pinning images is one decision taken once: an air-gapped installation
-// overrides all three against its own registry, and a reviewer reading the
-// document has one place to check what this deployment will run. The expansion
-// is what spends them on two different objects, since the three fields they land
-// on are not all on the same kind.
+// All three are software that runs on a storage node, which is what the slot
+// names say and what an earlier spelling of the first one hid. They are together
+// rather than each beside the object it configures because pinning images is one
+// decision taken once: an air-gapped installation overrides all three against its
+// own registry, and a reviewer reading the document has one place to check what
+// this deployment will run. The expansion is what spends them on two different
+// objects, since the three fields they land on are not all on the same kind.
+//
+// The control plane's own image is not here. A ClusterDeploymentConfig creates a
+// StorageCluster and its StorageNodes and neither creates nor adopts the
+// ControlPlane, so a slot for it would be a field the expansion has nowhere to
+// write. It is ControlPlane.spec.source.local.image, and the CSI driver's is
+// SimplyblockDriver.spec.image.
 type DeploymentImages struct {
-	// Cluster is the storage-node workload image, which the expansion writes to
-	// StorageCluster.spec.storageNodes. This is where the retired
+	// NodeAgent is the image the storage-node DaemonSet runs: the agent the
+	// control plane drives a worker through, and the two init containers that
+	// configure the host before it starts. The expansion writes it to
+	// StorageCluster.spec.storageNodes, which is where the retired
 	// StorageNodeSet.spec.clusterImage went.
 	//
+	// It is the same artifact the control plane itself runs, which is why
+	// spec.storageNodes.image defaults to the ControlPlane singleton's: the agent
+	// and the tasks that call it are one codebase, and version skew between them
+	// is what breaks a node add.
+	//
 	// It is spent only where the document creates the cluster. A document that
-	// names an existing one in ClusterRef adds nodes to a workload that is
-	// already running under an image the cluster states, and this slot is
-	// ignored the same way Cluster is.
+	// names an existing one in ClusterRef adds nodes to a DaemonSet that is
+	// already running under an image the cluster states, and this slot is ignored
+	// the same way Cluster is.
 	// +optional
-	Cluster *ImageSpec `json:"cluster,omitempty"`
+	NodeAgent *ImageSpec `json:"nodeAgent,omitempty"`
 
 	// SPDK is the SPDK image, which the expansion writes onto every
 	// StorageNode.spec.config it creates rather than onto the cluster: the field
