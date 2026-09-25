@@ -337,6 +337,9 @@ File: `operator/internal/controllers/node/pernodeconfig_test.go`
 | U-92  | A device list containing a shell metacharacter is quoted rather than interpolated          | Negative | —                                                      |
 | U-262 | `VCPU_COUNT` and `MAX_HUGE_PAGES_SIZE` come from the node's own sizing                     | Positive | —                                                      |
 | U-263 | Two nodes mid-roll: their entries differ in those two keys and agree on `MAX_SUBSYS_COUNT` | Boundary | —                                                      |
+| U-415 | A node stating `reservedSystemCPU`: its entry carries `RESERVED_SYSTEM_CPUS`               | Positive | `TestTheReservedCPUsReachTheNodesOwnEntry`             |
+| U-416 | A node stating none: no line is written, so the pod's fleet-wide value decides             | Boundary | `TestANodeWithNoReservedCPUsWritesNoLine`              |
+| U-417 | The agent's container exports that one variable out of the entry it sources, and no other  | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
 | U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                        | Positive | —                                                      |
 | U-245 | A `deviceNames` entry that is a device path reaches the node as one                        | Positive | —                                                      |
 | U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                  | Boundary | —                                                      |
@@ -907,11 +910,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 377       | 272     | 105         |
+| Unit        | 380       | 275     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **462**   | **272** | **190**     |
+| **Total**   | **465**   | **275** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the

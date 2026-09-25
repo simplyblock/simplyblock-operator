@@ -303,6 +303,17 @@ is one object for every node it schedules. A per-node value has nowhere to go. A
 four move to `StorageCluster.spec.storageNodes` (§5.1), which is where a
 cluster-uniform value belongs and where setting one has an effect.
 
+**`reservedSystemCPU` comes back, because one of them is not
+cluster-uniform.** It names core ids rather than a quantity, so `0,1` on a
+sixteen-core worker and `0,1` on a ninety-six-core worker hold back different
+fractions of the machine, and a fleet whose groups differ in core count has no
+one list that is right for all of them. What changed is that a per-node value
+now has somewhere to go: the per-node ConfigMap carries one shell-sourceable
+entry per worker, the pod sources its own, and the agent exports that one
+variable out of it, so the node's list wins over the pod's environment while the
+cluster's value stays the fleet's default. The other three are uniform and stay
+where they went.
+
 #### A device is named by a PCI address or by a device path
 
 `config.deviceNames` is the explicit list of devices a node owns, and an entry is
@@ -2282,6 +2293,27 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
+
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
+	// core list such as 0,1 or 0-3.
+	//
+	// It is per node and not per cluster because it names core ids: 0,1 on a
+	// sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine, and a fleet whose groups differ in core count
+	// has no one list that is right for all of them.
+	// StorageCluster.spec.storageNodes.reservedSystemCPU is the fleet's value,
+	// which the pod carries as an environment variable, and this overrides it
+	// for the node that states it.
+	//
+	// On OpenShift the value reaches the kubelet through a KubeletConfig for
+	// the machine config pool rather than through the node alone, so nodes
+	// sharing a pool that disagree are writing over one another's pool
+	// configuration. Mutable: the CPUs a machine holds back are a tuning
+	// decision, not a layout one.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the

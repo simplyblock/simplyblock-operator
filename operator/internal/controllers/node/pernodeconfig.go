@@ -234,6 +234,12 @@ func renderNodeConfig(
 	} else {
 		fmt.Fprintf(&entry, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
 	}
+	// Written only when the node states one. An empty line here would override
+	// the fleet's value, which the pod carries as an environment variable, with
+	// nothing.
+	if config.ReservedSystemCPU != "" {
+		fmt.Fprintf(&entry, "RESERVED_SYSTEM_CPUS=%s\n", utils.ShellQuote(config.ReservedSystemCPU))
+	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
 	// The journal share leaves through the variable its class is read by, for

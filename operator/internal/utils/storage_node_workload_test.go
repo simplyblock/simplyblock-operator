@@ -146,3 +146,34 @@ func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
 		t.Errorf("init container: expected user memory limit 128Mi, got %v", initMem.String())
 	}
 }
+
+// What the pod carries as an environment variable is the fleet's value, and
+// what the node's own entry states has to win over it. The entry is sourced
+// rather than injected, so a variable it sets is a shell variable: sudo passes
+// the environment, which a sourced assignment is not part of until it is
+// exported.
+func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
+	ds := BuildStorageNodeDaemonSet(&simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}, false, false, "", "", "node-agent:test")
+
+	containers := ds.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("the pod has %d containers, want 1", len(containers))
+	}
+	command := strings.Join(containers[0].Command, "\n")
+
+	if !strings.Contains(command, ". /etc/node-env/env.sh") {
+		t.Fatalf("the container does not source the node's entry: %s", command)
+	}
+	if !strings.Contains(command, "export RESERVED_SYSTEM_CPUS") {
+		t.Errorf("the container sources the entry and exports nothing from it, "+
+			"so the node's own reserved CPUs never reach the agent: %s", command)
+	}
+	// Only that one. Exporting the entry wholesale would put the device lists
+	// and the class flag into the agent's environment, where nothing asked for
+	// them and a name could collide.
+	if strings.Contains(command, "set -a") {
+		t.Errorf("the container exports the whole entry: %s", command)
+	}
+}

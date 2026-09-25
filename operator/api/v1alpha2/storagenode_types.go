@@ -196,6 +196,27 @@ type StorageNodeConfig struct {
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
+	// core list such as 0,1 or 0-3.
+	//
+	// It is per node and not per cluster because it names core ids: 0,1 on a
+	// sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine, and a fleet whose groups differ in core count
+	// has no one list that is right for all of them.
+	// StorageCluster.spec.storageNodes.reservedSystemCPU is the fleet's value,
+	// which the pod carries as an environment variable, and this overrides it
+	// for the node that states it.
+	//
+	// On OpenShift the value reaches the kubelet through a KubeletConfig for
+	// the machine config pool rather than through the node alone, so nodes
+	// sharing a pool that disagree are writing over one another's pool
+	// configuration. Mutable: the CPUs a machine holds back are a tuning
+	// decision, not a layout one.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the
 	// devices were partitioned.
