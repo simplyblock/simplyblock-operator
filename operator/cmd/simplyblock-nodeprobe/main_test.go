@@ -100,7 +100,8 @@ func TestParseOptionsReadsTheOwnerTheJobPassed(t *testing.T) {
 		"OWNER_NAME":        "oops-1",
 		"OWNER_UID":         "8f14e45f-ceea-467a-9d1f-2e0b1c4b6b8a",
 	})
-	opts, err := parseOptions([]string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m", "--host-root=/host/root"}, full)
+	args := []string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m", "--host-root=/host/root"}
+	opts, err := parseOptions(args, full)
 	if err != nil {
 		t.Fatalf("parse with an owner: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestParseOptionsReadsTheOwnerTheJobPassed(t *testing.T) {
 	}
 
 	partial := envOf(map[string]string{"OWNER_KIND": "OperatorOps", "OWNER_NAME": "oops-1"})
-	opts, err = parseOptions([]string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m", "--host-root=/host/root"}, partial)
+	opts, err = parseOptions(args, partial)
 	if err != nil {
 		t.Fatalf("parse with a partial owner: %v", err)
 	}

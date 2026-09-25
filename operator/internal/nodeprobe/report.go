@@ -494,15 +494,6 @@ func (r Report) HugePageBytes() uint64 {
 	return total
 }
 
-// orUnknown is what a summary prints for a reading that was not taken, so that
-// a line with a blank in it says which blank it is.
-func orUnknown(value string) string {
-	if value == "" {
-		return "an unknown OS"
-	}
-	return value
-}
-
 // Encode renders the report as the bytes that go into a ConfigMap.
 //
 // It is indented because the value a human reads is a kubectl get -o YAML of a

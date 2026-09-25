@@ -208,12 +208,23 @@ func sentences(err error) []string {
 // Summary is the one line the probe logs when it is done, so that a
 // kubectl logs of a finished Job says what it found without anybody parsing
 // JSON.
+// orUnknown is what a summary prints for a reading that was not taken, so that
+// a line with a blank in it says which blank it is.
+func orUnknown(value, unknown string) string {
+	if value == "" {
+		return unknown
+	}
+	return value
+}
+
 func Summary(report Report) string {
 	return fmt.Sprintf(
-		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
+		"node %s: %s on %s, %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
 			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers bound to a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
+		orUnknown(report.HostOS.PrettyName, "an unknown OS"),
+		orUnknown(report.HostOS.Architecture, "an unknown architecture"),
 		len(report.AvailableDevices()), len(report.Devices),
 		report.CPU.OnlineCPUs, report.CPU.PhysicalCores, report.CPU.HyperThreading,
 		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,
