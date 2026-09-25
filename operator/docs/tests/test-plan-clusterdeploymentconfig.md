@@ -272,6 +272,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                            | Boundary | `TestHostOSForRefusesToStateOneNobodyRead`                    |
 | U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                       | Positive | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot` |
 | U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`              |
+| U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                    | Positive | `TestTheDocumentsTolerationsReachTheStorageNodes`             |
+| U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                           | Boundary | `TestAGrowthDocumentStatesNoTolerations`                      |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -581,11 +583,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 146       | 13      | 133         | 9         |
+| Unit        | 148       | 15      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **216**   | **16**  | **200**     | **12**    |
+| **Total**   | **218**   | **18**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

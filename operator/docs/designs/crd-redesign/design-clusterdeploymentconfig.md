@@ -286,6 +286,15 @@ A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
 
+**`spec.cluster.tolerations` is where the storage-node pods are allowed to
+run.** A fleet that dedicates machines to storage taints them, which is what
+keeps everything else off, and the DaemonSet that lands on those machines has to
+tolerate the taint or it schedules nowhere. It expands into the cluster's own
+`spec.storageNodes.tolerations`, and it is on the template rather than on the
+document because a growth document has no template: it names a cluster that
+already states what its storage nodes tolerate, and a second statement could
+only agree or disagree.
+
 That is the same relationship the cluster's sizing has, and it is what keeps the
 document ephemeral: the nodes carry the resolved flags and the sizing they were
 built with, so deleting the config loses nothing. A group that needs one flag against its distribution's default sets that
@@ -823,7 +832,6 @@ worker it schedules, so a fleet whose workers run different distributions has no
 answer to state: the run states none and writes an event naming which worker
 runs what. The same is true of a fleet whose `os-release` nothing could read,
 which on a probe means its host's root filesystem was not mounted into it.
-
 It also means two documents written against one Kubernetes cluster agree on it
 without anybody coordinating, since both runs read the same evidence.
 
@@ -1386,6 +1394,22 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:Maximum=8
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// Tolerations are what the storage-node pods tolerate, and they expand into
+	// the cluster's own spec.storageNodes.tolerations.
+	//
+	// A fleet that dedicates machines to storage taints them, which is what
+	// keeps everything else off. The DaemonSet that lands on those machines has
+	// to tolerate the taint or it schedules nowhere, and a document that could
+	// not say so described a deployment that does not start: the correction was
+	// an edit to the cluster the document had just created, on a field the
+	// document owns everywhere else.
+	//
+	// A growth document states none. It names a cluster rather than describing
+	// one, and that cluster already carries what its storage nodes tolerate.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// NodeProvisioningBudget is how many workers the expansion may have in the
 	// node-add process at once. It expands into the cluster's own

@@ -11,6 +11,7 @@ package deployment
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -485,5 +486,42 @@ func TestADocumentWithNoHostOSLeavesUbuntuHostUnset(t *testing.T) {
 	workload := reconcilerFor(t).buildWorkload(aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
 	if workload.UbuntuHost != nil {
 		t.Errorf("ubuntuHost is %v with no host OS stated, want unset", *workload.UbuntuHost)
+	}
+}
+
+// Where the storage-node pods are allowed to run is the document's to state.
+// A fleet that taints its storage plane, which is how a machine is dedicated
+// to one workload, has a DaemonSet that schedules nowhere without this, and a
+// document that could not say so left an administrator editing the cluster the
+// document had just written.
+func TestTheDocumentsTolerationsReachTheStorageNodes(t *testing.T) {
+	tolerations := []corev1.Toleration{{
+		Key:      "io.simplyblock.node-type",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "storage-plane",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.Tolerations = tolerations
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !reflect.DeepEqual(workload.Tolerations, tolerations) {
+		t.Errorf("the cluster tolerates %+v, want %+v", workload.Tolerations, tolerations)
+	}
+}
+
+// A growth document names a cluster instead of describing one, and that cluster
+// already states what its storage nodes tolerate. There is no template to read
+// them from, and re-stating them would be a second answer to a settled
+// question.
+func TestAGrowthDocumentStatesNoTolerations(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster = nil
+		c.Spec.ClusterRef = theCluster
+	})
+
+	if workload := reconcilerFor(t).buildWorkload(config); len(workload.Tolerations) != 0 {
+		t.Errorf("a growth document produced %+v", workload.Tolerations)
 	}
 }

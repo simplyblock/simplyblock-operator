@@ -322,6 +322,12 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		} else {
 			workload.EnableFormat4K = template.EnableDriveFormat
 		}
+		// What the storage-node pods tolerate. A fleet that dedicates machines
+		// to storage taints them, and a DaemonSet that tolerates nothing lands
+		// on none of them: the document that described the deployment would
+		// have produced a cluster whose nodes never start, and the correction
+		// was an edit to the cluster it had just written.
+		workload.Tolerations = template.Tolerations
 		// The journal layout is the cluster's and immutable on it, so the
 		// document is the only place it can still be stated. Dropping it here
 		// partitioned a journal out of every drive on a deployment reviewed for

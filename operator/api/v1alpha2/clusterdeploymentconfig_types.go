@@ -344,6 +344,22 @@ type ClusterTemplate struct {
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
+	// Tolerations are what the storage-node pods tolerate, and they expand into
+	// the cluster's own spec.storageNodes.tolerations.
+	//
+	// A fleet that dedicates machines to storage taints them, which is what
+	// keeps everything else off. The DaemonSet that lands on those machines has
+	// to tolerate the taint or it schedules nowhere, and a document that could
+	// not say so described a deployment that does not start: the correction was
+	// an edit to the cluster the document had just created, on a field the
+	// document owns everywhere else.
+	//
+	// A growth document states none. It names a cluster rather than describing
+	// one, and that cluster already carries what its storage nodes tolerate.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// NodeProvisioningBudget is how many workers the expansion may have in the
 	// node-add process at once. It expands into the cluster's own
 	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
