@@ -1,8 +1,8 @@
 # Design Document: csi-addons Volume Replication
 
-**Status:** Phase 3 Implemented  
+**Status:** Phase 4 Implemented  
 **Author:** Israel Geoffrey (geoffrey1330)  
-**Date:** 2026-09-16 (last updated 2026-09-21)  
+**Date:** 2026-09-16 (last updated 2026-09-25)  
 **Test Plan:** [`tests/test-plan-csi-addons-replication.md`](../tests/test-plan-csi-addons-replication.md)
 
 ---
@@ -13,9 +13,10 @@
 |-------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
 | **Phase 1** | Implemented | The csi-addons machinery and the steady-state contract: CRDs, controller-manager, sidecar, the Replication and csi-addons Identity gRPC services with `EnableVolumeReplication`, `DisableVolumeReplication`, and `GetVolumeReplicationInfo`, backed by a typed backend status endpoint | §4, §5.1, §6 |
 | **Phase 2** | Implemented | The lifecycle verbs: `PromoteVolume` (planned and forced), `DemoteVolume`, and `ResyncVolume`. Validation end to end against a Ramen `VolumeReplicationGroup` in async mode is still outstanding (§12, E-06/E-07)                                                                      | §5.2, §9     |
-| **Phase 3** | Implemented | §11 (the Prometheus metrics). §7.2's peerClasses preflight is out of this design's scope entirely (it's Ramen's own `DRPolicy` mechanism) and is deferred to a future Ramen-integration design | §7.1, §11    |
+| **Phase 3** | Implemented | §11 (the Prometheus metrics). §7.2's peerClasses preflight is out of this design's scope entirely (it's Ramen's own `DRPolicy` mechanism) and is deferred to a future Ramen-integration design                                                                                         | §7.1, §11    |
+| **Phase 4** | Implemented | §14 (`VolumeGroupReplication`): the group-level csi-addons surface on top of the consistency-group primitive, fanning the §5 verbs out to a group's members. This is the gap analysis's own Phase 2 group-replication item                                                             | §14          |
 
-Phase 1 is independently useful: a `VolumeReplication` object per PVC whose status truthfully reports the relationship, which no surface provides today. Phase 2 makes the object drivable, which is what Ramen actually needs. Phase 3 makes the whole thing operable at fleet scale.
+Phase 1 is independently useful: a `VolumeReplication` object per PVC whose status truthfully reports the relationship, which no surface provides today. Phase 2 makes the object drivable, which is what Ramen actually needs. Phase 3 makes the whole thing operable at fleet scale. Phase 4 lifts the same surface from one volume to a consistency group.
 
 The phase numbers above are this document's own, not the DR storage foundation gap analysis's (§1): its Phase 0 (shipping the csi-addons contract itself) is this design's Phase 1, and its Phase 1 (promote, demote, and resync end to end through Ramen) is this design's Phase 2.
 
@@ -23,13 +24,13 @@ The phase numbers above are this document's own, not the DR storage foundation g
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                                                                                                                                     | Kind                    | Blocks  | Status                                                                                                                                                                 |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| P0-1 | A typed, steady-state per-volume replication status read: `GET .../volumes/{id}/replication/status` serving what `lvol_controller.get_replication_info` computes today (state, lag, outstanding bytes, failure counters), available for the volume's whole replicated life       | Control plane (`sbcli`) | Phase 1 | Shipped: `GET .../volumes/{v}/replication/status` → `ReplicationStatusDTO` (`simplyblock_web/api/v2/cluster/storage_pool/volume/replication.py:58-69`)                |
-| P0-2 | Idempotent attach and detach: attaching a volume to the policy it already follows returns success, and detaching a non-attached volume returns success                                                                                                                           | Control plane (`sbcli`) | Phase 1 | Shipped: `replication_policy_controller.attach_policy`/`detach_policy` (`simplyblock_core/controllers/replication_policy_controller.py:208-262`)                       |
-| P0-3 | A standalone demote verb: `POST .../volumes/{id}/replication/demote` that converges the peer while still serving (repeated snapshot-and-ship until the remaining delta is small), then quiesces, ships the final delta, confirms it landed on the peer, and fences the data path | Control plane (`sbcli`) | Phase 2 | Shipped: `POST .../volumes/{v}/replication/demote` → `lvol_controller.demote_lvol`                                                                                      |
+| #    | Prerequisite                                                                                                                                                                                                                                                                     | Kind                    | Blocks  | Status                                                                                                                                                                                |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| P0-1 | A typed, steady-state per-volume replication status read: `GET .../volumes/{id}/replication/status` serving what `lvol_controller.get_replication_info` computes today (state, lag, outstanding bytes, failure counters), available for the volume's whole replicated life       | Control plane (`sbcli`) | Phase 1 | Shipped: `GET .../volumes/{v}/replication/status` → `ReplicationStatusDTO` (`simplyblock_web/api/v2/cluster/storage_pool/volume/replication.py:58-69`)                                |
+| P0-2 | Idempotent attach and detach: attaching a volume to the policy it already follows returns success, and detaching a non-attached volume returns success                                                                                                                           | Control plane (`sbcli`) | Phase 1 | Shipped: `replication_policy_controller.attach_policy`/`detach_policy` (`simplyblock_core/controllers/replication_policy_controller.py:208-262`)                                      |
+| P0-3 | A standalone demote verb: `POST .../volumes/{id}/replication/demote` that converges the peer while still serving (repeated snapshot-and-ship until the remaining delta is small), then quiesces, ships the final delta, confirms it landed on the peer, and fences the data path | Control plane (`sbcli`) | Phase 2 | Shipped: `POST .../volumes/{v}/replication/demote` → `lvol_controller.demote_lvol`                                                                                                    |
 | P0-4 | An `rpo_target_seconds` field on `ReplicationPolicy`, so RPO compliance is computable against a declared target rather than the derived lag budget                                                                                                                               | Control plane (`sbcli`) | Phase 3 | Shipped: `ReplicationPolicy.rpo_target_seconds` (`simplyblock_core/models/replication.py:89`), wired through the API (`PolicyParams.rpo_target_seconds`) and CLI (`--rpo-target-sec`) |
-| P0-5 | csi-addons upstream: the `VolumeReplication` and `VolumeReplicationClass` CRDs (`replication.storage.openshift.io/v1alpha1`), the kubernetes-csi-addons controller-manager image, and the csi-addons sidecar image                                                               | Ecosystem               | Phase 1 | Vendored in the chart at v0.15.0 behind `csiaddons.create` (all twelve upstream CRDs, since the stock manager starts a controller per kind); sidecar wiring is Phase 1 |
+| P0-5 | csi-addons upstream: the `VolumeReplication` and `VolumeReplicationClass` CRDs (`replication.storage.openshift.io/v1alpha1`), the kubernetes-csi-addons controller-manager image, and the csi-addons sidecar image                                                               | Ecosystem               | Phase 1 | Vendored in the chart at v0.15.0 behind `csiaddons.create` (all twelve upstream CRDs, since the stock manager starts a controller per kind); sidecar wiring is Phase 1                |
 
 Everything else the adapter needs already exists: the attach and detach calls, failover, the failback and commit pair, the relationship read, and the backlog arithmetic inside `get_replication_info`. The adapter is thin precisely because the engine is complete. What is missing is the shape Ramen can drive.
 
@@ -50,7 +51,8 @@ Everything else the adapter needs already exists: the attach and detach calls, f
 11. [Observability](#11-observability)
 12. [Testing Strategy](#12-testing-strategy)
 13. [Migration Strategy](#13-migration-strategy)
-14. [Open Questions](#14-open-questions)
+14. [VolumeGroupReplication](#14-volumegroupreplication)
+15. [Open Questions](#15-open-questions)
 
 ---
 
@@ -78,7 +80,7 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 
 **The contract this design targets.** Ramen's dr-cluster operator reconciles one `VolumeReplication` per protected PVC. It flips `spec.replicationState` between `primary` and `secondary` and waits for the driver's conditions (`Completed`, `Degraded`, `Resyncing`) to report the operation done and the relationship healthy. It reads `status.lastSyncTime` for RPO. It never calls a vendor API. The interfaces are the csi-addons specification's Replication gRPC, served by the driver, and the kubernetes-csi-addons controller-manager, which turns `VolumeReplication` objects into those RPCs through a per-driver sidecar.
 
-**The direction is already committed.** The CRD redesign excludes the four replication kinds from its model because "that subsystem is being redesigned against the CSI Addons specification, whose `VolumeReplication` and `VolumeGroupReplication` kinds already carry the per-volume and per-group replication contract that a backup tool or a DR orchestrator understands" (`crd-redesign/design-crd-model.md`, Non-Goals). This document is that redesign's first, per-volume half. The DR storage foundation gap analysis (Phase 0 and Appendix A of that document) is its requirements source.
+**The direction is already committed.** The CRD redesign excludes the four replication kinds from its model because "that subsystem is being redesigned against the CSI Addons specification, whose `VolumeReplication` and `VolumeGroupReplication` kinds already carry the per-volume and per-group replication contract that a backup tool or a DR orchestrator understands" (`crd-redesign/design-crd-model.md`, Non-Goals). This document is that redesign's replication chapter: the per-volume half in §5, and the per-group half (`VolumeGroupReplication`) in §14. The DR storage foundation gap analysis (Phase 0 and Appendix A of that document) is its requirements source.
 
 **Three facts about today's surface shape the design.**
 
@@ -102,7 +104,7 @@ A reader who stops here has the model: the engine is unchanged, the csi-addons s
 
 ### Non-Goals
 
-- **`VolumeGroupReplication`.** Continuous group promote and demote on top of consistency groups is the next design. This one is strictly per volume. The group snapshot surface (`design-consistency-groups.md`) is untouched.
+- **Global `VolumeGroupReplication`.** The base group surface (one VRG, one vendor's PVCs, one `VolumeGroupReplication` on top of a consistency group) is specified in §14. RamenDR's newer multi-VRG "Global VGR" consensus, spanning a replication group across several applications, is out of scope (§14.8, Open Question 4). The group snapshot surface (`design-consistency-groups.md`) is untouched.
 - **VolSync and the S3 backup path.** The recurrent-immutable-snapshots DR type is a separate phase of the gap analysis and does not pass through this adapter.
 - **Synchronous replication.** The engine is asynchronous snapshot shipping, and nothing here changes that.
 - **Ramen hub components.** DRPolicy, DRPC, and hub orchestration are consumers of this contract, not part of it.
@@ -304,16 +306,16 @@ The consolidation direction (§13) is that the annotation path becomes a compati
 
 Every endpoint is scoped as today: volume-scoped under `/api/v2/clusters/{c}/storage-pools/{p}/volumes/{v}`, cluster-scoped under `/api/v2/clusters/{c}/replication`.
 
-| Method | Endpoint                                                | Notes                                                                                                                                                                                                                       |
-|--------|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `PUT`  | `.../volumes/{v}` (`replication_policy_id`)             | Existing attach and detach. P0-2 makes both idempotent: same-policy attach and non-attached detach return success.                                                                                                          |
-| `GET`  | `.../volumes/{v}/replication/status`                    | **New (P0-1).** The typed steady-state status of §6.1. Never 404s for a volume that exists; `state: not_replicating, role: none` is a valid answer.                                                                         |
-| `POST` | `.../volumes/{v}/replication/failover` (+ planned gate) | Existing; the one promote, both forms. Gains a planned form that is refused unless the peer holds every acknowledged write (a completed demote). Idempotent by NQN probe.                                                   |
-| `POST` | `.../volumes/{v}/replication/demote`                    | **New (P0-3).** Quiesce, final ship, confirm on peer, fence. Idempotent: demoting a demoted volume returns success.                                                                                                         |
-| `POST` | `.../volumes/{v}/replication/failback`                  | Existing. Resync (direction reversal, delta-seeded).                                                                                                                                                                        |
-| `POST` | `.../volumes/{v}/replication/commit`                    | Existing, unchanged, and NOT part of this contract: it stays behind the legacy `ReplicationOps` migration path only (§13).                                                                                                  |
-| `GET`  | `.../replication/relationships/{lvol}`                  | Existing, unchanged. Cutover records only; the node redirect depends on its survive-deletion semantics.                                                                                                                     |
-| `POST` | `.../volumes/{v}/replication/cutover-proceed`           | Existing, unchanged, legacy path only: the adapter never reaches it, because the commit cutover is off this contract.                                                                                                       |
+| Method | Endpoint                                                | Notes                                                                                                                                                                     |
+|--------|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `PUT`  | `.../volumes/{v}` (`replication_policy_id`)             | Existing attach and detach. P0-2 makes both idempotent: same-policy attach and non-attached detach return success.                                                        |
+| `GET`  | `.../volumes/{v}/replication/status`                    | **New (P0-1).** The typed steady-state status of §6.1. Never 404s for a volume that exists; `state: not_replicating, role: none` is a valid answer.                       |
+| `POST` | `.../volumes/{v}/replication/failover` (+ planned gate) | Existing; the one promote, both forms. Gains a planned form that is refused unless the peer holds every acknowledged write (a completed demote). Idempotent by NQN probe. |
+| `POST` | `.../volumes/{v}/replication/demote`                    | **New (P0-3).** Quiesce, final ship, confirm on peer, fence. Idempotent: demoting a demoted volume returns success.                                                       |
+| `POST` | `.../volumes/{v}/replication/failback`                  | Existing. Resync (direction reversal, delta-seeded).                                                                                                                      |
+| `POST` | `.../volumes/{v}/replication/commit`                    | Existing, unchanged, and NOT part of this contract: it stays behind the legacy `ReplicationOps` migration path only (§13).                                                |
+| `GET`  | `.../replication/relationships/{lvol}`                  | Existing, unchanged. Cutover records only; the node redirect depends on its survive-deletion semantics.                                                                   |
+| `POST` | `.../volumes/{v}/replication/cutover-proceed`           | Existing, unchanged, legacy path only: the adapter never reaches it, because the commit cutover is off this contract.                                                     |
 
 The unused backend verbs the operator never calls (`start`, `stop`, `trigger`, `tasks`) are unaffected, and `start` and `stop` remain the policy-less legacy path.
 
@@ -347,7 +349,7 @@ The kubernetes-csi-addons controller-manager owns events on `VolumeReplication` 
 Exported by the control plane's existing v2 `Collector`-pattern exporter (`simplyblock_web/api/v2/metrics.py`), rebuilt from FDB on every scrape like every other series in that file. Labeled `lvol`/`lvol_name`/`pvc_name`/`pool`/`pool_name` (not the bare `volume` this section originally specified: the exporter's existing lvol-scoped metrics already use `lvol`/`lvol_name`, and joining the new series against them needs a shared label name) plus `policy`/`policy_name`/`peer_cluster`:
 
 | Metric                                      | Description                                                                     |
-|----------------------------------------------|---------------------------------------------------------------------------------|
+|---------------------------------------------|---------------------------------------------------------------------------------|
 | `simplyblock_replication_lag_seconds`       | Now minus the newest fully replicated snapshot's creation time.                 |
 | `simplyblock_replication_backlog_bytes`     | `outstanding_bytes`: the queued-but-unshipped snapshot sizes.                   |
 | `simplyblock_replication_last_sync_seconds` | Duration of the last shipping cycle.                                            |
@@ -366,7 +368,7 @@ Values are computed by `lvol_controller.get_replication_info_bulk`, a bulk-frien
 Full scenario matrix and coverage status: [`tests/test-plan-csi-addons-replication.md`](../tests/test-plan-csi-addons-replication.md)
 
 - **Unit (driver):** each verb against a mock control plane: the idempotency table (repeat enable, repeat disable, repeat promote), the refusal paths (different-policy enable, lagging planned promote, disable during cutover), the condition derivation from every status-read state, and handle parsing failures.
-- **Unit (operator):** the `PVCAnnotationWatcher` skip when a `VolumeReplication` exists.
+- **Unit (operator):** the `PVCAnnotationWatcher` skip when a `VolumeReplication` exists; and, for §14, `VolumeGroupReplicationReconciler`'s fan-in aggregation (group `Completed`/`Degraded`/`Resyncing` from the members, oldest-member `lastSyncTime`) and the admission webhook's membership check, against a fake client.
 - **Integration:** the csi-addons sidecar and controller-manager against the driver with a mock backend under envtest or kind: a `VolumeReplication` flipped `primary` to `secondary` and back walks the verbs in order and lands the conditions.
 - **E2E (two live clusters):** the Ramen-shaped lifecycle without Ramen: enable on the source, write data, and verify `lastSyncTime` advances; forced promote on the DR side, verifying the clone serves with the source fenced; and resync back with a planned swap (demote then promote), verifying zero loss with a hashed writer. Then the same driven by an actual Ramen VRG in async mode, which is Phase 2's acceptance gate.
 
@@ -385,10 +387,110 @@ Three replication control surfaces exist today: the operator's kinds, the stale 
 
 ---
 
-## 14. Open Questions
+## 14. VolumeGroupReplication
 
-| # | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owner                   |
-|---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
-| 1 | **Demote semantics for the application.** The P0-3 demote fences the volume (ANA inaccessible) after the final flush, and with convergence folded into the verb it is now the only place a planned swap can stall. This is also the one verb the planned promote's lossless guarantee entirely depends on (§5.2): a planned promote is refused unless a completed demote already fenced the source and confirmed the final delta landed, so an unresolved failure mode here is an unresolved gap in the whole "zero loss" claim. Ramen relocation unmounts the workload first, so the fence is ordinarily unopposed, but that is Ramen's choreography, not a guarantee the driver can rely on: a stuck termination, a stale mount that never released, or a demote invoked outside Ramen's normal flow can all leave writes still arriving when quiesce fires. Confirm the verb's behavior when writes are still in flight at quiesce (block versus fail), whether the converge phase has its own budget separate from the quiesced flush, and whether a timeout in either phase must abort back to serving primary or leave the volume fenced with no automatic recovery. | Backend team            |
-| 2 | **Per-volume policy granularity.** A `VolumeReplicationClass` names one policy, and today one policy implies one target and cadence for all its volumes. Confirm one class per (policy, cadence) is an acceptable authoring model for Ramen's `replicationClassSelector`, or whether per-volume interval overrides are needed. | Operator / Backend team |
-| 3 | ~~**Avoiding the clone on day-one protection.**~~ **Resolved:** `POST .../replication/failover?planned=true`'s no-demote branch now checks `lvol_controller.replication_source_online` (the source's own storage-node status) before falling through to `FAILED_PRECONDITION` -- an online source is a no-op (§5.2), so a healthy volume's first-ever `PromoteVolume` no longer materializes a clone. The remaining residual: a source that dies within the last health-check interval still briefly reads online, so one reconcile can treat a genuine disaster as a no-op before the node's status catches up and the controller retries -- bounded by the health-check detection window, not open-ended. | Backend team |
+`VolumeGroupReplication` extends this adapter from one volume to a consistency group. It is the group-level sibling of the `VolumeReplication` surface (§5): the same csi-addons `replication.storage.openshift.io` API group, the same `replicationState` intent, and the same gRPC verbs (§5.2), fanned out to every member of a consistency group rather than driven per volume. This is the async **group** path the gap analysis's Phase 2 named ("`VolumeGroupReplication` on top of the CG primitive so the VRG async group path can protect and fail over multi-volume apps at one point"), and it is implemented.
+
+Ramen's `VolumeReplicationGroup` creates one `VolumeGroupReplication` when a protected application's PVCs share a `VolumeGroupReplicationClass` carrying a `ramendr.openshift.io/groupreplicationid` label, the group-level sibling of the per-volume `replicationid` label of §7.1. The reconciler and validator specified here own that object. The driver's Replication gRPC (§5) is unchanged, and no new verb is added. The end-to-end Ramen validation of this path is `design-ramen-integration.md` §6, whose test plan carries its E2E scenario as M-05.
+
+### 14.1 Upstream kinds and ownership
+
+`VolumeGroupReplication`, `VolumeGroupReplicationClass`, and `VolumeGroupReplicationContent` are upstream kubernetes-csi-addons CRDs in the same `replication.storage.openshift.io` group this design already vendors `VolumeReplication` and `VolumeReplicationClass` from (§4.1). This repository declares no Go type for them, and the reconciler and validator read and write them as `unstructured`, matching how the per-volume kinds are handled.
+
+`VolumeGroupReplication.spec` carries `replicationState` (`primary`/`secondary`/`resync`), a `source.selector` naming the member PVCs by label, a `volumeGroupReplicationClassName`, a `volumeReplicationClassName` (the per-member class the fan-out stamps on each member `VolumeReplication`), and an `external` boolean. `external: false` routes the object through the generic kubernetes-csi-addons controller-manager, which fans it out to member `VolumeReplication` objects itself. `external: true` hands it to a vendor controller. simplyblock is the `external: true`, "offloaded" case: the backend replicates below Kubernetes, so this operator performs the fan-out.
+
+`VolumeGroupReplicationReconciler` (`operator/internal/controller/volumegroupreplication_controller.go`) owns a `VolumeGroupReplication` only when both `spec.external` is `true` and `spec.volumeGroupReplicationClassName` names a `VolumeGroupReplicationClass` whose `spec.provisioner` is `csi.simplyblock.io`. Every other object (non-external, or a foreign provisioner's class) is skipped, because `replication.storage.openshift.io` is a shared group and the generic controller-manager or another vendor may be the right owner.
+
+### 14.2 No new gRPC contract
+
+Group promote, demote, and resync are the same three verbs of §5.2 (`PromoteVolume`, `DemoteVolume`, `ResyncVolume`) fanned out to every member, not a fourth verb on the driver. Each member is an ordinary `VolumeReplication` object, reconciled by the already-shipped kubernetes-csi-addons controller-manager exactly as it reconciles any Ramen-created per-volume object (§5). `external: true` changes who performs the fan-out (this operator, rather than the generic manager), not what the fan-out does.
+
+### 14.3 The reconciler
+
+`VolumeGroupReplicationReconciler` reconciles each owned `VolumeGroupReplication` on a 60-second resync (30 seconds on a transient error):
+
+1. **Resolve membership.** Read `spec.source.selector` and list the matching PVCs in the object's namespace. Every matched PVC must carry the same non-empty `storage.simplyblock.io/consistency-group` label; a selector that matches an unlabeled PVC, spans two group values, or matches nothing is a membership mismatch. Map each PVC through its PV handle (`{clusterID}:{poolID}:{volumeID}`) to a backend lvol, read the consistency group named by the label, and require the selected lvol set to equal the group's current backend membership exactly, the same invariant `design-consistency-groups.md` §9.2 established for `VolumeGroupSnapshot`. A selected PVC that is not yet bound makes membership undeterminable, which requeues quietly rather than failing.
+2. **Fan out.** For each member PVC, ensure a per-volume `VolumeReplication` exists, owned by the group, named `<group>-<pvc>`, with `spec.replicationState` mirroring the group's, `spec.volumeReplicationClass` set to the group's `volumeReplicationClassName`, `spec.autoResync: false`, and a `dataSource` naming the member PVC. An existing member whose `replicationState` has drifted from the group's is updated. The reconciler never calls the driver's Replication gRPC; the controller-manager drives each member.
+3. **Fan in.** Aggregate the members' `VolumeReplication.status.conditions` into the group's own. `Completed` is the conjunction (true only when at least one member exists and every member is `Completed=True`), and `Degraded` and `Resyncing` are the disjunction (one degraded or resyncing member makes the group so). `status.lastSyncTime` is the oldest of the members' `lastSyncTime`, because a group's recovery point is only as fresh as its slowest member. `status.state` mirrors `spec.replicationState` once `Completed`. `status.persistentVolumeClaimsRefList` records the resolved membership.
+
+### 14.4 Admission webhook
+
+`VolumeGroupReplicationValidator` (`operator/internal/webhook/volumegroupreplication_validator.go`) rejects, at create, a `VolumeGroupReplication` whose selector cannot resolve to one whole consistency group, so the reconciler never has to reconcile an object that could never fan out correctly. It is the sibling of `VolumeGroupSnapshotValidator` (`design-consistency-groups.md` §9.4) and makes the same two checks with the same dispositions:
+
+- **Ownership gate.** The object is validated only when `spec.external` is `true` and its class is attributed to `csi.simplyblock.io`. Every other case is admitted untouched, because `failurePolicy: fail` on a shared group means a webhook error would block foreign drivers' objects too.
+- **Label check (fail-closed).** Every selected PVC must carry the same non-empty consistency-group label. A selector that spans groups, matches an unlabeled PVC, or matches nothing is denied.
+- **Membership check (fail-open).** The selected lvol set must equal the backend group's membership. When membership cannot be determined (the backend is unreachable, or a selected PVC is not yet bound), the object is admitted and the reconciler backstops it (§14.3).
+
+### 14.5 The class and CR
+
+A `VolumeGroupReplicationClass` binds a group to this driver, and Ramen selects it by its `ramendr.openshift.io/groupreplicationid` label rather than by name:
+
+```yaml
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeGroupReplicationClass
+metadata:
+  name: simplyblock-group-async-5m
+  labels:
+    ramendr.openshift.io/groupreplicationid: simplyblock-async-5m
+spec:
+  provisioner: csi.simplyblock.io
+  parameters: {}
+```
+
+```yaml
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeGroupReplication
+metadata:
+  name: app-group
+  namespace: team-a
+spec:
+  external: true
+  replicationState: primary
+  volumeGroupReplicationClassName: simplyblock-group-async-5m
+  volumeReplicationClassName: simplyblock-async-5m
+  source:
+    selector:
+      matchLabels:
+        storage.simplyblock.io/consistency-group: app-group-cg
+```
+
+The per-member backend policy is not named on the group class. It comes from the group's `volumeReplicationClassName`, which the fan-out stamps on each member `VolumeReplication` and which resolves to a `ReplicationPolicy` exactly as a standalone `VolumeReplication` does (§7.1).
+
+### 14.6 Backend API
+
+Group replication adds no replication endpoint. The reconciler reads the consistency group to verify membership, and every promote, demote, and resync reaches the backend through the member `VolumeReplication` objects, which use the per-volume endpoints of §9. The two reads it makes:
+
+| Method | Endpoint                             | Notes                                                              |
+|--------|--------------------------------------|--------------------------------------------------------------------|
+| `GET`  | `.../consistency-group` (by name)    | Resolve the group named by the members' shared label.              |
+| `GET`  | `.../consistency-group/{id}/members` | The group's current membership, compared against the selected set. |
+
+Both are consistency-group reads owned by `design-consistency-groups.md`; this design consumes them and adds none.
+
+### 14.7 Observability
+
+`VolumeGroupReplicationReconciler` carries an `events.EventRecorder` (wired in `operator/cmd/main.go` as `volumegroupreplication-controller`) and emits on the `VolumeGroupReplication` object:
+
+| Event                                                               | Type    | Reason                     |
+|---------------------------------------------------------------------|---------|----------------------------|
+| The selector resolves to the consistency group's current membership | Normal  | `GroupReplicationVerified` |
+| The selector does not resolve to exactly one whole group            | Warning | `GroupMembershipMismatch`  |
+| At least one member reports `Degraded`, on the transition into it   | Warning | `GroupReplicationDegraded` |
+
+The per-member replication metrics of §11 already cover each group member, so the group adds no metric of its own: its aggregate state (`Completed`/`Degraded`/`Resyncing` and the oldest-member `lastSyncTime`) is derivable from the members' series.
+
+### 14.8 Scope
+
+The base case is one VRG, one storage vendor's PVCs, one `VolumeGroupReplication`. RamenDR's newer multi-VRG "Global VGR" consensus, spanning a replication group across several applications' VRGs, is out of scope (Open Question 4). `VolumeGroupReplicationContent` is unused: `Content` objects bind a group the generic controller-manager provisioned through a real CSI `GroupReplication` call, and the `external: true` fan-out never makes one (Open Question 5).
+
+---
+
+## 15. Open Questions
+
+| #   | Question                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owner                   |
+|-----|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
+| 1   | **Demote semantics for the application.** The P0-3 demote fences the volume (ANA inaccessible) after the final flush, and with convergence folded into the verb it is now the only place a planned swap can stall. This is also the one verb the planned promote's lossless guarantee entirely depends on (§5.2): a planned promote is refused unless a completed demote already fenced the source and confirmed the final delta landed, so an unresolved failure mode here is an unresolved gap in the whole "zero loss" claim. Ramen relocation unmounts the workload first, so the fence is ordinarily unopposed, but that is Ramen's choreography, not a guarantee the driver can rely on: a stuck termination, a stale mount that never released, or a demote invoked outside Ramen's normal flow can all leave writes still arriving when quiesce fires. Confirm the verb's behavior when writes are still in flight at quiesce (block versus fail), whether the converge phase has its own budget separate from the quiesced flush, and whether a timeout in either phase must abort back to serving primary or leave the volume fenced with no automatic recovery. | Backend team            |
+| 2   | **Per-volume policy granularity.** A `VolumeReplicationClass` names one policy, and today one policy implies one target and cadence for all its volumes. Confirm one class per (policy, cadence) is an acceptable authoring model for Ramen's `replicationClassSelector`, or whether per-volume interval overrides are needed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Operator / Backend team |
+| 3   | ~~**Avoiding the clone on day-one protection.**~~ **Resolved:** `POST .../replication/failover?planned=true`'s no-demote branch now checks `lvol_controller.replication_source_online` (the source's own storage-node status) before falling through to `FAILED_PRECONDITION` -- an online source is a no-op (§5.2), so a healthy volume's first-ever `PromoteVolume` no longer materializes a clone. The remaining residual: a source that dies within the last health-check interval still briefly reads online, so one reconcile can treat a genuine disaster as a no-op before the node's status catches up and the controller retries -- bounded by the health-check detection window, not open-ended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Backend team            |
+| 4   | **Is Global VGR needed (§14.8).** The `VolumeGroupReplication` reconciler covers the base case: one VRG, one vendor's PVCs, one group. Confirm whether any planned simplyblock deployment spans a replication group across more than one application's VRG before treating RamenDR's multi-VRG "Global VGR" consensus as work this design should also specify.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Operator team           |
+| 5   | **`VolumeGroupReplicationContent`'s exact contract (§14.8).** The shipped reconciler writes nothing to it: `Content` objects bind a group the generic (non-external) controller-manager provisioned through a real CSI `GroupReplication` call, and the `external: true` path never makes one, fanning out to per-member `VolumeReplication` objects instead (§14.2). If a future Ramen version or tooling expects a `Content` object to exist even under `external: true`, revisit this.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Operator team           |

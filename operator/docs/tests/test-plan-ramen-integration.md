@@ -11,7 +11,7 @@ Scope: two things this document specifies. First, whether `VolumeGroupReplicatio
 
 ### VolumeGroupReplicationReconciler and its admission webhook (design §4)
 
-Implemented in `volumegroupreplication_controller.go` and `volumegroupreplication_validator.go`, covered by `volumegroupreplication_controller_unit_test.go` and `volumegroupreplication_validator_test.go`.
+Implemented in `volumegroupreplication_controller.go` and `volumegroupreplication_validator.go`, covered by `volumegroupreplication_controller_unit_test.go` and `volumegroupreplication_validator_test.go`. Since the reconciler's design now lives in `design-csi-addons-replication.md` §14 (the csi-addons group surface), these same scenarios are mirrored in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md) as its U-57 … U-61, and the group's live relocate as that plan's E-08.
 
 | #    | Scenario                                                                                                          | Type     | Test                                                              |
 |------|-------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|

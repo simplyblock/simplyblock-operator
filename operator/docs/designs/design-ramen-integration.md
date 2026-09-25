@@ -85,7 +85,9 @@ The exact contract Ramen's pairing requires of the two clusters' objects (the id
 
 ## 4. VolumeGroupReplication (Implemented)
 
-The gap analysis's own Phase 2 named this the piece consistency groups still owed: "Add `VolumeGroupReplication` (csi-addons) on top of the CG primitive so the VRG async group path can protect and fail over multi-volume apps at one point, not just snapshot them." `design-csi-addons-replication.md` §2 deferred it as "the next design," strictly per-volume itself. `design-consistency-groups.md` §2 deferred it too, as "future work," independent of any replication policy so that work could attach later. Neither claims it. This section is that attachment.
+The gap analysis's own Phase 2 named this the piece consistency groups still owed: "Add `VolumeGroupReplication` (csi-addons) on top of the CG primitive so the VRG async group path can protect and fail over multi-volume apps at one point, not just snapshot them." `design-consistency-groups.md` §2 deferred it as "future work," independent of any replication policy so that work could attach later. This section is that attachment.
+
+**Authoritative specification.** `design-csi-addons-replication.md` §14 now carries the csi-addons group surface as the per-group half of that document's replication chapter, beside the per-volume `VolumeReplication` surface, and §14.1 … §14.8 are the reference for the reconciler, the admission webhook, the class, the backend reads, and the events. This section keeps the Ramen-integration framing (the offloaded `external` case in §4.1, and why no new gRPC verb is needed in §4.2) and the E2E validation (§6); where the two documents describe the same reconciler, §14 is authoritative.
 
 ### 4.1 What already exists, upstream
 
