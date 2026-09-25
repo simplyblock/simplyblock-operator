@@ -30,6 +30,7 @@ var (
 	storage       = []string{"storage.k8s.io"}
 	snapshot      = []string{"snapshot.storage.k8s.io"}
 	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
+	simplyblock   = []string{"storage.simplyblock.io"}
 )
 
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
@@ -48,6 +49,23 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch"),
 		rule(storage, []string{"storageclasses"}, "get", "list", "watch"),
 		rule(core, []string{"events"}, "create", "patch"),
+		// The node reads its own export back at stage time. It never writes
+		// one: a node that could would bind an export to itself.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch"),
+	},
+	// The driver's own controller plugin, as distinct from the sidecars. It
+	// had no role until pNFS: every API-server call on that pod was a
+	// sidecar's.
+	controllerComponent: {
+		// delete, because DeleteVolume issues it: the record goes first and the
+		// operator's finalizer tears the host down before the backing volume.
+		// update, because expanding a volume records the new size on its
+		// export: the write bumps the generation, which is what tells the
+		// operator to re-assemble and grow the filesystem on the host.
+		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "update", "delete"),
+		// The status carries the backing volume's identity, which only this
+		// plugin knows, and the operator reads it back.
+		rule(simplyblock, []string{"nfsexports/status"}, "get", "update", "patch"),
 	},
 	"provisioner": {
 		rule(core, []string{"secrets"}, "get", "list"),

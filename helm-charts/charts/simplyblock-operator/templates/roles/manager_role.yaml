@@ -274,6 +274,7 @@ rules:
   - backuprestores
   - controlplaneops
   - controlplanes
+  - nfsexports
   - operatorops
   - persistentvolumeops
   - replicationops
@@ -311,6 +312,7 @@ rules:
   - clusterdeploymentconfigs/finalizers
   - controlplaneops/finalizers
   - controlplanes/finalizers
+  - nfsexports/finalizers
   - operatorops/finalizers
   - persistentvolumeops/finalizers
   - replicationops/finalizers
@@ -340,6 +342,7 @@ rules:
   - clusterdeploymentconfigs/status
   - controlplaneops/status
   - controlplanes/status
+  - nfsexports/status
   - operatorops/status
   - persistentvolumeops/status
   - replicationops/status

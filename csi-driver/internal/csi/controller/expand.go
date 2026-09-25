@@ -25,7 +25,6 @@ func (cs *Server) ControllerExpandVolume(
 	if req.GetCapacityRange() == nil {
 		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
 	}
-
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -49,6 +48,21 @@ func (cs *Server) ControllerExpandVolume(
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
 		return nil, classifyControllerExpandVolumeError(err)
 	}
+
+	// An export serving this volume has a filesystem on top of it that only
+	// its host can grow, so the record carries the new size and the operator
+	// does the rest. A volume with no export finds none and is unaffected.
+	if err := growExportAfter(ctx, cs.exports, volumeID, capacityBytes); err != nil {
+		return nil, err
+	}
+
+	// Every volume has node-side work. A block volume's node grows its
+	// filesystem; a pNFS client has none to grow but has to re-take its
+	// layout, because growing the namespace invalidated the block device it
+	// had cached. This flag is the only thing that gets NodeExpandVolume
+	// called, and without the call a pod's next write resolves the device in
+	// its own mount namespace, fails, and routes through the metadata server
+	// from then on.
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         capacityBytes,
 		NodeExpansionRequired: true,

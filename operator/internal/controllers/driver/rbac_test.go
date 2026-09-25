@@ -210,3 +210,99 @@ func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
 		}
 	}
 }
+
+// The pNFS record is a custom resource, and neither plugin could touch
+// storage.simplyblock.io before this design: their roles covered PVs, PVCs,
+// snapshots, nodes, and attachments. The controller plugin creates the record
+// during provisioning, and the node plugin reads its own back at stage time
+// (design-pnfs-rwx.md §9.3).
+func TestPluginRolesCarryTheExportRules(t *testing.T) {
+	wanted := map[string]map[string][]string{
+		controllerComponent: {
+			"nfsexports":        {"get", "list", "watch", "create", "update", "delete"},
+			"nfsexports/status": {"get", "update", "patch"},
+		},
+		nodeComponent: {
+			"nfsexports": {"get", "list", "watch"},
+		},
+	}
+	for component, resources := range wanted {
+		for resource, verbs := range resources {
+			found := false
+			for _, r := range clusterRoleRules[component] {
+				if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+					!slices.Contains(r.Resources, resource) {
+					continue
+				}
+				found = true
+				if !slices.Equal(r.Verbs, verbs) {
+					t.Errorf("%s rule for %s has verbs %v, want %v", component, resource, r.Verbs, verbs)
+				}
+			}
+			if !found {
+				t.Errorf("the %s role carries no rule for %s", component, resource)
+			}
+		}
+	}
+}
+
+// The node plugin reads exports and never writes them. It is the operator that
+// drives assembly, over the link, and a node that could write its own record
+// could bind an export to itself.
+func TestNodeRoleCannotWriteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[nodeComponent] {
+		if !slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		for _, v := range r.Verbs {
+			switch v {
+			case "create", "update", "patch", "delete", "deletecollection":
+				t.Errorf("the node role grants %q on nfsexports", v)
+			}
+		}
+	}
+}
+
+// The controller plugin deletes an export record: DeleteVolume calls
+// deleteExportFor, which issues the delete and then waits for the operator's
+// finalizer to finish tearing the export down on its host.
+//
+// Without the verb the delete is refused, DeleteVolume returns Internal
+// forever, and the PersistentVolume parks in Released with the export, the
+// host mount, and the backing lvol all still live. Nothing converges: the
+// provisioner retries a call that cannot succeed.
+func TestControllerRoleCanDeleteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "delete") {
+			return
+		}
+	}
+	t.Error("the controller role cannot delete nfsexports, so DeleteVolume can never converge")
+}
+
+// Regression: expanding a pNFS volume records the new size on the export,
+// which bumps its generation and is what tells the operator to re-assemble and
+// grow the filesystem. That is an update, and the controller could create,
+// list, and delete an NFSExport but not update one:
+//
+//	nfsexports.storage.simplyblock.io "nfsexp-030640ab-..." is forbidden:
+//	User "system:serviceaccount:simplyblock:simplyblock-csi-controller-sa"
+//	cannot update resource "nfsexports"
+//
+// Every ControllerExpandVolume failed, so no pNFS volume could grow at all.
+func TestControllerCanRecordANewSizeOnAnExport(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "update") {
+			return
+		}
+	}
+	t.Error("the controller cannot update nfsexports, so expanding a pNFS volume always fails")
+}

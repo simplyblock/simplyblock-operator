@@ -72,6 +72,7 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 		volumes = append(volumes, *v)
 	}
 	volumes = append(volumes, linkVolumes()...)
+	volumes = append(volumes, pnfsVolumes(d)...)
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
@@ -164,7 +165,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 			{Name: "guardian-state", MountPath: "/var/run/simplyblock/guardian"},
 			{Name: "stack-records", MountPath: stackRecordsMountDir},
-		}, slices.Concat(tlsVolumeMount(d), linkVolumeMounts())...),
+		}, slices.Concat(tlsVolumeMount(d), linkVolumeMounts(), pnfsVolumeMounts(d))...),
 	}
 }
 
