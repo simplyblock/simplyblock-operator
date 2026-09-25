@@ -434,3 +434,56 @@ func TestEveryNodeGetsADistinctName(t *testing.T) {
 		}
 	}
 }
+
+// The host OS is spent the same way the environment is, and on the one flag it
+// decides: Ubuntu keeps the NVMe-oF modules in a package the base install does
+// not carry, so a storage node on one has to install it and a node on anything
+// else must not be told to try.
+func TestTheHostOSResolvesIntoUbuntuHost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		hostOS *simplyblockv1alpha2.HostOSSpec
+		want   bool
+	}{
+		{"ubuntu", &simplyblockv1alpha2.HostOSSpec{
+			Distro: simplyblockv1alpha2.DistroUbuntu,
+			Family: simplyblockv1alpha2.HostOSFamilyDebian,
+		}, true},
+		// Debian is the family and not the distribution, and the package is
+		// Ubuntu's: a Debian host has the modules already.
+		{"debian", &simplyblockv1alpha2.HostOSSpec{
+			Distro: "debian",
+			Family: simplyblockv1alpha2.HostOSFamilyDebian,
+		}, false},
+		{"rocky", &simplyblockv1alpha2.HostOSSpec{
+			Distro: "rocky",
+			Family: simplyblockv1alpha2.HostOSFamilyRedHat,
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.HostOS = tc.hostOS
+			})
+
+			workload := reconcilerFor(t).buildWorkload(config)
+			if workload.UbuntuHost == nil {
+				t.Fatalf("a document stating %s left ubuntuHost unset", tc.hostOS.Distro)
+			}
+			if *workload.UbuntuHost != tc.want {
+				t.Errorf("a document stating %s set ubuntuHost to %v, want %v",
+					tc.hostOS.Distro, *workload.UbuntuHost, tc.want)
+			}
+		})
+	}
+}
+
+// A document that states no host OS states nothing about ubuntuHost either. It
+// is not the same as stating a host that is not Ubuntu: the cluster falls back
+// to its own default, which is what a hand-written cluster gets, and a reviewer
+// who knows better can still set it.
+func TestADocumentWithNoHostOSLeavesUbuntuHostUnset(t *testing.T) {
+	workload := reconcilerFor(t).buildWorkload(aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
+	if workload.UbuntuHost != nil {
+		t.Errorf("ubuntuHost is %v with no host OS stated, want unset", *workload.UbuntuHost)
+	}
+}

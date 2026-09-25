@@ -265,12 +265,26 @@ capability on, which is the class
 and `disableXyz` rule, alongside `ubuntuHost` and `openShiftCluster`.
 
 **`spec.environment` is a shorthand, and the expansion is where it is spent.** A
-distribution decides whether the kubelet is reconfigured, whether CPU topology is
-read, and which host assumptions hold, which
-[`design-storagenode.md`](design-storagenode.md) §5.1 carries as
-`enableKubeletConfiguration`, `enableCpuTopology`, `ubuntuHost`, and
-`openShiftCluster` on each node. Naming `OpenShift` once decides all four, and
-`CreatingNodes` stamps them onto every `StorageNode` it creates (§4.2).
+distribution decides whether the kubelet is reconfigured and whether CPU topology
+is read, which [`design-storagenode.md`](design-storagenode.md) §5.1 carries as
+`enableKubeletConfiguration`, `enableCpuTopology`, and `openShiftCluster` on the
+cluster. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
+them onto every `StorageNode` it creates (§4.2).
+
+**`spec.hostOS` is the other half of the same question, and it is a separate
+field because it has a separate answer.** The distribution decides what
+Kubernetes does to a machine; the host OS decides what the machine itself
+offers. A fleet on OpenShift runs Red Hat Enterprise Linux CoreOS and a fleet on
+K3s runs whatever its administrator installed, so neither can be read off the
+other. It carries the os-release `distro` and the packaging `family` that places
+it, and the expansion spends the distro on
+`StorageCluster.spec.storageNodes.ubuntuHost`: Ubuntu keeps the NVMe-oF modules
+in `linux-modules-extra` rather than in the base install, so a storage node on
+one installs the package for its running kernel before it starts.
+
+A document that states no `hostOS` states nothing about `ubuntuHost` either, and
+that is not the same as stating a host that is not Ubuntu. The cluster then
+falls back to its own default, which is what a hand-written cluster gets.
 
 That is the same relationship the cluster's sizing has, and it is what keeps the
 document ephemeral: the nodes carry the resolved flags and the sizing they were
@@ -777,6 +791,7 @@ kind exists for.
 | Each node's available NVMe devices                    | Candidate devices, by PCI address (§8.2)                    |
 | Each node's available block devices, where enabled    | Candidate devices, by path (§8.2)                           |
 | Node labels, annotations, and cluster-scoped services | `spec.environment`, from the markers a distribution leaves  |
+| Each node's `/etc/os-release` and `uname`             | `spec.hostOS`, when every worker agrees                     |
 | `StorageNode` objects in the namespace                | Which workers and devices are already taken                 |
 
 **Discovery reads the cluster it runs in and nothing else.** What a worker has
@@ -798,6 +813,16 @@ on nodes, the services and API groups only it registers, and the node images it
 boots. Discovery reads them together and writes the distribution it concluded,
 which is what makes the field a finding a reviewer corrects rather than a
 question a reviewer answers. §3.1 is what the answer then buys.
+
+**`spec.hostOS` is read the same way and stated only when the fleet agrees.**
+Each probe reads its own host's `os-release`, which is on the worker's root
+filesystem rather than in the trees the rest of the inventory comes from, and
+the run states what every worker reported. One document becomes one cluster,
+which runs one storage-node DaemonSet, which carries one host OS for every
+worker it schedules, so a fleet whose workers run different distributions has no
+answer to state: the run states none and writes an event naming which worker
+runs what. The same is true of a fleet whose `os-release` nothing could read,
+which on a probe means its host's root filesystem was not mounted into it.
 
 It also means two documents written against one Kubernetes cluster agree on it
 without anybody coordinating, since both runs read the same evidence.
@@ -1080,7 +1105,8 @@ onto it that had to discover that field by field would discover it by failing.
 renderer reads an unset flag as skipping the configuration and every OpenShift
 deployment this product has shipped configures it. `ubuntuHost` is not in the
 table: it describes the worker's host OS rather than the distribution running on
-it, so it stays a value a deployment states.
+it, so it is `spec.hostOS`'s to decide (§3.1), which a discovery run fills in
+from what the probes read.
 
 ---
 
@@ -1103,6 +1129,60 @@ const (
 	ClusterDeploymentConfigPhaseExpanded  ClusterDeploymentConfigPhase = "Expanded"
 	ClusterDeploymentConfigPhaseFailed    ClusterDeploymentConfigPhase = "Failed"
 )
+
+// HostOSFamily is the packaging tradition a Linux distribution belongs to.
+//
+// It is the coarse half of what a host OS is, and the half most decisions are
+// actually about: what differs between Ubuntu and Debian is rarely what a
+// storage node needs, and what differs between Ubuntu and Rocky always is.
+// There is no member for a host with no package manager: Talos and Flatcar are
+// not a family with no name, they are machines where the question does not
+// arise, and a document describing one leaves the family unstated.
+//
+// +kubebuilder:validation:Enum=Debian;RedHat;SUSE;Alpine;Arch
+type HostOSFamily string
+
+const (
+	HostOSFamilyDebian HostOSFamily = "Debian"
+	HostOSFamilyRedHat HostOSFamily = "RedHat"
+	HostOSFamilySUSE   HostOSFamily = "SUSE"
+	HostOSFamilyAlpine HostOSFamily = "Alpine"
+	HostOSFamilyArch   HostOSFamily = "Arch"
+)
+
+// DistroUbuntu is the one distribution the expansion decides anything by.
+//
+// Ubuntu keeps the NVMe-oF modules in a package the base install does not
+// carry, so a storage node on one installs linux-modules-extra for its kernel
+// before it starts and a node on anything else does not. That is what
+// StorageCluster.spec.storageNodes.ubuntuHost states, and stating it is the
+// whole of what spec.hostOS.distro is spent on.
+const DistroUbuntu = "ubuntu"
+
+// HostOSSpec is the operating system a deployment's workers run.
+//
+// It is a fact about the machines rather than about Kubernetes, which is why it
+// is stated here and not derived from spec.environment: a fleet on OpenShift
+// runs Red Hat Enterprise Linux CoreOS, and a fleet on K3s runs whatever its
+// administrator installed. A discovery run fills it in from what the probes
+// read, and fills it in only when every worker agrees, so a document that
+// states one is a document whose fleet is uniform.
+type HostOSSpec struct {
+	// Distro is the distribution's os-release ID, lowercase and verbatim:
+	// `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Distro string `json:"distro,omitempty"`
+
+	// Family is the packaging tradition Distro belongs to. A discovery run
+	// concludes it from the distribution itself, or from the distributions its
+	// os-release says it is built on, which is what places a derivative this
+	// product has never heard of. It is left unstated for a host with no
+	// package manager.
+	// +optional
+	Family HostOSFamily `json:"family,omitempty"`
+}
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
 // +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating
@@ -1356,10 +1436,19 @@ type ClusterDeploymentConfigSpec struct {
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
-	// enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
-	// the document produces, after which nothing reads it again.
+	// enableCpuTopology, and openShiftCluster on the cluster the document
+	// produces, after which nothing reads it again. The worker's host OS is not
+	// among them and is stated in hostOS, because a distribution decides what
+	// Kubernetes does to a machine and not which packages the machine has.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system the workers run, which decides what the
+	// host itself offers rather than what Kubernetes does to it. The expansion
+	// spends the distro on StorageCluster.spec.storageNodes.ubuntuHost and
+	// carries the family for the reviewer reading the document.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
 	// EdgeCluster states that this is an edge deployment. An edge deployment
 	// differs from a datacenter one in topology and scale rather than in kind,

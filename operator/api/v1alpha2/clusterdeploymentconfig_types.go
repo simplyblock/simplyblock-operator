@@ -92,6 +92,60 @@ const (
 	KubernetesEnvironmentTalos     KubernetesEnvironment = "Talos"
 )
 
+// HostOSFamily is the packaging tradition a Linux distribution belongs to.
+//
+// It is the coarse half of what a host OS is, and the half most decisions are
+// actually about: what differs between Ubuntu and Debian is rarely what a
+// storage node needs, and what differs between Ubuntu and Rocky always is.
+// There is no member for a host with no package manager: Talos and Flatcar are
+// not a family with no name, they are machines where the question does not
+// arise, and a document describing one leaves the family unstated.
+//
+// +kubebuilder:validation:Enum=Debian;RedHat;SUSE;Alpine;Arch
+type HostOSFamily string
+
+const (
+	HostOSFamilyDebian HostOSFamily = "Debian"
+	HostOSFamilyRedHat HostOSFamily = "RedHat"
+	HostOSFamilySUSE   HostOSFamily = "SUSE"
+	HostOSFamilyAlpine HostOSFamily = "Alpine"
+	HostOSFamilyArch   HostOSFamily = "Arch"
+)
+
+// DistroUbuntu is the one distribution the expansion decides anything by.
+//
+// Ubuntu keeps the NVMe-oF modules in a package the base install does not
+// carry, so a storage node on one installs linux-modules-extra for its kernel
+// before it starts and a node on anything else does not. That is what
+// StorageCluster.spec.storageNodes.ubuntuHost states, and stating it is the
+// whole of what spec.hostOS.distro is spent on.
+const DistroUbuntu = "ubuntu"
+
+// HostOSSpec is the operating system a deployment's workers run.
+//
+// It is a fact about the machines rather than about Kubernetes, which is why it
+// is stated here and not derived from spec.environment: a fleet on OpenShift
+// runs Red Hat Enterprise Linux CoreOS, and a fleet on K3s runs whatever its
+// administrator installed. A discovery run fills it in from what the probes
+// read, and fills it in only when every worker agrees, so a document that
+// states one is a document whose fleet is uniform.
+type HostOSSpec struct {
+	// Distro is the distribution's os-release ID, lowercase and verbatim:
+	// `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Distro string `json:"distro,omitempty"`
+
+	// Family is the packaging tradition Distro belongs to. A discovery run
+	// concludes it from the distribution itself, or from the distributions its
+	// os-release says it is built on, which is what places a derivative this
+	// product has never heard of. It is left unstated for a host with no
+	// package manager.
+	// +optional
+	Family HostOSFamily `json:"family,omitempty"`
+}
+
 // DeviceSelection is the explicit list of storage devices a group's workers hand
 // to simplyblock. It carries no filter of any kind: a document whose meaning
 // depends on what the hardware turns out to be is not a document a reviewer can
@@ -466,10 +520,19 @@ type ClusterDeploymentConfigSpec struct {
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
-	// enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
-	// the document produces, after which nothing reads it again.
+	// enableCpuTopology, and openShiftCluster on the cluster the document
+	// produces, after which nothing reads it again. The worker's host OS is not
+	// among them and is stated in hostOS, because a distribution decides what
+	// Kubernetes does to a machine and not which packages the machine has.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system the workers run, which decides what the
+	// host itself offers rather than what Kubernetes does to it. The expansion
+	// spends the distro on StorageCluster.spec.storageNodes.ubuntuHost and
+	// carries the family for the reviewer reading the document.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
 	// EdgeCluster states that this is an edge deployment. An edge deployment
 	// differs from a datacenter one in topology and scale rather than in kind,

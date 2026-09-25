@@ -245,28 +245,48 @@ hole in the gate rather than a convenience.
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #         | Scenario                                                                                                                     | Type     | Test |
-|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-116     | `environment: OpenShift`: every node gets the four flags that distribution implies                                           | Positive | —    |
-| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —    |
-| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —    |
-| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —    |
-| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —    |
-| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —    |
-| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —    |
-| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —    |
-| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —    |
-| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —    |
-| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —    |
-| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —    |
-| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —    |
-| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —    |
-| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —    |
-| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —    |
+| #         | Scenario                                                                                                                     | Type     | Test                                                          |
+|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------|
+| U-116     | `environment: OpenShift`: every node gets the three flags that distribution implies                                          | Positive | —                                                             |
+| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —                                                             |
+| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —                                                             |
+| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —                                                             |
+| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —                                                             |
+| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —                                                             |
+| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —                                                             |
+| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —                                                             |
+| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —                                                             |
+| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —                                                             |
+| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —                                                             |
+| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —                                                             |
+| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —                                                             |
+| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —                                                             |
+| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —                                                             |
+| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —                                                             |
+| U-187     | `hostOS.distro: ubuntu`: the cluster gets `ubuntuHost` set                                                                   | Positive | `TestTheHostOSResolvesIntoUbuntuHost`                         |
+| U-188     | `hostOS.distro: rocky`: the cluster gets `ubuntuHost` unset, not absent                                                      | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                         |
+| U-189     | `hostOS.distro: debian`: the family is Debian and `ubuntuHost` is still false                                                | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                         |
+| U-190     | `hostOS` absent: `ubuntuHost` is left alone and the cluster's own default decides                                            | Boundary | `TestADocumentWithNoHostOSLeavesUbuntuHostUnset`              |
+| U-191     | A fleet whose workers all report one distribution: the draft states it                                                       | Positive | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                  |
+| U-192     | A fleet running two distributions: the draft states none and the event names which worker runs what                          | Negative | `TestHostOSForRefusesToStateOneForAFleetThatDisagrees`        |
+| U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                            | Boundary | `TestHostOSForRefusesToStateOneNobodyRead`                    |
+| U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                       | Positive | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot` |
+| U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`              |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
 and one that adds nothing when there is nothing to add.
+
+`U-187` through `U-190` are the four halves of one decision, and the fourth is
+the one worth stating: a document that says nothing about the host OS is not a
+document saying the host is not Ubuntu. The first leaves the cluster's default
+to decide and the second overrides it, and a test that only covered Ubuntu would
+not tell them apart.
+
+`U-192` and `U-193` are why the conclusion is allowed to be nothing. One document
+becomes one storage-node DaemonSet carrying one host OS, so a fleet that
+disagrees has no answer to state, and averaging one out of the majority would
+hand every minority worker a flag read off a machine that is not it.
 
 `U-131` is what makes design §12's second question a non-question. Two documents
 written against one Kubernetes cluster read the same evidence, so they agree on
@@ -561,11 +581,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 137       | 4       | 133         | 9         |
+| Unit        | 146       | 13      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **207**   | **7**   | **200**     | **12**    |
+| **Total**   | **216**   | **16**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

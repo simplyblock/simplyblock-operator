@@ -993,8 +993,10 @@ spec:
                 description: |-
                   Environment is the Kubernetes distribution this deployment targets. It is a
                   shorthand the expansion spends: it sets enableKubeletConfiguration,
-                  enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
-                  the document produces, after which nothing reads it again.
+                  enableCpuTopology, and openShiftCluster on the cluster the document
+                  produces, after which nothing reads it again. The worker's host OS is not
+                  among them and is stated in hostOS, because a distribution decides what
+                  Kubernetes does to a machine and not which packages the machine has.
                 enum:
                 - Vanilla
                 - OpenShift
@@ -1002,6 +1004,35 @@ spec:
                 - K3s
                 - Talos
                 type: string
+              hostOS:
+                description: |-
+                  HostOS is the operating system the workers run, which decides what the
+                  host itself offers rather than what Kubernetes does to it. The expansion
+                  spends the distro on StorageCluster.spec.storageNodes.ubuntuHost and
+                  carries the family for the reviewer reading the document.
+                properties:
+                  distro:
+                    description: |-
+                      Distro is the distribution's os-release ID, lowercase and verbatim:
+                      `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+                    maxLength: 63
+                    pattern: ^[a-z0-9][a-z0-9._-]*$
+                    type: string
+                  family:
+                    description: |-
+                      Family is the packaging tradition Distro belongs to. A discovery run
+                      concludes it from the distribution itself, or from the distributions its
+                      os-release says it is built on, which is what places a derivative this
+                      product has never heard of. It is left unstated for a host with no
+                      package manager.
+                    enum:
+                    - Debian
+                    - RedHat
+                    - SUSE
+                    - Alpine
+                    - Arch
+                    type: string
+                type: object
               images:
                 description: |-
                   Images are the container images this deployment pins. Unstated, each field

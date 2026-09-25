@@ -672,6 +672,16 @@ func (r *OperatorOpsReconciler) draftFor(
 	}
 
 	var notes []string
+
+	// What the probes read of the workers' own operating system, stated only
+	// when they agree: one document becomes one storage-node DaemonSet, which
+	// carries one host OS for every worker it schedules, so a fleet that
+	// disagrees has no answer to state and the note says which worker runs
+	// what.
+	hostOS, hostOSNotes := discoverypkg.HostOSFor(plan)
+	config.Spec.HostOS = hostOS
+	notes = append(notes, hostOSNotes...)
+
 	if spec.ClusterRef != "" {
 		// A growth document: the cluster's layout is settled, and naming a
 		// template beside a reference is what admission refuses.

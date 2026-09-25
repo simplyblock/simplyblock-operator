@@ -350,9 +350,19 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		}
 	}
 
+	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
+	// modules in linux-modules-extra rather than in the base install, so a
+	// storage node on one installs the package for its running kernel before it
+	// starts. Stating any other distribution states that it must not, which is
+	// not the same as a document that states no host OS at all: that one leaves
+	// the cluster's own default to decide, as a hand-written cluster does.
+	if os := config.Spec.HostOS; os != nil && os.Distro != "" {
+		workload.UbuntuHost = ptr.To(os.Distro == simplyblockv1alpha2.DistroUbuntu)
+	}
+
 	// The environment is a shorthand and this is where it is spent. Naming
-	// OpenShift once decides all four, after which nothing reads the field again
-	// and the nodes carry the resolved flags (§3.1).
+	// OpenShift once decides all three, after which nothing reads the field
+	// again and the nodes carry the resolved flags (§3.1).
 	switch config.Spec.Environment {
 	case simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
 		workload.OpenShiftCluster = ptr.To(true)

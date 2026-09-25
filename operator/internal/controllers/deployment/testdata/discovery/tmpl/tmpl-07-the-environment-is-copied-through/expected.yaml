@@ -18,6 +18,9 @@ spec:
       parityChunks: 1
     vcpuCount: 16
   environment: OpenShift
+  hostOS:
+    distro: ubuntu
+    family: Debian
   nodeSets:
   - groups:
     - devices:

@@ -1,3 +1,4 @@
+hostOS is unstated: no worker's os-release could be read, which on a probe is the host's root filesystem not having been mounted into it. The cluster this expands into states no host OS either
 enableDriveFormat is set, so every drive listed here is formatted before a storage node takes it: a drive that carries anything is not usable otherwise. This is the line to remove if any of them should be left alone.
 vcpuCount is the API's minimum of 4, because no worker reported the cores of the memory node it was placed on
 maxSubsystemCount is 30, which is the middle of the range this API accepts and not a reading: how many subsystems a node should serve follows from the workload rather than from the hardware

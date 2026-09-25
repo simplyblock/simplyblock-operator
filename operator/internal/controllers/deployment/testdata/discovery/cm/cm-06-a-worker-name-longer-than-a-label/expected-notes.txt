@@ -1,3 +1,4 @@
+hostOS is ubuntu of the Debian family, read from every worker's os-release. It is what ubuntuHost is decided by, and the one distribution that decides it is Ubuntu, whose NVMe-oF modules are in a package the base install does not carry
 enableDriveFormat is set, so every drive listed here is formatted before a storage node takes it: a drive that carries anything is not usable otherwise. This is the line to remove if any of them should be left alone.
 vcpuCount is 16, the cores of the memory node chosen on ip-10-0-1-23.eu-central-1.compute.internal.a-very-long-suffix-nobody-shortened, which is the smallest of the fleet: the control plane assumes this uniform across a cluster's nodes
 maxSubsystemCount is 30, which is the middle of the range this API accepts and not a reading: how many subsystems a node should serve follows from the workload rather than from the hardware

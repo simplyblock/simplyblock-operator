@@ -36,6 +36,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -806,5 +807,62 @@ func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
 	if !strings.Contains(got.Status.Message, "ConfigMaps") {
 		t.Errorf("the failure does not say where the reports that did arrive are: %q",
 			got.Status.Message)
+	}
+}
+
+// The draft states the operating system the probes read, so that the reviewer
+// approving it sees what the cluster will be told and the expansion has
+// something to spend on ubuntuHost.
+func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{{
+		Name: "worker-01",
+		Report: nodeprobe.Report{Node: "worker-01", HostOS: nodeprobe.HostOS{
+			Distro: "ubuntu", Family: "Debian", Version: "22.04",
+		}},
+	}}}
+
+	config, notes := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+
+	if config.Spec.HostOS == nil {
+		t.Fatalf("the draft states no host OS; the notes are %v", notes)
+	}
+	if config.Spec.HostOS.Distro != simplyblockv1alpha2.DistroUbuntu {
+		t.Errorf("the draft states the distro %q, want %q",
+			config.Spec.HostOS.Distro, simplyblockv1alpha2.DistroUbuntu)
+	}
+	if config.Spec.HostOS.Family != simplyblockv1alpha2.HostOSFamilyDebian {
+		t.Errorf("the draft states the family %q, want %q",
+			config.Spec.HostOS.Family, simplyblockv1alpha2.HostOSFamilyDebian)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "hostOS") }) {
+		t.Errorf("the notes are %v, and none of them explains the host OS", notes)
+	}
+}
+
+// A fleet whose workers run different distributions gets no host OS and a note
+// naming the split, because one document becomes one DaemonSet with one flag.
+func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	worker := func(name, distro string) discoverypkg.Worker {
+		return discoverypkg.Worker{
+			Name:   name,
+			Report: nodeprobe.Report{Node: name, HostOS: nodeprobe.HostOS{Distro: distro}},
+		}
+	}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{
+		worker("worker-01", "ubuntu"),
+		worker("worker-02", "rocky"),
+	}}
+
+	config, notes := r.draftFor(ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+
+	if config.Spec.HostOS != nil {
+		t.Fatalf("the draft states %+v for a fleet running two distributions", config.Spec.HostOS)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "worker-02") }) {
+		t.Errorf("the notes are %v, and none of them says which worker runs what", notes)
 	}
 }
