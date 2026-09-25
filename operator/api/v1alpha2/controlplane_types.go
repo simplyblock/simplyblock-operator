@@ -46,7 +46,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
 type ControlPlaneStep string
 
 const (
@@ -58,6 +58,13 @@ const (
 	// itself available, which is the step that can take the longest and the one
 	// whose deadline matters.
 	ControlPlaneStepAwaitingFoundationDB ControlPlaneStep = "AwaitingFoundationDB"
+	// ControlPlaneStepBuildingIndices runs the control plane's own index
+	// backfill against the database that just became available, and holds until
+	// it reports success. It sits here because the secondary indices belong to
+	// the database rather than to a cluster, and a deployment whose tables are
+	// still empty is the one point where every index is complete the moment it
+	// is declared ready.
+	ControlPlaneStepBuildingIndices ControlPlaneStep = "BuildingIndices"
 	// ControlPlaneStepApplyingDatastore applies the object store the control
 	// plane keeps its long-term data in.
 	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
@@ -342,7 +349,7 @@ type ControlPlaneStatus struct {
 	// Step is the position of the installation machine within Installing. The
 	// rule repeats the ControlPlaneStep enum because a marker cannot reach a
 	// field of the shared snapshot type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

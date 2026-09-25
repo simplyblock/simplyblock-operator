@@ -57,6 +57,12 @@ const (
 	// ComponentFDBExporter turns FoundationDB's status JSON into Prometheus
 	// metrics.
 	ComponentFDBExporter = "simplyblock-fdb-exporter"
+
+	// indexJobName is the one-shot backfill that declares the database's
+	// secondary indices ready. It is not a Component, because nothing watches it
+	// once it has succeeded: its readiness belongs to the installation step that
+	// waits for it rather than to the phase table.
+	indexJobName = "simplyblock-build-indices"
 )
 
 // The accounts, roles, and configuration the workloads above name.

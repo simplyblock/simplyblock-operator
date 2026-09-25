@@ -16,10 +16,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -40,7 +44,8 @@ func TestTheInstallationGraphIsALine(t *testing.T) {
 
 	want := map[installStep]installStep{
 		stepApplyingFoundationDB: stepAwaitingFoundationDB,
-		stepAwaitingFoundationDB: stepApplyingDatastore,
+		stepAwaitingFoundationDB: stepBuildingIndices,
+		stepBuildingIndices:      stepApplyingDatastore,
 		stepApplyingDatastore:    stepApplyingAPI,
 		stepApplyingAPI:          stepAwaitingAPI,
 	}
@@ -87,6 +92,7 @@ func TestTheStepEnumAndTheGraphAgree(t *testing.T) {
 	admitted := []installStep{
 		simplyblockv1alpha2.ControlPlaneStepApplyingFoundationDB,
 		simplyblockv1alpha2.ControlPlaneStepAwaitingFoundationDB,
+		simplyblockv1alpha2.ControlPlaneStepBuildingIndices,
 		simplyblockv1alpha2.ControlPlaneStepApplyingDatastore,
 		simplyblockv1alpha2.ControlPlaneStepApplyingAPI,
 		simplyblockv1alpha2.ControlPlaneStepAwaitingAPI,
@@ -267,6 +273,225 @@ func TestReadingAnAbsentFoundationDBClusterIsNotAnError(t *testing.T) {
 	}
 	if health.found {
 		t.Error("a cluster that does not exist was reported as found")
+	}
+}
+
+// anotherImage is a control plane image the spec does not name, for the Jobs
+// an earlier spec left behind.
+const anotherImage = "quay.io/simplyblock-io/simplyblock:26.2.7"
+
+// BuildingIndices creates the backfill Job and holds until Kubernetes reports it
+// complete. Holding is what makes the step worth having: an install that walked
+// past a Job still running would apply the management API while the indices it
+// reads are not declared ready yet.
+func TestBuildingIndicesHoldsUntilTheJobSucceeds(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	c := newClient(t, cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	done, held, err := r.performInstallStep(ctx, cp, stepBuildingIndices)
+	if err != nil {
+		t.Fatalf("performInstallStep: %v", err)
+	}
+	if done {
+		t.Fatal("the step finished on the pass that created the job")
+	}
+	if !strings.Contains(held, indexJobName) {
+		t.Errorf("held on %q, want it to name the job it is waiting for", held)
+	}
+
+	var job batchv1.Job
+	key := client.ObjectKey{Namespace: testNamespace, Name: indexJobName}
+	if err := c.Get(ctx, key, &job); err != nil {
+		t.Fatalf("the step held without creating the job: %v", err)
+	}
+
+	done, _, err = r.performInstallStep(ctx, cp, stepBuildingIndices)
+	if err != nil {
+		t.Fatalf("performInstallStep with the job running: %v", err)
+	}
+	if done {
+		t.Error("the step finished while the job was still running")
+	}
+
+	job.Status.Conditions = []batchv1.JobCondition{
+		{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("complete the job: %v", err)
+	}
+
+	done, _, err = r.performInstallStep(ctx, cp, stepBuildingIndices)
+	if err != nil {
+		t.Fatalf("performInstallStep with the job complete: %v", err)
+	}
+	if !done {
+		t.Error("the step held on a job that had succeeded")
+	}
+}
+
+// A backfill that has used up its attempts fails the installation. The indices
+// are complete the moment they are declared ready on a database this install
+// just created, so a Job that cannot get there is the image or the database
+// rather than the data, and retrying it on an interval would report the same
+// failure every fifteen seconds. The install stops where it is, says why on the
+// object and in an event, and waits for a change it can act on.
+func TestAFailedIndexJobFailsTheInstallation(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseInstalling
+	cp.Status.Step = statemachine.KubeSnapshot{
+		State:    string(stepBuildingIndices),
+		Deadline: ptr.To(metav1.NewTime(time.Now().Add(buildingIndicesDeadline))),
+	}
+	failed := indexJob(cp)
+	failed.Status.Conditions = []batchv1.JobCondition{
+		{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
+	}
+	c := newClient(t, cp, failed)
+	recorder := &recordingRecorder{}
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Recorder: recorder}
+
+	result, err := r.install(ctx, cp)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("the install requeues after %s, want it to stop until the Job or the spec changes",
+			result.RequeueAfter)
+	}
+	if recorder.count(InstallationFailed) != 1 {
+		t.Errorf("%d InstallationFailed events, want one saying the install stopped",
+			recorder.count(InstallationFailed))
+	}
+
+	var after simplyblockv1alpha2.ControlPlane
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cp), &after); err != nil {
+		t.Fatalf("read the control plane back: %v", err)
+	}
+	if after.Status.Phase != simplyblockv1alpha2.ControlPlanePhaseInstalling {
+		t.Errorf("phase is %q, want Installing: nothing was installed", after.Status.Phase)
+	}
+	if !strings.Contains(after.Status.Message, indexJobName) {
+		t.Errorf("status.message = %q, want it to name the Job that failed", after.Status.Message)
+	}
+	if after.Status.Step.State != string(stepBuildingIndices) {
+		t.Errorf("the step moved to %q after a failed Job", after.Status.Step.State)
+	}
+}
+
+// What the install stops on names the failure Kubernetes reported, because the
+// two ways a backfill fails ask for different things of whoever reads it. A Job
+// that used up its attempts ran and refused, and its pods say why. A Job that
+// ran out of wall clock may have produced no pod at all, and a message sending
+// its reader to logs that do not exist is a message that wastes the reader.
+func TestTheFailureMessageSeparatesARefusalFromABackfillThatNeverStarted(t *testing.T) {
+	refused := indexJob(localControlPlane())
+	refused.Status.Conditions = []batchv1.JobCondition{{
+		Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
+		Reason: batchv1.JobReasonBackoffLimitExceeded,
+	}}
+	expired := indexJob(localControlPlane())
+	expired.Status.Conditions = []batchv1.JobCondition{{
+		Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
+		Reason: batchv1.JobReasonDeadlineExceeded,
+	}}
+
+	onRefusal := indexFailureMessage(refused)
+	onExpiry := indexFailureMessage(expired)
+
+	for _, message := range []string{onRefusal, onExpiry} {
+		if !strings.Contains(message, indexJobName) {
+			t.Errorf("%q does not name the Job that failed", message)
+		}
+	}
+	if onRefusal == onExpiry {
+		t.Fatalf("both failures read %q, so the message says nothing about which happened",
+			onRefusal)
+	}
+	if !strings.Contains(onExpiry, "pod") {
+		t.Errorf("%q does not mention the pods, and whether the Job produced one is the "+
+			"first thing to look at when it ran out of time", onExpiry)
+	}
+	if !strings.Contains(onExpiry, indexJobDeadline.String()) {
+		t.Errorf("%q does not say how long the backfill was given", onExpiry)
+	}
+}
+
+// A failed Job under an image the spec no longer names is the one retry the
+// operator performs on its own: the administrator changed the thing that failed,
+// and a Job's pod template is immutable, so the Job is replaced rather than
+// patched. A failed Job under the spec's own image is left standing, since
+// running it again changes nothing.
+func TestAFailedIndexJobIsReplacedWhenTheImageChanges(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	failed := indexJob(cp)
+	failed.Spec.Template.Spec.Containers[0].Image = anotherImage
+	failed.Status.Conditions = []batchv1.JobCondition{
+		{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
+	}
+	c := newClient(t, cp, failed)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	done, _, err := r.performInstallStep(ctx, cp, stepBuildingIndices)
+	if err != nil {
+		t.Fatalf("performInstallStep: %v", err)
+	}
+	if done {
+		t.Fatal("the step finished on a failed Job")
+	}
+
+	var job batchv1.Job
+	key := client.ObjectKey{Namespace: testNamespace, Name: indexJobName}
+	switch err := c.Get(ctx, key, &job); {
+	case errors.IsNotFound(err):
+		// Removed on this pass. The next one creates it under the spec's image.
+	case err != nil:
+		t.Fatalf("read the job back: %v", err)
+	case job.Spec.Template.Spec.Containers[0].Image != testImage:
+		t.Fatalf("the failed job still runs %q, want it replaced with the spec's %q",
+			job.Spec.Template.Spec.Containers[0].Image, testImage)
+	}
+
+	if _, _, err := r.performInstallStep(ctx, cp, stepBuildingIndices); err != nil {
+		t.Fatalf("performInstallStep after the removal: %v", err)
+	}
+	if err := c.Get(ctx, key, &job); err != nil {
+		t.Fatalf("no job after the failed one was replaced: %v", err)
+	}
+	if image := job.Spec.Template.Spec.Containers[0].Image; image != testImage {
+		t.Errorf("the replacement runs %q, want the spec's %q", image, testImage)
+	}
+	if jobOutcome(&job) != jobRunning {
+		t.Error("the replacement carries the old job's failed condition")
+	}
+}
+
+// The step reads before it writes, so a job that is already there is left as it
+// is. A Job's pod template is immutable, and an apply carrying a different image
+// over a job an earlier install created would fail the step on every pass rather
+// than run the backfill.
+func TestBuildingIndicesLeavesAJobThatAlreadyExistsAlone(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	existing := indexJob(cp)
+	existing.Spec.Template.Spec.Containers[0].Image = anotherImage
+	c := newClient(t, cp, existing)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if _, _, err := r.performInstallStep(ctx, cp, stepBuildingIndices); err != nil {
+		t.Fatalf("performInstallStep: %v", err)
+	}
+
+	var job batchv1.Job
+	key := client.ObjectKey{Namespace: testNamespace, Name: indexJobName}
+	if err := c.Get(ctx, key, &job); err != nil {
+		t.Fatalf("read the job back: %v", err)
+	}
+	if image := job.Spec.Template.Spec.Containers[0].Image; image != anotherImage {
+		t.Errorf("the step rewrote the running job's image to %q", image)
 	}
 }
 

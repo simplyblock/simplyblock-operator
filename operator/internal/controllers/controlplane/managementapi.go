@@ -90,7 +90,7 @@ func sharedConfigMap(namespace string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace},
 		Data: map[string]string{
-			logLevelKey:             "DEBUG",
+			logLevelKey:             defaultLogLevel,
 			"LOG_DELETION_INTERVAL": "3d",
 		},
 	}
@@ -249,7 +249,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Resources:       webAPIResources(managed),
 		}},
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
-			tlsVolume(managed, ServingCertSecret)...),
+			tlsVolume(managed)...),
 	}
 	scheduling(managed, &spec)
 
@@ -397,7 +397,7 @@ func servicePoolDeployment(
 		DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
 		Containers:  containers(services, managed, localImage(cp), pullPolicyOf(managed)),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
-			tlsVolume(managed, ServingCertSecret)...),
+			tlsVolume(managed)...),
 	}
 	scheduling(managed, &spec)
 
@@ -465,7 +465,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 			},
 		}},
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
-			tlsVolume(managed, ServingCertSecret)...),
+			tlsVolume(managed)...),
 	}
 	scheduling(managed, &spec)
 
