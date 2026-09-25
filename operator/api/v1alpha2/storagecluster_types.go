@@ -507,6 +507,7 @@ type StorageNodesSpec struct {
 
 	// DataInterfaces are the data-plane network interfaces.
 	// +optional
+	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means

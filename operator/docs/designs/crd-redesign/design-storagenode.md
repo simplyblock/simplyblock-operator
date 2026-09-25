@@ -997,6 +997,15 @@ NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 ```
 
+**The two network-interface fields are immutable once set.** `mgmtInterface` and
+`dataInterfaces` reach the control plane as the node-add's `interface_name` and
+`data_nics`, which it spends on the node it is adding and never revisits. An edit
+afterward reconfigures no node that already joined, so the cluster would name one
+set of NICs while every node built from it ran on another. Growing the list falls
+under the same rule for the same reason: the nodes already added do not pick the
+new interface up. Once-set rather than from-creation, so a cluster created before
+its network was decided can still be given them.
+
 The whole group is Appendix C, which states it against the file it lands in
 rather than either of this document's own. It sits at
 `StorageCluster.spec.storageNodes`, which is an addition to a kind this document
@@ -2865,8 +2874,12 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	MgmtInterface string `json:"mgmtInterface,omitempty"`
 
-	// DataInterfaces are the data-plane network interfaces.
+	// DataInterfaces are the data-plane network interfaces, frozen once set for
+	// the reason MgmtInterface is: both reach the control plane as the node-add's
+	// interface_name and data_nics, which it spends on the node it is adding and
+	// never revisits.
 	// +optional
+	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means

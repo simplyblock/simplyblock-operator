@@ -957,6 +957,9 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     enableBlockFormat:
                       description: |-
                         EnableBlockFormat wipes the partition tables and filesystem signatures
@@ -1178,6 +1181,8 @@ spec:
                   x-kubernetes-validations:
                     - message: field mgmtInterface is immutable once set
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                    - message: field dataInterfaces is immutable once set
+                      rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field nodesPerSocket is immutable once set
                       rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
                     - message: field enableJournalDevice is immutable once set
