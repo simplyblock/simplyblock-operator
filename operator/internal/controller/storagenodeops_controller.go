@@ -1410,15 +1410,12 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 	}
 
-	targetByPV, err := drainTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
+	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
 	if err != nil {
-		// The reason is carried through verbatim: "no target available" and
-		// "the secondary is down" call for different operator action, and the
-		// old generic wording described neither.
-		log.Error(err, "drain: cannot determine the migration target")
-		msg := fmt.Sprintf("drain stalled: %v", err)
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget", "%s", msg)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainNoMigrationTarget", msg)
+		log.Error(err, "drain: no available target nodes for migration")
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget",
+			"drain stalled: no online storage node available as migration target for node %s", nodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainNoMigrationTarget", fmt.Sprintf("drain stalled: no online storage node available as migration target for node %s", nodeUUID))
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 

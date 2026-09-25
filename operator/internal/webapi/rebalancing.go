@@ -22,15 +22,6 @@ type StorageNodeInfo struct {
 	// node, used to filter out at-capacity nodes during primary node placement.
 	Lvols    int `json:"lvols"`
 	LvolsMax int `json:"lvols_max"`
-	// SecondaryNodeID is the node's HA replica holder: it already carries this
-	// node's lvstore, which is what makes it the migration target when the node
-	// is drained. See drainTargetNodes.
-	//
-	// There is no TertiaryNodeID here on purpose: the v2 storage-node DTO
-	// serializes secondary_node_id but not tertiary_node_id, so the field would
-	// decode as "" on every node and read like an available fallback that
-	// silently never fires.
-	SecondaryNodeID string `json:"secondary_node_id"`
 }
 
 // CapacityStat holds the capacity sub-object present on VolumeDTO.
