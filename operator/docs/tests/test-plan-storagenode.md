@@ -275,6 +275,7 @@ File: `operator/api/v1alpha1/storagenode_conversion_test.go`
 | U-302 | A failure-domain index becomes its digits on the way up                         | Positive   | `TestStorageNodeFailureDomainIndexBecomesItsDigits`        |
 | U-303 | The four per-node fields that reach nothing survive the round trip              | Boundary   | `TestStorageNodeDeadPerNodeFieldsSurviveTheRoundTrip`      |
 | U-304 | The sizing block survives the trip down                                         | Positive   | `TestStorageNodeSizingSurvivesTheTripDown`                 |
+| U-305 | `config.spdkImagePullPolicy` survives the trip down, which has no field for it  | Positive   | `TestStorageNodeSpdkPullPolicySurvivesTheTripDown`         |
 
 ### Workload: DaemonSet, Services, and RBAC (design §5.1)
 
@@ -905,11 +906,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 375       | 270     | 105         |
+| Unit        | 376       | 271     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **460**   | **270** | **190**     |
+| **Total**   | **461**   | **271** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the

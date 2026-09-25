@@ -19,6 +19,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/statemachine"
@@ -161,6 +162,19 @@ type StorageNodeConfig struct {
 	// which is what makes a phased image rollout expressible per node.
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
+
+	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
+	// Always because the images this product ships are moving tags.
+	//
+	// The control plane starts the SPDK pod, not the operator, and its
+	// spdk_process_start takes no pull policy: the pod template it renders writes
+	// Always itself. So a node states the policy here and the node-add call does
+	// not yet carry it, which is a gap the control plane closes rather than this
+	// kind. Stating anything but Always is therefore recorded and not yet obeyed.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
 
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional

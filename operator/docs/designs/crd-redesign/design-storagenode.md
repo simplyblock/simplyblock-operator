@@ -458,12 +458,19 @@ identity. It fails closed, which is safe because it runs in the operator pod: it
 availability tracks the operator's own, and an operator that is down is not
 reconciling anything the rejection could deadlock.
 
-**Mutable.** `config.spdkImage`, `config.spdkProxyImage`, and
-`config.spdkSystemMemory`. The two images are per-node so that an image rollout can
-be phased, which is the whole reason they are not on the cluster, and the memory
-figure is what a node whose device count grew legitimately needs to raise. All
-three take effect on the node's next configuration generation, which is a
-restart-shaped change rather than a declarative one.
+**Mutable.** `config.spdkImage`, `config.spdkImagePullPolicy`, and
+`config.spdkProxyImage`, with `config.spdkSystemMemory`. The two images are
+per-node so that an image rollout can be phased, which is the whole reason they
+are not on the cluster, and the memory figure is what a node whose device count
+grew legitimately needs to raise. All of them take effect on the node's next
+configuration generation, which is a restart-shaped change rather than a
+declarative one.
+
+`config.spdkImagePullPolicy` is the one field of the set the operator records and
+does not yet spend. The control plane starts the SPDK pod, and its
+`spdk_process_start` takes no pull policy: the pod template it renders writes
+`Always` itself. The field is on this kind because a deployment document states
+it, and it reaches the pod once the control plane accepts one.
 
 ### 3.3 Status
 
@@ -2231,6 +2238,19 @@ type StorageNodeConfig struct {
 	// which is what makes a phased image rollout expressible per node.
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
+
+	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
+	// Always because the images this product ships are moving tags.
+	//
+	// The control plane starts the SPDK pod, not the operator, and its
+	// spdk_process_start takes no pull policy: the pod template it renders writes
+	// Always itself. So a node states the policy here and the node-add call does
+	// not yet carry it, which is a gap the control plane closes rather than this
+	// kind. Stating anything but Always is therefore recorded and not yet obeyed.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
 
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional

@@ -590,6 +590,22 @@ spec:
                         SpdkImage overrides the SPDK image the control plane starts for this node,
                         which is what makes a phased image rollout expressible per node.
                       type: string
+                    spdkImagePullPolicy:
+                      default: Always
+                      description: |-
+                        SpdkImagePullPolicy controls when that image is pulled, and defaults to
+                        Always because the images this product ships are moving tags.
+
+                        The control plane starts the SPDK pod, not the operator, and its
+                        spdk_process_start takes no pull policy: the pod template it renders writes
+                        Always itself. So a node states the policy here and the node-add call does
+                        not yet carry it, which is a gap the control plane closes rather than this
+                        kind. Stating anything but Always is therefore recorded and not yet obeyed.
+                      enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                      type: string
                     spdkProxyImage:
                       description: SpdkProxyImage overrides the SPDK proxy image for this node.
                       type: string
