@@ -34,15 +34,35 @@ const (
 // StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
 // steps when action=remove, and the Preparing → Migrating → Promoting steps when
 // action=migrate.
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Preparing;Restarting;Promoting
+// +kubebuilder:validation:Enum=Validating;Suspending;MigratingDevices;Migrating;Verifying;Reshuffling;Removing;Preparing;Restarting;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
 	StorageNodeOpsSubPhaseValidating StorageNodeOpsSubPhase = "Validating"
 	StorageNodeOpsSubPhaseSuspending StorageNodeOpsSubPhase = "Suspending"
-	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
-	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
-	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
+	// StorageNodeOpsSubPhaseMigratingDevices marks the pre-removal step: the
+	// node's devices are failed and their data rebuilt onto peers, before any
+	// lvol leaves the node.
+	//
+	// It is a phase of its own because until now this work happened inside the
+	// control plane's node delete, where it had no status, no events and no
+	// progress: an operator watching a removal saw "Removing" for as long as it
+	// took. The volumes still hosted here are served from their replicas while
+	// it runs, which is measurably slower, so the phase reports how far along it
+	// is rather than leaving that degradation unexplained.
+	StorageNodeOpsSubPhaseMigratingDevices StorageNodeOpsSubPhase = "MigratingDevices"
+	StorageNodeOpsSubPhaseMigrating        StorageNodeOpsSubPhase = "Migrating"
+	StorageNodeOpsSubPhaseVerifying        StorageNodeOpsSubPhase = "Verifying"
+	// StorageNodeOpsSubPhaseReshuffling marks the last step before the node is
+	// deleted: its lvstore replica roles are reallocated, so no surviving volume
+	// is left with a secondary or tertiary on a node that is about to go away.
+	//
+	// Also its own phase for the reason above -- it used to be the tail of the
+	// control plane's delete -- and because it is the step that decides the
+	// fleet's failure-domain diversity afterwards, which is worth being able to
+	// watch and to fail on its own.
+	StorageNodeOpsSubPhaseReshuffling StorageNodeOpsSubPhase = "Reshuffling"
+	StorageNodeOpsSubPhaseRemoving    StorageNodeOpsSubPhase = "Removing"
 	// StorageNodeOpsSubPhasePreparing marks that a migrate op is preparing the
 	// target worker: cloning per-node config, labeling it into the storage
 	// plane, and waiting until its storage-node-api pod is Ready and its per-pod
@@ -146,6 +166,24 @@ type StorageNodeOpsStatus struct {
 	// Suspending to avoid duplicate POSTs across reconcile iterations).
 	// +optional
 	Triggered bool `json:"triggered,omitempty"`
+
+	// DevicesMigrated and DevicesTotal report the pre-removal device rebuild,
+	// so the wait has a number attached to it rather than being a silent
+	// several-minute pause in MigratingDevices.
+	// +optional
+	DevicesMigrated int `json:"devicesMigrated,omitempty"`
+	// +optional
+	DevicesTotal int `json:"devicesTotal,omitempty"`
+
+	// DevicesTriggered and ReshuffleTriggered are the once-only latches for the
+	// two steps that start with a POST and are then polled, matching what
+	// Triggered does for Suspending. Separate fields because a drain passes
+	// through all three and one shared latch would let a later step inherit an
+	// earlier step's "already sent".
+	// +optional
+	DevicesTriggered bool `json:"devicesTriggered,omitempty"`
+	// +optional
+	ReshuffleTriggered bool `json:"reshuffleTriggered,omitempty"`
 
 	// StartedAt is when the operation began.
 	// +optional

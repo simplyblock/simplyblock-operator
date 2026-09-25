@@ -995,10 +995,14 @@ func (r *StorageNodeOpsReconciler) runDrain(
 		return r.drainValidate(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
 		return r.drainSuspend(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices:
+		return r.drainMigrateDevices(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
 		return r.drainMigrate(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying:
 		return r.drainVerify(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling:
+		return r.drainReshuffle(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving:
 		return r.drainRemove(ctx, ops, sn, clusterUUID, apiClient)
 	default:
@@ -1210,7 +1214,11 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
+	// Devices before lvols: the node's devices are failed and rebuilt onto peers
+	// first, and only then are its volumes drained. The volumes are served from
+	// their replicas throughout, which is slower than being served locally, so
+	// MigratingDevices reports its progress rather than leaving that unexplained.
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices)
 }
 
 func (r *StorageNodeOpsReconciler) drainMigrate(
@@ -1522,7 +1530,7 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling)
 }
 
 func (r *StorageNodeOpsReconciler) drainRemove(
