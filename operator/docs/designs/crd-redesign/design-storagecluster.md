@@ -383,22 +383,29 @@ from wherever the field sits, so this is a Kubernetes-side regrouping only.
 
 ### 3.2 Immutability
 
-Twelve spec fields are enforced immutable. Eleven of them are optional, and the
+Eleven spec fields are enforced immutable. Ten of them are optional, and the
 enforcement is immutable once set: the field may be filled in later, and from that
 point it can be neither changed nor removed.
 
-| Spelling                                         | Fields                                                                                                                                       |
-|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `clientDataIfname`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
-| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                                                 |
+| Spelling                                         | Fields                                                                                                                   |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
+| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                             |
 
-**The three network-interface fields are immutable because the control plane
-spends them once.** `clientDataIfname` is part of the cluster-add, and
-`storageNodes.mgmtInterface` and `storageNodes.dataInterfaces` are the node-add's
-`interface_name` and `data_nics`. None is re-read after the call it rides on, so an
-edit afterward reconfigures nothing and leaves the object describing a network no
-node is on. [`design-storagenode.md`](design-storagenode.md) §5.1 states the
-node-add pair against the group they live in.
+**The two node-facing interface fields are immutable because the control plane
+spends them once.** `storageNodes.mgmtInterface` and `storageNodes.dataInterfaces`
+are the node-add's `interface_name` and `data_nics`, and the control plane resolves
+both into the node's own record at that point. Nothing re-reads the cluster field
+afterward, so an edit reconfigures no node that already joined and leaves the
+object describing a network no node is on.
+[`design-storagenode.md`](design-storagenode.md) §5.1 states the pair against the
+group they live in.
+
+**`clientDataIfname` is not one of them, although it reads like one.** It is a
+client-side knob rather than a node-side one: the control plane keeps it on the
+cluster record and renders it as `--host-iface=` into every `nvme connect` the CSI
+driver runs, for the whole life of the cluster. Editing it is how a fleet is moved
+onto a different client data network, and it takes effect on the next attach.
 
 `+k8s:immutable` generates two rules. controller-gen v0.21.0 emits a field-level
 `self == oldSelf`, and for a field outside `required` a parent-level
@@ -1942,8 +1949,9 @@ type StorageClusterSpec struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// ClientDataIfname is the network interface clients reach the data plane on.
+	// It is mutable: the control plane reads it on every connect rather than once
+	// at cluster-add, so an edit moves the next attach onto the named interface.
 	// +optional
-	// +k8s:immutable
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.

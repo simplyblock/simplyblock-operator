@@ -6158,11 +6158,10 @@ spec:
               clientDataIfname:
                 description: |-
                   ClientDataIfname is the network interface clients reach the data plane
-                  on.
+                  on. It is mutable: the control plane reads it on every connect rather than
+                  once at cluster-add, so an edit moves the next attach onto the named
+                  interface.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               criticalThreshold:
                 description: CriticalThreshold is the capacity level at which the
                   cluster alarms.
@@ -6896,8 +6895,6 @@ spec:
               rule: '!has(oldSelf.stripe) || has(self.stripe)'
             - message: field fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
-            - message: field clientDataIfname is immutable once set
-              rule: '!has(oldSelf.clientDataIfname) || has(self.clientDataIfname)'
             - message: field nvmfBasePort is immutable once set
               rule: '!has(oldSelf.nvmfBasePort) || has(self.nvmfBasePort)'
             - message: field rpcBasePort is immutable once set

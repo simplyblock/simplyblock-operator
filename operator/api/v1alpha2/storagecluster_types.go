@@ -660,9 +660,10 @@ type StorageClusterSpec struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// ClientDataIfname is the network interface clients reach the data plane
-	// on.
+	// on. It is mutable: the control plane reads it on every connect rather than
+	// once at cluster-add, so an edit moves the next attach onto the named
+	// interface.
 	// +optional
-	// +k8s:immutable
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.

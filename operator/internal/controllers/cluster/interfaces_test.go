@@ -1,11 +1,16 @@
 // The network interfaces a cluster is built on, and why the apiserver refuses to
 // change them.
 //
-// Each of these is spent once, on a call whose result the operator never revisits:
-// the node-add carries the management and data NICs of the node it is adding, and
-// the cluster-add carries the interface clients reach the data plane on. A later
-// edit reconfigures nothing, so the object would say one thing while every node
-// built from it did another.
+// Both are spent once, on a call whose result the operator never revisits: the
+// node-add carries the management and data NICs of the node it is adding, and the
+// control plane resolves them into that node's own record there. A later edit
+// reconfigures nothing, so the object would say one thing while every node built
+// from it did another.
+//
+// spec.clientDataIfname is deliberately not here. It reads like a third member of
+// the set and is not one: the control plane renders it as --host-iface= into every
+// `nvme connect` for the life of the cluster, so editing it is how a fleet moves onto
+// a different client data network.
 
 package cluster
 
@@ -111,58 +116,5 @@ func TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem(t *testing.T) {
 	cluster.Spec.StorageNodes.DataInterfaces = []string{"eth2"}
 	if err := apiClient.Update(ctx, cluster); err != nil {
 		t.Fatalf("the first assignment was refused: %v", err)
-	}
-}
-
-// clientDataIfname is spent on the cluster-add rather than the node-add, which
-// makes it the same class as fabricType beside it: stated once, sent once, never
-// read again.
-func TestTheClientDataInterfaceIsImmutableOnceSet(t *testing.T) {
-	apiClient := apiServer(t)
-	ctx := context.Background()
-
-	for _, tc := range []struct {
-		name    string
-		mutate  func(*simplyblockv1alpha2.StorageClusterSpec)
-		wantErr string
-	}{
-		{
-			name: "changing it",
-			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
-				s.ClientDataIfname = "eth9"
-			},
-			wantErr: "field is immutable",
-		},
-		{
-			name: "clearing it",
-			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
-				s.ClientDataIfname = ""
-			},
-			wantErr: "immutable once set",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cluster := &simplyblockv1alpha2.StorageCluster{
-				ObjectMeta: metav1.ObjectMeta{GenerateName: "clientnic-", Namespace: "default"},
-				Spec: simplyblockv1alpha2.StorageClusterSpec{
-					MaxSubsystemCount: ptr.To(int32(10)),
-					VCPUCount:         ptr.To(int32(6)),
-					ClientDataIfname:  "eth4",
-				},
-			}
-			if err := apiClient.Create(ctx, cluster); err != nil {
-				t.Fatalf("creating the cluster: %v", err)
-			}
-			t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
-
-			tc.mutate(&cluster.Spec)
-			err := apiClient.Update(ctx, cluster)
-			if err == nil {
-				t.Fatal("the apiserver accepted the change")
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("refused for the wrong reason: %v", err)
-			}
-		})
 	}
 }
