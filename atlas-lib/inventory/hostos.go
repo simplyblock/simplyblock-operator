@@ -241,6 +241,17 @@ func ParseOSRelease(text string) HostOS {
 	return host
 }
 
+// FamilyOf places a distribution by its ID alone.
+//
+// It is the reading's table, asked without a host: a caller holding a distro
+// that was read somewhere else, off a probe report or a deployment document,
+// has the same question and would otherwise carry a second copy of the answer.
+// An ID this package does not name has no family, because ID_LIKE is what
+// places a derivative and only the file carries it.
+func FamilyOf(distro Distro) OSFamily {
+	return distroFamilies[distro]
+}
+
 // familyOf places a distribution, by its own ID where that is known and by what
 // it says it is built on where it is not.
 //

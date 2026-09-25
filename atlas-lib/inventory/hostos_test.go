@@ -322,3 +322,15 @@ func TestReadHostOSReadsACapturedHostsOSRelease(t *testing.T) {
 		t.Errorf("read %+v, want rocky 9.4 on aarch64", read)
 	}
 }
+
+func TestFamilyOfPlacesADistroWithoutItsFile(t *testing.T) {
+	// A caller holding a distro read somewhere else, off a report or a document
+	// rather than off a host, asks the same question the reading answers and
+	// must not have to carry a second table to answer it.
+	if got := FamilyOf(DistroRocky); got != OSFamilyRedHat {
+		t.Errorf("placed %q in %q, want %q", DistroRocky, got, OSFamilyRedHat)
+	}
+	if got := FamilyOf("gentoo"); got != "" {
+		t.Errorf("placed an unknown distro in %q, want no family", got)
+	}
+}
