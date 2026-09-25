@@ -288,6 +288,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-206     | `spec.cluster.initContainerResources`: the cluster's init containers are sized as the document states                        | Positive | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
 | U-207     | Sizing the init containers alone: the container that runs for the node's life is left unsized                                | Boundary | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
 | U-208     | A document that states no init container resources: the cluster states none either                                           | Boundary | `TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset` |
+| U-209     | `groups[].reservedSystemCPU`: every node of that group holds back the list the group states                                  | Positive | `TestTheGroupsReservedCPUsReachEveryNodeOfIt`                     |
+| U-210     | A group that states none: the node states none, and the cluster's fleet-wide value decides                                   | Boundary | `TestAGroupWithNoReservedCPUsStatesNone`                          |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -603,11 +605,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 159       | 26      | 133         | 9         |
+| Unit        | 161       | 28      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **229**   | **29**  | **200**     | **12**    |
+| **Total**   | **231**   | **31**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

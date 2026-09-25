@@ -599,3 +599,38 @@ func TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset(t *testing.
 		t.Errorf("the init containers are sized %+v with nothing stated", workload.InitContainerResources)
 	}
 }
+
+// The CPUs held back from SPDK are stated per group, because they are a list of
+// core ids: a group of sixteen-core workers and a group of ninety-six-core
+// workers have no one list that is right for both, and a group is what a
+// document calls machines that share their hardware.
+func TestTheGroupsReservedCPUsReachEveryNodeOfIt(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.NodeSets[0].Groups[0].ReservedSystemCPU = "0-3"
+	})
+	cluster := aCluster(nil)
+	r := reconcilerFor(t)
+
+	node := r.buildNode(config, cluster,
+		config.Spec.NodeSets[0], config.Spec.NodeSets[0].Groups[0], "worker-1", 0)
+
+	if got := node.Spec.Config.ReservedSystemCPU; got != "0-3" {
+		t.Errorf("the node holds back %q, want the group's %q", got, "0-3")
+	}
+}
+
+// A group that states none leaves the node stating none, so that the cluster's
+// fleet-wide value is what the agent reads. Writing an empty string would be
+// the same as stating one.
+func TestAGroupWithNoReservedCPUsStatesNone(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+	cluster := aCluster(nil)
+	r := reconcilerFor(t)
+
+	node := r.buildNode(config, cluster,
+		config.Spec.NodeSets[0], config.Spec.NodeSets[0].Groups[0], "worker-1", 0)
+
+	if got := node.Spec.Config.ReservedSystemCPU; got != "" {
+		t.Errorf("the node holds back %q with nothing stated", got)
+	}
+}

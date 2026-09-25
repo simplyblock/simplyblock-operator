@@ -1315,6 +1315,24 @@ type NodeGroup struct {
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system on
+	// these nodes, as a core list such as 0,1 or 0-3.
+	//
+	// It is a group's rather than the cluster's because it names core ids, and a
+	// group is what a document calls the workers that share their hardware: 0,1
+	// on a sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine. It expands into
+	// StorageNode.spec.config.reservedSystemCPU, whose shape it shares, and a
+	// group that states none leaves the cluster's fleet-wide value to decide.
+	//
+	// On OpenShift it reaches the kubelet through a KubeletConfig for the
+	// machine config pool, which is the cluster's, so groups that disagree there
+	// are writing over one another's pool configuration.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`

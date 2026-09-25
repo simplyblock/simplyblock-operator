@@ -579,7 +579,12 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				DeviceNames:      devicesOf(group),
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
-				JournalManager:   group.JournalManager,
+				// The core ids this group's machines hold back. It reaches the
+				// node's own entry in the per-node ConfigMap, which is where a
+				// per-node value has somewhere to go: the pod's environment
+				// variable is one object's for every worker it schedules.
+				ReservedSystemCPU: group.ReservedSystemCPU,
+				JournalManager:    group.JournalManager,
 				// The two SPDK slots of spec.images. They are the document's
 				// statement for the whole fleet and land per node, because the
 				// fields are per node so that a later rollout can walk it one
