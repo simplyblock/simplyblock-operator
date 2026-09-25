@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -110,10 +111,23 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 		panic(err.Error())
 	}
 
+	hostRoot := transcript.HostRootOf(root)
 	inventoryOf, unreadable := inventory.Collect(context.Background(), inventory.Config{
 		SysfsRoot: root,
 		ProcRoot:  root,
 		DevRoot:   transcript.DevRootOf(root),
+		// The transcript's own root and nothing outside it. Left unset, the OS
+		// reading would take the os-release of whichever machine generated the
+		// fixtures, so the committed reports would say what the last reviewer
+		// runs. A capture taken before the root section existed carries no
+		// os-release, and the reading then fails and the report says so, which
+		// is what a probe on a host it could not read also writes.
+		HostRoot: hostRoot,
+		// The architecture is the capture's where it has one, and stated where
+		// it does not, for the reason the memory is stated: uname is a system
+		// call and not a tree. Both fleets ran on GCP x86 instances, which is
+		// what their captured CPU topology is.
+		Machine: func() (string, error) { return statedMachine(host.Machine), nil },
 		// What each disk carries is stated blank rather than read, and the two
 		// reasons are the same reason. A transcript captures sysfs and not the
 		// disks themselves, so there is nothing to read; and the local reader is
@@ -140,7 +154,15 @@ func capturedHost(path, name, address string, memory statedMemory) nodeprobe.Rep
 	for i := range inventoryOf.Devices {
 		inventoryOf.Devices[i].Path = filepath.Join(blockdev.DefaultDevRoot, inventoryOf.Devices[i].Name)
 	}
-	return nodeprobe.FromInventory(name, probedAt.Time, inventoryOf, unreadable)
+
+	report := nodeprobe.FromInventory(name, probedAt.Time, inventoryOf, unreadable)
+	// A reading that failed names the tree it failed on, and for the same
+	// reason as the device paths above, that tree has to be the one the probe
+	// would have been given rather than this reviewer's scratch directory.
+	for i, sentence := range report.Unreadable {
+		report.Unreadable[i] = strings.ReplaceAll(sentence, hostRoot, nodeprobe.HostRootMount)
+	}
+	return report
 }
 
 // blankDevice opens a device that reads as zeros, which is a blank disk. See
@@ -170,6 +192,15 @@ func (zeroReader) Close() error { return nil }
 // disk is refused for one of the two reasons it would really be refused for.
 // Writing a mount table naming devices nobody checked would be a fixture
 // asserting something about a host that nothing in the capture supports.
+// statedMachine is the capture's machine name, or the fleet's where the capture
+// was taken before the walker recorded one.
+func statedMachine(captured string) string {
+	if captured != "" {
+		return captured
+	}
+	return "x86_64"
+}
+
 func writeStatedProc(root string, memory statedMemory) error {
 	meminfo := fmt.Sprintf(
 		"MemTotal:       %d kB\nMemFree:        %d kB\nMemAvailable:   %d kB\n",

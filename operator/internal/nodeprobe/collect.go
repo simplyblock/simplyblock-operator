@@ -37,7 +37,21 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		Interfaces:      interfacesOf(inv.Interfaces),
 		Devices:         devicesOf(inv.Devices),
 		NVMeControllers: controllersOf(inv.NVMeControllers),
+		HostOS:          hostOSOf(inv.HostOS),
 		Unreadable:      sentences(unreadable),
+	}
+}
+
+// hostOSOf renders the OS reading, which is five strings and no judgment:
+// whether a distribution is supported is the operator's question and not the
+// probe's.
+func hostOSOf(os inventory.HostOS) HostOS {
+	return HostOS{
+		Distro:       string(os.Distro),
+		Family:       string(os.Family),
+		Version:      os.Version,
+		PrettyName:   os.PrettyName,
+		Architecture: os.Architecture,
 	}
 }
 

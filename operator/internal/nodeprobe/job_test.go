@@ -182,7 +182,7 @@ func TestJobPassesTheNodeAndNamespaceOutOfThePodsOwnSpec(t *testing.T) {
 			t.Errorf("%s comes from %+v, want a field reference to %s", name, env.ValueFrom, want)
 		}
 	}
-	for _, flag := range []string{"--node=", "--namespace=", "--run=", "--sysfs-root=", "--proc-root=", "--dev-root="} {
+	for _, flag := range []string{"--node=", "--namespace=", "--run=", "--sysfs-root=", "--proc-root=", "--dev-root=", "--host-root="} {
 		if !arg(c, flag) {
 			t.Errorf("the command %v does not carry %s", c.Command, flag)
 		}
@@ -406,5 +406,39 @@ func TestAStatedPullPolicyIsKept(t *testing.T) {
 
 	if got := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
 		t.Errorf("the stated pull policy became %q", got)
+	}
+}
+
+func TestJobReadsTheHostsOSReleaseAndNotTheProbeImagesOwn(t *testing.T) {
+	// Every container image carries an /etc/os-release, so a probe left to read
+	// its own reports the image's distribution as the worker's and nothing
+	// about the answer looks wrong. The host's root filesystem is mounted
+	// read-only and named on the command line.
+	c := container(t, probeJob(t))
+
+	want := "--host-root=" + HostRootMount
+	if !slices.Contains(c.Command, want) {
+		t.Fatalf("the command is %v, and it does not carry %s", c.Command, want)
+	}
+
+	// Only the two directories os-release may live in are mounted, and both
+	// under that root: the probe needs one file, and a mount of the host's
+	// whole root filesystem would hand the pod every secret on the node.
+	byPath := map[string]corev1.VolumeMount{}
+	for _, mount := range c.VolumeMounts {
+		byPath[mount.MountPath] = mount
+	}
+	for _, path := range []string{HostRootMount + "/etc", HostRootMount + "/usr/lib"} {
+		mount, ok := byPath[path]
+		if !ok {
+			t.Errorf("%s is not mounted, so the probe reads its own image's os-release", path)
+			continue
+		}
+		if !mount.ReadOnly {
+			t.Errorf("%s is mounted writable, and the probe writes nothing", path)
+		}
+	}
+	if _, whole := byPath[HostRootMount]; whole {
+		t.Errorf("the host's whole root filesystem is mounted at %s, where two directories would do", HostRootMount)
 	}
 }

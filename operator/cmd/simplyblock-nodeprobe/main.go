@@ -19,7 +19,7 @@
 //
 //	simplyblock-nodeprobe --node=worker-3 --namespace=simplyblock --run=oops-20260908
 //	    --sysfs-root=/host/sys --proc-root=/host/proc --dev-root=/dev
-//	    --mountinfo=/host/proc/1/mountinfo
+//	    --host-root=/host/root --mountinfo=/host/proc/1/mountinfo
 //
 // With --output=stdout it writes the report to standard output and touches no
 // cluster at all, which is how it is run by hand on a machine to see what a
@@ -206,6 +206,9 @@ func parseOptions(args []string, env func(string) string) (options, error) {
 		"the host's procfs; the Job mounts it read-only at /host/proc")
 	fs.StringVar(&opts.roots.DevRoot, "dev-root", "/dev",
 		"the host's device nodes, which is what the report's device paths name")
+	fs.StringVar(&opts.roots.HostRoot, "host-root", "",
+		"the host's root filesystem, which the OS reading takes its os-release from; "+
+			"a pod has to be pointed at the host's, because its own image carries one too")
 	fs.StringVar(&opts.roots.MountinfoPath, "mountinfo", "",
 		"the mount table to read; a pod has to be pointed at the host's, which is "+
 			"/host/proc/1/mountinfo, because its own lists none of the host's mounts")
@@ -247,6 +250,16 @@ func parseOptions(args []string, env func(string) string) (options, error) {
 					"Without it this process reads its own mount namespace, which lists none of "+
 					"the host's mounts, and every mounted host disk would be reported free",
 				nodeprobe.HostMountinfoPath)
+		}
+		// The host's own root filesystem, for the same reason: unset, the OS
+		// reading takes the probe image's /etc/os-release, which answers, so
+		// the report would name the image's distribution as the worker's with
+		// nothing about it looking wrong.
+		if opts.roots.HostRoot == "" {
+			return options{}, fmt.Errorf(
+				"no host root to read: pass --host-root, which in a pod is where the host's " +
+					"root filesystem is mounted. Without it this process reads its own image's " +
+					"/etc/os-release and reports that distribution as the worker's")
 		}
 	}
 	if opts.timeout <= 0 {

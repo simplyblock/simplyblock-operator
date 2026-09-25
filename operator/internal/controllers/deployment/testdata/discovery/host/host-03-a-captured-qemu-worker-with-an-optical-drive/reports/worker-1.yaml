@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 6,
+      "version": 7,
       "node": "worker-1",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -904,6 +904,9 @@ data:
           ]
         }
       ],
+      "hostOS": {
+        "architecture": "x86_64"
+      },
       "nvmeControllers": [
         {
           "address": "0000:02:00.0",
@@ -919,6 +922,9 @@ data:
           "product": "0xa808",
           "numaNode": -1
         }
+      ],
+      "unreadable": [
+        "read the host OS: the host root /host/root carries no os-release, so its distribution is unknown"
       ]
     }
 kind: ConfigMap

@@ -140,8 +140,8 @@ func reportConfigMap(id string, report nodeprobe.Report) (*corev1.ConfigMap, err
 type hostOpt func(*nodeprobe.Report)
 
 // host is a worker: two memory nodes, eight cores each with two threads, 256
-// GiB of memory, sixteen 1 GiB huge pages free per node, and a 25G data NIC on
-// each node holding a routable address.
+// GiB of memory, sixteen 1 GiB huge pages free per node, a 25G data NIC on each
+// node holding a routable address, and Ubuntu on x86_64.
 //
 // Everything a case does not name, it inherits from here.
 func host(name string, opts ...hostOpt) nodeprobe.Report {
@@ -152,6 +152,7 @@ func host(name string, opts ...hostOpt) nodeprobe.Report {
 		CPU:       cpuTopology(2, 8, 2),
 		Memory:    memoryOf(256*gb, 240*gb, 128*gb, 128*gb),
 		HugePages: []nodeprobe.HugePagePool{pagePool(gb, 16, 16)},
+		HostOS:    runningUbuntu(),
 		Interfaces: []nodeprobe.Interface{
 			nic("eth0", inventory.LinkPhysical, at(25000), on(0), holding(managementAddress(name))),
 			nic("eth1", inventory.LinkPhysical, at(25000), on(1), holding(dataAddress(name))),
@@ -161,6 +162,18 @@ func host(name string, opts ...hostOpt) nodeprobe.Report {
 		opt(&report)
 	}
 	return report
+}
+
+// runningUbuntu is the OS every synthetic worker runs unless its case says
+// otherwise, because it is the one most of this product's clusters are on.
+func runningUbuntu() nodeprobe.HostOS {
+	return nodeprobe.HostOS{
+		Distro:       string(inventory.DistroUbuntu),
+		Family:       string(inventory.OSFamilyDebian),
+		Version:      "22.04",
+		PrettyName:   "Ubuntu 22.04.4 LTS",
+		Architecture: "x86_64",
+	}
 }
 
 // managementAddress and dataAddress are the two addresses a worker holds, keyed

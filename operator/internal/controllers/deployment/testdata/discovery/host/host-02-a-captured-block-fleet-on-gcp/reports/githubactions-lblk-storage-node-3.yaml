@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 6,
+      "version": 7,
       "node": "githubactions-lblk-storage-node-3",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -539,6 +539,12 @@ data:
           "available": true,
           "content": "Blank"
         }
+      ],
+      "hostOS": {
+        "architecture": "x86_64"
+      },
+      "unreadable": [
+        "read the host OS: the host root /host/root carries no os-release, so its distribution is unknown"
       ]
     }
 kind: ConfigMap

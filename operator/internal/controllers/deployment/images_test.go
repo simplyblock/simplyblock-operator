@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	theSpdkImage    = "public.ecr.aws/simply-block/ultra:main-latest"
-	theProxyImage   = "public.ecr.aws/simply-block/simplyblock:main"
+	theSpdkImage      = "public.ecr.aws/simply-block/ultra:main-latest"
+	theProxyImage     = "public.ecr.aws/simply-block/simplyblock:main"
 	theNodeAgentImage = "public.ecr.aws/simply-block/simplyblock-operator:initialize-indices"
 )
 

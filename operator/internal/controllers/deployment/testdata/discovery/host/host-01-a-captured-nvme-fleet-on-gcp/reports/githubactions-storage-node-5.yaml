@@ -2,7 +2,7 @@ apiVersion: v1
 data:
   report.json: |-
     {
-      "version": 6,
+      "version": 7,
       "node": "githubactions-storage-node-5",
       "probedAt": "2026-09-18T09:00:00Z",
       "cpu": {
@@ -550,6 +550,9 @@ data:
           ]
         }
       ],
+      "hostOS": {
+        "architecture": "x86_64"
+      },
       "nvmeControllers": [
         {
           "address": "0000:00:04.0",
@@ -558,6 +561,9 @@ data:
           "product": "0x001f",
           "numaNode": -1
         }
+      ],
+      "unreadable": [
+        "read the host OS: the host root /host/root carries no os-release, so its distribution is unknown"
       ]
     }
 kind: ConfigMap
