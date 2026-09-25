@@ -16,6 +16,7 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -864,5 +865,74 @@ func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
 	}
 	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "worker-02") }) {
 		t.Errorf("the notes are %v, and none of them says which worker runs what", notes)
+	}
+}
+
+// storagePlaneTaint is what a fleet that dedicates machines to storage puts on
+// them, and what a probe and a storage node both have to tolerate to land
+// there.
+var storagePlaneTaint = []corev1.Toleration{{
+	Key:      "io.simplyblock.node-type",
+	Operator: corev1.TolerationOpEqual,
+	Value:    "storage-plane",
+	Effect:   corev1.TaintEffectNoSchedule,
+}}
+
+// A probe pod is pinned to its worker rather than scheduled onto it, but a
+// taint still evicts what the scheduler was bypassed for. A run against a
+// tainted fleet that tolerated nothing probed nothing.
+func TestDiscoverProbesTolerateWhatTheRunWasToldTo(t *testing.T) {
+	run := discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint})
+	r := newRunner(t, run, worker("worker-1"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probe
+
+	jobs := r.jobs()
+	if len(jobs) != 1 {
+		t.Fatalf("created %d Jobs for 1 worker", len(jobs))
+	}
+	if !reflect.DeepEqual(jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint) {
+		t.Errorf("the probe tolerates %+v, want %+v",
+			jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint)
+	}
+}
+
+// The taints a run was allowed to probe through are the taints the cluster it
+// drafts has to live with, so the draft states them rather than leaving a
+// reviewer to work out that the DaemonSet will schedule nowhere.
+func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
+
+	config, notes := r.draftFor(ops, spec, discoverypkg.Plan{})
+
+	if config.Spec.Cluster == nil {
+		t.Fatalf("the draft describes no cluster; the notes are %v", notes)
+	}
+	if !reflect.DeepEqual(config.Spec.Cluster.Tolerations, storagePlaneTaint) {
+		t.Errorf("the draft tolerates %+v, want %+v", config.Spec.Cluster.Tolerations, storagePlaneTaint)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "tolerations") }) {
+		t.Errorf("the notes are %v, and none of them says where the tolerations came from", notes)
+	}
+}
+
+// A growth document names a cluster that already states what it tolerates, so
+// there is no template to put them on and nothing to restate.
+func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{
+		ClusterRef:  "an-existing-cluster",
+		Tolerations: storagePlaneTaint,
+	}
+
+	config, _ := r.draftFor(ops, spec, discoverypkg.Plan{})
+
+	if config.Spec.Cluster != nil {
+		t.Errorf("a growth draft describes a cluster: %+v", config.Spec.Cluster)
 	}
 }

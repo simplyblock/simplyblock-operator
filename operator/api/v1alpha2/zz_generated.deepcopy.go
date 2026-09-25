@@ -850,6 +850,13 @@ func (in *DiscoverSpec) DeepCopyInto(out *DiscoverSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.EnableControlPlaneNodes != nil {
 		in, out := &in.EnableControlPlaneNodes, &out.EnableControlPlaneNodes
 		*out = new(bool)

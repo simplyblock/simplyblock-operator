@@ -2481,6 +2481,60 @@ spec:
                       NodeSelector restricts which workers are inspected. Empty inspects every
                       schedulable worker, and it is exclusive with Workers.
                     type: object
+                  tolerations:
+                    description: |-
+                      Tolerations are what the probe pods tolerate, and what the draft states
+                      for the storage nodes it proposes.
+
+                      A probe is pinned to its worker with spec.nodeName rather than scheduled
+                      onto it, which bypasses the scheduler and not the taints: a NoSchedule
+                      taint still keeps the pod off, and a NoExecute taint evicts one that
+                      landed. A fleet that dedicates machines to storage taints them, so a run
+                      against one that tolerates nothing inspects nothing.
+
+                      They reach the draft as well, because the taints a run was allowed to
+                      probe through are the taints the cluster it proposes has to live with.
+                      Stating them in one place is what keeps a reviewer from approving a
+                      document whose DaemonSet schedules nowhere.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    maxItems: 32
+                    type: array
                   workers:
                     description: |-
                       Workers are the workers to inspect, by node name.

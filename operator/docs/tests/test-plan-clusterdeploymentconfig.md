@@ -274,6 +274,9 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`              |
 | U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                    | Positive | `TestTheDocumentsTolerationsReachTheStorageNodes`             |
 | U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                           | Boundary | `TestAGrowthDocumentStatesNoTolerations`                      |
+| U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                   | Positive | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`               |
+| U-199     | The same run's draft states those tolerations for the cluster it proposes                                                    | Positive | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`           |
+| U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                             | Boundary | `TestAGrowthDraftCarriesNoTolerations`                        |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -583,11 +586,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 148       | 15      | 133         | 9         |
+| Unit        | 151       | 18      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **218**   | **18**  | **200**     | **12**    |
+| **Total**   | **221**   | **21**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

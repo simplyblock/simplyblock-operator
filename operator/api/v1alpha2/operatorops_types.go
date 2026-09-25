@@ -16,6 +16,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/statemachine"
@@ -170,6 +171,23 @@ type DiscoverSpec struct {
 	// schedulable worker, and it is exclusive with Workers.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations are what the probe pods tolerate, and what the draft states
+	// for the storage nodes it proposes.
+	//
+	// A probe is pinned to its worker with spec.nodeName rather than scheduled
+	// onto it, which bypasses the scheduler and not the taints: a NoSchedule
+	// taint still keeps the pod off, and a NoExecute taint evicts one that
+	// landed. A fleet that dedicates machines to storage taints them, so a run
+	// against one that tolerates nothing inspects nothing.
+	//
+	// They reach the draft as well, because the taints a run was allowed to
+	// probe through are the taints the cluster it proposes has to live with.
+	// Stating them in one place is what keeps a reviewer from approving a
+	// document whose DaemonSet schedules nowhere.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// EnableControlPlaneNodes lets the run consider machines that run the API
 	// server and etcd.
