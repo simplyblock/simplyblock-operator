@@ -292,6 +292,10 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-210     | A group that states none: the node states none, and the cluster's fleet-wide value decides                                   | Boundary | `TestAGroupWithNoReservedCPUsStatesNone`                          |
 | U-211     | `spec.cluster.enableNodeAffinity`: the cluster the document creates carries it                                               | Positive | `TestNodeAffinityReachesTheCluster`                               |
 | U-212     | A document that states none: the cluster states none, since the control plane bakes it in at create                          | Boundary | `TestADocumentStatingNoNodeAffinityLeavesTheClusterUnset`         |
+| U-213     | `spec.cluster.ports`: all three reach the cluster fields they name                                                           | Positive | `TestTheDocumentsPortsReachTheCluster`                            |
+| U-214     | A block stating one port: the schema defaults the other two to the control plane's                                           | Boundary | `TestThePortsBlockIsDefaultedByTheApiserver`                      |
+| U-216     | The expansion spends the block member by member, so an unstated member travels as nothing                                    | Boundary | `TestThePortsBlockIsSpentMemberByMember`                          |
+| U-215     | A document with no ports block: all three stay unset                                                                         | Boundary | `TestADocumentWithNoPortsLeavesTheClustersUnset`                  |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -607,11 +611,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 163       | 30      | 133         | 9         |
+| Unit        | 167       | 34      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **233**   | **33**  | **200**     | **12**    |
+| **Total**   | **237**   | **37**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

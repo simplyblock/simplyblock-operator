@@ -205,3 +205,35 @@ func TestTheDocumentsSchemaRefusesAnUnsupportedScheme(t *testing.T) {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
+
+// A document that names the ports block gets the control plane's own numbers
+// filled in for whatever it leaves out, which is what makes the block worth
+// naming: a reviewer sees the three a cluster will run with rather than the one
+// somebody happened to state.
+func TestThePortsBlockIsDefaultedByTheApiserver(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "ports-defaulted")
+	config.Spec.Cluster.Ports = &simplyblockv1alpha2.ClusterPortsSpec{NVMf: ptr.To(int32(4430))}
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("stating one port: %v", err)
+	}
+
+	stored := &simplyblockv1alpha2.ClusterDeploymentConfig{}
+	if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(config), stored); err != nil {
+		t.Fatalf("reading the document back: %v", err)
+	}
+
+	ports := stored.Spec.Cluster.Ports
+	if ports == nil {
+		t.Fatal("the stored document carries no ports block")
+	}
+	if got := ptr.IntFromOrZero(ports.NVMf); got != 4430 {
+		t.Errorf("the NVMe-oF base is %d, want the stated 4430", got)
+	}
+	if got := ptr.IntFromOrZero(ports.Rpc); got != 8080 {
+		t.Errorf("the RPC base is %d, want the control plane's 8080", got)
+	}
+	if got := ptr.IntFromOrZero(ports.NodeAgent); got != 50001 {
+		t.Errorf("the node agent's port is %d, want the control plane's 50001", got)
+	}
+}

@@ -146,6 +146,49 @@ type HostOSSpec struct {
 	Family HostOSFamily `json:"family,omitempty"`
 }
 
+// ClusterPortsSpec is where a cluster's storage nodes listen.
+//
+// The three are one block here and three fields on the StorageCluster, which is
+// the one place the document deliberately does not mirror the cluster's shape.
+// They are the same decision taken once — which ports this deployment's nodes
+// bind — and a reviewer reads them together or not at all, where the cluster
+// carries them flat because that is what shipped.
+//
+// Every member is immutable on the cluster: a node binds its ports when it
+// starts and the control plane hands them out from the bases it was given at
+// cluster create, so the document is the only place any of them can be stated.
+//
+// Each carries the control plane's own default, so a document that names the
+// block shows a reviewer the three numbers a cluster will actually run with
+// rather than three blanks they would have to know the backend to fill in.
+type ClusterPortsSpec struct {
+	// NVMf is the base of the NVMe-oF port range every node binds. It expands
+	// into StorageCluster.spec.nvmfBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
+	// +optional
+	NVMf *int32 `json:"nvmf,omitempty"`
+
+	// Rpc is the base of the RPC port range every node binds. It expands into
+	// StorageCluster.spec.rpcBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	// +optional
+	Rpc *int32 `json:"rpc,omitempty"`
+
+	// NodeAgent is the port each node's agent API listens on. It expands into
+	// StorageCluster.spec.snodeApiPort, and it is named for the component
+	// rather than for that field: the agent is what spec.images.nodeAgent pins
+	// and what the storage-node DaemonSet runs.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
+	// +optional
+	NodeAgent *int32 `json:"nodeAgent,omitempty"`
+}
+
 // DeviceSelection is the explicit list of storage devices a group's workers hand
 // to simplyblock. It carries no filter of any kind: a document whose meaning
 // depends on what the hardware turns out to be is not a document a reviewer can
@@ -472,6 +515,11 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
+
+	// Ports are where this cluster's storage nodes listen. Unstated, and for
+	// each member left unstated, the cluster's own defaults decide.
+	// +optional
+	Ports *ClusterPortsSpec `json:"ports,omitempty"`
 
 	// EnableFailureDomains opts the cluster into failure-domain mode, in which
 	// every group must label the fault group its workers belong to.

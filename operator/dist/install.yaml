@@ -1081,6 +1081,41 @@ spec:
                     maximum: 8
                     minimum: 1
                     type: integer
+                  ports:
+                    description: |-
+                      Ports are where this cluster's storage nodes listen. Unstated, and for
+                      each member left unstated, the cluster's own defaults decide.
+                    properties:
+                      nodeAgent:
+                        default: 50001
+                        description: |-
+                          NodeAgent is the port each node's agent API listens on. It expands into
+                          StorageCluster.spec.snodeApiPort, and it is named for the component
+                          rather than for that field: the agent is what spec.images.nodeAgent pins
+                          and what the storage-node DaemonSet runs.
+                        format: int32
+                        maximum: 65535
+                        minimum: 1024
+                        type: integer
+                      nvmf:
+                        default: 4420
+                        description: |-
+                          NVMf is the base of the NVMe-oF port range every node binds. It expands
+                          into StorageCluster.spec.nvmfBasePort.
+                        format: int32
+                        maximum: 65535
+                        minimum: 1024
+                        type: integer
+                      rpc:
+                        default: 8080
+                        description: |-
+                          Rpc is the base of the RPC port range every node binds. It expands into
+                          StorageCluster.spec.rpcBasePort.
+                        format: int32
+                        maximum: 65535
+                        minimum: 1024
+                        type: integer
+                    type: object
                   socketsToUse:
                     description: |-
                       SocketsToUse restricts the deployment to selected NUMA sockets, and empty

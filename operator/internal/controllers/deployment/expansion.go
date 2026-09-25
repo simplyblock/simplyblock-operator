@@ -260,6 +260,15 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 
 	class := DeviceClassOf(config)
 
+	// The document states the ports as one block and the cluster carries them
+	// as three fields. An absent block stands in as an empty one so that each
+	// member travels on its own: a block stating one port leaves the other two
+	// unset, for the cluster's own defaults to decide.
+	ports := template.Ports
+	if ports == nil {
+		ports = &simplyblockv1alpha2.ClusterPortsSpec{}
+	}
+
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
@@ -276,6 +285,9 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
 			EnableNodeAffinity:       template.EnableNodeAffinity,
+			NvmfBasePort:             ports.NVMf,
+			RpcBasePort:              ports.Rpc,
+			SnodeApiPort:             ports.NodeAgent,
 			KMS:                      template.KMS,
 			DeviceClass:              class,
 			// The workload every node runs as. The document's per-group network

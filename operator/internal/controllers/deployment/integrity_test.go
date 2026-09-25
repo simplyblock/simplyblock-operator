@@ -110,3 +110,57 @@ func TestADocumentStatingNoNodeAffinityLeavesTheClusterUnset(t *testing.T) {
 		t.Errorf("enableNodeAffinity = %v with nothing stated, want unset", *got)
 	}
 }
+
+// The ports every node binds are fixed when the cluster is created and are
+// three fields on it, so the document states them as one block and the
+// expansion spends it onto the three.
+func TestTheDocumentsPortsReachTheCluster(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.Ports = &simplyblockv1alpha2.ClusterPortsSpec{
+			NVMf:      ptr.To(int32(4430)),
+			Rpc:       ptr.To(int32(8090)),
+			NodeAgent: ptr.To(int32(50011)),
+		}
+	}))
+
+	if got := ptr.IntFromOrZero(cluster.Spec.NvmfBasePort); got != 4430 {
+		t.Errorf("the NVMe-oF base port is %d, want the document's 4430", got)
+	}
+	if got := ptr.IntFromOrZero(cluster.Spec.RpcBasePort); got != 8090 {
+		t.Errorf("the RPC base port is %d, want the document's 8090", got)
+	}
+	if got := ptr.IntFromOrZero(cluster.Spec.SnodeApiPort); got != 50011 {
+		t.Errorf("the node agent's port is %d, want the document's 50011", got)
+	}
+}
+
+// The block is spent member by member rather than as a whole, so a member the
+// apiserver did not default and nobody stated travels as nothing rather than as
+// a zero. What a stored document's block actually holds is all three, because
+// the schema defaults the two nobody stated: see
+// TestThePortsBlockIsDefaultedByTheApiserver.
+func TestThePortsBlockIsSpentMemberByMember(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.Ports = &simplyblockv1alpha2.ClusterPortsSpec{NVMf: ptr.To(int32(4430))}
+	}))
+
+	if got := ptr.IntFromOrZero(cluster.Spec.NvmfBasePort); got != 4430 {
+		t.Errorf("the NVMe-oF base port is %d, want the document's 4430", got)
+	}
+	if cluster.Spec.RpcBasePort != nil || cluster.Spec.SnodeApiPort != nil {
+		t.Errorf("the unstated ports are %v and %v, want both unset",
+			cluster.Spec.RpcBasePort, cluster.Spec.SnodeApiPort)
+	}
+}
+
+// A document with no ports block leaves all three unset, so the cluster's own
+// defaults decide.
+func TestADocumentWithNoPortsLeavesTheClustersUnset(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
+
+	if cluster.Spec.NvmfBasePort != nil || cluster.Spec.RpcBasePort != nil ||
+		cluster.Spec.SnodeApiPort != nil {
+		t.Errorf("the ports are %v, %v and %v with nothing stated",
+			cluster.Spec.NvmfBasePort, cluster.Spec.RpcBasePort, cluster.Spec.SnodeApiPort)
+	}
+}
