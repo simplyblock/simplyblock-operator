@@ -573,7 +573,7 @@ func TestReconcileValidating_ImageUnresolvable_Requeues(t *testing.T) {
 func TestBuildValidationJob_MountsHostSysfs(t *testing.T) {
 	r, _ := newVMReconciler(t, unreachableAPI)
 	vm := validatingVM("")
-	job := r.buildValidationJob(vm, testConsumerNode, "rebalancer:test")
+	job := r.buildValidationJob(vm, testConsumerNode, vmigration.JobPlacement{Image: "rebalancer:test"})
 
 	var sysMount *corev1.VolumeMount
 	for i, m := range job.Spec.Template.Spec.Containers[0].VolumeMounts {

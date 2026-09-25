@@ -184,7 +184,10 @@ removed. Their IDs are retired rather than reused.
 ### Device Selection and the Discovery Filter (design §3.1, §8.1)
 
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
-and `operator/internal/controllers/deployment/operatorops_discover_test.go`
+and `operator/internal/controllers/deployment/operatorops_discover_test.go`. The
+three rows about the Jobs the operator pins to a node are tested where those
+Jobs are built: `operator/internal/volumemigration/job_test.go` and
+`operator/internal/controller/storagenode_latency_job_test.go`
 
 | #        | Scenario                                                                                                    | Type     | Test |
 |----------|-------------------------------------------------------------------------------------------------------------|----------|------|
@@ -277,6 +280,9 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                   | Positive | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`               |
 | U-199     | The same run's draft states those tolerations for the cluster it proposes                                                    | Positive | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`           |
 | U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                             | Boundary | `TestAGrowthDraftCarriesNoTolerations`                        |
+| U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                         | Positive | `TestJobPlacementCarriesTheClustersTolerations`               |
+| U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                        | Boundary | `TestJobPlacementOfAClusterThatTakesNoTaint`                  |
+| U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                        | Positive | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`            |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -292,6 +298,12 @@ not tell them apart.
 becomes one storage-node DaemonSet carrying one host OS, so a fleet that
 disagrees has no answer to state, and averaging one out of the majority would
 hand every minority worker a flag read off a machine that is not it.
+
+`U-198` through `U-203` are one rule applied in four places: a pod the operator
+pins to a node is not excused from that node's taints. The probe, the storage
+node, the migration validation Job, and the latency baseline Job all land on
+machines a fleet dedicates to storage, and each of them tolerating nothing is a
+pod that stays Pending until something times out.
 
 `U-131` is what makes design §12's second question a non-question. Two documents
 written against one Kubernetes cluster read the same evidence, so they agree on
@@ -586,11 +598,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 151       | 18      | 133         | 9         |
+| Unit        | 154       | 21      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **221**   | **21**  | **200**     | **12**    |
+| **Total**   | **224**   | **24**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

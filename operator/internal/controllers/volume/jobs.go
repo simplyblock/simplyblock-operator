@@ -219,14 +219,14 @@ func (r *PersistentVolumeOpsReconciler) startValidationJobs(
 		return 0, nil
 	}
 
-	image, err := vmigration.JobImage(ctx, r.Client, subject.namespace(), subject.clusterUUID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, subject.namespace(), subject.clusterUUID)
 	if err != nil {
 		return 0, err
 	}
 
 	started := make([]simplyblockv1alpha2.ValidationJob, 0, len(missing))
 	for _, node := range missing {
-		job := r.pathJob(ops, subject, node, image, modeValidate)
+		job := r.pathJob(ops, subject, node, placement, modeValidate)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return 0, fmt.Errorf("start the validation on node %s: %w", node, err)
 		}
@@ -412,14 +412,14 @@ func (r *PersistentVolumeOpsReconciler) releaseOnEveryValidatedNode(
 	if subject != nil {
 		namespace = subject.namespace()
 	}
-	image, err := vmigration.JobImage(ctx, r.Client, namespace, clusterUUID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, namespace, clusterUUID)
 	if err != nil {
 		return err
 	}
 
 	var nodes []string
 	for _, record := range migration.ValidationJobs {
-		job := r.releaseJob(ops, namespace, record.Node, image)
+		job := r.releaseJob(ops, namespace, record.Node, placement)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("release the target paths on node %s: %w", record.Node, err)
 		}
@@ -449,14 +449,14 @@ func (r *PersistentVolumeOpsReconciler) reapOnEveryValidatedNode(
 	ctx context.Context, ops *simplyblockv1alpha2.PersistentVolumeOps, subject *subject,
 ) (bool, error) {
 	migration := ops.Status.Migration
-	image, err := vmigration.JobImage(ctx, r.Client, subject.namespace(), migration.ClusterUUID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, subject.namespace(), migration.ClusterUUID)
 	if err != nil {
 		return false, err
 	}
 
 	done := true
 	for _, record := range migration.ValidationJobs {
-		job := r.releaseJob(ops, subject.namespace(), record.Node, image)
+		job := r.releaseJob(ops, subject.namespace(), record.Node, placement)
 
 		var existing batchv1.Job
 		err := r.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: job.Name}, &existing)
@@ -493,9 +493,11 @@ func (r *PersistentVolumeOpsReconciler) reapOnEveryValidatedNode(
 func (r *PersistentVolumeOpsReconciler) pathJob(
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
 	subject *subject,
-	node, image, mode string,
+	node string,
+	placement vmigration.JobPlacement,
+	mode string,
 ) *batchv1.Job {
-	return r.modeJob(ops, subject.namespace(), node, image, mode, 0)
+	return r.modeJob(ops, subject.namespace(), node, placement, mode, 0)
 }
 
 // releaseJob is the cleanup counterpart, retried where the check is not:
@@ -503,14 +505,17 @@ func (r *PersistentVolumeOpsReconciler) pathJob(
 // that is not retried is simply a path left connected, which is the leak.
 func (r *PersistentVolumeOpsReconciler) releaseJob(
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
-	namespace, node, image string,
+	namespace, node string,
+	placement vmigration.JobPlacement,
 ) *batchv1.Job {
-	return r.modeJob(ops, namespace, node, image, modeRelease, 2)
+	return r.modeJob(ops, namespace, node, placement, modeRelease, 2)
 }
 
 func (r *PersistentVolumeOpsReconciler) modeJob(
 	ops *simplyblockv1alpha2.PersistentVolumeOps,
-	namespace, node, image, mode string,
+	namespace, node string,
+	placement vmigration.JobPlacement,
+	mode string,
 	backoffLimit int32,
 ) *batchv1.Job {
 	migration := ops.Status.Migration
@@ -520,7 +525,8 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 		Name:          jobName(mode, ops.Name, node),
 		Namespace:     namespace,
 		Hostname:      node,
-		Image:         image,
+		Image:         placement.Image,
+		Tolerations:   placement.Tolerations,
 		ContainerName: containerFor(mode),
 		Mode:          mode,
 		Env: []corev1.EnvVar{

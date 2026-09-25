@@ -432,10 +432,12 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 		log.Error(err, "Cannot start validation jobs; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
-	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
-	image, err := vmigration.JobImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
+	// The image the Job runs and the taints it has to tolerate both come from
+	// the StorageCluster: the image carries nvme-cli, and the tolerations are
+	// what lets the Job land on a node of a fleet that taints its storage plane.
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
-		log.Error(err, "Cannot resolve simplyblock-rebalancer image; requeuing")
+		log.Error(err, "Cannot resolve the simplyblock-rebalancer placement; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
@@ -449,7 +451,7 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 		if _, ok := have[node]; ok {
 			continue
 		}
-		job := r.buildValidationJob(vm, node, image)
+		job := r.buildValidationJob(vm, node, placement)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("create validation job for node %q: %w", node, err)
 		}
@@ -629,16 +631,16 @@ func (r *VolumeMigrationReconciler) releaseMigrationPaths(
 		return
 	}
 
-	image, err := vmigration.JobImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
-		log.Error(err, "Cannot resolve simplyblock-rebalancer image; migration target paths are left connected",
+		log.Error(err, "Cannot resolve the simplyblock-rebalancer placement; migration target paths are left connected",
 			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
 		return
 	}
 
 	nodes := make([]string, 0, len(vm.Status.ValidationJobs))
 	for _, vj := range vm.Status.ValidationJobs {
-		job := r.buildReleaseJob(vm, vj.Node, image)
+		job := r.buildReleaseJob(vm, vj.Node, placement)
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			log.Error(err, "Cannot start release job; migration target paths are left connected on this node",
 				"node", vj.Node, "migration", vm.Status.MigrationUUID)
@@ -829,11 +831,12 @@ func (r *VolumeMigrationReconciler) performMigration(
 // ANA state on the target node using the simplyblock-rebalancer binary.
 func (r *VolumeMigrationReconciler) buildValidationJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
-	hostname, image string,
+	hostname string,
+	placement vmigration.JobPlacement,
 ) *batchv1.Job {
 	// No retries: a failed validation cancels the migration, and retrying the Job would
 	// only delay that decision behind a second run of a check that just said no.
-	return migrationPathJob(vm, hostname, image, pathJobSpec{
+	return migrationPathJob(vm, hostname, placement, pathJobSpec{
 		namePrefix:   "vmig-validate-",
 		container:    "nvme-validate",
 		mode:         "validate-migration",
@@ -845,11 +848,12 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 // node, for the nodes the operator has to tell because their own Job cannot know.
 func (r *VolumeMigrationReconciler) buildReleaseJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
-	hostname, image string,
+	hostname string,
+	placement vmigration.JobPlacement,
 ) *batchv1.Job {
 	// Retried, unlike validation: nothing downstream waits on this Job, so a transient
 	// failure that is not retried is simply a path left connected, which is the leak.
-	return migrationPathJob(vm, hostname, image, pathJobSpec{
+	return migrationPathJob(vm, hostname, placement, pathJobSpec{
 		namePrefix:   "vmig-release-",
 		container:    "nvme-release",
 		mode:         "release-migration-paths",
@@ -873,7 +877,8 @@ type pathJobSpec struct {
 // against the host's NVMe fabric, using the shared buildRebalancerJob builder.
 func migrationPathJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
-	hostname, image string,
+	hostname string,
+	placement vmigration.JobPlacement,
 	js pathJobSpec,
 ) *batchv1.Job {
 	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
@@ -885,7 +890,8 @@ func migrationPathJob(
 		Namespace:     vm.Namespace,
 		OwnerRef:      *metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
 		Hostname:      hostname,
-		Image:         image,
+		Image:         placement.Image,
+		Tolerations:   placement.Tolerations,
 		ContainerName: js.container,
 		Mode:          js.mode,
 		Env: []corev1.EnvVar{

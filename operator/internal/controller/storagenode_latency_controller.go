@@ -311,6 +311,16 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	return nil, true, nil
 }
 
+// storageNodeTolerations is what the cluster's storage-node pods tolerate,
+// which is what anything the operator pins to one of those machines tolerates
+// as well.
+func storageNodeTolerations(cluster *simplyblockv1alpha2.StorageCluster) []corev1.Toleration {
+	if cluster == nil || cluster.Spec.StorageNodes == nil {
+		return nil
+	}
+	return cluster.Spec.StorageNodes.Tolerations
+}
+
 func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	ctx context.Context,
 	snode *simplyblockv1alpha2.StorageCluster,
@@ -342,7 +352,13 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Status.Hostname},
-					HostNetwork:   true,
+					// The Job runs on the storage node it measures, so it has
+					// to tolerate what that node tolerates: pinning asks the
+					// scheduler for the machine rather than excusing the pod
+					// from its taints, and a fleet with a dedicated storage
+					// plane taints every machine this can run on.
+					Tolerations: storageNodeTolerations(snode),
+					HostNetwork: true,
 					Volumes: []corev1.Volume{
 						{
 							Name: "host-dev",

@@ -308,7 +308,7 @@ func TestBuildReleaseJob_RunsReleaseModeAgainstTheHost(t *testing.T) {
 	r, _ := newVMReconciler(t, unreachableAPI)
 	vm := releasingVM()
 
-	job := r.buildReleaseJob(vm, testConsumerNode, "img:tag")
+	job := r.buildReleaseJob(vm, testConsumerNode, vmigration.JobPlacement{Image: "img:tag"})
 	c := job.Spec.Template.Spec.Containers[0]
 
 	if !slices.Contains(c.Command, "--mode=release-migration-paths") {
@@ -330,7 +330,7 @@ func TestBuildReleaseJob_RunsReleaseModeAgainstTheHost(t *testing.T) {
 
 	// The name must not collide with the validation Job of the same migration and node —
 	// they exist at the same time on the abort path.
-	if job.Name == r.buildValidationJob(vm, testConsumerNode, "img:tag").Name {
+	if job.Name == r.buildValidationJob(vm, testConsumerNode, vmigration.JobPlacement{Image: "img:tag"}).Name {
 		t.Errorf("release and validation jobs share the name %q", job.Name)
 	}
 	// Unlike validation, a release is retried: nothing waits on it, so a transient

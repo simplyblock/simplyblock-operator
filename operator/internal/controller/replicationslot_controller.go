@@ -626,9 +626,9 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	image, err := vmigration.JobImage(ctx, r.Client, slot.Namespace, clusterID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, slot.Namespace, clusterID)
 	if err != nil {
-		log.Error(err, "Cannot resolve rebalancer image for preconnect", "slot", slot.Name)
+		log.Error(err, "Cannot resolve rebalancer placement for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 
@@ -642,7 +642,8 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		Namespace:     slot.Namespace,
 		OwnerRef:      *metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
 		Hostname:      node,
-		Image:         image,
+		Image:         placement.Image,
+		Tolerations:   placement.Tolerations,
 		ContainerName: "replication-preconnect",
 		Mode:          "replication-preconnect",
 		Env: []corev1.EnvVar{
@@ -746,9 +747,9 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 	if err != nil || node == "" {
 		return // no active consumer; nothing to connect
 	}
-	image, err := vmigration.JobImage(ctx, r.Client, slot.Namespace, clusterID)
+	placement, err := vmigration.JobPlacementOf(ctx, r.Client, slot.Namespace, clusterID)
 	if err != nil {
-		log.Error(err, "Preconnect: cannot resolve rebalancer image", "slot", slot.Name)
+		log.Error(err, "Preconnect: cannot resolve rebalancer placement", "slot", slot.Name)
 		return
 	}
 	connsJSON, err := json.Marshal(conns)
@@ -760,7 +761,8 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		Namespace:     slot.Namespace,
 		OwnerRef:      *metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
 		Hostname:      node,
-		Image:         image,
+		Image:         placement.Image,
+		Tolerations:   placement.Tolerations,
 		ContainerName: "replication-preconnect",
 		Mode:          "replication-preconnect",
 		Env: []corev1.EnvVar{
