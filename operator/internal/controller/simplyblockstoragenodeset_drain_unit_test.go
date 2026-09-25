@@ -51,65 +51,102 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 	}
 }
 
-// A drain migration creates the volume on the target's whole HA pair, so a
-// target paired with the drained node is refused by the control plane. These
-// tests therefore have to state each node's secondary; a node with none is
-// unpaired and always eligible.
-func TestRoundRobinSkipsNodesPairedWithTheDrainedNode(t *testing.T) {
-	// node-2 is the drained node's secondary, node-3 has the drained node as its
-	// secondary. Both are HA-paired with node-1 and neither can receive its
-	// volumes; only node-4 can.
+// threeOnlineNodes serves node-1 (the drained node) plus two online peers.
+func threeOnlineNodes(t *testing.T) *webapimock.SpecServer {
+	t.Helper()
 	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
-	defer mock.Close()
 	mock.Register(http.MethodGet,
 		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"node-1","status":"online","secondary_node_id":"node-2"},
-			{"id":"node-2","status":"online","secondary_node_id":"node-4"},
-			{"id":"node-3","status":"online","secondary_node_id":"node-1"},
-			{"id":"node-4","status":"online","secondary_node_id":"node-3"}
+			{"id":"node-1","status":"online"},
+			{"id":"node-2","status":"online"},
+			{"id":"node-3","status":"online"}
 		]`},
 	)
+	return mock
+}
 
+func TestRoundRobinEscalatesPastATargetThatAlreadyFailed(t *testing.T) {
+	// Without this the retry is not a retry. Round-robin is a pure function of
+	// position, so a single volume is assigned the same first candidate on every
+	// pass and goes straight back to the node it just failed on -- which is how
+	// a drain spent 75 minutes re-picking one target on 2026-09-25.
+	mock := threeOnlineNodes(t)
+	defer mock.Close()
+
+	tried := func(pv string) []string { return []string{"node-2"} }
 	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
-		drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b", "pv-c"})
+		drainTestClusterUUID, "node-1", []string{"pv-a"}, tried)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for pv, target := range assignment {
-		switch target {
-		case "node-2":
-			t.Errorf("pv %s went to node-2, the drained node's secondary", pv)
-		case "node-3":
-			t.Errorf("pv %s went to node-3, whose secondary is the drained node -- "+
-				"the migration cannot create on its HA pair", pv)
-		case "node-1":
-			t.Errorf("pv %s went to the drained node itself", pv)
-		}
+	if assignment["pv-a"] != "node-3" {
+		t.Errorf("pv-a went to %q; node-2 already failed for it, so the only "+
+			"remaining candidate is node-3", assignment["pv-a"])
 	}
 }
 
-func TestRoundRobinErrorsWhenEveryPeerIsPairedWithTheDrainedNode(t *testing.T) {
-	// Stalling with a clear reason beats assigning a target that can never work:
-	// with one PV the choice is eligible[0] every time, so an invalid assignment
-	// is retried identically for ever rather than eventually succeeding.
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+func TestRoundRobinErrorsWhenEveryTargetHasFailedForTheVolume(t *testing.T) {
+	// The escalation has to end somewhere, and saying so beats handing the
+	// volume back to a node that has already failed it.
+	mock := threeOnlineNodes(t)
 	defer mock.Close()
-	mock.Register(http.MethodGet,
-		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"node-1","status":"online","secondary_node_id":"node-2"},
-			{"id":"node-2","status":"online","secondary_node_id":"node-1"}
-		]`},
-	)
 
+	tried := func(pv string) []string { return []string{"node-2", "node-3"} }
 	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
-		drainTestClusterUUID, "node-1", []string{"pv-a"})
+		drainTestClusterUUID, "node-1", []string{"pv-a"}, tried)
 	if err == nil {
-		t.Fatal("a target HA-paired with the drained node was assigned anyway")
+		t.Fatal("a target was assigned although every peer had already failed for it")
 	}
-	if !strings.Contains(err.Error(), "HA-paired") {
-		t.Errorf("error should say why no target is eligible, got: %v", err)
+	if !strings.Contains(err.Error(), "pv-a") {
+		t.Errorf("error should name the volume that ran out of targets, got: %v", err)
+	}
+}
+
+func TestRoundRobinEscalationIsPerVolume(t *testing.T) {
+	// One volume exhausting a target says nothing about another volume, so the
+	// exhausted list is keyed by PV rather than shared across the drain.
+	mock := threeOnlineNodes(t)
+	defer mock.Close()
+
+	tried := func(pv string) []string {
+		if pv == "pv-a" {
+			return []string{"node-2"}
+		}
+		return nil
+	}
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"}, tried)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if assignment["pv-a"] == "node-2" {
+		t.Error("pv-a was sent back to node-2, which had already failed for it")
+	}
+	if assignment["pv-b"] != "node-3" {
+		t.Errorf("pv-b went to %q; nothing has failed for it, so it keeps its "+
+			"round-robin slot", assignment["pv-b"])
+	}
+}
+
+func TestRecordDrainTargetTried(t *testing.T) {
+	ops := &simplyblockv1alpha1.StorageNodeOps{}
+
+	if !recordDrainTargetTried(ops, "pv-a", "node-2") {
+		t.Fatal("recording a new target reported no change")
+	}
+	if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 1 || got[0] != "node-2" {
+		t.Fatalf("tried targets for pv-a = %v, want [node-2]", got)
+	}
+	// Re-observing the same failed CR must not keep patching the status.
+	if recordDrainTargetTried(ops, "pv-a", "node-2") {
+		t.Error("recording the same target again reported a change")
+	}
+	if !recordDrainTargetTried(ops, "pv-a", "node-3") {
+		t.Error("recording a second target reported no change")
+	}
+	if got := drainTargetsTriedFor(ops, "pv-b"); got != nil {
+		t.Errorf("pv-b inherited pv-a's exhausted targets: %v", got)
 	}
 }
 
@@ -127,7 +164,7 @@ func TestRoundRobinDistributesEvenly(t *testing.T) {
 
 	pvNames := []string{"pv-a", "pv-b", "pv-c", "pv-d", "pv-e", "pv-f"}
 	excluded := "node-1"
-	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, excluded, pvNames)
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, excluded, pvNames, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,7 +201,7 @@ func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
 		]`},
 	)
 
-	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
+	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"}, nil)
 	if err == nil {
 		t.Fatal("expected error when no online peer node is available")
 	}
@@ -182,7 +219,7 @@ func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
 		]`},
 	)
 
-	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"})
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

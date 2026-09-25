@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,76 +224,73 @@ func getNodeBackendStatus(
 // being drained. The i-th eligible PV goes to eligible[i % len(eligible)],
 // spreading the migrations without needing persistent state.
 //
-// A node is not eligible if it is HA-paired with the node being drained, in
-// either direction:
+// triedFor reports the targets already exhausted for a PV; nil means none.
+// Passed in rather than read from the ops object so this stays a pure function
+// of its inputs and can be tested without one.
+type triedFor func(pvName string) []string
+
+// roundRobinTargetNodes assigns each PV a target, round-robin over the online
+// peers, skipping any target that has already failed for that PV.
 //
-//   - it IS the drained node's secondary, or
-//   - the drained node is ITS secondary.
-//
-// A migration does not just write to the target: it creates the volume on the
-// target's whole HA pair. So if either half of that pair is the node on its way
-// out, the control plane refuses, and the drain stops dead. Observed on a
-// 7-node cluster (2026-09-25): the target picked was a node whose secondary was
-// the drained node, and the migration sat in snap_copy for 75 minutes on
-//
-//	Target secondary node <drained> is in state 'pending_removal';
-//	cannot create on target primary
-//
-// with no retry able to help — with one PV the assignment is always
-// eligible[0], so the same invalid target was chosen deterministically. Of six
-// peers, exactly one was invalid and round-robin picked it.
-//
-// Excluding the drained node's own secondary as well is the other half of the
-// same rule: that node is the one taking over the drained node's HA role, so it
-// must not simultaneously be absorbing its volumes.
+// A node HA-paired with the drained node is NOT excluded. A migration creates
+// the volume on the target's whole HA pair, so if half that pair is the
+// departing node the control plane has to tolerate it — and it does: the
+// overlap-drain cases in _get_target_secondary_node / _get_target_tertiary_node
+// allow a replica that is the migration source itself. Those cases only ever
+// recognised SUSPENDED, which is why such a target stalled a drain for 75
+// minutes on 2026-09-25; sbcli now admits every draining status there, so the
+// target is legitimate again and excluding it here would only shrink the
+// candidate set that escalation depends on.
 func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	excludeNodeUUID string,
 	pvNames []string,
+	tried triedFor,
 ) (map[string]string, error) {
 	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
 		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
 	}
 
-	var drainedSecondary string
+	var online []string
 	for _, n := range nodes {
-		if n.UUID == excludeNodeUUID {
-			drainedSecondary = n.SecondaryNodeID
-			break
+		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
+			online = append(online, n.UUID)
 		}
 	}
-
-	var eligible []string
-	var pairedWithDrained int
-	for _, n := range nodes {
-		if n.UUID == excludeNodeUUID || n.Status != utils.NodeStatusOnline {
-			continue
-		}
-		if n.UUID == drainedSecondary || n.SecondaryNodeID == excludeNodeUUID {
-			pairedWithDrained++
-			continue
-		}
-		eligible = append(eligible, n.UUID)
-	}
-	if len(eligible) == 0 {
-		// Distinguished from "no online peer at all", because the operator's next
-		// move differs: bring a node back, versus the cluster being too small or
-		// too tightly paired for this node to be drained at all.
-		if pairedWithDrained > 0 {
-			return nil, fmt.Errorf(
-				"roundRobinTargetNodes: every online peer of %s is HA-paired with it "+
-					"(%d paired); a migration would have to create on the drained node",
-				excludeNodeUUID, pairedWithDrained)
-		}
+	if len(online) == 0 {
 		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
 	}
 
 	assignment := make(map[string]string, len(pvNames))
 	for i, pv := range pvNames {
-		assignment[pv] = eligible[i%len(eligible)]
+		// Round-robin sets where this PV starts looking, so several PVs still
+		// spread across the cluster; the exhausted list then moves this one on.
+		// Scanning from its own offset rather than always from 0 keeps that
+		// spread instead of funnelling every retry onto the same next node.
+		var exhausted []string
+		if tried != nil {
+			exhausted = tried(pv)
+		}
+		picked := ""
+		for off := 0; off < len(online); off++ {
+			cand := online[(i+off)%len(online)]
+			if !slices.Contains(exhausted, cand) {
+				picked = cand
+				break
+			}
+		}
+		if picked == "" {
+			// Every peer has already failed for this volume. Saying so is the
+			// point of tracking them: the alternative is handing it back to a
+			// node that just failed, for ever.
+			return nil, fmt.Errorf(
+				"roundRobinTargetNodes: every online peer of %s has already failed "+
+					"for %s (%d tried)", excludeNodeUUID, pv, len(exhausted))
+		}
+		assignment[pv] = picked
 	}
 	return assignment, nil
 }

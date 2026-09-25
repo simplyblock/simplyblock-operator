@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -1317,6 +1318,30 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	}
 
 	// Cluster ready: delete failed CRs and let createMissingVolumeMigrationsOps recreate them.
+	//
+	// The target is recorded as exhausted BEFORE the delete, and the status
+	// write is what makes the next attempt a different attempt. Deleting alone
+	// re-picks from the same ordered candidate list, so the volume goes back to
+	// the node it just failed on -- with one volume, for ever. The event says
+	// "will retry with new target"; recording it is what makes that true.
+	opsPatch := client.MergeFrom(ops.DeepCopy())
+	recorded := false
+	for i := range failed {
+		if t := failed[i].Spec.TargetNodeUUID; t != "" {
+			if recordDrainTargetTried(ops, failed[i].Spec.PVName, t) {
+				recorded = true
+			}
+		}
+	}
+	if recorded {
+		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
+			// Deleting without the record would lose the escalation, so leave
+			// the CRs alone and come back: a failed CR is idle, not harmful.
+			log.Error(err, "drain: could not record exhausted migration targets; not deleting yet")
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+		}
+	}
+
 	for i := range failed {
 		vm := &failed[i]
 		if err := r.Delete(ctx, vm); err != nil {
@@ -1324,10 +1349,46 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 			continue
 		}
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "MigrationRetry", "MigrationRetry",
-			"VolumeMigration %s failed, deleted and will retry with new target", vm.Name)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry", fmt.Sprintf("VolumeMigration %s failed, deleted and will retry with new target", vm.Name))
+			"VolumeMigration %s failed on %s, deleted and will retry with another target",
+			vm.Name, vm.Spec.TargetNodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry",
+			fmt.Sprintf("VolumeMigration %s failed on %s, deleted and will retry with another target",
+				vm.Name, vm.Spec.TargetNodeUUID))
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+}
+
+// recordDrainTargetTried marks target as exhausted for pvName. Returns true if
+// this changed the status, so the caller only writes when there is something
+// new -- a reconcile that re-observes the same failed CR must not keep patching.
+func recordDrainTargetTried(ops *simplyblockv1alpha1.StorageNodeOps, pvName, target string) bool {
+	if pvName == "" || target == "" {
+		return false
+	}
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName != pvName {
+			continue
+		}
+		if slices.Contains(ops.Status.DrainTargetsTried[i].Targets, target) {
+			return false
+		}
+		ops.Status.DrainTargetsTried[i].Targets = append(
+			ops.Status.DrainTargetsTried[i].Targets, target)
+		return true
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Targets: []string{target}})
+	return true
+}
+
+// drainTargetsTriedFor returns the targets already exhausted for pvName.
+func drainTargetsTriedFor(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) []string {
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == pvName {
+			return ops.Status.DrainTargetsTried[i].Targets
+		}
+	}
+	return nil
 }
 
 func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
@@ -1410,7 +1471,8 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 	}
 
-	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
+	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames,
+		func(pv string) []string { return drainTargetsTriedFor(ops, pv) })
 	if err != nil {
 		log.Error(err, "drain: no available target nodes for migration")
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget",

@@ -140,6 +140,20 @@ type StorageNodeOpsSpec struct {
 	Drain *DrainOpsSpec `json:"drain,omitempty"`
 }
 
+// VolumeDrainTargets is the set of migration targets already exhausted for one
+// volume during a drain. Keyed by PV name because that is what the drain builds
+// its VolumeMigration CRs from, so the key survives a control-plane restart and
+// matches the CR that failed.
+type VolumeDrainTargets struct {
+	// PVName is the PersistentVolume whose migration these targets failed for.
+	PVName string `json:"pvName"`
+
+	// Targets are storage node UUIDs that have already failed for this volume
+	// and must not be chosen again for it.
+	// +optional
+	Targets []string `json:"targets,omitempty"`
+}
+
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
 type StorageNodeOpsStatus struct {
 	// Phase is the high-level lifecycle phase.
@@ -184,6 +198,19 @@ type StorageNodeOpsStatus struct {
 	DevicesTriggered bool `json:"devicesTriggered,omitempty"`
 	// +optional
 	ReshuffleTriggered bool `json:"reshuffleTriggered,omitempty"`
+
+	// DrainTargetsTried records, per volume, the migration targets that have
+	// already failed for it.
+	//
+	// Without it a retry is not a retry: the target is re-picked from the same
+	// ordered candidate list with no memory, so a volume whose migration fails
+	// on one node is handed straight back to that node. With a single volume
+	// the pick is the first candidate every time, which is a loop rather than
+	// an escalation. Recording the failure lets the next attempt move on, and
+	// lets the drain say "every target has been tried" instead of retrying for
+	// ever.
+	// +optional
+	DrainTargetsTried []VolumeDrainTargets `json:"drainTargetsTried,omitempty"`
 
 	// StartedAt is when the operation began.
 	// +optional
