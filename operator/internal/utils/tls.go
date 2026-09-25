@@ -64,6 +64,7 @@ func BuildServiceServingCertificate(namespace, serviceName, secretName string) *
 				"namespace": namespace,
 			},
 			"spec": map[string]any{
+				"commonName": serviceName,
 				"secretName": secretName,
 				"issuerRef": map[string]any{
 					"kind": "ClusterIssuer",
