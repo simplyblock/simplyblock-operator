@@ -1627,6 +1627,50 @@ type ClusterTemplate struct {
 	// only moment it can be set at all.
 	// +optional
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+
+	// EnableChecksumValidation turns on inline CRC validation of every I/O, for
+	// silent-data-error protection.
+	//
+	// It is on the document because it is immutable on the cluster it lands on:
+	// the backend bakes the checksum method into each device when the cluster is
+	// created and never re-applies it, so a cluster created without this is one
+	// nobody can turn it on for. A deployment that wants its data checked has to
+	// say so here or not at all.
+	// +optional
+	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
+
+	// EnableAtomicity4K enforces 4K write atomicity on every device this
+	// deployment names, which is what lets checksum validation run on devices
+	// whose logical block size is under the data plane's 4K minimum.
+	//
+	// It is the route to checked I/O on a device that cannot be reformatted: a
+	// logical block device's block size is fixed by the drive, and some NVMe
+	// devices offer no 4K format either. Where a device can be reformatted,
+	// EnableDriveFormat is the other route and this is unnecessary.
+	//
+	// It is an enforcement because the question is often unanswerable. A SATA
+	// drive presenting 512-byte logical blocks over a 4K physical sector reports
+	// 512 and nothing more, and a kernel older than 6.11 publishes no atomic
+	// write attributes at all. Where a device does answer, the storage node's
+	// report carries it, and a reviewer approves this against that rather than
+	// against a vendor's datasheet -- because enforcing a guarantee the hardware
+	// does not keep is how a torn write becomes a checksum that silently
+	// disagrees with it.
+	//
+	// It means nothing unless EnableChecksumValidation is set, which is the
+	// cluster's own rule and is left to the cluster to enforce.
+	// +optional
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
+
+
+	// KMS selects where the cluster stores volume encryption keys. It is here
+	// rather than left to be set on the StorageCluster afterward because the
+	// expansion's own reconciler reads it back off that object on the very next
+	// pass, before anything external could patch it in; stating it on the
+	// document is what makes it present at the cluster's creation rather than a
+	// race with one.
+	// +optional
+	KMS *KMSSpec `json:"kms,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
