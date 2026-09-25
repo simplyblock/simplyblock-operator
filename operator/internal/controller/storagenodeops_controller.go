@@ -1325,14 +1325,7 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	// the node it just failed on -- with one volume, for ever. The event says
 	// "will retry with new target"; recording it is what makes that true.
 	opsPatch := client.MergeFrom(ops.DeepCopy())
-	recorded := false
-	for i := range failed {
-		if t := failed[i].Spec.TargetNodeUUID; t != "" {
-			if recordDrainTargetTried(ops, failed[i].Spec.PVName, t) {
-				recorded = true
-			}
-		}
-	}
+	recorded := recordExhaustedTargets(ops, failed)
 	if recorded {
 		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
 			// Deleting without the record would lose the escalation, so leave
@@ -1356,6 +1349,58 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 				vm.Name, vm.Spec.TargetNodeUUID))
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+}
+
+// recordExhaustedTargets marks the target of every failed migration that the
+// target can actually be blamed for. Returns true if anything changed, so the
+// caller only writes status when there is something new to write.
+//
+// Separate from the reconcile it is called from so the decision -- which
+// failures burn a target and which do not -- is testable without an API server
+// behind it.
+func recordExhaustedTargets(
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	failed []simplyblockv1alpha1.VolumeMigration,
+) bool {
+	recorded := false
+	for i := range failed {
+		target := failed[i].Spec.TargetNodeUUID
+		if target == "" || !targetWasEngaged(&failed[i]) {
+			continue
+		}
+		if recordDrainTargetTried(ops, failed[i].Spec.PVName, target) {
+			recorded = true
+		}
+	}
+	return recorded
+}
+
+// targetWasEngaged reports whether a failed migration ever reached the point of
+// working against its target, and so whether the failure says anything about
+// that target.
+//
+// A migration fails for two very different kinds of reason. Some are about the
+// target -- the register on its replica failed, it went offline mid-copy. Others
+// are about the environment and would fail identically against every node: the
+// volume's consumer pod is not Running, the PV cannot be resolved, the cluster
+// is busy. Burning a target for the second kind destroys good candidates for
+// something that was never their fault.
+//
+// Observed on 2026-09-25: the volume's fio pod died, so every later attempt
+// failed the consumer-pod precondition inside a minute, before touching the
+// target -- and three untried, perfectly good targets were marked exhausted on
+// the strength of it. With all six gone the drain stalled permanently, on what
+// was a recoverable situation.
+//
+// SourceNodeUUID is the marker because reconcileRunning is the only place that
+// writes it (volumemigration_controller.go), and it does so from the first
+// successful poll after the migration starts moving data. Its presence
+// therefore means "this migration actually ran against this target"; its
+// absence means the failure happened in validation or earlier, where the target
+// is not implicated. Phase cannot be used instead: setFailed overwrites it with
+// Failed, losing the phase the failure came from.
+func targetWasEngaged(vm *simplyblockv1alpha1.VolumeMigration) bool {
+	return vm.Status.SourceNodeUUID != ""
 }
 
 // recordDrainTargetTried marks target as exhausted for pvName. Returns true if

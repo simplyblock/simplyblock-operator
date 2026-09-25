@@ -407,3 +407,53 @@ func TestDrainMigrationNameIsDNSValid(t *testing.T) {
 		}
 	}
 }
+
+func TestTargetWasEngaged(t *testing.T) {
+	// The distinction that decides whether a failure burns a target. A
+	// migration that never reached its target failed for a reason that would
+	// have failed against any node, so marking that node exhausted destroys a
+	// good candidate -- which is how a drain lost all six on 2026-09-25 after
+	// the volume's consumer pod died.
+	engaged := &simplyblockv1alpha1.VolumeMigration{}
+	engaged.Status.SourceNodeUUID = "node-src"
+	if !targetWasEngaged(engaged) {
+		t.Error("a migration that reached Running was treated as never having " +
+			"touched its target, so a genuinely bad target is never exhausted")
+	}
+
+	// Validation-time failures (consumer pod down, PV unresolvable, cluster
+	// busy) land here: Failed, but with no source recorded because
+	// reconcileRunning never ran.
+	notEngaged := &simplyblockv1alpha1.VolumeMigration{}
+	if targetWasEngaged(notEngaged) {
+		t.Error("a migration that failed before running was blamed on its target")
+	}
+}
+
+func TestRecordExhaustedTargetsIgnoresFailuresBeforeTheTargetWasReached(t *testing.T) {
+	// The wiring, not just the predicate: a drain that burns targets for
+	// environment failures exhausts its whole candidate list on something no
+	// target could have prevented, and then stalls for good.
+	vm := func(pv, target, sourceNode string) simplyblockv1alpha1.VolumeMigration {
+		m := simplyblockv1alpha1.VolumeMigration{}
+		m.Spec.PVName = pv
+		m.Spec.TargetNodeUUID = target
+		m.Status.SourceNodeUUID = sourceNode // only set once the migration ran
+		return m
+	}
+
+	ops := &simplyblockv1alpha1.StorageNodeOps{}
+	failed := []simplyblockv1alpha1.VolumeMigration{
+		vm("pv-a", "node-2", "node-src"), // ran, then failed: node-2 is implicated
+		vm("pv-a", "node-3", ""),         // failed in validation: node-3 is not
+	}
+
+	if !recordExhaustedTargets(ops, failed) {
+		t.Fatal("the engaged target was not recorded")
+	}
+	got := drainTargetsTriedFor(ops, "pv-a")
+	if len(got) != 1 || got[0] != "node-2" {
+		t.Errorf("exhausted targets = %v, want [node-2] only -- node-3 failed "+
+			"before the migration reached it and must stay available", got)
+	}
+}
