@@ -22,9 +22,10 @@ spec:
   - groups:
     - devices:
         block:
+        - /dev/nvme0n1
         - /dev/sda
       mgmtInterface: eth0
-      name: group-1-block-1x4T
+      name: group-1-block-2x3.5T
       workers:
       - worker-01
     name: discovered

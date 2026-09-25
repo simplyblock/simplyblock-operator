@@ -2,6 +2,6 @@
 
 **Mutation.** A SATA disk beside an NVMe one, block run
 
-**Expected.** Only the SATA disk. The NVMe run takes only the NVMe disk
+**Expected.** Both disks. The NVMe run over the same worker takes only the NVMe disk
 
 **Harness.** `CM`

@@ -2,7 +2,7 @@
 
 **Mutation.** The same worker, block run
 
-**Expected.** Only the two virtio disks. The NVMe pair is refused for being the other class
+**Expected.** All four disks: the kernel presents a local NVMe namespace as a block device like any other
 
 **Harness.** `CM`
 
