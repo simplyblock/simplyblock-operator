@@ -145,6 +145,22 @@ spec:
                   or not).
                 format: date-time
                 type: string
+              devicesMigrated:
+                description: |-
+                  DevicesMigrated and DevicesTotal report the pre-removal device rebuild,
+                  so the wait has a number attached to it rather than being a silent
+                  several-minute pause in MigratingDevices.
+                type: integer
+              devicesTotal:
+                type: integer
+              devicesTriggered:
+                description: |-
+                  DevicesTriggered and ReshuffleTriggered are the once-only latches for the
+                  two steps that start with a POST and are then polled, matching what
+                  Triggered does for Suspending. Separate fields because a drain passes
+                  through all three and one shared latch would let a later step inherit an
+                  earlier step's "already sent".
+                type: boolean
               message:
                 description: Message is a human-readable description of the current
                   state or failure reason.
@@ -157,6 +173,8 @@ spec:
                 - Succeeded
                 - Failed
                 type: string
+              reshuffleTriggered:
+                type: boolean
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time
@@ -167,8 +185,10 @@ spec:
                 enum:
                 - Validating
                 - Suspending
+                - MigratingDevices
                 - Migrating
                 - Verifying
+                - Reshuffling
                 - Removing
                 - Preparing
                 - Restarting
