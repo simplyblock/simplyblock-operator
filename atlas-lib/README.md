@@ -62,6 +62,7 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
+│   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
 │   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
@@ -609,10 +610,10 @@ store.SubsystemResolver  // nvme.SubsystemResolver
 #### Inspect a worker before it is given to a cluster
 
 What a discovery run asks before it writes a document: which disks are free,
-what the machine has to run a storage node with, and which distribution
-installed the kubelet. One call, because a run wants all of it about one worker
-and every caller would otherwise repeat the same five reads and the same
-partial-failure handling.
+what the machine has to run a storage node with, which operating system it
+boots, and which distribution installed the kubelet. One call, because a run
+wants all of it about one worker and every caller would otherwise repeat the
+same reads and the same partial-failure handling.
 
 ```go
 inv, err := inventory.Collect(ctx, inventory.Config{
@@ -620,6 +621,7 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     // the mount table is the one that matters: see the warning below.
     SysfsRoot:     "/host/sys",
     ProcRoot:      "/host/proc",
+    HostRoot:      "/host",
     MountinfoPath: "/host/proc/1/mountinfo",
 
     // Omit these and the machine is read without a cluster around it.
@@ -638,6 +640,9 @@ inv.CPU.HyperThreading          // the kernel's own answer where it gives one
 inv.Memory.AvailableBytes       // what a process could get; not the same as FreeBytes
 inv.HugePages.AllocatedBytes()  // what is already set aside, across every size
 inv.Interfaces                  // .SpeedMbps, .Virtual, .PCIAddress, .NUMANode
+inv.HostOS.Distro               // ubuntu / rocky / rhel / talos, as os-release names it
+inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which packaging
+inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
 
@@ -674,6 +679,13 @@ The last entry is `NUMANodeUnknown` when something could not be placed — a
 bridge, loopback, a disk behind a controller whose bus reports no node — and it
 is absent when everything was. Dropping the unplaceable would make the rollup
 read as the whole inventory while missing part of it.
+
+**Reading a host from inside a pod: name its root filesystem too.** Every
+container image carries an `/etc/os-release` of its own, so a collection that
+leaves `HostRoot` at its default reads the probe image's distribution and
+reports it as the worker's, with nothing about the answer looking wrong. The
+architecture is the exception and needs no mount: `uname` answers for the
+kernel, which is the host's.
 
 **Reading a host from inside a pod: name its mount table.** A pod has its own
 mount namespace, so `/proc/self/mountinfo` lists none of the host's mounts. A
