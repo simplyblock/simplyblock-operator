@@ -6664,8 +6664,13 @@ spec:
                   the computed minimum is used.
                 type: string
               nvmfBasePort:
-                description: NvmfBasePort is the base of the NVMe-oF port range every
-                  node binds.
+                default: 4420
+                description: |-
+                  NvmfBasePort is the base of the NVMe-oF port range every node binds.
+
+                  The default is the control plane's own, which is what it applies to a
+                  cluster that sends none, so the field states the number the cluster
+                  actually runs with rather than leaving a reader to know the backend.
                 format: int32
                 maximum: 65535
                 minimum: 1024
@@ -6674,8 +6679,10 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               rpcBasePort:
-                description: RpcBasePort is the base of the RPC port range every node
-                  binds.
+                default: 8080
+                description: |-
+                  RpcBasePort is the base of the RPC port range every node binds. Its
+                  default is the control plane's, as NvmfBasePort's is.
                 format: int32
                 maximum: 65535
                 minimum: 1024
@@ -6684,8 +6691,10 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               snodeApiPort:
-                description: SnodeApiPort is the port each node's storage-node API
-                  listens on.
+                default: 50001
+                description: |-
+                  SnodeApiPort is the port each node's storage-node API listens on. Its
+                  default is the control plane's, as NvmfBasePort's is.
                 format: int32
                 maximum: 65535
                 minimum: 1024

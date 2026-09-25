@@ -1958,22 +1958,31 @@ type StorageClusterSpec struct {
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.
+	//
+	// The default is the control plane's own, which is what it applies to a
+	// cluster that sends none, so the field states the number the cluster
+	// actually runs with rather than leaving a reader to know the backend.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
 	// +optional
 	// +k8s:immutable
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
 
-	// RpcBasePort is the base of the RPC port range every node binds.
+	// RpcBasePort is the base of the RPC port range every node binds. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
 	// +optional
 	// +k8s:immutable
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
 
-	// SnodeApiPort is the port each node's storage-node API listens on.
+	// SnodeApiPort is the port each node's storage-node API listens on. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
 	// +optional
 	// +k8s:immutable
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
