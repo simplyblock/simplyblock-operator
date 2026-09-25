@@ -420,6 +420,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.Backup != nil {
+		in, out := &in.Backup, &out.Backup
+		*out = new(BackupStoreSpec)
+		**out = **in
+	}
 	if in.KMS != nil {
 		in, out := &in.KMS, &out.KMS
 		*out = new(KMSSpec)

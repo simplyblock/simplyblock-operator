@@ -553,6 +553,23 @@ type ClusterTemplate struct {
 	// +optional
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 
+	// Backup is where this cluster's backups live, and it expands into
+	// StorageCluster.spec.backup unchanged.
+	//
+	// It is here for the reason KMS is: the expansion creates the cluster and
+	// its own reconciler reads it back on the next pass, so a store stated on
+	// the document is present at the cluster's creation rather than patched in
+	// afterward by whoever remembers. Unlike most of what this template
+	// carries, the field it fills is mutable, so a document that states none
+	// costs nothing permanent — a cluster can be given a store whenever there
+	// is one to give.
+	//
+	// The Secret it names is not resolved at admission. It is a core object a
+	// deployment legitimately creates alongside the document or after it, and
+	// the cluster's own creation is where its absence is reported.
+	// +optional
+	Backup *BackupStoreSpec `json:"backup,omitempty"`
+
 	// KMS selects where the cluster stores volume encryption keys. It is here
 	// rather than left to be set on the StorageCluster afterward because the
 	// expansion's own reconciler reads it back off that object on the very next

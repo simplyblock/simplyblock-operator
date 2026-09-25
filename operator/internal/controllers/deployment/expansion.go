@@ -289,7 +289,12 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			RpcBasePort:              ports.Rpc,
 			SnodeApiPort:             ports.NodeAgent,
 			KMS:                      template.KMS,
-			DeviceClass:              class,
+			// Where the backups go, stated on the document for the reason the
+			// key store is: the cluster is created here and read back on the
+			// next pass, so a store stated on the document is present at
+			// creation rather than patched in afterward.
+			Backup:      template.Backup,
+			DeviceClass: class,
 			// The workload every node runs as. The document's per-group network
 			// interfaces are the same for every group of a cluster in practice,
 			// and the cluster is where a DaemonSet can carry them at all

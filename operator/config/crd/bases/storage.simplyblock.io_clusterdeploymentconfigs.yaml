@@ -96,6 +96,62 @@ spec:
                 description: Cluster is the StorageCluster to create. Ignored when
                   ClusterRef is set.
                 properties:
+                  backup:
+                    description: |-
+                      Backup is where this cluster's backups live, and it expands into
+                      StorageCluster.spec.backup unchanged.
+
+                      It is here for the reason KMS is: the expansion creates the cluster and
+                      its own reconciler reads it back on the next pass, so a store stated on
+                      the document is present at the cluster's creation rather than patched in
+                      afterward by whoever remembers. Unlike most of what this template
+                      carries, the field it fills is mutable, so a document that states none
+                      costs nothing permanent — a cluster can be given a store whenever there
+                      is one to give.
+
+                      The Secret it names is not resolved at admission. It is a core object a
+                      deployment legitimately creates alongside the document or after it, and
+                      the cluster's own creation is where its absence is reported.
+                    properties:
+                      bucket:
+                        description: Bucket is the bucket backups are written to and
+                          read from.
+                        type: string
+                      credentialsSecretRef:
+                        description: |-
+                          CredentialsSecretRef names the Secret holding the access key and the
+                          secret key. It is a reference rather than the values, because a spec is
+                          readable by anybody who can read the object.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      endpoint:
+                        description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
+                        pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                        type: string
+                      prefix:
+                        description: |-
+                          Prefix narrows the store to one key prefix, so that several clusters can
+                          share a bucket without each walking the others' backups.
+                        type: string
+                      region:
+                        description: Region is the bucket's region, for endpoints
+                          that do not imply one.
+                        type: string
+                    required:
+                    - bucket
+                    - credentialsSecretRef
+                    - endpoint
+                    type: object
                   containerResources:
                     description: |-
                       ContainerResources sizes the storage-node container, and expands into the

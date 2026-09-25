@@ -286,6 +286,17 @@ A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
 
+**`spec.cluster.backup` is where the cluster's backups go, and it is on the
+document for the reason `kms` is.** The expansion creates the cluster and its own
+reconciler reads it back on the very next pass, so a store stated here is present
+at the cluster's creation rather than a race with whoever patches it in
+afterward. It is the one member of the template whose cluster field is mutable,
+which is what makes omitting it cost nothing permanent: a cluster is given a
+store whenever there is one to give. The `Secret` it names is not resolved at
+admission, because it is a core object a deployment legitimately creates
+alongside the document, and the cluster's creation is where its absence is
+reported.
+
 **`spec.cluster.openshift` is what a deployment onto OpenShift states beyond
 the environment.** Its one member names a machine-config role the storage nodes'
 own pool inherits from: adding a node creates a pool of its own,
@@ -1662,6 +1673,23 @@ type ClusterTemplate struct {
 	// +optional
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
+
+	// Backup is where this cluster's backups live, and it expands into
+	// StorageCluster.spec.backup unchanged.
+	//
+	// It is here for the reason KMS is: the expansion creates the cluster and
+	// its own reconciler reads it back on the next pass, so a store stated on
+	// the document is present at the cluster's creation rather than patched in
+	// afterward by whoever remembers. Unlike most of what this template
+	// carries, the field it fills is mutable, so a document that states none
+	// costs nothing permanent — a cluster can be given a store whenever there
+	// is one to give.
+	//
+	// The Secret it names is not resolved at admission. It is a core object a
+	// deployment legitimately creates alongside the document or after it, and
+	// the cluster's own creation is where its absence is reported.
+	// +optional
+	Backup *BackupStoreSpec `json:"backup,omitempty"`
 
 	// KMS selects where the cluster stores volume encryption keys. It is here
 	// rather than left to be set on the StorageCluster afterward because the

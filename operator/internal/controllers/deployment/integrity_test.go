@@ -11,6 +11,8 @@ package deployment
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -162,5 +164,46 @@ func TestADocumentWithNoPortsLeavesTheClustersUnset(t *testing.T) {
 		cluster.Spec.SnodeApiPort != nil {
 		t.Errorf("the ports are %v, %v and %v with nothing stated",
 			cluster.Spec.NvmfBasePort, cluster.Spec.RpcBasePort, cluster.Spec.SnodeApiPort)
+	}
+}
+
+// Where a cluster's backups live is the document's to state, for the reason the
+// key store is: the cluster is created from the template and read back on the
+// next pass, so a store stated here is present at creation rather than patched
+// in afterward by whoever remembers.
+func TestTheDocumentsBackupStoreReachesTheCluster(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.Backup = &simplyblockv1alpha2.BackupStoreSpec{
+			Endpoint:             "https://s3.example.com",
+			Bucket:               "simplyblock-backups",
+			Prefix:               "production/",
+			Region:               "eu-central-1",
+			CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
+		}
+	}))
+
+	store := cluster.Spec.Backup
+	if store == nil {
+		t.Fatal("the cluster carries no backup store")
+	}
+	if store.Bucket != "simplyblock-backups" || store.Prefix != "production/" {
+		t.Errorf("the store is %+v, want the document's bucket and prefix", store)
+	}
+	if store.Endpoint != "https://s3.example.com" || store.Region != "eu-central-1" {
+		t.Errorf("the store is %+v, want the document's endpoint and region", store)
+	}
+	if store.CredentialsSecretRef.Name != "backup-credentials" {
+		t.Errorf("the store reads its credentials from %q", store.CredentialsSecretRef.Name)
+	}
+}
+
+// A document that states no store creates a cluster with none, which is a
+// cluster whose backups are nobody's yet: the block is mutable, so it is given
+// one whenever there is one to give.
+func TestADocumentWithNoBackupStoreCreatesAClusterWithNone(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
+
+	if cluster.Spec.Backup != nil {
+		t.Errorf("the cluster carries the store %+v with nothing stated", cluster.Spec.Backup)
 	}
 }

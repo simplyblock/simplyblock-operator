@@ -299,6 +299,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-218     | `environment: OpenShift` with no block: the cluster still carries one, because its presence is the statement                 | Boundary | `TestTheEnvironmentResolvesIntoTheWorkloadFlags`                  |
 | U-219     | A non-OpenShift environment: no block reaches the cluster, whatever the template holds                                       | Negative | `TestANonOpenShiftEnvironmentStatesNoBlock`                       |
 | U-220     | A document naming the block without naming the distribution: refused by the schema                                           | Negative | `TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment`                 |
+| U-221     | `spec.cluster.backup`: the cluster is created carrying the store the document states                                         | Positive | `TestTheDocumentsBackupStoreReachesTheCluster`                    |
+| U-222     | A document that states none: the cluster is created with no store, which is a cluster whose backups are nobody's yet         | Boundary | `TestADocumentWithNoBackupStoreCreatesAClusterWithNone`           |
 | U-215     | A document with no ports block: all three stay unset                                                                         | Boundary | `TestADocumentWithNoPortsLeavesTheClustersUnset`                  |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
@@ -615,11 +617,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 171       | 38      | 133         | 9         |
+| Unit        | 173       | 40      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **241**   | **41**  | **200**     | **12**    |
+| **Total**   | **243**   | **43**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
