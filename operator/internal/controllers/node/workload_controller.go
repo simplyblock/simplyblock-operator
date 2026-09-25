@@ -514,10 +514,8 @@ func (r *StorageNodeWorkloadReconciler) reconcileRBAC(
 		return err
 	}
 
-	isOpenShift := false
-	if wl := cluster.Spec.StorageNodes; wl != nil && wl.OpenShiftCluster != nil {
-		isOpenShift = *wl.OpenShiftCluster
-	}
+	wl := cluster.Spec.StorageNodes
+	isOpenShift := wl != nil && wl.OpenShift != nil
 	if err := r.apply(ctx, utils.BuildStorageNodeSetClusterRole(isOpenShift)); err != nil {
 		return err
 	}

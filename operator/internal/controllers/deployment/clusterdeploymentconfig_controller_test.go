@@ -414,8 +414,8 @@ func TestTheEnvironmentResolvesIntoTheWorkloadFlags(t *testing.T) {
 	r := reconcilerFor(t)
 
 	workload := r.buildWorkload(config)
-	if workload.OpenShiftCluster == nil || !*workload.OpenShiftCluster {
-		t.Error("OpenShift did not set openShiftCluster")
+	if workload.OpenShift == nil {
+		t.Error("OpenShift left the cluster with no OpenShift block, which is what states it")
 	}
 	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
 		t.Error("OpenShift did not set enableCpuTopology")

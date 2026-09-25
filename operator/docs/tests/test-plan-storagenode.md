@@ -236,6 +236,8 @@ File: `operator/internal/webhook/storagenode_validator_test.go`
 | U-425 | The operator changing one: allowed, because the block is its record of the node                     | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
 | U-426 | A member added to the block later: guarded without being named anywhere                             | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
 | U-427 | A user changing a label alone: admitted, because the guard is the spec's and not the object's       | Positive | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-428 | A cluster carrying the OpenShift block: the agent is told the distribution and the pool             | Positive | `TestTheOpenShiftBlockReachesTheAgent`                                                                     |
+| U-429 | A cluster carrying none: the agent is told it is not OpenShift, and no pool is named                | Boundary | `TestNoOpenShiftBlockIsNotOpenShift`                                                                       |
 | U-63  | A create rather than an update: allowed, since there is no old value                                | Boundary | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
 | U-64  | A service account in another namespace named like the operator's: denied                            | Negative | —                                                                                                          |
 | U-239 | A user changing `spec.config.pcieAllowList`: denied                                                 | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
@@ -920,11 +922,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 390       | 285     | 105         |
+| Unit        | 392       | 287     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **475**   | **285** | **190**     |
+| **Total**   | **477**   | **287** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the

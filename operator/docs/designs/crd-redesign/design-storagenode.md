@@ -2895,6 +2895,32 @@ because §5 specifies it and
 before the `StorageNodeSet` retirement can land (§15.3).
 
 ```go
+// OpenShiftSpec is what a deployment onto OpenShift states beyond what every
+// distribution states.
+//
+// Its presence is the statement. A cluster carrying the block runs on OpenShift
+// and one without it does not, which is why there is no boolean beside it: a
+// block naming a machine-config pool on a cluster that also said it was not
+// OpenShift was expressible before and meant nothing.
+type OpenShiftSpec struct {
+	// MachineConfigPool names a machine-config role the storage nodes' own pool
+	// inherits from, beyond the worker role it always inherits.
+	//
+	// It is not the pool the nodes end up in, which the description it carried
+	// before said and which cost a reader the reboot they were trying to avoid.
+	// Adding a node creates a pool of its own, storage-<cluster>, and moves the
+	// node into it; a node belongs to exactly one custom pool, so whatever
+	// machine configuration its previous pool carried is lost unless that
+	// pool's role is named here for the new one to select as well. The default
+	// is the role every pool already selects, which is what makes it a no-op
+	// for a fleet whose workers are ordinary workers.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:default=worker
+	// +optional
+	MachineConfigPool string `json:"machineConfigPool,omitempty"`
+}
+
 // StorageNodesSpec is the Kubernetes workload every storage node in the cluster
 // runs as. Every field here is cluster-uniform by construction, because a
 // DaemonSet is one object for every node it schedules and its pod template
@@ -2982,15 +3008,10 @@ type StorageNodesSpec struct {
 	// +optional
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
-	// OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+	// OpenShift is what this deployment states because it runs on OpenShift,
+	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
-	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
-
-	// OpenShiftMachineConfigPool names the pool generated MachineConfig objects
-	// are labeled into.
-	// +kubebuilder:default=worker
-	// +optional
-	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
 
 	// Tolerations are applied to the storage-node pods.
 	// +optional

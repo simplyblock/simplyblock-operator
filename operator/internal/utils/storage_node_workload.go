@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/simplyblock/atlas/kube"
@@ -91,7 +92,7 @@ func BuildStorageNodeDaemonSet(
 
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, "false")},
-		{Name: "OPENSHIFT_CLUSTER", Value: ptr.StringOrDefault(wl.OpenShiftCluster, "false")},
+		{Name: "OPENSHIFT_CLUSTER", Value: strconv.FormatBool(wl.OpenShift != nil)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
@@ -102,8 +103,9 @@ func BuildStorageNodeDaemonSet(
 	if wl.NodeProvisioningBudget != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
-	if wl.OpenShiftMachineConfigPool != "" {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShiftMachineConfigPool})
+	if wl.OpenShift != nil && wl.OpenShift.MachineConfigPool != "" {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShift.MachineConfigPool})
 	}
 	if wl.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})

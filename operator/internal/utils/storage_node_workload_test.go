@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -176,4 +177,56 @@ func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
 	if strings.Contains(command, "set -a") {
 		t.Errorf("the container exports the whole entry: %s", command)
 	}
+}
+
+// The OpenShift block is the statement that this is OpenShift, and the pool it
+// names is the extra machine-config role the storage pool inherits from. Both
+// reach the agent as the environment variables it reads them by.
+func TestTheOpenShiftBlockReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				OpenShift: &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"},
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["OPENSHIFT_CLUSTER"] != "true" {
+		t.Errorf("OPENSHIFT_CLUSTER = %q for a cluster that states the block", env["OPENSHIFT_CLUSTER"])
+	}
+	if env["OPENSHIFT_MCP"] != "infra" {
+		t.Errorf("OPENSHIFT_MCP = %q, want the pool the block names", env["OPENSHIFT_MCP"])
+	}
+}
+
+// No block is no OpenShift, and the agent is told so rather than left to read an
+// empty string as a distribution.
+func TestNoOpenShiftBlockIsNotOpenShift(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["OPENSHIFT_CLUSTER"] != "false" {
+		t.Errorf("OPENSHIFT_CLUSTER = %q with no block stated", env["OPENSHIFT_CLUSTER"])
+	}
+	if _, stated := env["OPENSHIFT_MCP"]; stated {
+		t.Errorf("OPENSHIFT_MCP = %q with no block stated", env["OPENSHIFT_MCP"])
+	}
+}
+
+// mainEnvOf is the agent container's environment, by name.
+func mainEnvOf(t *testing.T, ds *appsv1.DaemonSet) map[string]string {
+	t.Helper()
+	containers := ds.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("the pod has %d containers, want 1", len(containers))
+	}
+	env := map[string]string{}
+	for _, variable := range containers[0].Env {
+		env[variable.Name] = variable.Value
+	}
+	return env
 }
