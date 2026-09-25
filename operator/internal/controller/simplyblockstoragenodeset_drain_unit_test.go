@@ -51,88 +51,122 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 	}
 }
 
-func TestRoundRobinDistributesEvenly(t *testing.T) {
+// drainNodesMock serves a storage-nodes list where node-1 is the node being
+// drained and its secondary is whatever secondary names.
+func drainNodesMock(t *testing.T, secondary string, nodes string) *webapimock.SpecServer {
+	t.Helper()
 	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
-	defer mock.Close()
 	mock.Register(http.MethodGet,
 		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"node-1","status":"online"},
-			{"id":"node-2","status":"online"},
-			{"id":"node-3","status":"online"}
+			{"id":"node-1","status":"online","secondary_node_id":"` + secondary + `"},` + nodes + `
 		]`},
 	)
+	return mock
+}
+
+func TestDrainSendsEveryVolumeToTheSecondary(t *testing.T) {
+	// The secondary already holds the drained node's lvstore, so this is the one
+	// target that turns the migration into a role handover instead of a copy.
+	// Round-robin spread volumes over all online peers and reached a replica
+	// holder only by chance.
+	mock := drainNodesMock(t, "node-2", `
+			{"id":"node-2","status":"online"},
+			{"id":"node-3","status":"online"}`)
+	defer mock.Close()
 
 	pvNames := []string{"pv-a", "pv-b", "pv-c", "pv-d", "pv-e", "pv-f"}
-	excluded := "node-1"
-	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, excluded, pvNames)
+	assignment, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", pvNames)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// excluded node should not appear as a target
-	for pv, target := range assignment {
-		if target == excluded {
-			t.Errorf("pv %s assigned to excluded node %s", pv, excluded)
-		}
-	}
-	// all pvNames must be assigned
 	if len(assignment) != len(pvNames) {
-		t.Errorf("expected %d assignments, got %d", len(pvNames), len(assignment))
-	}
-	// each of node-2 and node-3 should appear 3 times (6 pvs / 2 nodes)
-	counts := map[string]int{}
-	for _, target := range assignment {
-		counts[target]++
-	}
-	for _, node := range []string{"node-2", "node-3"} {
-		if counts[node] != 3 {
-			t.Errorf("node %s expected 3 assignments, got %d", node, counts[node])
-		}
-	}
-}
-
-func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
-	defer mock.Close()
-	// Only one node, and it is the excluded one.
-	mock.Register(http.MethodGet,
-		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"node-1","status":"online"}
-		]`},
-	)
-
-	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
-	if err == nil {
-		t.Fatal("expected error when no online peer node is available")
-	}
-}
-
-func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
-	defer mock.Close()
-	mock.Register(http.MethodGet,
-		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"node-1","status":"online"},
-			{"id":"node-2","status":"offline"},
-			{"id":"node-3","status":"online"}
-		]`},
-	)
-
-	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("expected %d assignments, got %d", len(pvNames), len(assignment))
 	}
 	for pv, target := range assignment {
-		if target == "node-2" {
-			t.Errorf("pv %s assigned to offline node-2", pv)
-		}
-		if target == "node-1" {
-			t.Errorf("pv %s assigned to excluded node-1", pv)
+		if target != "node-2" {
+			t.Errorf("pv %s went to %s, want the secondary node-2 "+
+				"(node-3 holds no replica, so that is a full copy)", pv, target)
 		}
 	}
-	_ = assignment
+}
+
+func TestDrainStallsWhenTheSecondaryIsNotOnline(t *testing.T) {
+	// Falling back to any other online peer is what silently turns a handover
+	// into a cluster-wide copy, so an offline secondary must stop the drain and
+	// say so rather than pick someone else.
+	mock := drainNodesMock(t, "node-2", `
+			{"id":"node-2","status":"offline"},
+			{"id":"node-3","status":"online"}`)
+	defer mock.Close()
+
+	_, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
+	if err == nil {
+		t.Fatal("an offline secondary was accepted, or fell back to another node")
+	}
+	if !strings.Contains(err.Error(), "node-2") || !strings.Contains(err.Error(), "offline") {
+		t.Errorf("error should name the secondary and its status, got: %v", err)
+	}
+}
+
+func TestDrainStallsWhenThereIsNoSecondary(t *testing.T) {
+	mock := drainNodesMock(t, "", `
+			{"id":"node-2","status":"online"}`)
+	defer mock.Close()
+
+	_, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
+	if err == nil {
+		t.Fatal("a node with no secondary produced a target anyway")
+	}
+}
+
+func TestDrainRejectsANodeThatIsItsOwnSecondary(t *testing.T) {
+	// Would otherwise migrate every volume onto the node being removed.
+	mock := drainNodesMock(t, "node-1", `
+			{"id":"node-2","status":"online"}`)
+	defer mock.Close()
+
+	_, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
+	if err == nil {
+		t.Fatal("the drained node was accepted as its own migration target")
+	}
+}
+
+func TestDrainStallsWhenTheSecondaryIsNotInTheCluster(t *testing.T) {
+	mock := drainNodesMock(t, "node-9", `
+			{"id":"node-2","status":"online"}`)
+	defer mock.Close()
+
+	_, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"})
+	if err == nil {
+		t.Fatal("a secondary that is not a cluster member produced a target anyway")
+	}
+}
+
+func TestDrainIgnoresUnrelatedOfflineNodes(t *testing.T) {
+	// Only the secondary's health decides the target. Another peer being down
+	// is not this drain's problem, and must not divert the volumes or stall it.
+	mock := drainNodesMock(t, "node-3", `
+			{"id":"node-2","status":"offline"},
+			{"id":"node-3","status":"online"}`)
+	defer mock.Close()
+
+	assignment, err := drainTargetNodes(
+		context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID,
+		"node-1", []string{"pv-a", "pv-b"})
+	if err != nil {
+		t.Fatalf("an unrelated offline node stalled the drain: %v", err)
+	}
+	for pv, target := range assignment {
+		if target != "node-3" {
+			t.Errorf("pv %s went to %s, want the secondary node-3", pv, target)
+		}
+	}
 }
 
 // ── matchVolumesToPVs ─────────────────────────────────────────────────────────

@@ -218,36 +218,76 @@ func getNodeBackendStatus(
 	return resp.Status, nil
 }
 
-// roundRobinTargetNodes lists all online nodes (excluding the drained node) and
-// assigns each PV name a target node UUID using round-robin order. The i-th PV
-// in pvNames is assigned to onlineNodes[i % len(onlineNodes)], distributing
-// migrations evenly across the cluster without requiring persistent state.
-// Returns an error if no online peer node is available.
-func roundRobinTargetNodes(
+// drainTargetNodes assigns every PV on a drained node the same target: that
+// node's HA secondary.
+//
+// For a drain the target is determined, not chosen. The drained node is the
+// lvstore's leader, so it cannot be its own target, and the secondary is the
+// one peer that already holds a replica of that lvstore -- migrating there
+// moves the serving role over data the target already has, instead of copying
+// the volume across the cluster.
+//
+// roundRobinTargetNodes, which this replaces on the drain path, could not see
+// that: StorageNodeInfo carried no replica information at all, so it spread
+// volumes over online[i%len(online)] and landed on a replica holder only by
+// chance. Observed on a 7-node cluster (2026-09-25): a 10 GiB volume on a node
+// whose secondary already held its LVS_7 was assigned to a node holding none of
+// it, turning a role handover into a full 9.3 GiB copy -- read out through a
+// node whose own devices had already been failed and rebuilt onto peers, so
+// every one of those reads was a remote read.
+//
+// If the secondary is not online the drain stops with an error rather than
+// falling back to an arbitrary peer: that fallback is precisely the expensive
+// wrong thing, and doing it silently is how the above went unnoticed. A
+// tertiary fallback is the obvious extension and deliberately not implemented
+// here -- the v2 storage-node DTO does not serialize tertiary_node_id, so it
+// needs a control-plane change first.
+func drainTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	excludeNodeUUID string,
+	drainNodeUUID string,
 	pvNames []string,
 ) (map[string]string, error) {
 	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
-		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
+		return nil, fmt.Errorf("drainTargetNodes: %w", err)
 	}
 
-	var online []string
+	var secondaryUUID string
+	statusByUUID := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
-			online = append(online, n.UUID)
+		statusByUUID[n.UUID] = n.Status
+		if n.UUID == drainNodeUUID {
+			secondaryUUID = n.SecondaryNodeID
 		}
 	}
-	if len(online) == 0 {
-		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
+
+	if secondaryUUID == "" {
+		return nil, fmt.Errorf(
+			"drainTargetNodes: node %s has no secondary; nothing holds a replica of its lvstore",
+			drainNodeUUID)
+	}
+	// Guards a layout that should not exist rather than a transient state, so it
+	// is worth failing loudly on: a node listed as its own secondary would make
+	// the drain migrate every volume onto the node being removed.
+	if secondaryUUID == drainNodeUUID {
+		return nil, fmt.Errorf(
+			"drainTargetNodes: node %s lists itself as its own secondary", drainNodeUUID)
+	}
+	if status, ok := statusByUUID[secondaryUUID]; !ok {
+		return nil, fmt.Errorf(
+			"drainTargetNodes: secondary %s of node %s is not in the cluster",
+			secondaryUUID, drainNodeUUID)
+	} else if status != utils.NodeStatusOnline {
+		return nil, fmt.Errorf(
+			"drainTargetNodes: secondary %s of node %s is %s, not online",
+			secondaryUUID, drainNodeUUID, status)
 	}
 
 	assignment := make(map[string]string, len(pvNames))
-	for i, pv := range pvNames {
-		assignment[pv] = online[i%len(online)]
+	for _, pv := range pvNames {
+		assignment[pv] = secondaryUUID
 	}
 	return assignment, nil
 }
