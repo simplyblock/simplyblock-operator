@@ -374,6 +374,7 @@ Files: `operator/internal/controllers/cluster/cel_validation_test.go`,
 | I-32 | `spec.storageNodes` present with no `imagePullPolicy`: the stored object reads `Always`                  | Boundary | `TestAStorageClusterThatNamesNoPullPolicyPullsAlways`                 |
 | I-33 | `spec.storageNodes.dataInterfaces` changed, appended to, or cleared after creation: rejected             | Negative | `TestTheDataInterfacesAreImmutableOnceSet`                            |
 | I-34 | `spec.storageNodes.dataInterfaces` absent at creation, set later: accepted                               | Boundary | `TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem`          |
+| I-35 | `spec.clientDataIfname` changed or cleared after creation: rejected as immutable                         | Negative | `TestTheClientDataInterfaceIsImmutableOnceSet`                        |
 
 `I-01` is answered by a unit test rather than an integration one: a not-found read
 needs no API server to be a not-found read, and the row is kept because the ID is
@@ -475,10 +476,10 @@ against a real API server under real concurrency.
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
 | Unit        | 179       | 163     | 16          |
-| Integration | 32        | 13      | 19          |
+| Integration | 33        | 14      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **227**   | **176** | **51**      |
+| **Total**   | **228**   | **177** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and

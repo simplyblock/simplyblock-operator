@@ -662,6 +662,7 @@ type StorageClusterSpec struct {
 	// ClientDataIfname is the network interface clients reach the data plane
 	// on.
 	// +optional
+	// +k8s:immutable
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.

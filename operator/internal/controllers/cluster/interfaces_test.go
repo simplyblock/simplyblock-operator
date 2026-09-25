@@ -113,3 +113,56 @@ func TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem(t *testing.T) {
 		t.Fatalf("the first assignment was refused: %v", err)
 	}
 }
+
+// clientDataIfname is spent on the cluster-add rather than the node-add, which
+// makes it the same class as fabricType beside it: stated once, sent once, never
+// read again.
+func TestTheClientDataInterfaceIsImmutableOnceSet(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*simplyblockv1alpha2.StorageClusterSpec)
+		wantErr string
+	}{
+		{
+			name: "changing it",
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.ClientDataIfname = "eth9"
+			},
+			wantErr: "field is immutable",
+		},
+		{
+			name: "clearing it",
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.ClientDataIfname = ""
+			},
+			wantErr: "immutable once set",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "clientnic-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(int32(6)),
+					ClientDataIfname:  "eth4",
+				},
+			}
+			if err := apiClient.Create(ctx, cluster); err != nil {
+				t.Fatalf("creating the cluster: %v", err)
+			}
+			t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+
+			tc.mutate(&cluster.Spec)
+			err := apiClient.Update(ctx, cluster)
+			if err == nil {
+				t.Fatal("the apiserver accepted the change")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
