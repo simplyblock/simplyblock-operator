@@ -368,6 +368,21 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 `U-149` is the row that keeps the cap where it belongs. A per-node copy could only
 repeat the cluster's value, and design §3.1 leaves it out for that reason.
 
+### Deployment Images (design §3.1)
+
+File: `operator/internal/controllers/deployment/images_test.go`
+
+| #     | Scenario                                                                      | Type     | Test                                       |
+|-------|-------------------------------------------------------------------------------|----------|--------------------------------------------|
+| U-151 | `images.cluster` reaches `StorageCluster.spec.storageNodes`, image and policy | Positive | `TestTheClusterImageReachesTheWorkload`    |
+| U-152 | `images.spdk` and `images.spdkProxy` reach every node's `spec.config`         | Positive | `TestTheSPDKImagesReachEveryNode`          |
+| U-153 | A document stating no images writes no image and no policy anywhere           | Boundary | `TestADocumentWithNoImagesStatesNone`      |
+| U-154 | One slot stated: the others are written as unstated rather than as empty      | Boundary | `TestOneStatedSlotLeavesTheOthersUnstated` |
+
+`U-153` and `U-154` are the rows that keep an unstated slot from overriding a
+downstream default with an empty string, which is the failure a struct of plain
+strings invites and the reason each slot is a pointer.
+
 ### Erasure Coding and the Node Minimum (design §4.1, §5.1)
 
 Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
@@ -463,6 +478,9 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —                                                  |
 | I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —                                                  |
 | I-55     | A document whose cluster template states a scheme outside the supported seven: rejected by the schema                  | Negative | `TestTheDocumentsSchemaRefusesAnUnsupportedScheme` |
+| I-56     | An image slot stating no `imagePullPolicy`: the stored document reads `Always`                                         | Boundary | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
+| I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
+| I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 
 ---
 
@@ -543,11 +561,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 133       | 0       | 133         | 9         |
-| Integration | 53        | 0       | 53          | 1         |
+| Unit        | 137       | 4       | 133         | 9         |
+| Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **200**   | **0**   | **200**     | **12**    |
+| **Total**   | **207**   | **7**   | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
@@ -560,8 +578,10 @@ replaced with a rejection. The last two are the node set's sizing, which the sam
 section moved to the cluster block, leaving a set with no sizing to omit or to
 differ in.
 
-Nothing is covered, and nothing can be: neither kind exists. Every row is a
-specification, and the plan's value before implementation is that it says what
+The covered column counts the rows that name a test. The rest were written before
+the kinds existed and have not been re-audited against what was since built, so an
+uncovered row here says that nobody has checked rather than that nothing runs.
+Every row is a specification either way, and the plan's value is that it says what
 the kinds have to do rather than what somebody remembers deciding.
 
 The distribution is worth reading, though. Seventy per cent of the scenarios

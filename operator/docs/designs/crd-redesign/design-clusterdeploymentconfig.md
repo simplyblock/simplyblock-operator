@@ -132,8 +132,8 @@ follows quotes the field an argument turns on and no more.
 
 ### 3.1 Shape
 
-The document has three parts: what the deployment is, what cluster to make, and
-which nodes to make it out of.
+The document has four parts: what the deployment is, which images it runs, what
+cluster to make, and which nodes to make it out of.
 
 ```yaml
 apiVersion: storage.simplyblock.io/v1alpha2
@@ -145,6 +145,16 @@ spec:
   approved: true
   environment: OpenShift
   edgeCluster: false
+  images:
+    cluster:
+      image: public.ecr.aws/simply-block/simplyblock:main
+      imagePullPolicy: Always
+    spdk:
+      image: public.ecr.aws/simply-block/ultra:main-latest
+      imagePullPolicy: Always
+    spdkProxy:
+      image: public.ecr.aws/simply-block/simplyblock:main
+      imagePullPolicy: Always
   cluster:
     name: production
     maxSubsystemCount: 20
@@ -169,6 +179,38 @@ spec:
           devices:
             nvme: ["0000:5e:00.0"]
 ```
+
+**Every image the deployment pins is in one block, and the expansion spends it on
+two objects.** `images.cluster` is the storage-node workload image and is written
+to `StorageCluster.spec.storageNodes`, which is where the retired
+`StorageNodeSet.spec.clusterImage` went. `images.spdk` and `images.spdkProxy` are
+written onto every `StorageNode.spec.config` the expansion creates, because those
+two fields are per node so that a later rollout can walk the fleet one machine at
+a time ([`design-storagenode.md`](design-storagenode.md) §3.2) and a document
+states the fleet's starting point.
+
+They are together here rather than each beside the object it configures because
+pinning images is one decision taken once. An air-gapped installation overrides
+all three against its own registry, and a reviewer reading the document has one
+place to check what this deployment will run, which is the property the whole kind
+exists for.
+
+Each slot is an image and a pull policy, and either may be stated without the
+other: an override of the image keeps the default policy, and a pin of the policy
+keeps the default image. A slot the document does not state is written nowhere, so
+the field it would have filled keeps its own default rather than being overridden
+with an empty string. Every image is held to the trusted-registry set the rest of
+this API holds them to.
+
+`images.cluster` is spent only where the document creates the cluster. A document
+naming an existing one in `spec.clusterRef` adds nodes to a workload already
+running under an image that cluster states, and the slot is ignored the same way
+`spec.cluster` is.
+
+The two SPDK policies are recorded and not yet obeyed. The control plane starts
+the SPDK pod, and its `spdk_process_start` takes no pull policy: the pod template
+it renders writes `Always` for both containers. They are in the document because a
+deployment states them, and they reach the pod once the control plane accepts one.
 
 **All three sizing values sit in the cluster block, and nothing below it varies
 them.** `maxSubsystemCount`, `vcpuCount`, and `minHugePagesSize` are stated once
@@ -1317,10 +1359,54 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
+	// Images are the container images this deployment pins. Unstated, each field
+	// the expansion would write keeps its own default.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
+
 	// NodeSets are the nodes the deployment is made of.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:Required
 	NodeSets []NodeSet `json:"nodeSets"`
+}
+
+// ImageSpec is one container image and when to pull it, which is the pair every
+// image in this product is stated as. Both members are optional so that each can
+// be stated without the other.
+type ImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned. An empty value
+	// is not written downstream, so the field it would fill keeps its own
+	// default rather than being overridden with nothing.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImagePullPolicy is when that image is pulled, and defaults to Always
+	// because every image this product ships by default is a moving tag.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+}
+
+// DeploymentImages is every image a deployment pins, in one block. The expansion
+// spends them on two objects: the cluster slot is the workload's, and the two
+// SPDK slots are every node's.
+type DeploymentImages struct {
+	// Cluster is the storage-node workload image, written to
+	// StorageCluster.spec.storageNodes and ignored when ClusterRef names an
+	// existing cluster.
+	// +optional
+	Cluster *ImageSpec `json:"cluster,omitempty"`
+
+	// SPDK is the SPDK image, written onto every StorageNode.spec.config the
+	// expansion creates.
+	// +optional
+	SPDK *ImageSpec `json:"spdk,omitempty"`
+
+	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
+	// +optional
+	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
 }
 
 // ClusterDeploymentConfigStatus is the observed state of the document.

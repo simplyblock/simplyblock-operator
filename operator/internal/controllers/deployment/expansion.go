@@ -329,6 +329,16 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		workload.EnableJournalDevice = template.EnableJournalDevice
 	}
 
+	// The cluster slot of spec.images. It is read here rather than in
+	// buildCluster because the field it fills is on the workload, and it is
+	// spent only on this path: a document naming an existing cluster in
+	// clusterRef never reaches buildCluster at all, so the slot is ignored for
+	// the same reason spec.cluster is.
+	if images := config.Spec.Images; images != nil && images.Cluster != nil {
+		workload.Image = images.Cluster.Image
+		workload.ImagePullPolicy = images.Cluster.ImagePullPolicy
+	}
+
 	for _, set := range config.Spec.NodeSets {
 		for _, group := range set.Groups {
 			if workload.MgmtInterface == "" {
@@ -543,9 +553,61 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
 				JournalManager:   group.JournalManager,
+				// The two SPDK slots of spec.images. They are the document's
+				// statement for the whole fleet and land per node, because the
+				// fields are per node so that a later rollout can walk it one
+				// machine at a time.
+				SpdkImage:                imageOf(config, spdkSlot),
+				SpdkImagePullPolicy:      pullPolicyOf(config, spdkSlot),
+				SpdkProxyImage:           imageOf(config, spdkProxySlot),
+				SpdkProxyImagePullPolicy: pullPolicyOf(config, spdkProxySlot),
 			},
 		},
 	}
+}
+
+// The two slots of spec.images a node is built from, as accessors rather than as
+// a switch, so that a slot added later is one function and not a case in four.
+func spdkSlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec {
+	return images.SPDK
+}
+
+func spdkProxySlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec {
+	return images.SPDKProxy
+}
+
+// imageOf and pullPolicyOf read one slot, or the zero value when the document
+// states no images or not that slot. The zero value is what the expansion writes
+// for an unstated slot, so the field downstream keeps its own default rather than
+// being overridden with nothing.
+func imageOf(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) string {
+	if spec := imageSlot(config, slot); spec != nil {
+		return spec.Image
+	}
+	return ""
+}
+
+func pullPolicyOf(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) corev1.PullPolicy {
+	if spec := imageSlot(config, slot); spec != nil {
+		return spec.ImagePullPolicy
+	}
+	return ""
+}
+
+func imageSlot(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) *simplyblockv1alpha2.ImageSpec {
+	if config.Spec.Images == nil {
+		return nil
+	}
+	return slot(config.Spec.Images)
 }
 
 // decomposeSlot renders a slot as the socket and the position within it, which is

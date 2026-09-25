@@ -18,6 +18,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/statemachine"
@@ -362,6 +363,66 @@ type ClusterTemplate struct {
 	KMS *KMSSpec `json:"kms,omitempty"`
 }
 
+// ImageSpec is one container image and when to pull it, which is the pair every
+// image in this product is stated as.
+//
+// Both members are optional so that each can be stated without the other: an
+// air-gapped deployment overrides the image and keeps the policy, and a
+// development one keeps the image and pins the policy to IfNotPresent so a tag
+// rebuilt in place is not picked up mid-deployment.
+type ImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned. An empty value
+	// is not written downstream, so the field it would fill keeps its own
+	// default rather than being overridden with nothing.
+	//
+	// The registry set is the one every image field in this API is held to,
+	// which is what keeps a reviewed document from naming a build nobody
+	// published.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// ImagePullPolicy is when that image is pulled. It defaults to Always,
+	// because every image this product ships by default is a moving tag and a
+	// node brought up after a release otherwise runs what its kubelet held.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+}
+
+// DeploymentImages is every image a deployment pins, in one block.
+//
+// They are together rather than each beside the object it configures because
+// pinning images is one decision taken once: an air-gapped installation
+// overrides all three against its own registry, and a reviewer reading the
+// document has one place to check what this deployment will run. The expansion
+// is what spends them on two different objects, since the three fields they land
+// on are not all on the same kind.
+type DeploymentImages struct {
+	// Cluster is the storage-node workload image, which the expansion writes to
+	// StorageCluster.spec.storageNodes. This is where the retired
+	// StorageNodeSet.spec.clusterImage went.
+	//
+	// It is spent only where the document creates the cluster. A document that
+	// names an existing one in ClusterRef adds nodes to a workload that is
+	// already running under an image the cluster states, and this slot is
+	// ignored the same way Cluster is.
+	// +optional
+	Cluster *ImageSpec `json:"cluster,omitempty"`
+
+	// SPDK is the SPDK image, which the expansion writes onto every
+	// StorageNode.spec.config it creates rather than onto the cluster: the field
+	// is per node so that a later rollout can walk the fleet one machine at a
+	// time, and a document states the fleet's starting point.
+	// +optional
+	SPDK *ImageSpec `json:"spdk,omitempty"`
+
+	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
+	// +optional
+	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
+}
+
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
 // reviewable document.
 //
@@ -417,6 +478,11 @@ type ClusterDeploymentConfigSpec struct {
 	// Cluster is the StorageCluster to create. Ignored when ClusterRef is set.
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
+
+	// Images are the container images this deployment pins. Unstated, each field
+	// the expansion would write keeps its own default.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
 
 	// NodeSets are the nodes the deployment is made of.
 	//

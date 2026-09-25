@@ -329,6 +329,103 @@ spec:
                 - K3s
                 - Talos
                 type: string
+              images:
+                description: |-
+                  Images are the container images this deployment pins. Unstated, each field
+                  the expansion would write keeps its own default.
+                properties:
+                  cluster:
+                    description: |-
+                      Cluster is the storage-node workload image, which the expansion writes to
+                      StorageCluster.spec.storageNodes. This is where the retired
+                      StorageNodeSet.spec.clusterImage went.
+
+                      It is spent only where the document creates the cluster. A document that
+                      names an existing one in ClusterRef adds nodes to a workload that is
+                      already running under an image the cluster states, and this slot is
+                      ignored the same way Cluster is.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned. An empty value
+                          is not written downstream, so the field it would fill keeps its own
+                          default rather than being overridden with nothing.
+
+                          The registry set is the one every image field in this API is held to,
+                          which is what keeps a reviewed document from naming a build nobody
+                          published.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      imagePullPolicy:
+                        default: Always
+                        description: |-
+                          ImagePullPolicy is when that image is pulled. It defaults to Always,
+                          because every image this product ships by default is a moving tag and a
+                          node brought up after a release otherwise runs what its kubelet held.
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                    type: object
+                  spdk:
+                    description: |-
+                      SPDK is the SPDK image, which the expansion writes onto every
+                      StorageNode.spec.config it creates rather than onto the cluster: the field
+                      is per node so that a later rollout can walk the fleet one machine at a
+                      time, and a document states the fleet's starting point.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned. An empty value
+                          is not written downstream, so the field it would fill keeps its own
+                          default rather than being overridden with nothing.
+
+                          The registry set is the one every image field in this API is held to,
+                          which is what keeps a reviewed document from naming a build nobody
+                          published.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      imagePullPolicy:
+                        default: Always
+                        description: |-
+                          ImagePullPolicy is when that image is pulled. It defaults to Always,
+                          because every image this product ships by default is a moving tag and a
+                          node brought up after a release otherwise runs what its kubelet held.
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                    type: object
+                  spdkProxy:
+                    description: SPDKProxy is the SPDK proxy image, written per node
+                      for the reason SPDK is.
+                    properties:
+                      image:
+                        description: |-
+                          Image is the repository and tag, optionally digest-pinned. An empty value
+                          is not written downstream, so the field it would fill keeps its own
+                          default rather than being overridden with nothing.
+
+                          The registry set is the one every image field in this API is held to,
+                          which is what keeps a reviewed document from naming a build nobody
+                          published.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                        type: string
+                      imagePullPolicy:
+                        default: Always
+                        description: |-
+                          ImagePullPolicy is when that image is pulled. It defaults to Always,
+                          because every image this product ships by default is a moving tag and a
+                          node brought up after a release otherwise runs what its kubelet held.
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                    type: object
+                type: object
               nodeSets:
                 description: |-
                   NodeSets are the nodes the deployment is made of.
