@@ -58,6 +58,8 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		sharedConfigMap(ns),
 		controlPlaneClusterRole(),
 		controlPlaneClusterRoleBinding(ns),
+		podTeardownRole(ns),
+		podTeardownRoleBinding(ns),
 		serviceReaderClusterRole(),
 		serviceReaderClusterRoleBinding(ns),
 		webAPIDeployment(cp),
@@ -161,6 +163,46 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 				Verbs:     []string{"create"},
 			},
 		},
+	}
+}
+
+// podTeardownRole is the delete half of what the control plane does to pods,
+// and it is separate because it is the half that never leaves the install
+// namespace.
+//
+// rbac-justified: a node add that fails after spdk_process_start has already
+// created snode-spdk-pod-<port>-<cluster> deletes it straight through the API
+// server (_abort_started_spdk in the control plane's storage_node_ops). The node
+// agent that would otherwise do it runs on the host the add is abandoning and is
+// unreachable in exactly that case, so the fallback through the agent is not a
+// substitute. Left behind, the pod holds the host's hugepages, so every later
+// add on that host stays Pending on an "Insufficient hugepages-2Mi" event.
+//
+// Containment: delete on pods in one namespace, with no create beside it. The
+// account cannot replace what it removes, and the workloads it can remove are
+// recreated by their own controllers. It is capped by the manager's own
+// cluster-wide delete on pods, which the storage node and cluster Ops
+// reconcilers already hold.
+func podTeardownRole(namespace string) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: podTeardownRoleName, Namespace: namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"pods"},
+			Verbs:     []string{"delete"},
+		}},
+	}
+}
+
+func podTeardownRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: podTeardownBindingName, Namespace: namespace},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName, Kind: "Role", Name: podTeardownRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind: "ServiceAccount", Name: serviceAccountName, Namespace: namespace,
+		}},
 	}
 }
 

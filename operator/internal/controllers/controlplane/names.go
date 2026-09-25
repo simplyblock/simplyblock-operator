@@ -77,6 +77,12 @@ const (
 	clusterRoleName        = "simplyblock-role"
 	clusterRoleBindingName = "simplyblock-binding"
 
+	// podTeardownRoleName and podTeardownBindingName grant the same account the
+	// one thing it does that is confined to its own namespace, so it is a Role
+	// rather than another rule on the cluster-wide one.
+	podTeardownRoleName    = "simplyblock-pod-teardown"
+	podTeardownBindingName = "simplyblock-pod-teardown-binding"
+
 	// serviceReaderRoleName and serviceReaderBindingName let the namespace's
 	// default account resolve services and endpoints, which is how the control
 	// plane's own tooling finds its peers.
