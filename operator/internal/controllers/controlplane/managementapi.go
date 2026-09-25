@@ -114,8 +114,21 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 			},
 			{
 				APIGroups: []string{"", "apps"},
-				Resources: []string{"pods", "deployments", "statefulsets", "daemonsets"},
+				Resources: []string{"deployments", "statefulsets", "daemonsets"},
 				Verbs:     []string{"get", "list", "watch", "patch", "update"},
+			},
+			{
+				// rbac-justified: sbcli's storage_node_ops._delete_spdk_pod_via_k8s
+				// deletes an orphaned SPDK pod straight through the API server when
+				// an add/restart abort can't reach the node's own agent to ask it to
+				// -- the exact situation the abort path exists for. Without delete
+				// it 403s and falls back to the agent unconditionally, which is
+				// unreliable in precisely that situation and can permanently
+				// strand a pod holding a worker's hugepages (2026-09-24 lblk
+				// outage-matrix RCA).
+				APIGroups: []string{""},
+				Resources: []string{"pods"},
+				Verbs:     []string{"get", "list", "watch", "patch", "update", "delete"},
 			},
 			{
 				APIGroups: []string{""},
