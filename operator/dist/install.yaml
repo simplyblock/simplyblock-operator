@@ -8509,6 +8509,18 @@ spec:
                     description: SpdkProxyImage overrides the SPDK proxy image for
                       this node.
                     type: string
+                  spdkProxyImagePullPolicy:
+                    default: Always
+                    description: |-
+                      SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+                      apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+                      the SPDK image, and it carries the same not-yet-spent caveat: the template
+                      the control plane renders writes Always for both containers.
+                    enum:
+                    - Always
+                    - Never
+                    - IfNotPresent
+                    type: string
                   spdkSystemMemory:
                     description: |-
                       SpdkSystemMemory is the memory the control plane starts this node's SPDK

@@ -284,3 +284,36 @@ func TestStorageNodeSpdkPullPolicySurvivesTheTripDown(t *testing.T) {
 		t.Errorf("the config did not survive (-want +got):\n%s", diff)
 	}
 }
+
+// SpdkProxyImagePullPolicy is the second of the pair, and it stashes separately
+// rather than with its sibling: a node may pin the proxy and follow the SPDK
+// image, so a note that carried both under one key would report the two as one
+// decision.
+func TestStorageNodeSpdkProxyPullPolicySurvivesTheTripDown(t *testing.T) {
+	hub := &v1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeSpec{
+			ClusterRef: testCluster,
+			WorkerNode: "worker-3",
+			Config: v1alpha2.StorageNodeConfig{
+				SpdkImage:                "public.ecr.aws/simply-block/ultra:main-latest",
+				SpdkImagePullPolicy:      corev1.PullAlways,
+				SpdkProxyImage:           "public.ecr.aws/simply-block/simplyblock:main",
+				SpdkProxyImagePullPolicy: corev1.PullIfNotPresent,
+			},
+		},
+	}
+
+	var stored StorageNode
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNode
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub.Spec.Config, back.Spec.Config); diff != "" {
+		t.Errorf("the config did not survive (-want +got):\n%s", diff)
+	}
+}

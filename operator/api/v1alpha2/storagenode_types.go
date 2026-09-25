@@ -180,6 +180,15 @@ type StorageNodeConfig struct {
 	// +optional
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
+	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+	// apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+	// the SPDK image, and it carries the same not-yet-spent caveat: the template
+	// the control plane renders writes Always for both containers.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
 	// with, as a size string such as 4G or 512M. Mutable: a node whose device
 	// count grew legitimately needs to raise it.

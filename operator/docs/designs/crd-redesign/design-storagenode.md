@@ -458,19 +458,21 @@ identity. It fails closed, which is safe because it runs in the operator pod: it
 availability tracks the operator's own, and an operator that is down is not
 reconciling anything the rejection could deadlock.
 
-**Mutable.** `config.spdkImage`, `config.spdkImagePullPolicy`, and
-`config.spdkProxyImage`, with `config.spdkSystemMemory`. The two images are
+**Mutable.** `config.spdkImage`, `config.spdkImagePullPolicy`,
+`config.spdkProxyImage`, `config.spdkProxyImagePullPolicy`, and
+`config.spdkSystemMemory`. The two images are
 per-node so that an image rollout can be phased, which is the whole reason they
 are not on the cluster, and the memory figure is what a node whose device count
 grew legitimately needs to raise. All of them take effect on the node's next
 configuration generation, which is a restart-shaped change rather than a
 declarative one.
 
-`config.spdkImagePullPolicy` is the one field of the set the operator records and
-does not yet spend. The control plane starts the SPDK pod, and its
-`spdk_process_start` takes no pull policy: the pod template it renders writes
-`Always` itself. The field is on this kind because a deployment document states
-it, and it reaches the pod once the control plane accepts one.
+The two pull policies are the fields of the set the operator records and does not
+yet spend. The control plane starts the SPDK pod, and its `spdk_process_start`
+takes no pull policy: the pod template it renders writes `Always` for both
+containers. They are on this kind because a deployment document states them, and
+they reach the pod once the control plane accepts one. They are two fields rather
+than one because a node may pin the proxy and follow the SPDK image.
 
 ### 3.3 Status
 
@@ -2255,6 +2257,15 @@ type StorageNodeConfig struct {
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
+
+	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+	// apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+	// the SPDK image, and it carries the same not-yet-spent caveat: the template
+	// the control plane renders writes Always for both containers.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
 	// with ("4G", "512M"). Mutable: a node whose device count grew legitimately

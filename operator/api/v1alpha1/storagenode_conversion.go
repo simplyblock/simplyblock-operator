@@ -64,13 +64,14 @@ const (
 	annoV1Alpha1NodePostedAt     = "storage.simplyblock.io/v1alpha1-status.postedAt"
 )
 
-// The annotations holding the hub fields this version cannot express. The SPDK
-// pull policy is one of them: this version names the image and never said when
-// to pull it.
+// The annotations holding the hub fields this version cannot express. The two
+// SPDK pull policies are among them: this version names both images and never
+// said when either is pulled.
 const (
 	annoNodeCluster    = "storage.simplyblock.io/conversion-spec.clusterRef"
 	annoNodeSizing     = "storage.simplyblock.io/conversion-spec.config.sizing"
 	annoNodeSpdkPull   = "storage.simplyblock.io/conversion-spec.config.spdkImagePullPolicy"
+	annoNodeProxyPull  = "storage.simplyblock.io/conversion-spec.config.spdkProxyImagePullPolicy"
 	annoNodeSpecDomain = "storage.simplyblock.io/conversion-spec.config.failureDomain"
 	annoNodeStatDomain = "storage.simplyblock.io/conversion-status.failureDomain"
 	annoNodeStep       = "storage.simplyblock.io/conversion-status.step"
@@ -317,6 +318,7 @@ func stashNodeHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageNode) error 
 		{annoNodeCluster, src.Spec.ClusterRef},
 		{annoNodeSizing, src.Spec.Config.Sizing},
 		{annoNodeSpdkPull, string(src.Spec.Config.SpdkImagePullPolicy)},
+		{annoNodeProxyPull, string(src.Spec.Config.SpdkProxyImagePullPolicy)},
 		{annoNodeStep, src.Status.Step},
 		{annoNodePhase, string(src.Status.Phase)},
 		{annoNodeMessage, src.Status.Message},
@@ -378,6 +380,7 @@ func restoreNodeHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageNode) erro
 	}{
 		{annoNodeSizing, &dst.Spec.Config.Sizing},
 		{annoNodeSpdkPull, &dst.Spec.Config.SpdkImagePullPolicy},
+		{annoNodeProxyPull, &dst.Spec.Config.SpdkProxyImagePullPolicy},
 		{annoNodeMessage, &dst.Status.Message},
 		{annoNodeObserved, &dst.Status.ObservedGeneration},
 	} {
