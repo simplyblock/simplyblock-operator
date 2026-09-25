@@ -322,6 +322,12 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		} else {
 			workload.EnableFormat4K = template.EnableDriveFormat
 		}
+		// What the storage-node container is sized with. Left here, a document
+		// that stated a fleet's sizing produced a cluster carrying the modest
+		// default, and the correction was an edit to the cluster.
+		if template.ContainerResources != nil {
+			workload.ContainerResources = *template.ContainerResources
+		}
 		// What the storage-node pods tolerate. A fleet that dedicates machines
 		// to storage taints them, and a DaemonSet that tolerates nothing lands
 		// on none of them: the document that described the deployment would

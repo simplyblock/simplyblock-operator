@@ -286,6 +286,14 @@ A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
 
+**`spec.cluster.containerResources` sizes the storage-node container.** The
+container is the node's management API and not SPDK, which runs in a pod of its
+own, so what outgrows the default is a node answering for many subsystems rather
+than a node moving more data. It expands into the cluster's own
+`spec.storageNodes.containerResources`, and stating either half of it replaces
+both: the defaults apply to a cluster that states neither requests nor limits,
+so a document stating requests alone produces a container with no limits at all.
+
 **`spec.cluster.tolerations` is where the storage-node pods are allowed to
 run.** A fleet that dedicates machines to storage taints them, which is what
 keeps everything else off, and the DaemonSet that lands on those machines has to
@@ -1404,6 +1412,30 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:Maximum=8
 	// +optional
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// ContainerResources sizes the storage-node container, and expands into the
+	// cluster's own spec.storageNodes.containerResources.
+	//
+	// The container it sizes is the node's management API rather than SPDK,
+	// which runs in a pod of its own: what outgrows the default is a node
+	// answering for many subsystems, not a node moving more data. It is on the
+	// document because a deployment is where a fleet's sizing is decided, and
+	// a cluster written from a document that could not say so had to be edited
+	// afterward on a field the document owns everywhere else.
+	//
+	// Stating either half replaces both. The defaults apply to a cluster that
+	// states neither requests nor limits, so a document stating requests alone
+	// produces a container with no limits rather than one with the default
+	// limits, and a memory limit is what has the kubelet evict a leaking agent
+	// rather than losing the worker.
+	//
+	// It is a pointer because a resource block is a struct, and a struct with
+	// omitempty is serialized whether or not anything is in it: as a value,
+	// every document a discovery run writes would carry an empty
+	// containerResources that says nothing and that a reviewer has to decide
+	// about.
+	// +optional
+	ContainerResources *corev1.ResourceRequirements `json:"containerResources,omitempty"`
 
 	// Tolerations are what the storage-node pods tolerate, and they expand into
 	// the cluster's own spec.storageNodes.tolerations.

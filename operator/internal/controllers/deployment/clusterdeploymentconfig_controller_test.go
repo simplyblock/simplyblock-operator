@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -523,5 +524,45 @@ func TestAGrowthDocumentStatesNoTolerations(t *testing.T) {
 
 	if workload := reconcilerFor(t).buildWorkload(config); len(workload.Tolerations) != 0 {
 		t.Errorf("a growth document produced %+v", workload.Tolerations)
+	}
+}
+
+// What the storage-node container is sized with. The default is the agent's
+// modest one, and a fleet whose nodes serve many subsystems outgrows it: a
+// document that could not say so left the sizing to an edit of the cluster it
+// had just written.
+func TestTheDocumentsContainerResourcesReachTheStorageNodes(t *testing.T) {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+	}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.ContainerResources = &resources
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !workload.ContainerResources.Requests.Cpu().Equal(resource.MustParse("500m")) {
+		t.Errorf("the container requests %v, want 500m", workload.ContainerResources.Requests.Cpu())
+	}
+	if !workload.ContainerResources.Limits.Memory().Equal(resource.MustParse("4Gi")) {
+		t.Errorf("the container is limited to %v, want 4Gi", workload.ContainerResources.Limits.Memory())
+	}
+}
+
+// A document that states no resources states nothing, and the cluster's own
+// defaults decide. Stating an empty block would be a third answer beside the
+// default and the stated one.
+func TestADocumentWithNoContainerResourcesLeavesTheClustersUnset(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if len(workload.ContainerResources.Requests) != 0 || len(workload.ContainerResources.Limits) != 0 {
+		t.Errorf("the cluster is sized %+v with nothing stated", workload.ContainerResources)
 	}
 }

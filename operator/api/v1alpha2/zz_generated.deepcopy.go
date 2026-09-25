@@ -340,6 +340,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.ContainerResources != nil {
+		in, out := &in.ContainerResources, &out.ContainerResources
+		*out = new(v1.ResourceRequirements)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.NodeProvisioningBudget != nil {
 		in, out := &in.NodeProvisioningBudget, &out.NodeProvisioningBudget
 		*out = new(int32)

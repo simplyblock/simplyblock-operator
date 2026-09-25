@@ -283,6 +283,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                         | Positive | `TestJobPlacementCarriesTheClustersTolerations`               |
 | U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                        | Boundary | `TestJobPlacementOfAClusterThatTakesNoTaint`                  |
 | U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                        | Positive | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`            |
+| U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                      | Positive | `TestTheDocumentsContainerResourcesReachTheStorageNodes`      |
+| U-205     | A document that states no container resources: the cluster states none either, and the default decides                       | Boundary | `TestADocumentWithNoContainerResourcesLeavesTheClustersUnset` |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
@@ -598,11 +600,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 154       | 21      | 133         | 9         |
+| Unit        | 156       | 23      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **224**   | **24**  | **200**     | **12**    |
+| **Total**   | **226**   | **26**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
