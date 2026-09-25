@@ -2,9 +2,11 @@
 //
 // The capture is written by hack/inventory/capture-host.py: one JSON document
 // of four maps -- directories, file contents, symlink targets, and the udev
-// links under /dev/disk -- with every path relative to /sys. This package is
-// the reading half, so that a transcript taken off a real machine can be handed
-// to a Config as its SysfsRoot and read by the ordinary readers.
+// links under /dev/disk -- with every path relative to /sys, plus the few files
+// read from the host's own root filesystem and the machine name uname gives.
+// This package is the reading half, so that a transcript taken off a real
+// machine can be handed to a Config as its SysfsRoot and read by the ordinary
+// readers.
 //
 // It lives here, outside a _test.go file, because two modules replay the same
 // captures: this package's own tests, which check a reading against what a host
@@ -38,6 +40,26 @@ type Host struct {
 	// A transcript captured before the section existed has none, which decodes
 	// to nil and materializes as a host whose udev made no links.
 	DevLinks map[string]string `json:"devlinks"`
+
+	// Root are files captured from the host's own root filesystem rather than
+	// from sysfs, keyed relative to it: etc/os-release and usr/lib/os-release,
+	// which are what the OS reading takes. They are a section of their own for
+	// the reason DevLinks is: a path relative to the host's filesystem and one
+	// relative to /sys are two namespaces, and a capture that merged them would
+	// have to guess which a path belonged to.
+	//
+	// A transcript captured before the section existed has none, and
+	// materializes as a host whose distribution cannot be read, which is what
+	// such a machine's capture could in fact answer.
+	Root map[string]string `json:"root"`
+
+	// Machine is what uname called the hardware: `x86_64`, `aarch64`. It is a
+	// string on the transcript rather than a file in it, because it comes from
+	// a system call and there is no tree to replay it from.
+	//
+	// It is empty on a transcript captured before it was recorded, and a caller
+	// replaying one has to state the architecture itself.
+	Machine string `json:"machine"`
 }
 
 // Load reads a capture from a file, gzipped or not.
@@ -108,6 +130,15 @@ func (h Host) Materialize(root string) error {
 			return err
 		}
 	}
+	for path, content := range h.Root {
+		full := filepath.Join(HostRootOf(root), path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("create the parent of %s: %w", path, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil { //nolint:gosec // a fixture tree
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
 	return nil
 }
 
@@ -127,6 +158,14 @@ func link(full, target string) error {
 // "not found" it would get on a host where udev made none.
 func DevRootOf(root string) string {
 	return filepath.Join(root, "dev")
+}
+
+// HostRootOf is the host root of a materialized host, which is what a reader
+// takes as HostRoot. Like DevRootOf, it is a directory that may not exist: a
+// transcript that captured no root files creates nothing, and the OS reading
+// then reports that the host root carries no os-release.
+func HostRootOf(root string) string {
+	return filepath.Join(root, "root")
 }
 
 // WithClassBlock returns the transcript with a class/block tree derived from
