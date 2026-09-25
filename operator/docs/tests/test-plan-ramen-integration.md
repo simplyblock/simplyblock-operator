@@ -1,25 +1,27 @@
 # Test Plan: Ramen Integration
 
 Related design: [`designs/design-ramen-integration.md`](../designs/design-ramen-integration.md)
-Harness: two classes. `VolumeGroupReplicationReconciler` (design §4) is unit-tested against a fake-client harness, the same shape `replicationpair_controller_unit_test.go` already uses elsewhere in this package. Everything else needs a live two-cluster simplyblock deployment (`regression_test/21/`), plus an OCM hub with Ramen installed on the hub and both managed clusters (design §6.1).
+Harness: one class. Everything this document specifies needs a live two-cluster simplyblock deployment (`regression_test/21/`), plus an OCM hub with Ramen installed on the hub and both managed clusters (design §6.1). `VolumeGroupReplication` (design §4) is now a driver-and-backend feature specified in `design-csi-addons-replication.md` §14; its unit and backend scenarios live in that document's test plan (U-62 … U-69), not here.
 
-Scope: two things this document specifies. First, whether `VolumeGroupReplicationReconciler` (design §4) correctly fans a group's replication state out to its members and their status back in, and correctly validates group membership at admission, as unit scenarios (`U-01` … `U-05`). Second, whether a real Ramen `VolumeReplicationGroup`, driven through a real OCM hub, correctly drives the csi-addons adapter `design-csi-addons-replication.md` implements, for both a single volume and a consistency-group of them, as manual E2E scenarios (`M-`), since no smaller harness substitutes for a real Ramen reconcile loop against a real OCM-registered cluster pair. The manual scenarios close two rows already carried in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md): E-06 and E-07, both `—` in that plan's `Test` column since they were written. Design §3 (peerClasses) adds no scenarios of its own: it confirms that no operator-side code exists to test.
+Scope: this document specifies whether a real Ramen `VolumeReplicationGroup`, driven through a real OCM hub, correctly drives the csi-addons surface `design-csi-addons-replication.md` implements, for both a single volume and a consistency group of them, as manual E2E scenarios (`M-`), since no smaller harness substitutes for a real Ramen reconcile loop against a real OCM-registered cluster pair. The manual scenarios close two rows already carried in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md): E-06 and E-07, both `—` in that plan's `Test` column since they were written. Design §3 (peerClasses) adds no scenarios of its own: it confirms that no operator-side code exists to test.
 
 ---
 
 ## 1. Unit Scenarios
 
-### VolumeGroupReplicationReconciler and its admission webhook (design §4)
+### VolumeGroupReplication (design §4)
 
-Implemented in `volumegroupreplication_controller.go` and `volumegroupreplication_validator.go`, covered by `volumegroupreplication_controller_unit_test.go` and `volumegroupreplication_validator_test.go`. Since the reconciler's design now lives in `design-csi-addons-replication.md` §14 (the csi-addons group surface), these same scenarios are mirrored in [`test-plan-csi-addons-replication.md`](test-plan-csi-addons-replication.md) as its U-57 … U-61, and the group's live relocate as that plan's E-08.
+`VolumeGroupReplication` is no longer an operator reconciler; it is the driver-and-backend, `external: false` path of `design-csi-addons-replication.md` §14. Its unit and backend scenarios are that document's test plan U-62 … U-69, and its live group relocate is that plan's E-08 (which points back to M-05 here). This plan owns no unit scenario for it.
 
-| #    | Scenario                                                                                                          | Type     | Test                                                              |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
-| U-01 | Every member's `VolumeReplication` reports `Completed=True, Degraded=False`, and the group reports the same       | Positive | `TestVolumeGroupReplication_AllMembersHealthyYieldsGroupHealthy`  |
-| U-02 | One member's `VolumeReplication` reports `Degraded=True`, and the group reports `Degraded=True`                   | Negative | `TestVolumeGroupReplication_OneMemberDegradedYieldsGroupDegraded` |
-| U-03 | Members report differing `lastSyncTime`, and `status.lastSyncTime` is the oldest, not the newest                  | Boundary | `TestVolumeGroupReplication_LastSyncTimeIsTheOldestMember`        |
-| U-04 | `spec.source.selector` resolves to exactly one `ConsistencyGroup`'s current membership, and is admitted           | Positive | `TestVolumeGroupReplicationValidator`                             |
-| U-05 | `spec.source.selector` resolves to a subset of a group, or spans two groups, and is rejected, naming the mismatch | Negative | `TestVolumeGroupReplicationValidator`                             |
+U-01 … U-05 are **retired**: they covered the operator-owned `VolumeGroupReplicationReconciler`/`VolumeGroupReplicationValidator`, which `design-csi-addons-replication.md` §13 removes.
+
+| #        | Scenario                                                                                | Type | Test |
+|----------|-----------------------------------------------------------------------------------------|------|------|
+| ~~U-01~~ | **Retired** (operator fan-in, all members healthy; reconciler removed)                  | —    | —    |
+| ~~U-02~~ | **Retired** (operator fan-in, one member degraded; reconciler removed)                  | —    | —    |
+| ~~U-03~~ | **Retired** (operator oldest-`lastSyncTime`; reconciler removed)                        | —    | —    |
+| ~~U-04~~ | **Retired** (operator webhook admits a whole group; validator removed)                  | —    | —    |
+| ~~U-05~~ | **Retired** (operator webhook rejects a subset/cross-group selector; validator removed) | —    | —    |
 
 ---
 
@@ -76,44 +78,43 @@ Implemented in `volumegroupreplication_controller.go` and `volumegroupreplicatio
 
 ### M-05: Ramen protects and relocates a multi-volume app through `VolumeGroupReplication`
 
-**Design reference:** design §4, exercised through the topology and test flow §6 defines for the per-volume case. New scope this document adds, with no corresponding row in `test-plan-csi-addons-replication.md`.
+**Design reference:** design §4 and `design-csi-addons-replication.md` §14 (the driver-and-backend group surface), exercised through the topology and test flow §6 defines for the per-volume case. New scope this document adds; it closes `test-plan-csi-addons-replication.md` E-08. It cannot run until Phase 4 (that plan's U-62 … U-69) is built.
 
-**What to verify:** a VRG whose PVCs share a `storage.simplyblock.io/consistency-group` label and a `VolumeGroupReplicationClass` carrying `ramendr.openshift.io/groupreplicationid` creates one `VolumeGroupReplication`, `VolumeGroupReplicationReconciler` (design §4.3) fans it out to one `VolumeReplication` per member and fans member status back into the group, and a planned relocate of the whole app moves every member together with none diverging.
+**What to verify:** a VRG whose PVCs share the consistency-group labels and a `StorageClass` carrying `ramendr.openshift.io/groupreplicationid` (and **not** `offloaded`) creates one `VolumeGroupReplication` with `spec.external: false`; the stock kubernetes-csi-addons controller-manager forms the backend group through the driver's `CreateVolumeGroup`, replicates it as one unit addressed by the group handle, and a planned relocate of the whole app moves every member together at one crash-consistent point, none diverging.
 
 **Test concept:**
-1. Extend M-01's topology: a workload with three PVCs sharing one `storage.simplyblock.io/consistency-group` value, protected by one VRG under a `VolumeGroupReplicationClass` naming that group's `ReplicationPolicy`.
-2. Confirm exactly one `VolumeGroupReplication` exists and exactly three member `VolumeReplication` objects exist, each owned by it.
+1. Extend M-01's topology: a workload with three PVCs sharing one `storage.simplyblock.io/consistency-group` value (and Ramen's own `ramendr.openshift.io/consistency-group`), under a group `StorageClass` carrying `groupreplicationid` and a `VolumeGroupReplicationClass` matching it.
+2. Confirm exactly one `VolumeGroupReplication` (`external: false`) and its `VolumeGroupReplicationContent` exist, that the backend consistency group holds all three members, and that the group is replicating (the group `lastSyncTime` advances).
 3. Trigger Ramen's `Relocate` action, as in M-02.
-4. Assert: all three members reach `Secondary` on cluster A and `Primary` on cluster B together, not staggered. The group's own `status.lastSyncTime` reflects the oldest member's throughout (U-03). No member is left behind mid-relocate.
+4. Assert: the whole group promotes on cluster B and demotes on cluster A as one unit, each member's PVC restored and serving on cluster B, every member's pre-relocate data intact, and the group's `lastSyncTime` tracking one group generation throughout. No member is left behind mid-relocate.
 
 ---
 
 ## 3. Axis Coverage
 
-| Axis                          | Values covered                                                             | IDs                    | Not covered                                                                                                                                                                           |
-|-------------------------------|----------------------------------------------------------------------------|------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Group replication aggregation | all members healthy, one member degraded, differing `lastSyncTime`         | U-01 … U-03            | more than one degraded member simultaneously (not a gap: the aggregation is a plain disjunction, one member already exercises it)                                                     |
-| Group membership validation   | selector equals membership, selector is a subset or spans two groups       | U-04, U-05             | membership changing between admission and reconcile (the fail-open backend-unreachable case `design-consistency-groups.md` §9.4's sibling check already covers for the snapshot path) |
-| Orchestrator                  | Ramen VRG async, hub-driven                                                | M-01 … M-05            | direct `kubectl` lifecycle (already covered in `test-plan-csi-addons-replication.md`)                                                                                                 |
-| Cluster topology              | two managed clusters, one relationship, hub-mediated                       | M-01 … M-05            | three-cluster (cascaded) topologies. SiteMap-authored `DRPlacementControl` specifically (§8 Open Question 2 may leave this a hand-authored stand-in)                                  |
-| Failure mode                  | planned relocate, unplanned failover, post-recovery resync, group relocate | M-02, M-03, M-04, M-05 | a demote that stalls mid-convergence while Ramen-driven (covered by hand in `test-plan-csi-addons-replication.md` M-01/M-02, not yet by Ramen)                                        |
+| Axis                             | Values covered                                                             | IDs                                                    | Not covered                                                                                                                                          |
+|----------------------------------|----------------------------------------------------------------------------|--------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Group replication (unit/backend) | the driver VolumeGroup service and the backend group engine                | (in `test-plan-csi-addons-replication.md` U-62 … U-69) | owned by the csi-addons plan now that group replication is driver-and-backend (design §4), not this plan                                             |
+| Orchestrator                     | Ramen VRG async, hub-driven                                                | M-01 … M-05                                            | direct `kubectl` lifecycle (already covered in `test-plan-csi-addons-replication.md`)                                                                |
+| Cluster topology                 | two managed clusters, one relationship, hub-mediated                       | M-01 … M-05                                            | three-cluster (cascaded) topologies. SiteMap-authored `DRPlacementControl` specifically (§8 Open Question 2 may leave this a hand-authored stand-in) |
+| Failure mode                     | planned relocate, unplanned failover, post-recovery resync, group relocate | M-02, M-03, M-04, M-05                                 | a demote that stalls mid-convergence while Ramen-driven (covered by hand in `test-plan-csi-addons-replication.md` M-01/M-02, not yet by Ramen)       |
 
 ---
 
 ## 4. Coverage Summary
 
-| Class        | Scenarios | Covered         | Not covered |
-|--------------|-----------|-----------------|-------------|
-| Unit         | 5         | 5 (U-01 … U-05) | —           |
-| Manual (E2E) | 5         | 0               | M-01 … M-05 |
+| Class        | Scenarios | Covered | Not covered                                                                                                 |
+|--------------|-----------|---------|-------------------------------------------------------------------------------------------------------------|
+| Unit         | 0         | 0       | — (U-01 … U-05 retired; group unit/backend scenarios are `test-plan-csi-addons-replication.md` U-62 … U-69) |
+| Manual (E2E) | 5         | 0       | M-01 … M-05                                                                                                 |
 
 ---
 
 ## 5. What Is Not Yet Covered
 
-| #           | Gap                                                               | Reason                                                                                                                                                                                                                                                  |
-|-------------|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| M-01 … M-05 | The entire Ramen-driven validation                                | Blocked on Phase 0 (design §Phase 0): a live OCM hub with Ramen installed across a registered two-cluster pair, not yet confirmed available (§8 Open Question 1). M-05 additionally needs the `VolumeGroupReplication` CRDs installed on both clusters. |
-| —           | Three-cluster / cascaded topologies                               | Out of scope for this document, and not part of the gap analysis's Appendix A either                                                                                                                                                                    |
-| —           | SiteMap-authored (rather than hand-authored) `DRPlacementControl` | Depends on SiteMap's own availability (§8 Open Question 2)                                                                                                                                                                                              |
-| —           | Global VGR (multi-VRG consensus)                                  | Out of scope for design §4.1, tracked as design §8 Open Question 4                                                                                                                                                                                      |
+| #           | Gap                                                               | Reason                                                                                                                                                                                                                                                                                                                                                                                     |
+|-------------|-------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| M-01 … M-05 | The entire Ramen-driven validation                                | Blocked on Phase 0 (design §Phase 0): a live OCM hub with Ramen installed across a registered two-cluster pair, not yet confirmed available (§8 Open Question 1). M-05 additionally needs Phase 4 built (`test-plan-csi-addons-replication.md` U-62 … U-69: the driver VolumeGroup service and the backend group engine) and the `VolumeGroupReplication` CRDs installed on both clusters. |
+| —           | Three-cluster / cascaded topologies                               | Out of scope for this document, and not part of the gap analysis's Appendix A either                                                                                                                                                                                                                                                                                                       |
+| —           | SiteMap-authored (rather than hand-authored) `DRPlacementControl` | Depends on SiteMap's own availability (§8 Open Question 2)                                                                                                                                                                                                                                                                                                                                 |
+| —           | Global VGR (multi-VRG consensus)                                  | Out of scope for design §4.1, tracked as design §8 Open Question 4                                                                                                                                                                                                                                                                                                                         |

@@ -6,7 +6,7 @@ Scope is the CSI driver's Replication service, the operator's preflight and coex
 
 Scenario IDs are permanent and are never reused or renumbered. `U-` is unit (no cluster: mock control plane, fake `client.Client`), `I-` is integration (the sidecar and controller-manager against the driver with a mock backend), `E-` is end-to-end (two live simplyblock clusters), and `M-` is manual. Types are `Positive`, `Negative`, `Boundary`, and `Regression`. A `—` in the `Test` column means nothing implements the scenario yet, and every such row reappears in §7 with its reason.
 
-Phase 1 (the csi-addons machinery, §4, §5.1's three verbs, and §6's steady-state contract) and Phase 2 (§5.2's lifecycle verbs and P0-3) have both landed; their unit rows below are filled in. Phase 4 (§14, `VolumeGroupReplication`) has landed too: its reconciler and admission webhook are unit-tested (U-57 … U-61), and its live group relocate is the E2E row E-08. The operator's preflight and coexistence controllers (peerClasses, `PVCReplicationController`) remain a separate, unbuilt subsystem, and the integration and E2E tiers wait on a test bed neither phase has built yet.
+Phase 1 (the csi-addons machinery, §4, §5.1's three verbs, and §6's steady-state contract) and Phase 2 (§5.2's lifecycle verbs and P0-3) have both landed; their unit rows below are filled in. Phase 4 (§14, `VolumeGroupReplication`) is **Planned**: the driver VolumeGroup service, the group-handle Replication routing, and the backend group-replication engine (U-62 … U-69) are not built yet, and its live group relocate is E-08. The earlier operator-owned reconciler and validator (U-57 … U-61) are retired (design §13). The operator's preflight and coexistence controllers (peerClasses, `PVCReplicationController`) remain a separate, unbuilt subsystem, and the integration and E2E tiers wait on a test bed neither phase has built yet.
 
 ---
 
@@ -112,17 +112,27 @@ File: `operator/internal/controllers/driver/workloads_test.go`, `operator/intern
 | U-38 | The sidecar's grant is a namespaced Role bound to the controller plugin's account, not a ClusterRole, since CSIAddonsNode is namespaced | Positive | `TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount` |
 | U-39 | The namespaced Role's rules are scoped to the sidecar's own job: its CSIAddonsNode and its own leader-election Lease                    | Positive | `TestCSIAddonsRoleRulesAreScopedToItsOwnJob`                  |
 
-### VolumeGroupReplication: fan-in and membership (design §14)
+### VolumeGroupReplication: VolumeGroup service and group-wide replication (design §14, Phase 4 — Planned)
 
-Files: `operator/internal/controller/volumegroupreplication_controller_unit_test.go`, `operator/internal/webhook/volumegroupreplication_validator_test.go`. These are the same scenarios [`test-plan-ramen-integration.md`](test-plan-ramen-integration.md) §1 tracks as its U-01 … U-05; the design they verify now lives in §14 of this plan's design doc, so the coverage is recorded here too. `VolumeGroupReplicationReconciler` fans a group's `replicationState` out to its members and their status back in (§14.3), and its admission webhook (§14.4) enforces the one-whole-group invariant. The reconciler calls no driver gRPC, so the fan-out itself is exercised only at the E2E tier (E-08).
+The driver-driven, `external: false` model (design §14): the plugin's csi-addons VolumeGroup service maps a set of volume handles to the backend consistency group (§14.3), and the existing Replication verbs route a group handle to the new backend group-replication endpoints (§14.4). None of this is built yet, so every row's `Test` is `—` and reappears in §7. Files (planned): `csi-driver/internal/csi/controller/volumegroup_test.go`, `csi-driver/internal/csi/controller/replication_group_test.go`, and the backend tier in `sbcli`.
 
-| #    | Scenario                                                                                                          | Type     | Test                                                              |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
-| U-57 | Every member's `VolumeReplication` reports `Completed=True, Degraded=False`, and the group reports the same       | Positive | `TestVolumeGroupReplication_AllMembersHealthyYieldsGroupHealthy`  |
-| U-58 | One member reports `Degraded=True`, and the group reports `Degraded=True` (disjunction)                           | Negative | `TestVolumeGroupReplication_OneMemberDegradedYieldsGroupDegraded` |
-| U-59 | Members report differing `lastSyncTime`, and `status.lastSyncTime` is the oldest, not the newest                  | Boundary | `TestVolumeGroupReplication_LastSyncTimeIsTheOldestMember`        |
-| U-60 | `spec.source.selector` resolves to exactly one consistency group's current membership, and is admitted            | Positive | `TestVolumeGroupReplicationValidator`                             |
-| U-61 | `spec.source.selector` resolves to a subset of a group, or spans two groups, and is rejected, naming the mismatch | Negative | `TestVolumeGroupReplicationValidator`                             |
+U-57 … U-61 are **retired**: they covered the earlier operator-owned `VolumeGroupReplicationReconciler`/`VolumeGroupReplicationValidator`, which design §13 removes in favor of this path. Their Go tests are deleted with the reconciler.
+
+| #        | Scenario                                                                                                                                                           | Type     | Test |
+|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| ~~U-57~~ | **Retired** (operator fan-in aggregation; reconciler removed, design §13)                                                                                          | —        | —    |
+| ~~U-58~~ | **Retired** (operator fan-in disjunction; reconciler removed)                                                                                                      | —        | —    |
+| ~~U-59~~ | **Retired** (operator oldest-`lastSyncTime`; reconciler removed)                                                                                                   | —        | —    |
+| ~~U-60~~ | **Retired** (operator webhook admits a whole group; validator removed)                                                                                             | —        | —    |
+| ~~U-61~~ | **Retired** (operator webhook rejects a subset/cross-group selector; validator removed)                                                                            | —        | —    |
+| U-62     | `CreateVolumeGroup` over the label-formed, co-placed group resolves and returns the existing group's id (idempotent), making no second group                       | Positive | —    |
+| U-63     | `CreateVolumeGroup` with a handle that resolves to no consistency group: `FAILED_PRECONDITION` (or the group's own not-found), no group created                    | Negative | —    |
+| U-64     | `ModifyVolumeGroupMembership` adding a volume not co-placed on the group's node/LVS: refused (design §14.3, dynamic membership deferred)                           | Negative | —    |
+| U-65     | `DeleteVolumeGroup` dissolves the grouping and leaves every member volume intact; repeating it succeeds (idempotent)                                               | Boundary | —    |
+| U-66     | A group handle on `PromoteVolume`/`DemoteVolume`/`ResyncVolume` routes to the group endpoints; a per-volume handle still takes the §5 path unchanged               | Positive | —    |
+| U-67     | `GetVolumeReplicationInfo` on a group handle returns the group `lastSyncTime` (newest fully replicated group generation), never `NOT_FOUND` for a real group       | Positive | —    |
+| U-68     | Backend group failover clones the last group-snapshot generation for every member atomically; if one member cannot clone, the whole group operation aborts (§14.4) | Boundary | —    |
+| U-69     | Backend group demote quiesces every member, ships one final group snapshot, confirms it landed, then fences every member                                           | Positive | —    |
 
 ---
 
@@ -195,29 +205,29 @@ Two live simplyblock clusters with the chart-deployed csi-addons machinery. The 
 
 ## 5. Axis Coverage
 
-| Axis              | Values covered                                                         | IDs                                                                         | Not covered                                                            |
-|-------------------|------------------------------------------------------------------------|-----------------------------------------------------------------------------|------------------------------------------------------------------------|
-| Verb lifecycle    | enable, disable, info, forced promote, planned promote, demote, resync | U-01, U-02, U-04 … U-10, U-12 … U-17, U-40 … U-56, I-02 … I-04, E-01 … E-04 | —                                                                      |
-| Idempotency       | repeat enable, disable, demote; re-drive after restart                 | U-02, U-05, U-15, I-07                                                      | repeated promote (U-11), repeated resync                               |
-| Conditions        | healthy, degraded, error, staleness, resyncing, disabled               | U-18 … U-22, E-05                                                           | condition behavior across backend upgrade                              |
-| Coexistence       | slot skip, one-owner refusal, concurrent claim                         | U-26, U-27, M-02                                                            | migration of an annotated volume onto a VolumeReplication              |
-| peerClasses       | verified, missing class, mispaired policies                            | U-23 … U-25                                                                 | drift after verification                                               |
-| Orchestrator      | direct kubectl lifecycle, Ramen VRG async (per volume and per group)   | I-02 … I-06, E-06, E-07, E-08                                               | Ramen hub failover of multiple apps                                    |
-| Group replication | fan-in aggregation, membership validation, live group relocate         | U-57 … U-61, E-08                                                           | Global (multi-VRG) VGR; the fan-out at the integration tier (no I-row) |
-| Cluster topology  | two clusters, one relationship addressed from both sides               | E-01 … E-08                                                                 | three-cluster (cascaded) topologies                                    |
+| Axis              | Values covered                                                              | IDs                                                                         | Not covered                                                                                  |
+|-------------------|-----------------------------------------------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| Verb lifecycle    | enable, disable, info, forced promote, planned promote, demote, resync      | U-01, U-02, U-04 … U-10, U-12 … U-17, U-40 … U-56, I-02 … I-04, E-01 … E-04 | —                                                                                            |
+| Idempotency       | repeat enable, disable, demote; re-drive after restart                      | U-02, U-05, U-15, I-07                                                      | repeated promote (U-11), repeated resync                                                     |
+| Conditions        | healthy, degraded, error, staleness, resyncing, disabled                    | U-18 … U-22, E-05                                                           | condition behavior across backend upgrade                                                    |
+| Coexistence       | slot skip, one-owner refusal, concurrent claim                              | U-26, U-27, M-02                                                            | migration of an annotated volume onto a VolumeReplication                                    |
+| peerClasses       | verified, missing class, mispaired policies                                 | U-23 … U-25                                                                 | drift after verification                                                                     |
+| Orchestrator      | direct kubectl lifecycle, Ramen VRG async (per volume and per group)        | I-02 … I-06, E-06, E-07, E-08                                               | Ramen hub failover of multiple apps                                                          |
+| Group replication | VolumeGroup service, group-handle routing, backend group ops, live relocate | U-62 … U-69, E-08                                                           | Global (multi-VRG) VGR; the controller-manager group loop at the integration tier (no I-row) |
+| Cluster topology  | two clusters, one relationship addressed from both sides                    | E-01 … E-08                                                                 | three-cluster (cascaded) topologies                                                          |
 
 ---
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered             |
-|-------------|-----------|---------|-------------------------|
-| Unit        | 51        | 39      | U-03, U-11, U-18 … U-27 |
-| Integration | 7         | 0       | I-01 … I-07             |
-| E2E         | 8         | 0       | E-01 … E-08             |
-| Manual      | 2         | 0       | M-01, M-02              |
+| Class       | Scenarios | Covered | Not covered                          |
+|-------------|-----------|---------|--------------------------------------|
+| Unit        | 54        | 34      | U-03, U-11, U-18 … U-27, U-62 … U-69 |
+| Integration | 7         | 0       | I-01 … I-07                          |
+| E2E         | 8         | 0       | E-01 … E-08                          |
+| Manual      | 2         | 0       | M-01, M-02                           |
 
-Phase 1 landed the driver's Replication and Identity services, the error classifier, and the operator's sidecar and RBAC wiring, covering every Phase 1 unit scenario except U-03 (§7). Phase 2 landed P0-3 (the demote endpoint and the planned gate on `failover`, in sbcli) and the driver's `PromoteVolume`/`DemoteVolume`/`ResyncVolume`, covering every Phase 2 unit scenario except U-11 (§7). Phase 4 landed the `VolumeGroupReplication` reconciler and its admission webhook, covering all of U-57 … U-61; its live group relocate (E-08) waits on the same Ramen bed as E-06/E-07. The operator's preflight and coexistence controllers (peerClasses, `PVCReplicationController`) remain a separate, unbuilt subsystem, and neither a sidecar-and-controller-manager integration suite nor a live two-cluster E2E bed exists yet, so those tiers remain fully uncovered.
+Phase 1 landed the driver's Replication and Identity services, the error classifier, and the operator's sidecar and RBAC wiring, covering every Phase 1 unit scenario except U-03 (§7). Phase 2 landed P0-3 (the demote endpoint and the planned gate on `failover`, in sbcli) and the driver's `PromoteVolume`/`DemoteVolume`/`ResyncVolume`, covering every Phase 2 unit scenario except U-11 (§7). Phase 4 (group replication, §14) is Planned: U-62 … U-69 (the driver VolumeGroup service, group-handle routing, and the backend group engine) and E-08 are uncovered, and the earlier operator reconciler's rows (U-57 … U-61) are retired with it. The operator's preflight and coexistence controllers (peerClasses, `PVCReplicationController`) remain a separate, unbuilt subsystem, and neither a sidecar-and-controller-manager integration suite nor a live two-cluster E2E bed exists yet, so those tiers remain fully uncovered.
 
 ---
 
@@ -232,5 +242,6 @@ Phase 1 landed the driver's Replication and Identity services, the error classif
 | I-01 … I-07      | The sidecar and controller-manager loop                                                                           | The driver's Replication and Identity services and the sidecar container now exist (Phase 1); no envtest/kind suite exercises them against the real kubernetes-csi-addons controller-manager yet                                                                                                                       |
 | E-01 … E-05      | The live lifecycle (non-Ramen half)                                                                               | Needs a two-cluster live test bed. `regression_test/21/` exercises the same lifecycle by hand but is not wired as an automated E2E suite.                                                                                                                                                                              |
 | E-06, E-07, E-08 | The Ramen-driven gate (per-volume and per-group)                                                                  | Detailed scenario ownership moved to [`test-plan-ramen-integration.md`](test-plan-ramen-integration.md) M-01 … M-03 (per volume) and M-05 (the `VolumeGroupReplication` group relocate), blocked there on a live OCM hub with Ramen installed (see that document's Phase 0)                                            |
+| U-62 … U-69      | Group replication (§14): the driver VolumeGroup service, group-handle routing, and the backend group engine       | Phase 4 is Planned, not built. P0-6/P0-7 (the `sbcli` group-replication engine and group policy) are the blocking backend work; the driver's VolumeGroup service and group-handle routing depend on them                                                                                                               |
 | —                | Repeated resync, class drift after verification, annotated-volume migration onto the adapter, cascaded topologies | Beyond the first coverage pass, recorded so the gaps are explicit rather than assumed covered                                                                                                                                                                                                                          |
 | M-01, M-02       | Demote under writes; concurrent ownership race                                                                    | Need failure injection and precise timing a live two-cluster run does not automate yet                                                                                                                                                                                                                                 |
