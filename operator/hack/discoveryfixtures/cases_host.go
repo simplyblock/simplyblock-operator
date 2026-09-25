@@ -202,9 +202,15 @@ func hostCases() map[string]Case {
 	nvmeMemory := statedMemory{TotalBytes: 64 * gb, AvailableBytes: 30 * gb}
 	// n2-standard-8, the same way: 32 GiB with 15 reserved.
 	blockMemory := statedMemory{TotalBytes: 32 * gb, AvailableBytes: 15 * gb}
+	// The QEMU worker: 64 GiB, all of it available, because this capture
+	// recorded no huge pages reserved at all. It is the one figure of the three
+	// that is a round number rather than a machine type's, since the host is
+	// somebody's hypervisor and not a catalog entry.
+	qemuMemory := statedMemory{TotalBytes: 64 * gb, AvailableBytes: 64 * gb}
 
 	nvmeFleet := capturedFleet("gcp-k3s-nvme", nvmeMemory)
 	blockFleet := capturedFleet("gcp-k3s-block", blockMemory)
+	qemuFleet := capturedFleet("qemu-nvme-with-optical", qemuMemory)
 
 	return map[string]Case{
 		"HOST-01": {
@@ -234,6 +240,24 @@ func hostCases() map[string]Case {
 				"beside them. Each storage worker has two unpartitioned virtio disks " +
 				"beside a partitioned boot disk and no NVMe at all, which is the fleet " +
 				"the block class exists for.",
+		},
+		"HOST-03": {
+			Family:   "host",
+			Slug:     "a-captured-qemu-worker-with-an-optical-drive",
+			Reports:  qemuFleet,
+			Nodes:    capturedNodes(qemuFleet),
+			Discover: blockClass(),
+			Note: "One worker off a QEMU host rather than a cloud one, and the family's " +
+				"smallest fleet. It carries two devices no cloud image presents, and each " +
+				"is why it is here. Its two Samsung 1.92 TB NVMe disks are the case for " +
+				"the block class taking local NVMe: the classes are not disjoint sets of " +
+				"hardware, and a machine whose only real storage is NVMe has to be " +
+				"deployable as logical block devices. Its QEMU DVD-ROM is the case for " +
+				"refusing a removable device: with install media in it the drive reports " +
+				"a whole disk of 924 MB on the SATA bus and reads as blank, so every " +
+				"other ground admits it. Beside them are a partitioned virtio boot disk " +
+				"and sixteen nbd devices. Memory is stated rather than captured; see " +
+				"statedMemory.",
 		},
 	}
 }
