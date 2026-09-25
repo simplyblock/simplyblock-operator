@@ -334,7 +334,8 @@ any other version goes through a conversion webhook `envtest` does not run, so a
 `v1alpha1` row would fail on an unreachable webhook rather than on what it is
 about.
 
-File: `operator/internal/controllers/cluster/cel_validation_test.go`
+Files: `operator/internal/controllers/cluster/cel_validation_test.go` and
+`operator/internal/controllers/cluster/imagepullpolicy_test.go`
 
 | #    | Scenario                                                                                                 | Type     | Test                                                                  |
 |------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------|
@@ -369,6 +370,7 @@ File: `operator/internal/controllers/cluster/cel_validation_test.go`
 | I-29 | The default pool a cluster is created with picks up the CRD's declared defaults                          | Positive | `TestTheDefaultPoolIsFormattedXFS`                                    |
 | I-30 | Each of the seven supported schemes at creation: accepted; 3+1, 8+2, 2+0, 4+0, 1+3, and 16+4: rejected   | Negative | `TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes`    |
 | I-31 | A stripe stating one half only: read as the control plane's default for the other, and accepted          | Boundary | `TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault`                |
+| I-32 | `spec.storageNodes` present with no `imagePullPolicy`: the stored object reads `Always`                  | Boundary | `TestAStorageClusterThatNamesNoPullPolicyPullsAlways`                 |
 
 `I-01` is answered by a unit test rather than an integration one: a not-found read
 needs no API server to be a not-found read, and the row is kept because the ID is
@@ -470,10 +472,10 @@ against a real API server under real concurrency.
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
 | Unit        | 179       | 163     | 16          |
-| Integration | 29        | 10      | 19          |
+| Integration | 30        | 11      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **224**   | **173** | **51**      |
+| **Total**   | **225**   | **174** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and

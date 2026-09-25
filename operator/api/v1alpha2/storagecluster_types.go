@@ -489,9 +489,14 @@ type StorageNodesSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ImagePullPolicy controls when that image is pulled.
+	// ImagePullPolicy controls when that image is pulled. It defaults to Always
+	// for the reason SimplyblockDriver's does: the images this product ships are
+	// moving tags, so a node brought up after a release that kept IfNotPresent
+	// would run whatever its kubelet already held. The workload builder has
+	// always meant this and falls back to Always for an unset policy, a fallback
+	// the schema default means it never reaches.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
-	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:default=Always
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
