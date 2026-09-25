@@ -140,8 +140,11 @@ cluster's volume encryption keys, and is a block rather than a field, which is
 the last part of this section. `enableFailureDomains` opts the cluster into
 failure-domain mode, where every node must label the fault group it belongs to
 ("rack-b") so the control plane can spread chunks across independent ones
-([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` selects
-affinity-based placement for storage components. `deviceClass` names the one class
+([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` has the data
+plane serve an erasure-coded volume's I/O from the local node's own devices
+before crossing the network, and is not Kubernetes affinity
+([`design-primary-node-placement.md`](../design-primary-node-placement.md)
+§`EnableNodeAffinity` is unrelated to Tier 1). `deviceClass` names the one class
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
 
