@@ -408,6 +408,32 @@ spec:
                     maximum: 8
                     minimum: 1
                     type: integer
+                  openshift:
+                    description: |-
+                      OpenShift is what this deployment states because it runs on OpenShift. It
+                      expands into StorageCluster.spec.storageNodes.openshift, whose shape it
+                      shares, and it is read only for a document whose environment is
+                      OpenShift: the environment is what says which distribution this is, and
+                      the block is what that distribution needs said beyond it.
+                    properties:
+                      machineConfigPool:
+                        default: worker
+                        description: |-
+                          MachineConfigPool names a machine-config role the storage nodes' own pool
+                          inherits from, beyond the worker role it always inherits.
+
+                          It is not the pool the nodes end up in, which the description it carried
+                          before said and which cost a reader the reboot they were trying to avoid.
+                          Adding a node creates a pool of its own, storage-<cluster>, and moves the
+                          node into it; a node belongs to exactly one custom pool, so whatever
+                          machine configuration its previous pool carried is lost unless that
+                          pool's role is named here for the new one to select as well. The default
+                          is the role every pool already selects, which is what makes it a no-op
+                          for a fleet whose workers are ordinary workers.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    type: object
                   ports:
                     description: |-
                       Ports are where this cluster's storage nodes listen. Unstated, and for
@@ -889,6 +915,10 @@ spec:
                 block'
               rule: self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)))
                 || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))
+            - message: spec.cluster.openshift is what a deployment onto OpenShift
+                states, so spec.environment has to be OpenShift
+              rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
+                && self.environment == ''OpenShift'')'
           status:
             description: ClusterDeploymentConfigStatus is the observed state of the
               document.

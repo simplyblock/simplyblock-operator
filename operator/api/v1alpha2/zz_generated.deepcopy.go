@@ -400,6 +400,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(StripeSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.OpenShift != nil {
+		in, out := &in.OpenShift, &out.OpenShift
+		*out = new(OpenShiftSpec)
+		**out = **in
+	}
 	if in.Ports != nil {
 		in, out := &in.Ports, &out.Ports
 		*out = new(ClusterPortsSpec)

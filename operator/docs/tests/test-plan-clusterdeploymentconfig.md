@@ -295,6 +295,10 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-213     | `spec.cluster.ports`: all three reach the cluster fields they name                                                           | Positive | `TestTheDocumentsPortsReachTheCluster`                            |
 | U-214     | A block stating one port: the schema defaults the other two to the control plane's                                           | Boundary | `TestThePortsBlockIsDefaultedByTheApiserver`                      |
 | U-216     | The expansion spends the block member by member, so an unstated member travels as nothing                                    | Boundary | `TestThePortsBlockIsSpentMemberByMember`                          |
+| U-217     | `spec.cluster.openshift`: the cluster the expansion writes carries the block and its pool                                    | Positive | `TestTheDocumentsMachineConfigPoolReachesTheCluster`              |
+| U-218     | `environment: OpenShift` with no block: the cluster still carries one, because its presence is the statement                 | Boundary | `TestTheEnvironmentResolvesIntoTheWorkloadFlags`                  |
+| U-219     | A non-OpenShift environment: no block reaches the cluster, whatever the template holds                                       | Negative | `TestANonOpenShiftEnvironmentStatesNoBlock`                       |
+| U-220     | A document naming the block without naming the distribution: refused by the schema                                           | Negative | `TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment`                 |
 | U-215     | A document with no ports block: all three stay unset                                                                         | Boundary | `TestADocumentWithNoPortsLeavesTheClustersUnset`                  |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
@@ -611,11 +615,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 167       | 34      | 133         | 9         |
+| Unit        | 171       | 38      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **237**   | **37**  | **200**     | **12**    |
+| **Total**   | **241**   | **41**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

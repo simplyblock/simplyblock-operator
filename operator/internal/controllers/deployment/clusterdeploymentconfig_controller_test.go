@@ -422,6 +422,33 @@ func TestTheEnvironmentResolvesIntoTheWorkloadFlags(t *testing.T) {
 	}
 }
 
+// The document's own block travels with it, which is what a fleet whose workers
+// sit in a custom machine-config pool states.
+func TestTheDocumentsMachineConfigPoolReachesTheCluster(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+		c.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.OpenShift == nil || workload.OpenShift.MachineConfigPool != "infra" {
+		t.Errorf("the cluster's OpenShift block is %+v, want the document's pool", workload.OpenShift)
+	}
+}
+
+// An environment that is not OpenShift states no block, whatever the template
+// carries: the environment is what says which distribution this is.
+func TestANonOpenShiftEnvironmentStatesNoBlock(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentK3s
+		c.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+	})
+
+	if workload := reconcilerFor(t).buildWorkload(config); workload.OpenShift != nil {
+		t.Errorf("a K3s document produced the OpenShift block %+v", workload.OpenShift)
+	}
+}
+
 // Every node of one document gets a name of its own, because the name is derived
 // from the cluster, the worker, and the slot.
 func TestEveryNodeGetsADistinctName(t *testing.T) {

@@ -516,6 +516,14 @@ type ClusterTemplate struct {
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
 
+	// OpenShift is what this deployment states because it runs on OpenShift. It
+	// expands into StorageCluster.spec.storageNodes.openshift, whose shape it
+	// shares, and it is read only for a document whose environment is
+	// OpenShift: the environment is what says which distribution this is, and
+	// the block is what that distribution needs said beyond it.
+	// +optional
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
+
 	// Ports are where this cluster's storage nodes listen. Unstated, and for
 	// each member left unstated, the cluster's own defaults decide.
 	// +optional
@@ -640,6 +648,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes

@@ -262,13 +262,13 @@ workers sharing one configuration rather than one of anything.
 `spec.edgeCluster` names a fact about the deployment rather than switching a
 capability on, which is the class
 [`design-crd-model.md`](design-crd-model.md) §7.5 leaves outside the `enableXyz`
-and `disableXyz` rule, alongside `ubuntuHost` and `openShiftCluster`.
+and `disableXyz` rule, alongside `ubuntuHost`.
 
 **`spec.environment` is a shorthand, and the expansion is where it is spent.** A
 distribution decides whether the kubelet is reconfigured and whether CPU topology
 is read, which [`design-storagenode.md`](design-storagenode.md) §5.1 carries as
-`enableKubeletConfiguration`, `enableCpuTopology`, and `openShiftCluster` on the
-cluster. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
+`enableKubeletConfiguration` and `enableCpuTopology` on the cluster, and the
+`openshift` block whose presence states the distribution. Naming `OpenShift` once decides all three, and `CreatingNodes` stamps
 them onto every `StorageNode` it creates (§4.2).
 
 **`spec.hostOS` is the other half of the same question, and it is a separate
@@ -285,6 +285,17 @@ one installs the package for its running kernel before it starts.
 A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
+
+**`spec.cluster.openshift` is what a deployment onto OpenShift states beyond
+the environment.** Its one member names a machine-config role the storage nodes'
+own pool inherits from: adding a node creates a pool of its own,
+`storage-<cluster>`, and a node belongs to exactly one custom pool, so a fleet
+whose workers sat in a custom pool loses that pool's machine configuration
+unless its role is named here for the new pool to select as well. The block is
+read only for a document whose `environment` is `OpenShift`, and the schema
+refuses one that names it without saying so: the environment says which
+distribution this is, and the block is what that distribution needs said beyond
+it.
 
 **`spec.cluster.ports` is one block where the cluster has three fields.** The
 NVMe-oF and RPC bases and the node agent's port are the same decision taken once,
@@ -1580,6 +1591,14 @@ type ClusterTemplate struct {
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
 
+	// OpenShift is what this deployment states because it runs on OpenShift. It
+	// expands into StorageCluster.spec.storageNodes.openshift, whose shape it
+	// shares, and it is read only for a document whose environment is
+	// OpenShift: the environment is what says which distribution this is, and
+	// the block is what that distribution needs said beyond it.
+	// +optional
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
+
 	// Ports are where this cluster's storage nodes listen. Unstated, and for
 	// each member left unstated, the cluster's own defaults decide.
 	// +optional
@@ -1621,6 +1640,7 @@ type ClusterTemplate struct {
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
 // +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -1630,7 +1650,7 @@ type ClusterDeploymentConfigSpec struct {
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
-	// enableCpuTopology, and openShiftCluster on the cluster the document
+	// enableCpuTopology, and the openshift block on the cluster the document
 	// produces, after which nothing reads it again. The worker's host OS is not
 	// among them and is stated in hostOS, because a distribution decides what
 	// Kubernetes does to a machine and not which packages the machine has.

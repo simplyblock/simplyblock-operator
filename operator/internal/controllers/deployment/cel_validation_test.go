@@ -237,3 +237,25 @@ func TestThePortsBlockIsDefaultedByTheApiserver(t *testing.T) {
 		t.Errorf("the node agent's port is %d, want the control plane's 50001", got)
 	}
 }
+
+// The OpenShift block is what a deployment onto OpenShift states, so a document
+// that names it without naming the distribution is a contradiction the
+// apiserver refuses rather than the expansion ignoring it.
+func TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment(t *testing.T) {
+	apiClient := apiServer(t)
+	config := aStoredDocument(t, apiClient, "openshift-block")
+	config.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+
+	err := apiClient.Update(context.Background(), config)
+	if err == nil {
+		t.Fatal("a document with no environment carried an OpenShift block")
+	}
+	if !strings.Contains(err.Error(), "OpenShift") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
+	}
+
+	config.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+	if err := apiClient.Update(context.Background(), config); err != nil {
+		t.Fatalf("an OpenShift document was refused its own block: %v", err)
+	}
+}
