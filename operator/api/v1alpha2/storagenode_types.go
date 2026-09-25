@@ -318,15 +318,19 @@ type StorageNodeSpec struct {
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
 	// set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
 	// pair a person reads; nothing but a print column consumes either.
+	//
+	// It is not marked immutable, because where a node sits is a fact about the
+	// host it runs on and a relocation moves it: the target worker's free socket
+	// is not necessarily the source's. The StorageNode validating webhook
+	// rejects a change made by an identity outside the operator's namespace,
+	// which is the same treatment WorkerNode takes and for the same reason.
 	// +optional
-	// +k8s:immutable
 	SocketID string `json:"socketId,omitempty"`
 
 	// NodeIndex is the position among the nodes sharing this socket, in
-	// 0..nodesPerSocket-1. See SocketID.
+	// 0..nodesPerSocket-1. See SocketID, whose guard it shares.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
-	// +k8s:immutable
 	NodeIndex *int32 `json:"nodeIndex,omitempty"`
 
 	// Slot is which storage-node slot on this worker the object occupies, counted

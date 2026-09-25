@@ -6,17 +6,18 @@
 // are properties of the cluster rather than of the request, so neither can be
 // decided from the admission review alone.
 //
-// On update it enforces the three fields that have exactly one legitimate writer.
-// spec.workerNode, spec.config.pcieAllowList, and spec.config.sizing are all
-// written by the operator and by nobody else, so a +k8s:immutable marker would
-// lock the operator out along with everyone else and no marker at all would let a
-// user invalidate a layout claim by editing a string.
+// On update it enforces the fields that have exactly one legitimate writer.
+// spec.workerNode, spec.socketId, spec.nodeIndex, spec.config.pcieAllowList, and
+// spec.config.sizing are all written by the operator and by nobody else, so a
+// +k8s:immutable marker would lock the operator out along with everyone else and
+// no marker at all would let a user invalidate a layout claim by editing a
+// string.
 //
 // failurePolicy=Fail, and that is safe because the webhook server runs in the
 // operator pod: its availability tracks the operator's own, and an operator that
-// is down is not reconciling anything the rejection could deadlock. The three
-// guarded fields have no CRD-level immutability behind them, so this is their only
-// guard and admitting while unavailable would let the edit through.
+// is down is not reconciling anything the rejection could deadlock. The guarded
+// fields have no CRD-level immutability behind them, so this is their only guard
+// and admitting while unavailable would let the edit through.
 //
 // design-storagenode.md §3.2 and §3.4 are the specification.
 
@@ -55,7 +56,7 @@ type StorageNodeValidator struct {
 
 	// OperatorNamespace is the namespace the operator runs in. A service account
 	// in it is the operator itself, and is the one identity permitted to write the
-	// three fields of §3.2.
+	// guarded fields of §3.2.
 	OperatorNamespace string
 }
 
@@ -120,7 +121,7 @@ func (v *StorageNodeValidator) admitCreate(
 	return admission.Allowed("")
 }
 
-// admitUpdate enforces the three fields with exactly one legitimate writer.
+// admitUpdate enforces the fields with exactly one legitimate writer.
 func (v *StorageNodeValidator) admitUpdate(
 	oldNode, newNode *simplyblockv1alpha2.StorageNode, byOperator bool,
 ) admission.Response {
@@ -144,6 +145,17 @@ func operatorOnlyChanges(oldNode, newNode *simplyblockv1alpha2.StorageNode) []st
 	if oldNode.Spec.WorkerNode != newNode.Spec.WorkerNode {
 		changed = append(changed, "spec.workerNode")
 	}
+	// Where a node sits on its host, which a relocation changes along with the
+	// host: the target's free socket is not necessarily the source's. They are
+	// guarded rather than frozen for the reason workerNode is, and apart from
+	// spec.slot, which stays frozen because the topology label the CSI driver
+	// reads is built from it.
+	if oldNode.Spec.SocketID != newNode.Spec.SocketID {
+		changed = append(changed, "spec.socketId")
+	}
+	if !equalIndex(oldNode.Spec.NodeIndex, newNode.Spec.NodeIndex) {
+		changed = append(changed, "spec.nodeIndex")
+	}
 	// The allow list is the one device field a migration writes, merging the
 	// drives bound on the target host into it so they survive a later rebuild
 	// (§3.2). That is why it is guarded here rather than marked immutable.
@@ -154,6 +166,16 @@ func operatorOnlyChanges(oldNode, newNode *simplyblockv1alpha2.StorageNode) []st
 		changed = append(changed, "spec.config.sizing")
 	}
 	return changed
+}
+
+// equalIndex compares two node indexes, unset included: an index that was absent
+// and one that is zero are different states, and reading both as zero would admit
+// the write that states it.
+func equalIndex(old, new *int32) bool {
+	if old == nil || new == nil {
+		return old == new
+	}
+	return *old == *new
 }
 
 // deviceClassDenial reports why a node's device configuration does not belong to

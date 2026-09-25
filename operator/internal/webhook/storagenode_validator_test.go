@@ -134,6 +134,15 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 		{"spec.config.sizing", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.Sizing.VCPUCount = ptr.To(int32(16))
 		}},
+		// The socket a node is bound to is a fact about where it runs, so a
+		// relocation changes it. It is not a marker's to freeze for the same
+		// reason workerNode is not: the operator is the one writer it has.
+		{"spec.socketId", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.SocketID = "1"
+		}},
+		{"spec.nodeIndex", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.NodeIndex = ptr.To(int32(1))
+		}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			before, after := testNode(nil), testNode(tc.mutate)

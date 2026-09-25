@@ -226,6 +226,9 @@ File: `operator/internal/webhook/storagenode_validator_test.go`
 | U-60  | A user changing `spec.workerNode`: denied with the migration hint                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
 | U-61  | The operator's service account changing `spec.workerNode`: allowed                  | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
 | U-62  | An update that does not touch `spec.workerNode`: allowed without inspection         | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`      |
+| U-418 | A user changing `spec.socketId` or `spec.nodeIndex`: denied, with the field named   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
+| U-419 | The operator changing either: allowed, because a relocation moves where a node sits | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
+| U-420 | `spec.nodeIndex` stated where it was absent: a change, not a zero equal to nothing  | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
 | U-63  | A create rather than an update: allowed, since there is no old value                | Boundary | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet` |
 | U-64  | A service account in another namespace named like the operator's: denied            | Negative | —                                                   |
 | U-239 | A user changing `spec.config.pcieAllowList`: denied                                 | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
@@ -910,11 +913,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 380       | 275     | 105         |
+| Unit        | 383       | 278     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **465**   | **275** | **190**     |
+| **Total**   | **468**   | **278** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the

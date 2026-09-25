@@ -194,7 +194,11 @@ the slot is the position among them. The other two decompose it into the socket 
 node is bound to and its position among the nodes sharing that socket, which is
 what a `kubectl get sn` column is worth showing, and nothing but those columns
 reads either. The three are not peers: the slot is what the topology label key,
-the CR-to-slot matching, and the adoption lookup all use (§4.3, §5.2).
+the CR-to-slot matching, and the adoption lookup all use (§4.3, §5.2), so it is
+frozen to everybody while the other two are the operator's to rewrite. A
+relocation moves a node onto a host whose free socket is not necessarily the
+source's, and a pair that still described the old host would be a column telling
+a person something that is not so.
 
 **The slot is named for where a user already meets it.** The topology label the
 CSI driver reads is
@@ -430,7 +434,7 @@ creation.
 | Field                                                                                    | Optionality | Why                                                                                                     |
 |------------------------------------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------------------|
 | `clusterRef`                                                                             | `Required`  | Which cluster a node belongs to is its identity                                                         |
-| `nodeSet`, `socketId`, `nodeIndex`, `slot`                                               | `+optional` | The slot and its decomposition (§3.1)                                                                   |
+| `nodeSet`, `slot`                                                                        | `+optional` | The slot a node fills, and the document it was declared under (§3.1)                                    |
 | `config.deviceNames`, `config.pcieDenyList`, `config.pcieModel`, `config.driveSizeRange` | `+optional` | They select which physical devices the node owns                                                        |
 | `config.journalManager`                                                                  | `+optional` | Journal count and per-device share are on-disk layout, fixed when the devices were partitioned          |
 | `config.failureDomain`                                                                   | `+optional` | Chunk placement was computed from it. Fillable later, since §4.2 holds provisioning until it is present |
@@ -457,11 +461,12 @@ and is printed in a column of its own (§15.1).
 exactly one legitimate writer, so a marker would lock the operator out along with
 everyone else.
 
-| Field                  | Written by                                                 |
-|------------------------|------------------------------------------------------------|
-| `workerNode`           | A migration re-pointing the node onto another host (§9)    |
-| `config.pcieAllowList` | A migration merging `spec.migrate.newSsdPcie` into it (§9) |
-| `config.sizing`        | A re-size during a rolling hardware upgrade (§3.1)         |
+| Field                   | Written by                                                               |
+|-------------------------|--------------------------------------------------------------------------|
+| `workerNode`            | A migration re-pointing the node onto another host (§9)                  |
+| `config.pcieAllowList`  | A migration merging `spec.migrate.newSsdPcie` into it (§9)               |
+| `config.sizing`         | A re-size during a rolling hardware upgrade (§3.1)                       |
+| `socketId`, `nodeIndex` | A relocation: where a node sits is a fact about the host it runs on (§9) |
 
 The `StorageNode` validating admission webhook admits a change to any of them
 from a service account in the operator's namespace and rejects it from every other
@@ -2412,15 +2417,19 @@ type StorageNodeSpec struct {
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
 	// set's socket list ("0", "1"). With NodeIndex it decomposes Slot into the
 	// pair a person reads; nothing but a print column consumes either.
+	//
+	// It is not marked immutable, because where a node sits is a fact about the
+	// host it runs on and a relocation moves it: the target worker's free socket
+	// is not necessarily the source's. The StorageNode validating webhook
+	// rejects a change made by an identity outside the operator's namespace,
+	// which is the same treatment WorkerNode takes and for the same reason.
 	// +optional
-	// +k8s:immutable
 	SocketID string `json:"socketId,omitempty"`
 
 	// NodeIndex is the position among the nodes sharing this socket, in
-	// 0..nodesPerSocket-1. See SocketID.
+	// 0..nodesPerSocket-1. See SocketID, whose guard it shares.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
-	// +k8s:immutable
 	NodeIndex *int32 `json:"nodeIndex,omitempty"`
 
 	// Slot is which storage-node slot on this worker the object occupies,

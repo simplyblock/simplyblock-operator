@@ -670,13 +670,10 @@ spec:
                 nodeIndex:
                   description: |-
                     NodeIndex is the position among the nodes sharing this socket, in
-                    0..nodesPerSocket-1. See SocketID.
+                    0..nodesPerSocket-1. See SocketID, whose guard it shares.
                   format: int32
                   minimum: 0
                   type: integer
-                  x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                 nodeSet:
                   description: |-
                     NodeSet is the name of the group in ClusterDeploymentConfig.nodeSets[] this
@@ -707,10 +704,13 @@ spec:
                     SocketID is the NUMA socket this node is bound to, as declared in the node
                     set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
                     pair a person reads; nothing but a print column consumes either.
+
+                    It is not marked immutable, because where a node sits is a fact about the
+                    host it runs on and a relocation moves it: the target worker's free socket
+                    is not necessarily the source's. The StorageNode validating webhook
+                    rejects a change made by an identity outside the operator's namespace,
+                    which is the same treatment WorkerNode takes and for the same reason.
                   type: string
-                  x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                 workerNode:
                   description: |-
                     WorkerNode is the Kubernetes worker hostname this node runs on. It is not
@@ -726,10 +726,6 @@ spec:
               x-kubernetes-validations:
                 - message: field nodeSet is immutable once set
                   rule: '!has(oldSelf.nodeSet) || has(self.nodeSet)'
-                - message: field socketId is immutable once set
-                  rule: '!has(oldSelf.socketId) || has(self.socketId)'
-                - message: field nodeIndex is immutable once set
-                  rule: '!has(oldSelf.nodeIndex) || has(self.nodeIndex)'
                 - message: field slot is immutable once set
                   rule: '!has(oldSelf.slot) || has(self.slot)'
             status:
