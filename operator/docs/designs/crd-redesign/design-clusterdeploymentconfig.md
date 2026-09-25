@@ -286,6 +286,17 @@ A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
 
+**`spec.cluster.enableNodeAffinity` is the data plane's locality, not
+Kubernetes'.** It has an erasure-coded volume's I/O served from the local node's
+own devices where it can, before crossing the network, and the control plane
+takes it at cluster create and never re-applies it — so the document is the only
+place it can be stated at all. The name is the one place this API invites the
+other reading:
+[`design-primary-node-placement.md`](../design-primary-node-placement.md)
+§`EnableNodeAffinity` is unrelated to Tier 1 is the account of what it is not,
+and co-locating a workload with its primary node is the separate mechanism
+described there.
+
 **`spec.cluster.containerResources` sizes the storage-node container.** The
 container is the node's management API and not SPDK, which runs in a pod of its
 own, so what outgrows the default is a node answering for many subsystems rather
@@ -1516,6 +1527,25 @@ type ClusterTemplate struct {
 	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
+	// Tier 1" is the longer account, and the co-location of a workload with its
+	// primary node is the separate mechanism described there.
+	//
+	// It is on the document because it is immutable on the cluster: the control
+	// plane takes it at cluster create and never re-applies it, so this is the
+	// only moment it can be set at all.
+	// +optional
+	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one

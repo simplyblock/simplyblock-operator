@@ -275,6 +275,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			Stripe:                   template.Stripe,
 			FabricType:               template.FabricType,
 			EnableFailureDomains:     template.EnableFailureDomains,
+			EnableNodeAffinity:       template.EnableNodeAffinity,
 			KMS:                      template.KMS,
 			DeviceClass:              class,
 			// The workload every node runs as. The document's per-group network
@@ -287,7 +288,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 	return cluster, nil
 }
 
-// buildWorkload resolves spec.environment into the four distribution flags and
+// buildWorkload resolves spec.environment into the distribution flags and
 // carries the first group's interfaces onto the cluster.
 //
 // A DaemonSet is one object for every node it schedules, so its pod template

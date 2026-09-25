@@ -478,6 +478,25 @@ type ClusterTemplate struct {
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
+	// Tier 1" is the longer account, and the co-location of a workload with its
+	// primary node is the separate mechanism described there.
+	//
+	// It is on the document because it is immutable on the cluster: the control
+	// plane takes it at cluster create and never re-applies it, so this is the
+	// only moment it can be set at all.
+	// +optional
+	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+
 	// KMS selects where the cluster stores volume encryption keys. It is here
 	// rather than left to be set on the StorageCluster afterward because the
 	// expansion's own reconciler reads it back off that object on the very next

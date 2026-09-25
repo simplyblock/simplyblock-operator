@@ -86,3 +86,27 @@ func builtCluster(
 	}
 	return cluster
 }
+
+// Node affinity is a data-plane placement policy the control plane bakes in at
+// cluster create, so the document is the only place it can be stated at all: the
+// field is immutable on the cluster the expansion writes.
+func TestNodeAffinityReachesTheCluster(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.EnableNodeAffinity = ptr.To(true)
+	}))
+
+	if got := cluster.Spec.EnableNodeAffinity; got == nil || !*got {
+		t.Errorf("enableNodeAffinity = %v, want the document's true", got)
+	}
+}
+
+// A document that states nothing leaves the cluster stating nothing, so the
+// cluster's own default decides rather than the expansion inventing a false the
+// control plane would then bake in.
+func TestADocumentStatingNoNodeAffinityLeavesTheClusterUnset(t *testing.T) {
+	cluster := builtCluster(t, aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
+
+	if got := cluster.Spec.EnableNodeAffinity; got != nil {
+		t.Errorf("enableNodeAffinity = %v with nothing stated, want unset", *got)
+	}
+}

@@ -375,6 +375,11 @@ func (in *ClusterTemplate) DeepCopyInto(out *ClusterTemplate) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EnableNodeAffinity != nil {
+		in, out := &in.EnableNodeAffinity, &out.EnableNodeAffinity
+		*out = new(bool)
+		**out = **in
+	}
 	if in.KMS != nil {
 		in, out := &in.KMS, &out.KMS
 		*out = new(KMSSpec)
