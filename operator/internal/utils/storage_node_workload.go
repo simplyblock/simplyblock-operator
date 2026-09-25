@@ -17,8 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// defaultInitContainerResources are applied when the user has not set
-// InitContainerResources on the StorageNodeSet CR.
+// defaultInitContainerResources are applied when the cluster states no
+// initContainerResources. The init containers write one env file and run
+// node_configure.py once, so both are sized for a short, small job.
 var defaultInitContainerResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -30,10 +31,15 @@ var defaultInitContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-// defaultContainerResources are applied when the user has not set
-// ContainerResources on the StorageNodeSet CR. No CPU limit is set because
-// SPDK uses busy-polling and a hard CPU ceiling would degrade storage
-// performance. Memory limits are enforced to allow kubelet eviction.
+// defaultContainerResources are applied when the cluster states no
+// containerResources.
+//
+// They are the node management API's and not SPDK's. The container they size
+// runs node_webapp.py, which answers RPCs and starts the SPDK pod; SPDK itself
+// runs in a pod of its own, with its cores pinned outside this cgroup, so a CPU
+// limit here throttles the agent rather than the data path. Memory is limited
+// so that a leaking agent is evicted rather than taking the worker down with
+// it.
 var defaultContainerResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("200m"),
