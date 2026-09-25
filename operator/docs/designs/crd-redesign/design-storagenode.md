@@ -459,14 +459,18 @@ and is printed in a column of its own (§15.1).
 
 **Immutable to users, writable by the operator, by webhook.** Each of these has
 exactly one legitimate writer, so a marker would lock the operator out along with
-everyone else.
+everyone else. `spec.config` is guarded as a block rather than member by member:
+the rule is about what the block is, and a list of the fields it happens to have
+is a thing to keep up to date. The two rules stack where both apply, so a member
+carrying a marker is frozen to the operator as well.
 
-| Field                   | Written by                                                               |
-|-------------------------|--------------------------------------------------------------------------|
-| `workerNode`            | A migration re-pointing the node onto another host (§9)                  |
-| `config.pcieAllowList`  | A migration merging `spec.migrate.newSsdPcie` into it (§9)               |
-| `config.sizing`         | A re-size during a rolling hardware upgrade (§3.1)                       |
-| `socketId`, `nodeIndex` | A relocation: where a node sits is a fact about the host it runs on (§9) |
+| Field                          | Written by                                                                                                                                                                         |
+|--------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `workerNode`                   | A migration re-pointing the node onto another host (§9)                                                                                                                            |
+| `config.pcieAllowList`         | A migration merging `spec.migrate.newSsdPcie` into it (§9)                                                                                                                         |
+| `config.sizing`                | A re-size during a rolling hardware upgrade (§3.1)                                                                                                                                 |
+| every other member of `config` | Nothing today. The block is the record of what the node was built as, and it is guarded whole so that a member added later is the operator's without anybody remembering to say so |
+| `socketId`, `nodeIndex`        | A relocation: where a node sits is a fact about the host it runs on (§9)                                                                                                           |
 
 The `StorageNode` validating admission webhook admits a change to any of them
 from a service account in the operator's namespace and rejects it from every other
@@ -2293,8 +2297,9 @@ type StorageNodeConfig struct {
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with ("4G", "512M"). Mutable: a node whose device count grew legitimately
-	// needs to raise it.
+	// with ("4G", "512M"). It carries no immutability marker, because a node
+	// whose device count grew legitimately needs it raised, and the webhook that
+	// guards spec.config is what decides who may raise it.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
@@ -2313,8 +2318,10 @@ type StorageNodeConfig struct {
 	// On OpenShift the value reaches the kubelet through a KubeletConfig for
 	// the machine config pool rather than through the node alone, so nodes
 	// sharing a pool that disagree are writing over one another's pool
-	// configuration. Mutable: the CPUs a machine holds back are a tuning
-	// decision, not a layout one.
+	// configuration. It carries no immutability marker, because the CPUs a
+	// machine holds back are a tuning decision rather than a layout one, and
+	// the webhook that guards spec.config is what decides who may retune
+	// them.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
 	// +optional

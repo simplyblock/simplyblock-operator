@@ -190,8 +190,10 @@ type StorageNodeConfig struct {
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with, as a size string such as 4G or 512M. Mutable: a node whose device
-	// count grew legitimately needs to raise it.
+	// with, as a size string such as 4G or 512M. It carries no immutability
+	// marker, because a node whose device count grew legitimately needs it
+	// raised, and the webhook that guards spec.config is what decides who may
+	// raise it.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
@@ -210,8 +212,10 @@ type StorageNodeConfig struct {
 	// On OpenShift the value reaches the kubelet through a KubeletConfig for
 	// the machine config pool rather than through the node alone, so nodes
 	// sharing a pool that disagree are writing over one another's pool
-	// configuration. Mutable: the CPUs a machine holds back are a tuning
-	// decision, not a layout one.
+	// configuration. It carries no immutability marker, because the CPUs a
+	// machine holds back are a tuning decision rather than a layout one, and
+	// the webhook that guards spec.config is what decides who may retune
+	// them.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
 	// +optional

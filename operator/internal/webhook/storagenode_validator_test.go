@@ -143,6 +143,25 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 		{"spec.nodeIndex", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.NodeIndex = ptr.To(int32(1))
 		}},
+		// The whole of spec.config is the operator's. It is the record of what
+		// the node was built as, copied from the document that produced it, and
+		// every member of it is a claim about a layout that is already on disk
+		// or on the wire.
+		{"spec.config.deviceNames", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.DeviceNames = []string{"nvme3n1"}
+		}},
+		{"spec.config.spdkSystemMemory", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.SpdkSystemMemory = "8G"
+		}},
+		{"spec.config.reservedSystemCPU", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.ReservedSystemCPU = "0-3"
+		}},
+		{"spec.config.spdkImage", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.SpdkImage = "spdk:rebuilt"
+		}},
+		{"spec.config.failureDomain", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.FailureDomain = "rack-c"
+		}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			before, after := testNode(nil), testNode(tc.mutate)
@@ -164,17 +183,41 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 	}
 }
 
-// An update that touches none of the three is nobody's business but the writer's.
+// An update that touches no guarded field is nobody's business but the writer's.
+// Every member of spec.config is guarded, so what is left to a user is the
+// object's metadata: a label, an annotation, a finalizer of their own.
 func TestAnUpdateTouchingNoGuardedFieldIsAdmitted(t *testing.T) {
 	validator := validatorFor(t, nodeTestCluster(nil))
 	before := testNode(nil)
 	after := testNode(func(n *simplyblockv1alpha2.StorageNode) {
-		n.Spec.Config.SpdkSystemMemory = "8G"
+		n.Labels = map[string]string{"team": "storage"}
 	})
 
 	response := validator.Handle(context.Background(), updateReq(t, before, after, someoneElse))
 	if !response.Allowed {
-		t.Errorf("a mutable field was refused: %s", response.Result.Message)
+		t.Errorf("an update that changed a label alone was refused: %s", response.Result.Message)
+	}
+}
+
+// The refusal names every member of the block the update touched, because a
+// person correcting a rejected apply is reading the message to find out which
+// lines to take back out.
+func TestTheRefusalNamesEveryConfigFieldTheUpdateTouched(t *testing.T) {
+	validator := validatorFor(t, nodeTestCluster(nil))
+	before := testNode(nil)
+	after := testNode(func(n *simplyblockv1alpha2.StorageNode) {
+		n.Spec.Config.SpdkSystemMemory = "8G"
+		n.Spec.Config.PcieModel = "SAMSUNG MZQL2"
+	})
+
+	response := validator.Handle(context.Background(), updateReq(t, before, after, someoneElse))
+	if response.Allowed {
+		t.Fatal("two guarded fields were admitted from a user")
+	}
+	for _, field := range []string{"spec.config.spdkSystemMemory", "spec.config.pcieModel"} {
+		if !strings.Contains(response.Result.Message, field) {
+			t.Errorf("the refusal does not name %s: %s", field, response.Result.Message)
+		}
 	}
 }
 

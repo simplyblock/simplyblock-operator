@@ -6,12 +6,14 @@
 // are properties of the cluster rather than of the request, so neither can be
 // decided from the admission review alone.
 //
-// On update it enforces the fields that have exactly one legitimate writer.
-// spec.workerNode, spec.socketId, spec.nodeIndex, spec.config.pcieAllowList, and
-// spec.config.sizing are all written by the operator and by nobody else, so a
+// On update it enforces the fields that have exactly one legitimate writer:
+// spec.workerNode, spec.socketId, spec.nodeIndex, and the whole of spec.config.
+// All of them are written by the operator and by nobody else, so a
 // +k8s:immutable marker would lock the operator out along with everyone else and
 // no marker at all would let a user invalidate a layout claim by editing a
-// string.
+// string. spec.config is guarded as a block rather than field by field, because
+// the rule is about what the block is — the record of what the node was built
+// as — and a list of members is a thing to keep up to date.
 //
 // failurePolicy=Fail, and that is safe because the webhook server runs in the
 // operator pod: its availability tracks the operator's own, and an operator that
@@ -28,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -156,16 +159,44 @@ func operatorOnlyChanges(oldNode, newNode *simplyblockv1alpha2.StorageNode) []st
 	if !equalIndex(oldNode.Spec.NodeIndex, newNode.Spec.NodeIndex) {
 		changed = append(changed, "spec.nodeIndex")
 	}
-	// The allow list is the one device field a migration writes, merging the
-	// drives bound on the target host into it so they survive a later rebuild
-	// (§3.2). That is why it is guarded here rather than marked immutable.
-	if !equalStrings(oldNode.Spec.Config.PcieAllowList, newNode.Spec.Config.PcieAllowList) {
-		changed = append(changed, "spec.config.pcieAllowList")
-	}
-	if !equalSizing(oldNode.Spec.Config.Sizing, newNode.Spec.Config.Sizing) {
-		changed = append(changed, "spec.config.sizing")
+	return append(changed, configChanges(&oldNode.Spec.Config, &newNode.Spec.Config)...)
+}
+
+// configChanges names the members of spec.config this update would change.
+//
+// The whole block is the operator's: it is the record of what the node was built
+// as, copied from the document that produced it, and every member of it is a
+// claim about a layout that is already on disk or on the wire. Some members are
+// frozen to everybody by a marker as well, and the two rules stack — a marker
+// says nobody may change this, and this says the operator is the only one who
+// may change what is changeable.
+//
+// It walks the struct rather than listing the members, because the rule is about
+// the block and not about the fields it happens to have today. A field added
+// later is the operator's too, and a list is a thing to remember: the allow list
+// and the sizing were named here one at a time, and every other member of the
+// block was writable by anyone in between.
+func configChanges(old, new *simplyblockv1alpha2.StorageNodeConfig) []string {
+	oldValue, newValue := reflect.ValueOf(*old), reflect.ValueOf(*new)
+
+	var changed []string
+	for i := range oldValue.NumField() {
+		if reflect.DeepEqual(oldValue.Field(i).Interface(), newValue.Field(i).Interface()) {
+			continue
+		}
+		changed = append(changed, "spec.config."+fieldName(oldValue.Type().Field(i)))
 	}
 	return changed
+}
+
+// fieldName is how a member of the block is spelled in a manifest, which is what
+// a refusal has to name: a person reading it is looking at YAML, not at Go.
+func fieldName(field reflect.StructField) string {
+	name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	if name == "" {
+		return field.Name
+	}
+	return name
 }
 
 // equalIndex compares two node indexes, unset included: an index that was absent
@@ -306,35 +337,4 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
-}
-
-// equalSizing compares two sizing blocks by value.
-//
-// It is spelled out rather than compared with ==, because the core count is a
-// pointer and two separately decoded objects hold two pointers to the same
-// number. Comparing the structs would read every update as a re-size and refuse
-// every edit a user is entitled to make.
-func equalSizing(a, b simplyblockv1alpha2.StorageNodeSizing) bool {
-	if a.MinHugePagesSize != b.MinHugePagesSize {
-		return false
-	}
-	if a.VCPUCount == nil || b.VCPUCount == nil {
-		return a.VCPUCount == b.VCPUCount
-	}
-	return *a.VCPUCount == *b.VCPUCount
-}
-
-// equalStrings compares two lists for the purpose of deciding whether an update
-// changed one. Order matters: the allow list is a user's, and a reordering is a
-// write of the field whoever did it has to be allowed to make.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
