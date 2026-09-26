@@ -142,8 +142,9 @@ func (h *harness) logicalVolumesIn(ctx context.Context, target Target, group str
 	return strings.Fields(out)
 }
 
-// The interrupted create is the case the layer's Partial state was written for,
-// and for a pooled type the retry it performs cannot succeed: the pool the first
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate (e2e
+// run 36219557238). The interrupted create is the case the layer's Partial state
+// was written for, and for a pooled type the retry it performed could not succeed: the pool the first
 // attempt made is still there, under the name the second attempt needs. A
 // bring-up that converges has to notice the pool and deal with it, and a
 // bring-up that does not is a volume no node can stage.
@@ -220,8 +221,9 @@ func TestVDOStackConvergesAfterAnInterruptedPoolCreate(t *testing.T) {
 	}
 }
 
-// The recovery above removes a pool, and the only thing that makes that safe is
-// the reading it is gated on: the pool alone, under the marker. This is the
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate, the
+// negative half. The recovery above removes a pool, and the only thing that makes
+// that safe is the reading it is gated on: the pool alone, under the marker. This is the
 // other reading, and the one that costs data if it is ever converged over: the
 // same group, the same marker, and a volume beside the pool that is not ours,
 // which is what an interrupted clone resolution leaves. The bring-up has to

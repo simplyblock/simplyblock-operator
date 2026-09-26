@@ -197,6 +197,12 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 
 	switch state {
 	case volstack.StateReady:
+		// Complete and mapped. The one thing to do is clear a marker a create
+		// left behind, which is what a failed vgchange --deltag after a
+		// successful lvcreate leaves.
+		if err := l.clearStaleMarker(ctx); err != nil {
+			return volstack.Artifact{}, err
+		}
 		return own, nil
 
 	case volstack.StateAbsent:
@@ -219,6 +225,9 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 		// and costs nothing when it is already mapped.
 		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
+		}
+		if err := l.clearStaleMarker(ctx); err != nil {
+			return volstack.Artifact{}, err
 		}
 
 	case volstack.StateForeign:
@@ -260,6 +269,28 @@ func (l *LVMLogicalVolume) create(ctx context.Context) error {
 	}
 	if err := l.cfg.Manager.RemoveVolumeGroupTag(ctx, l.group(), creatingMarker); err != nil {
 		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
+	return nil
+}
+
+// clearStaleMarker takes the marker off a group whose volume exists.
+//
+// create removes it after lvcreate, and that removal can fail with the volume
+// already made. The group is complete then, and the marker says nothing true
+// about it: it is not an interrupted create, and a clone of it must not read the
+// marker as permission to remove anything. So every bring-up that finds the
+// volume takes the marker off on the way through, which costs one vgs read and,
+// almost always, nothing else.
+func (l *LVMLogicalVolume) clearStaleMarker(ctx context.Context) error {
+	tags, err := l.cfg.Manager.VolumeGroupTags(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
+	if !slices.Contains(tags, creatingMarker) {
+		return nil
+	}
+	if err := l.cfg.Manager.RemoveVolumeGroupTag(ctx, l.group(), creatingMarker); err != nil {
+		return fmt.Errorf("lvmLogicalVolume: clear the stale marker: %w", err)
 	}
 	return nil
 }
