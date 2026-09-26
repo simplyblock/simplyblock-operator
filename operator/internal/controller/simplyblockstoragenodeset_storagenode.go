@@ -352,7 +352,7 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 			suspended++
 		case "in_creation":
 			creating++
-		case "removed":
+		case utils.NodeStatusRemoved:
 			removed++
 		}
 	}

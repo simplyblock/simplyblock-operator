@@ -1169,11 +1169,11 @@ func isNodeStopped(status string) bool {
 	switch status {
 	case utils.NodeStatusOffline,
 		utils.NodeStatusInShutdown,
-		"migrating_devices",
-		"migrating_lvols",
-		"in_removal",
-		"removed",
-		"removed_failed":
+		nodeStatusMigratingDevices,
+		nodeStatusMigratingLvols,
+		nodeStatusInRemoval,
+		utils.NodeStatusRemoved,
+		nodeStatusRemovedFailed:
 		return true
 	default:
 		return false
@@ -1788,9 +1788,17 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 }
 
-// nodeStatusRemovedFailed is the status a removal ends in when it could not
-// finish; the operator can re-drive it, so the op fails rather than waits.
-const nodeStatusRemovedFailed = "removed_failed"
+// The statuses the control plane stamps on a node during a removal, as its
+// API reports them: pending_removal -> migrating_devices -> migrating_lvols ->
+// in_removal -> removed, or removed_failed once it has given up. The operator
+// can re-drive a removed_failed node, so an op that reaches it fails rather
+// than waits. "removed" itself is utils.NodeStatusRemoved.
+const (
+	nodeStatusMigratingDevices = "migrating_devices"
+	nodeStatusMigratingLvols   = "migrating_lvols"
+	nodeStatusInRemoval        = "in_removal"
+	nodeStatusRemovedFailed    = "removed_failed"
+)
 
 func (r *StorageNodeOpsReconciler) resumeAndFail(
 	ctx context.Context,

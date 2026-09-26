@@ -230,7 +230,7 @@ func removeStepServer(t *testing.T, nodeStatus *string, deleteStatus int, delete
 // plane says so. Succeeding on the 204 reported a node removed while it was
 // still at the first step of its removal, and hid one that never finished.
 func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
-	status := "migrating_lvols" // what the drain hands over; also what a running removal reads as
+	status := nodeStatusMigratingLvols // what the drain hands over; also what a running removal reads as
 	deletes, posts := 0, 0
 	srv := removeStepServer(t, &status, http.StatusNoContent, &deletes, &posts)
 	defer srv.Close()
@@ -249,7 +249,7 @@ func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
 		t.Fatal("succeeded on the 204, before the node was removed")
 	}
 
-	status = "in_removal"
+	status = nodeStatusInRemoval
 	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
 		t.Errorf("the DELETE was sent %d times, want 1", deletes)
 	}
 
-	status = "removed"
+	status = utils.NodeStatusRemoved
 	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
 		t.Fatalf("third pass: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
 // A removal the control plane gave up on ends the op, and does not try to
 // resume a node the drain has already dismantled.
 func TestDrainRemove_RemovedFailedFailsTheOpWithoutResuming(t *testing.T) {
-	status := "removed_failed"
+	status := nodeStatusRemovedFailed
 	deletes, posts := 0, 0
 	srv := removeStepServer(t, &status, http.StatusNoContent, &deletes, &posts)
 	defer srv.Close()
@@ -299,7 +299,7 @@ func TestDrainRemove_RemovedFailedFailsTheOpWithoutResuming(t *testing.T) {
 // outright. Resuming such a node fails too (its SPDK is gone), and retrying
 // that resume forever is how a plain 400 became an op that never ended.
 func TestDrainRemove_RefusedDeleteOnAStoppedNodeFailsWithoutResuming(t *testing.T) {
-	status := "migrating_lvols"
+	status := nodeStatusMigratingLvols
 	deletes, posts := 0, 0
 	srv := removeStepServer(t, &status, http.StatusBadRequest, &deletes, &posts)
 	defer srv.Close()
