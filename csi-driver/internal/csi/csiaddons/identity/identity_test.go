@@ -41,6 +41,35 @@ func TestGetCapabilitiesAdvertisesVolumeReplication(t *testing.T) {
 	}
 }
 
+func TestGetCapabilitiesAdvertisesVolumeGroup(t *testing.T) {
+	s := New("test.csi.simplyblock.io", "v1.2.3")
+	resp, err := s.GetCapabilities(context.Background(), &identity.GetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawVolumeGroup, sawDoNotDeleteVolumes bool
+	for _, c := range resp.Capabilities {
+		vg := c.GetVolumeGroup()
+		if vg == nil {
+			continue
+		}
+		switch vg.Type {
+		case identity.Capability_VolumeGroup_VOLUME_GROUP:
+			sawVolumeGroup = true
+		case identity.Capability_VolumeGroup_DO_NOT_ALLOW_VG_TO_DELETE_VOLUMES:
+			sawDoNotDeleteVolumes = true
+		}
+	}
+	if !sawVolumeGroup {
+		t.Error("capabilities do not advertise VOLUME_GROUP")
+	}
+	// DeleteVolumeGroup dissolves the group but keeps its member volumes
+	// (design §14.3), which is exactly what this capability promises.
+	if !sawDoNotDeleteVolumes {
+		t.Error("capabilities do not advertise DO_NOT_ALLOW_VG_TO_DELETE_VOLUMES")
+	}
+}
+
 func TestProbeReportsReady(t *testing.T) {
 	s := New("test.csi.simplyblock.io", "v1.2.3")
 	resp, err := s.Probe(context.Background(), &identity.ProbeRequest{})

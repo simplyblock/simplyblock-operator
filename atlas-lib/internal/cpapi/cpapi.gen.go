@@ -144,6 +144,60 @@ func (e ClusterParamsHaType) Valid() bool {
 	}
 }
 
+// Defines values for ConsistencyGroupReplicationStatusDTORole.
+const (
+	ConsistencyGroupReplicationStatusDTORoleFailedOver ConsistencyGroupReplicationStatusDTORole = "failed_over"
+	ConsistencyGroupReplicationStatusDTORoleNone       ConsistencyGroupReplicationStatusDTORole = "none"
+	ConsistencyGroupReplicationStatusDTORoleSecondary  ConsistencyGroupReplicationStatusDTORole = "secondary"
+	ConsistencyGroupReplicationStatusDTORoleSource     ConsistencyGroupReplicationStatusDTORole = "source"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupReplicationStatusDTORole enum.
+func (e ConsistencyGroupReplicationStatusDTORole) Valid() bool {
+	switch e {
+	case ConsistencyGroupReplicationStatusDTORoleFailedOver:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleNone:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleSecondary:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConsistencyGroupReplicationStatusDTOState.
+const (
+	ConsistencyGroupReplicationStatusDTOStateDegraded       ConsistencyGroupReplicationStatusDTOState = "degraded"
+	ConsistencyGroupReplicationStatusDTOStateError          ConsistencyGroupReplicationStatusDTOState = "error"
+	ConsistencyGroupReplicationStatusDTOStateInSync         ConsistencyGroupReplicationStatusDTOState = "in_sync"
+	ConsistencyGroupReplicationStatusDTOStateLagging        ConsistencyGroupReplicationStatusDTOState = "lagging"
+	ConsistencyGroupReplicationStatusDTOStateNotReplicating ConsistencyGroupReplicationStatusDTOState = "not_replicating"
+	ConsistencyGroupReplicationStatusDTOStateReplicating    ConsistencyGroupReplicationStatusDTOState = "replicating"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupReplicationStatusDTOState enum.
+func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
+	switch e {
+	case ConsistencyGroupReplicationStatusDTOStateDegraded:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateError:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateInSync:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateLagging:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateNotReplicating:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateReplicating:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FailoverResultDTOStatus.
 const (
 	FailoverResultDTOStatusFailed     FailoverResultDTOStatus = "failed"
@@ -998,6 +1052,40 @@ type ConsistencyGroupMemberJoinDTO struct {
 	LvolId string `json:"lvol_id"`
 }
 
+// ConsistencyGroupReplicationIntentDTO Request body to enable or disable group replication (design §14.4).
+//
+// A UUID attaches the whole consistency group to that group replication policy;
+// an explicit “null“ detaches it (the group and its members stay grouped by
+// label, only replication stops). The field is required, so omitting it is a
+// 422 rather than an ambiguous no-op.
+type ConsistencyGroupReplicationIntentDTO struct {
+	ReplicationPolicyId *openapi_types.UUID `json:"replication_policy_id"`
+}
+
+// ConsistencyGroupReplicationStatusDTO The replication status of a consistency group as one unit.
+//
+// A group's recovery point is its OLDEST member's, its lag and health its
+// WORST member's, and its backlog the sum, because a group is only as
+// protected as its slowest, sickest member. Never a 404, matching the
+// per-volume “ReplicationStatusDTO“ (design-csi-addons-replication.md
+// §14.4/§14.6).
+type ConsistencyGroupReplicationStatusDTO struct {
+	LagSeconds       *int                                      `json:"lag_seconds,omitempty"`
+	LastReplicatedAt *time.Time                                `json:"last_replicated_at,omitempty"`
+	MemberCount      *int                                      `json:"member_count,omitempty"`
+	OutstandingBytes *int                                      `json:"outstanding_bytes,omitempty"`
+	OutstandingCount *int                                      `json:"outstanding_count,omitempty"`
+	Resyncing        *bool                                     `json:"resyncing,omitempty"`
+	Role             ConsistencyGroupReplicationStatusDTORole  `json:"role"`
+	State            ConsistencyGroupReplicationStatusDTOState `json:"state"`
+}
+
+// ConsistencyGroupReplicationStatusDTORole defines model for ConsistencyGroupReplicationStatusDTO.Role.
+type ConsistencyGroupReplicationStatusDTORole string
+
+// ConsistencyGroupReplicationStatusDTOState defines model for ConsistencyGroupReplicationStatusDTO.State.
+type ConsistencyGroupReplicationStatusDTOState string
+
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
 	BdevType           *string            `json:"bdev_type,omitempty"`
@@ -1064,6 +1152,11 @@ type FailoverResultDTO struct {
 
 // FailoverResultDTOStatus defines model for FailoverResultDTO.Status.
 type FailoverResultDTOStatus string
+
+// GroupFailbackParams defines model for GroupFailbackParams.
+type GroupFailbackParams struct {
+	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
+}
 
 // HTTPValidationError defines model for HTTPValidationError.
 type HTTPValidationError struct {
@@ -1981,6 +2074,12 @@ type ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSO
 // ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody defines body for ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost for application/json ContentType.
 type ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody = ConsistencyGroupMemberJoinDTO
 
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody defines body for ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut for application/json ContentType.
+type ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody = ConsistencyGroupReplicationIntentDTO
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody defines body for ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost for application/json ContentType.
+type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody = GroupFailbackParams
+
 // ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostJSONRequestBody defines body for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost for application/json ContentType.
 type ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostJSONRequestBody = PolicyParams
 
@@ -2656,6 +2755,84 @@ type ClientInterface interface {
 	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id} (the `ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete` operationId).
 	ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, lvolId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBody Clusters:Consistency-Groups:Replication:Configure
+	//
+	// Enable or disable group replication (design-csi-addons-replication.md
+	// §14.4): a policy id attaches the whole group to that group replication
+	// policy; ``null`` detaches it (the group and its members stay grouped by
+	// label). A refused attach (not a consistency-group policy, missing policy) is
+	// a 409.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+	ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut Clusters:Consistency-Groups:Replication:Configure
+	//
+	// Enable or disable group replication (design-csi-addons-replication.md
+	// §14.4): a policy id attaches the whole group to that group replication
+	// policy; ``null`` detaches it (the group and its members stay grouped by
+	// label). A refused attach (not a consistency-group policy, missing policy) is
+	// a 409.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+	ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost Clusters:Consistency-Groups:Replication:Demote
+	//
+	// Demote the whole group: fence every member and confirm each one's last
+	// write replicated (design-csi-addons-replication.md §14.4). Re-drivable, not
+	// queued: 204 once every member is demoted, 202 (with per-member detail) while
+	// any is still converging, 500 on a hard failure.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
+	ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBody Clusters:Consistency-Groups:Replication:Failback
+	//
+	// Fail the whole group back: point every member's replication back at the
+	// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+	// each member's own commit.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+	ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost Clusters:Consistency-Groups:Replication:Failback
+	//
+	// Fail the whole group back: point every member's replication back at the
+	// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+	// each member's own commit.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+	ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost Clusters:Consistency-Groups:Replication:Failover
+	//
+	// Fail the whole group over as ONE unit through its replication policy
+	// (design-csi-addons-replication.md §14.4): every member is pinned to the same
+	// group generation, all-or-nothing. Refuses (412) a group not attached to a
+	// policy.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
+	ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet Clusters:Consistency-Groups:Replication:Status
+	//
+	// The group's replication status as one unit: oldest recovery point, worst
+	// member lag and health, summed backlog (design-csi-addons-replication.md
+	// §14.4/§14.6). Never 404s -- a group with no replicating member reports
+	// ``state: not_replicating``.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status (the `ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet` operationId).
+	ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet Clusters:Consistency-Groups:Snapshots:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots (the `ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet` operationId).
@@ -3264,16 +3441,20 @@ type ClientInterface interface {
 	// faithfully replicated.
 	//
 	// ``planned=True`` gates on a completed demote (P0-3) so a planned swap
-	// loses nothing: 412 when no demote was ever requested for this volume (the
-	// caller's premise that the source is reachable to demote was wrong, and a
-	// 412 is what lets the csi-addons controller's own force-escalation take
-	// over), 409 while demote is still converging (retryable -- 409 must never
-	// become a code the controller reads as permission to force, since that
-	// controller escalates on ANY FAILED_PRECONDITION from a force=false
-	// promote with no wait-and-retry grace period of its own). Unplanned
-	// failover (the default) ignores demote state entirely, unchanged from
-	// today: its whole premise is that the source may never have been
-	// reachable to demote.
+	// loses nothing: 409 while demote is still converging (retryable -- 409
+	// must never become a code the controller reads as permission to force,
+	// since that controller escalates on ANY FAILED_PRECONDITION from a
+	// force=false promote with no wait-and-retry grace period of its own).
+	// When no demote was ever requested, the source's own health decides: a
+	// genuinely healthy, still-serving source means there is nothing to fail
+	// over -- this is the vendored csi-addons controller's OWN first-ever
+	// reconcile of a `VolumeReplication` that already lives here, not a
+	// disaster, and this call succeeds as the no-op it is. A source that is
+	// NOT healthy gets 412, the caller's premise that it was reachable to
+	// demote was wrong, and 412 is what lets the controller's own
+	// force-escalation take over. Unplanned failover (the default) ignores
+	// demote state entirely, unchanged from today: its whole premise is that
+	// the source may never have been reachable to demote.
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
 	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -4137,6 +4318,154 @@ func (c *Client) ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsi
 // Corresponds with DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id} (the `ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete` operationId).
 func (c *Client) ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, lvolId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteRequest(c.Server, clusterId, groupId, lvolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBody Clusters:Consistency-Groups:Replication:Configure
+//
+// Enable or disable group replication (design-csi-addons-replication.md
+// §14.4): a policy id attaches the whole group to that group replication
+// policy; “null“ detaches it (the group and its members stay grouped by
+// label). A refused attach (not a consistency-group policy, missing policy) is
+// a 409.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequestWithBody(c.Server, clusterId, groupId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut Clusters:Consistency-Groups:Replication:Configure
+//
+// Enable or disable group replication (design-csi-addons-replication.md
+// §14.4): a policy id attaches the whole group to that group replication
+// policy; “null“ detaches it (the group and its members stay grouped by
+// label). A refused attach (not a consistency-group policy, missing policy) is
+// a 409.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequest(c.Server, clusterId, groupId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost Clusters:Consistency-Groups:Replication:Demote
+//
+// Demote the whole group: fence every member and confirm each one's last
+// write replicated (design-csi-addons-replication.md §14.4). Re-drivable, not
+// queued: 204 once every member is demoted, 202 (with per-member detail) while
+// any is still converging, 500 on a hard failure.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostRequest(c.Server, clusterId, groupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBody Clusters:Consistency-Groups:Replication:Failback
+//
+// Fail the whole group back: point every member's replication back at the
+// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+// each member's own commit.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBody(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequestWithBody(c.Server, clusterId, groupId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost Clusters:Consistency-Groups:Replication:Failback
+//
+// Fail the whole group back: point every member's replication back at the
+// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+// each member's own commit.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequest(c.Server, clusterId, groupId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost Clusters:Consistency-Groups:Replication:Failover
+//
+// Fail the whole group over as ONE unit through its replication policy
+// (design-csi-addons-replication.md §14.4): every member is pinned to the same
+// group generation, all-or-nothing. Refuses (412) a group not attached to a
+// policy.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostRequest(c.Server, clusterId, groupId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet Clusters:Consistency-Groups:Replication:Status
+//
+// The group's replication status as one unit: oldest recovery point, worst
+// member lag and health, summed backlog (design-csi-addons-replication.md
+// §14.4/§14.6). Never 404s -- a group with no replicating member reports
+// “state: not_replicating“.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status (the `ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet` operationId).
+func (c *Client) ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetRequest(c.Server, clusterId, groupId)
 	if err != nil {
 		return nil, err
 	}
@@ -5675,16 +6004,20 @@ func (c *Client) ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClus
 // faithfully replicated.
 //
 // “planned=True“ gates on a completed demote (P0-3) so a planned swap
-// loses nothing: 412 when no demote was ever requested for this volume (the
-// caller's premise that the source is reachable to demote was wrong, and a
-// 412 is what lets the csi-addons controller's own force-escalation take
-// over), 409 while demote is still converging (retryable -- 409 must never
-// become a code the controller reads as permission to force, since that
-// controller escalates on ANY FAILED_PRECONDITION from a force=false
-// promote with no wait-and-retry grace period of its own). Unplanned
-// failover (the default) ignores demote state entirely, unchanged from
-// today: its whole premise is that the source may never have been
-// reachable to demote.
+// loses nothing: 409 while demote is still converging (retryable -- 409
+// must never become a code the controller reads as permission to force,
+// since that controller escalates on ANY FAILED_PRECONDITION from a
+// force=false promote with no wait-and-retry grace period of its own).
+// When no demote was ever requested, the source's own health decides: a
+// genuinely healthy, still-serving source means there is nothing to fail
+// over -- this is the vendored csi-addons controller's OWN first-ever
+// reconcile of a `VolumeReplication` that already lives here, not a
+// disaster, and this call succeeds as the no-op it is. A source that is
+// NOT healthy gets 412, the caller's premise that it was reachable to
+// demote was wrong, and 412 is what lets the controller's own
+// force-escalation take over. Unplanned failover (the default) ignores
+// demote state entirely, unchanged from today: its whole premise is that
+// the source may never have been reachable to demote.
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover (the `ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost` operationId).
 func (c *Client) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(ctx context.Context, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params *ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -7581,6 +7914,237 @@ func NewClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyG
 	}
 
 	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequest calls the generic ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut builder with application/json body
+func NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequestWithBody(server, clusterId, groupId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut method, with any body, and a specified content type
+func NewClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostRequest constructs an http.Request for the ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost method
+func NewClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication/demote", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequest calls the generic ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost builder with application/json body
+func NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequestWithBody(server, clusterId, groupId, "application/json", bodyReader)
+}
+
+// NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequestWithBody constructs an http.Request for the ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost method, with any body, and a specified content type
+func NewClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostRequestWithBody(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication/failback", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostRequest constructs an http.Request for the ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost method
+func NewClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication/failover", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetRequest constructs an http.Request for the ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet method
+func NewClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetRequest(server string, clusterId openapi_types.UUID, groupId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "group_id", groupId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/consistency-groups/%s/replication/status", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -13405,6 +13969,90 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id} (the `ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete` operationId).
 	ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, lvolId string, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteResponse, error)
 
+	// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBodyWithResponse Clusters:Consistency-Groups:Replication:Configure
+	//
+	// Enable or disable group replication (design-csi-addons-replication.md
+	// §14.4): a policy id attaches the whole group to that group replication
+	// policy; ``null`` detaches it (the group and its members stay grouped by
+	// label). A refused attach (not a consistency-group policy, missing policy) is
+	// a 409.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+	ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse, error)
+
+	// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithResponse Clusters:Consistency-Groups:Replication:Configure
+	//
+	// Enable or disable group replication (design-csi-addons-replication.md
+	// §14.4): a policy id attaches the whole group to that group replication
+	// policy; ``null`` detaches it (the group and its members stay grouped by
+	// label). A refused attach (not a consistency-group policy, missing policy) is
+	// a 409.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+	ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse, error)
+
+	// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse Clusters:Consistency-Groups:Replication:Demote
+	//
+	// Demote the whole group: fence every member and confirm each one's last
+	// write replicated (design-csi-addons-replication.md §14.4). Re-drivable, not
+	// queued: 204 once every member is demoted, 202 (with per-member detail) while
+	// any is still converging, 500 on a hard failure.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
+	ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse, error)
+
+	// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBodyWithResponse Clusters:Consistency-Groups:Replication:Failback
+	//
+	// Fail the whole group back: point every member's replication back at the
+	// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+	// each member's own commit.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+	ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse, error)
+
+	// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithResponse Clusters:Consistency-Groups:Replication:Failback
+	//
+	// Fail the whole group back: point every member's replication back at the
+	// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+	// each member's own commit.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+	ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse, error)
+
+	// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse Clusters:Consistency-Groups:Replication:Failover
+	//
+	// Fail the whole group over as ONE unit through its replication policy
+	// (design-csi-addons-replication.md §14.4): every member is pinned to the same
+	// group generation, all-or-nothing. Refuses (412) a group not attached to a
+	// policy.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
+	ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse, error)
+
+	// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse Clusters:Consistency-Groups:Replication:Status
+	//
+	// The group's replication status as one unit: oldest recovery point, worst
+	// member lag and health, summed backlog (design-csi-addons-replication.md
+	// §14.4/§14.6). Never 404s -- a group with no replicating member reports
+	// ``state: not_replicating``.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status (the `ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet` operationId).
+	ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse, error)
+
 	// ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGetWithResponse Clusters:Consistency-Groups:Snapshots:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -14137,16 +14785,20 @@ type ClientWithResponsesInterface interface {
 	// faithfully replicated.
 	//
 	// ``planned=True`` gates on a completed demote (P0-3) so a planned swap
-	// loses nothing: 412 when no demote was ever requested for this volume (the
-	// caller's premise that the source is reachable to demote was wrong, and a
-	// 412 is what lets the csi-addons controller's own force-escalation take
-	// over), 409 while demote is still converging (retryable -- 409 must never
-	// become a code the controller reads as permission to force, since that
-	// controller escalates on ANY FAILED_PRECONDITION from a force=false
-	// promote with no wait-and-retry grace period of its own). Unplanned
-	// failover (the default) ignores demote state entirely, unchanged from
-	// today: its whole premise is that the source may never have been
-	// reachable to demote.
+	// loses nothing: 409 while demote is still converging (retryable -- 409
+	// must never become a code the controller reads as permission to force,
+	// since that controller escalates on ANY FAILED_PRECONDITION from a
+	// force=false promote with no wait-and-retry grace period of its own).
+	// When no demote was ever requested, the source's own health decides: a
+	// genuinely healthy, still-serving source means there is nothing to fail
+	// over -- this is the vendored csi-addons controller's OWN first-ever
+	// reconcile of a `VolumeReplication` that already lives here, not a
+	// disaster, and this call succeeds as the no-op it is. A source that is
+	// NOT healthy gets 412, the caller's premise that it was reachable to
+	// demote was wrong, and 412 is what lets the controller's own
+	// force-escalation take over. Unplanned failover (the default) ignores
+	// demote state entirely, unchanged from today: its whole premise is that
+	// the source may never have been reachable to demote.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -15682,6 +16334,225 @@ func (r ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyG
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *map[string]interface{}
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) GetJSON200() *map[string]interface{} {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ConsistencyGroupReplicationStatusDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) GetJSON200() *ConsistencyGroupReplicationStatusDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -20565,6 +21436,132 @@ func (c *ClientWithResponses) ClustersConsistencyGroupsMembersDetachApiV2Cluster
 	return ParseClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDeleteResponse(rsp)
 }
 
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBodyWithResponse Clusters:Consistency-Groups:Replication:Configure
+//
+// Enable or disable group replication (design-csi-addons-replication.md
+// §14.4): a policy id attaches the whole group to that group replication
+// policy; “null“ detaches it (the group and its members stay grouped by
+// label). A refused attach (not a consistency-group policy, missing policy) is
+// a 409.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithBody(ctx, clusterId, groupId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithResponse Clusters:Consistency-Groups:Replication:Configure
+//
+// Enable or disable group replication (design-csi-addons-replication.md
+// §14.4): a policy id attaches the whole group to that group replication
+// policy; “null“ detaches it (the group and its members stay grouped by
+// label). A refused attach (not a consistency-group policy, missing policy) is
+// a 409.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication (the `ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(ctx, clusterId, groupId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse Clusters:Consistency-Groups:Replication:Demote
+//
+// Demote the whole group: fence every member and confirm each one's last
+// write replicated (design-csi-addons-replication.md §14.4). Re-drivable, not
+// queued: 204 once every member is demoted, 202 (with per-member detail) while
+// any is still converging, 500 on a hard failure.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote (the `ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(ctx, clusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBodyWithResponse Clusters:Consistency-Groups:Replication:Failback
+//
+// Fail the whole group back: point every member's replication back at the
+// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+// each member's own commit.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithBody(ctx, clusterId, groupId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithResponse Clusters:Consistency-Groups:Replication:Failback
+//
+// Fail the whole group back: point every member's replication back at the
+// source cluster (design-csi-addons-replication.md §14.4). The cutover itself is
+// each member's own commit.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback (the `ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, body ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(ctx, clusterId, groupId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse Clusters:Consistency-Groups:Replication:Failover
+//
+// Fail the whole group over as ONE unit through its replication policy
+// (design-csi-addons-replication.md §14.4): every member is pinned to the same
+// group generation, all-or-nothing. Refuses (412) a group not attached to a
+// policy.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover (the `ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(ctx, clusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse(rsp)
+}
+
+// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse Clusters:Consistency-Groups:Replication:Status
+//
+// The group's replication status as one unit: oldest recovery point, worst
+// member lag and health, summed backlog (design-csi-addons-replication.md
+// §14.4/§14.6). Never 404s -- a group with no replicating member reports
+// “state: not_replicating“.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status (the `ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet` operationId).
+func (c *ClientWithResponses) ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, groupId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse, error) {
+	rsp, err := c.ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(ctx, clusterId, groupId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse(rsp)
+}
+
 // ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGetWithResponse Clusters:Consistency-Groups:Snapshots:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -21849,16 +22846,20 @@ func (c *ClientWithResponses) ClustersStoragePoolsVolumesReplicationFailbackApiV
 // faithfully replicated.
 //
 // “planned=True“ gates on a completed demote (P0-3) so a planned swap
-// loses nothing: 412 when no demote was ever requested for this volume (the
-// caller's premise that the source is reachable to demote was wrong, and a
-// 412 is what lets the csi-addons controller's own force-escalation take
-// over), 409 while demote is still converging (retryable -- 409 must never
-// become a code the controller reads as permission to force, since that
-// controller escalates on ANY FAILED_PRECONDITION from a force=false
-// promote with no wait-and-retry grace period of its own). Unplanned
-// failover (the default) ignores demote state entirely, unchanged from
-// today: its whole premise is that the source may never have been
-// reachable to demote.
+// loses nothing: 409 while demote is still converging (retryable -- 409
+// must never become a code the controller reads as permission to force,
+// since that controller escalates on ANY FAILED_PRECONDITION from a
+// force=false promote with no wait-and-retry grace period of its own).
+// When no demote was ever requested, the source's own health decides: a
+// genuinely healthy, still-serving source means there is nothing to fail
+// over -- this is the vendored csi-addons controller's OWN first-ever
+// reconcile of a `VolumeReplication` that already lives here, not a
+// disaster, and this call succeeds as the no-op it is. A source that is
+// NOT healthy gets 412, the caller's premise that it was reachable to
+// demote was wrong, and 412 is what lets the controller's own
+// force-escalation take over. Unplanned failover (the default) ignores
+// demote state entirely, unchanged from today: its whole premise is that
+// the source may never have been reachable to demote.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -23110,6 +24111,162 @@ func ParseClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistenc
 	switch {
 	case rsp.StatusCode == 204:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutWithResponse call
+func ParseClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostWithResponse call
+func ParseClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 202:
+		break // No content-type
+
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostWithResponse call
+func ParseClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostWithResponse call
+func ParseClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse parses an HTTP response from a ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetWithResponse call
+func ParseClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse(rsp *http.Response) (*ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ConsistencyGroupReplicationStatusDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

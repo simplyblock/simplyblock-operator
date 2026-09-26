@@ -21,6 +21,11 @@ type Server struct {
 	// (PromoteVolume, DemoteVolume, ResyncVolume) fall through to this
 	// embedded default until Phase 2.
 	replication.UnimplementedControllerServer
+	// The csi-addons VolumeGroup (GroupController) service (design §14.3) is
+	// implemented in volumegroup.go. Its unimplemented base is embedded through
+	// a named wrapper (volumeGroupUnimplemented) because the replication base
+	// above already occupies the UnimplementedControllerServer embed name.
+	volumeGroupUnimplemented
 	volumeLocks *csicommon.VolumeLocks
 	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
 	// cleanup). Built once at construction and reused, and nil when no in-cluster

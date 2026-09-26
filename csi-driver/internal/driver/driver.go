@@ -30,6 +30,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
 	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
+	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -147,6 +148,12 @@ func Run(conf *config.Config) {
 	if cs != nil {
 		register = append(register, func(gs *grpc.Server) {
 			csiaddonsreplication.RegisterControllerServer(gs, cs)
+		})
+		// The csi-addons VolumeGroup service (design §14.3): the stock
+		// controller-manager dials it to form a backend consistency group before
+		// replicating the group as one unit.
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
 		})
 	}
 

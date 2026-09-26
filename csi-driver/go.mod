@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/container-storage-interface/spec v1.12.0
+	github.com/csi-addons/spec v0.2.1-0.20260515055340-d4a373713b9a
 	github.com/kubernetes-csi/csi-lib-utils v0.24.0
 	github.com/kubernetes-csi/csi-test/v5 v5.5.0
 	github.com/onsi/gomega v1.42.1
@@ -25,7 +26,6 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/csi-addons/spec v0.2.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -37,7 +37,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.3 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/cel-go v0.26.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect

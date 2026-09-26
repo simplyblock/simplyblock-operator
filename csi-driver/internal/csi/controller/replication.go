@@ -131,6 +131,19 @@ func (cs *Server) EnableVolumeReplication(
 		return nil, status.Errorf(codes.InvalidArgument,
 			"VolumeReplicationClass parameter %q is required", replicationPolicyParam)
 	}
+	// A group handle drives the whole consistency group as one unit through the
+	// group-replication endpoints (design §14.4); a per-volume handle takes the
+	// §5 path below unchanged.
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		if err := client.EnableGroupReplication(ctx, gh, policyID); err != nil {
+			return nil, classifyEnableVolumeReplicationError(err)
+		}
+		return &replication.EnableVolumeReplicationResponse{}, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -172,6 +185,16 @@ func (cs *Server) DisableVolumeReplication(
 	ctx context.Context,
 	req *replication.DisableVolumeReplicationRequest,
 ) (*replication.DisableVolumeReplicationResponse, error) {
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		if err := client.DisableGroupReplication(ctx, gh); err != nil {
+			return nil, classifyDisableVolumeReplicationError(err)
+		}
+		return &replication.DisableVolumeReplicationResponse{}, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -204,6 +227,21 @@ func (cs *Server) GetVolumeReplicationInfo(
 	ctx context.Context,
 	req *replication.GetVolumeReplicationInfoRequest,
 ) (*replication.GetVolumeReplicationInfoResponse, error) {
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		info, err := client.GetGroupReplicationInfo(ctx, gh)
+		if err != nil {
+			return nil, classifyGetVolumeReplicationInfoError(err)
+		}
+		resp := &replication.GetVolumeReplicationInfoResponse{}
+		if info.LastReplicatedAt != nil {
+			resp.LastSyncTime = timestamppb.New(*info.LastReplicatedAt)
+		}
+		return resp, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -240,6 +278,20 @@ func (cs *Server) PromoteVolume(
 	ctx context.Context,
 	req *replication.PromoteVolumeRequest,
 ) (*replication.PromoteVolumeResponse, error) {
+	// A group handle promotes the whole consistency group atomically (design
+	// §14.4): every member is cloned from the same group generation. The
+	// planned/forced split is the backend group failover's own concern, so
+	// force is not forwarded here.
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		if err := client.PromoteGroup(ctx, gh); err != nil {
+			return nil, classifyPromoteVolumeError(err)
+		}
+		return &replication.PromoteVolumeResponse{}, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -280,6 +332,20 @@ func (cs *Server) DemoteVolume(
 	ctx context.Context,
 	req *replication.DemoteVolumeRequest,
 ) (*replication.DemoteVolumeResponse, error) {
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		done, err := client.DemoteGroup(ctx, gh)
+		if err != nil {
+			return nil, classifyDemoteVolumeError(err)
+		}
+		if !done {
+			return nil, status.Error(codes.Aborted, "group demote is still converging")
+		}
+		return &replication.DemoteVolumeResponse{}, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -318,6 +384,21 @@ func (cs *Server) ResyncVolume(
 	ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
+	if gh, ok := lvol.ParseGroupHandle(lvol.VolumeHandle(volumeIDFrom(req))); ok {
+		client, err := clusters.ReplicationClient(ctx, gh.ClusterID)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		if err := client.ResyncGroup(ctx, gh, req.GetParameters()[sourceClusterIDParam]); err != nil {
+			return nil, classifyResyncVolumeError(err)
+		}
+		info, err := client.GetGroupReplicationInfo(ctx, gh)
+		if err != nil {
+			return nil, classifyGetVolumeReplicationInfoError(err)
+		}
+		ready := info.LagSeconds == nil || info.LagBudgetSeconds == nil || *info.LagSeconds <= *info.LagBudgetSeconds
+		return &replication.ResyncVolumeResponse{Ready: ready}, nil
+	}
 	h, err := csicommon.ParseVolumeHandle(volumeIDFrom(req))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

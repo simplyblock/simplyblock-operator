@@ -49,6 +49,33 @@ func (s *Server) GetCapabilities(
 					},
 				},
 			},
+			// The VolumeGroup service (design §14.3), which the stock
+			// kubernetes-csi-addons controller-manager dials to form a backend
+			// consistency group before replicating it as one unit.
+			{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_VOLUME_GROUP,
+					},
+				},
+			},
+			{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_MODIFY_VOLUME_GROUP,
+					},
+				},
+			},
+			// DeleteVolumeGroup dissolves the group but keeps its member volumes
+			// (design §14.3): a group is a label-formed set, never an owner of
+			// the volumes' lifecycle.
+			{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_DO_NOT_ALLOW_VG_TO_DELETE_VOLUMES,
+					},
+				},
+			},
 		},
 	}, nil
 }
