@@ -18,10 +18,16 @@ const (
 	vgPolicyID    = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 )
 
+// groupSource builds the ReplicationSource the csi-addons sidecar actually sends
+// when driving a VolumeGroupReplication: the group handle rides the volumegroup
+// oneof, NOT the per-volume one. Using the volume oneof here (as this helper
+// once did) exercised the same wrong field the code read, so every group-routing
+// test passed while live VGR promote failed with `invalid volume handle ""`
+// (2026-09-26). Regression: 2026-09-26-vgr-source-oneof.
 func groupSource(handle string) *replication.ReplicationSource {
 	return &replication.ReplicationSource{
-		Type: &replication.ReplicationSource_Volume{
-			Volume: &replication.ReplicationSource_VolumeSource{VolumeId: handle},
+		Type: &replication.ReplicationSource_Volumegroup{
+			Volumegroup: &replication.ReplicationSource_VolumeGroupSource{VolumeGroupId: handle},
 		},
 	}
 }

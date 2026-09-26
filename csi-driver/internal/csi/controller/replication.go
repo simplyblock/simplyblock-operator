@@ -48,9 +48,20 @@ type volumeIDCarrier interface {
 // proxies every Replication RPC through ReplicationSource and never sets the
 // legacy flat VolumeId, so that field is checked first; the flat field is
 // kept as a fallback for any caller that still sends it.
+//
+// A VolumeGroupReplication drives the SAME Replication verbs, but the sidecar
+// sets the group source oneof (ReplicationSource.volumegroup.volume_group_id)
+// rather than the per-volume one, carrying the "cg:{cluster}:{group}" handle.
+// Reading only the volume oneof left the handle empty and every group verb
+// failed with `invalid volume handle ""` (VGR promote, confirmed live
+// 2026-09-26). The group handle is returned as-is so ParseGroupHandle routes it
+// to the group-replication path.
 func volumeIDFrom(req volumeIDCarrier) string {
 	if v := req.GetReplicationSource().GetVolume().GetVolumeId(); v != "" {
 		return v
+	}
+	if g := req.GetReplicationSource().GetVolumegroup().GetVolumeGroupId(); g != "" {
+		return g
 	}
 	return req.GetVolumeId()
 }
