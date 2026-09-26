@@ -231,6 +231,14 @@ type StorageNodeOpsStatus struct {
 	// StorageNodeOpsSubPhaseReshuffling.
 	// +optional
 	ReshuffleTriggered bool `json:"reshuffleTriggered,omitempty"`
+	// RemoveTriggered latches that the node DELETE was accepted. The DELETE
+	// queues the removal rather than performing it, so Removing sends it once
+	// and then follows the node to removed / removed_failed. Its own latch
+	// because the status the drain hands the node over in (migrating_lvols)
+	// is also one a running removal reads as, so the status alone cannot say
+	// whether the DELETE has been sent.
+	// +optional
+	RemoveTriggered bool `json:"removeTriggered,omitempty"`
 
 	// DrainTargetsTried records, per volume, the migration targets that have
 	// already failed for it.

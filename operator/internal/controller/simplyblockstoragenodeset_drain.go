@@ -204,19 +204,31 @@ func getNodeBackendStatus(
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (string, error) {
+	status, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
+	return status, err
+}
+
+// getNodeBackendStatusWithCode is getNodeBackendStatus for callers that need
+// to tell "the node is gone" (404) apart from "the API is unavailable": the
+// removal's last step reads a vanished record as success, not as an error.
+func getNodeBackendStatusWithCode(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+) (string, int, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: %w", err)
+		return "", 0, fmt.Errorf("getNodeBackendStatus: %w", err)
 	}
 	if status >= 300 {
-		return "", fmt.Errorf("getNodeBackendStatus: status %d", status)
+		return "", status, fmt.Errorf("getNodeBackendStatus: status %d", status)
 	}
 	var resp utils.NodeStatusResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
+		return "", status, fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
 	}
-	return resp.Status, nil
+	return resp.Status, status, nil
 }
 
 // roundRobinTargetNodes assigns each PV name a target node UUID, round-robin

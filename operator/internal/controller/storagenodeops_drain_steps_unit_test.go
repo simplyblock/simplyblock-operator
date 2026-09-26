@@ -205,3 +205,118 @@ func TestDrainReshuffle_LegacyPhaseAdvancesInsteadOfStranding(t *testing.T) {
 		t.Errorf("subPhase: got %q, want Removing", updated.Status.SubPhase)
 	}
 }
+
+// removeStepServer answers the delete step: DELETE on the node is accepted (or
+// refused with deleteStatus), GET on the node reports *nodeStatus, and every
+// POST (a resume) is counted so a test can assert none was attempted.
+func removeStepServer(t *testing.T, nodeStatus *string, deleteStatus int, deletes, posts *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			*deletes++
+			w.WriteHeader(deleteStatus)
+		case http.MethodPost:
+			*posts++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + opsTestNodeUUID + `","status":"` + *nodeStatus + `"}`))
+		}
+	}))
+}
+
+// The DELETE queues the removal; the node is removed only when the control
+// plane says so. Succeeding on the 204 reported a node removed while it was
+// still at the first step of its removal, and hid one that never finished.
+func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
+	status := "migrating_lvols" // what the drain hands over; also what a running removal reads as
+	deletes, posts := 0, 0
+	srv := removeStepServer(t, &status, http.StatusNoContent, &deletes, &posts)
+	defer srv.Close()
+
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+	client := webapi.NewClient(srv.URL)
+
+	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	ops = reloadOps(t, r)
+	if !ops.Status.RemoveTriggered {
+		t.Fatal("the DELETE was not latched")
+	}
+	if ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
+		t.Fatal("succeeded on the 204, before the node was removed")
+	}
+
+	status = "in_removal"
+	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	ops = reloadOps(t, r)
+	if ops.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
+		t.Fatal("succeeded while the node was still in_removal")
+	}
+	if deletes != 1 {
+		t.Errorf("the DELETE was sent %d times, want 1", deletes)
+	}
+
+	status = "removed"
+	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if got := reloadOps(t, r).Status.Phase; got != simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
+		t.Errorf("phase: got %q, want Succeeded once the node reads removed", got)
+	}
+	if deletes != 1 {
+		t.Errorf("the DELETE was sent %d times, want 1", deletes)
+	}
+}
+
+// A removal the control plane gave up on ends the op, and does not try to
+// resume a node the drain has already dismantled.
+func TestDrainRemove_RemovedFailedFailsTheOpWithoutResuming(t *testing.T) {
+	status := "removed_failed"
+	deletes, posts := 0, 0
+	srv := removeStepServer(t, &status, http.StatusNoContent, &deletes, &posts)
+	defer srv.Close()
+
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+	ops.Status.RemoveTriggered = true
+
+	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("drainRemove: %v", err)
+	}
+	if got := reloadOps(t, r).Status.Phase; got != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		t.Errorf("phase: got %q, want Failed", got)
+	}
+	if posts != 0 {
+		t.Errorf("attempted %d resume(s) of a node that is already dismantled", posts)
+	}
+}
+
+// A DELETE refused for a node the drain has already stopped fails the op
+// outright. Resuming such a node fails too (its SPDK is gone), and retrying
+// that resume forever is how a plain 400 became an op that never ended.
+func TestDrainRemove_RefusedDeleteOnAStoppedNodeFailsWithoutResuming(t *testing.T) {
+	status := "migrating_lvols"
+	deletes, posts := 0, 0
+	srv := removeStepServer(t, &status, http.StatusBadRequest, &deletes, &posts)
+	defer srv.Close()
+
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
+
+	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("drainRemove: %v", err)
+	}
+	updated := reloadOps(t, r)
+	if updated.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		t.Errorf("phase: got %q, want Failed", updated.Status.Phase)
+	}
+	if posts != 0 {
+		t.Errorf("attempted %d resume(s) of a stopped node", posts)
+	}
+	if updated.Status.RemoveTriggered {
+		t.Error("a refused DELETE was latched as sent")
+	}
+}

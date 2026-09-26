@@ -1728,25 +1728,69 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s?force_remove=false",
-		clusterUUID, nodeUUID)
-	_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+	// The DELETE queues the removal; it does not perform it. The control plane
+	// then runs its own phases -- in_removal, its replicas torn down, the
+	// roles it hosted reallocated, its devices dismantled -- and the node reads
+	// "removed" only at the end, or "removed_failed" once it has given up.
+	// Succeeding on the 204 reported the node removed while it was still at
+	// the first of those, and hid a removal that never finished behind a
+	// Succeeded op (2026-09-26). So the DELETE is sent once, and the op then
+	// follows the node to its terminal status.
+	if !ops.Status.RemoveTriggered {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s?force_remove=false",
+			clusterUUID, nodeUUID)
+		_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 
-	if err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound) {
+		switch {
+		case err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound):
+			patch := client.MergeFrom(ops.DeepCopy())
+			ops.Status.RemoveTriggered = true
+			ops.Status.Message = "removal queued; waiting for the node to be removed"
+			_ = r.Status().Patch(ctx, ops, patch)
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRemovalQueued", "NodeRemovalQueued",
+				"removal of storage node %s accepted by the control plane", nodeUUID)
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
+		case webapi.ClassifyError(err, status).Retryable:
+			log.Error(err, "drain: transient error on node DELETE, retrying", "status", status)
+			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		}
+
+		// The DELETE was refused before anything was dismantled. A node that
+		// is still up can be handed back; one the drain has already stopped
+		// cannot be resumed -- the resume itself fails, and retrying it
+		// forever is how a refused DELETE turned into an op that never ended.
+		reason := fmt.Sprintf("DELETE node returned status %d", status)
+		if current, _, gerr := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID); gerr == nil && isNodeStopped(current) {
+			return r.failOps(ctx, ops, reason+" (node already stopped; not resuming)")
+		}
+		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID, reason)
+	}
+
+	current, code, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
+	if err != nil && code != http.StatusNotFound {
+		log.Error(err, "drain: could not read the node while waiting for its removal, retrying")
+		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+	}
+
+	switch {
+	case code == http.StatusNotFound, current == utils.NodeStatusRemoved:
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRemoved", "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "NodeRemoved", fmt.Sprintf("storage node %s removed successfully", nodeUUID))
 		return r.succeedOps(ctx, ops, sn)
+	case current == nodeStatusRemovedFailed:
+		return r.failOps(ctx, ops, fmt.Sprintf("the control plane gave up removing node %s (removed_failed)", nodeUUID))
 	}
 
-	class := webapi.ClassifyError(err, status)
-	if class.Retryable {
-		log.Error(err, "drain: transient error on node DELETE, retrying", "status", status)
-		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
-	}
-	return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
-		fmt.Sprintf("DELETE node returned status %d", status))
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.Message = fmt.Sprintf("removal in progress: node is %s", current)
+	_ = r.Status().Patch(ctx, ops, patch)
+	return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 }
+
+// nodeStatusRemovedFailed is the status a removal ends in when it could not
+// finish; the operator can re-drive it, so the op fails rather than waits.
+const nodeStatusRemovedFailed = "removed_failed"
 
 func (r *StorageNodeOpsReconciler) resumeAndFail(
 	ctx context.Context,
