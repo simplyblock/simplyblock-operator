@@ -45,6 +45,13 @@ type LVMPhysicalVolumeConfig struct {
 	// that exactly the one carrying the source's name is renamed.
 	PreserveLogicalVolumes []string
 
+	// RecognizeStack answers whether a group carrying no ownership tag is a
+	// stack of this driver's from before the tag existed, by its names. It is
+	// consulted for a clone whose source predates the tag, and nowhere else:
+	// a tagged clone is known by its tag, and a group that is neither is
+	// somebody's and is refused.
+	RecognizeStack lvm.StackRecognizer
+
 	Manager *lvm.Manager
 	Content ContentReader
 }
@@ -220,7 +227,7 @@ func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact)
 			// nothing else.
 			if _, err := l.cfg.Manager.ResolveClonedVolumeGroup(ctx, d.pv,
 				lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
-				l.cfg.PreserveLogicalVolumes...); err != nil {
+				l.cfg.RecognizeStack, l.cfg.PreserveLogicalVolumes...); err != nil {
 				return volstack.Artifact{}, fmt.Errorf("lvmPhysicalVolume: %w", err)
 			}
 

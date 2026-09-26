@@ -2,6 +2,7 @@ package lvm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -59,6 +60,9 @@ func RegisterVolumeProvisioning(handler VolumeProvisioning) {
 // that is free to remove, which a node service has no terminal to answer, and it
 // overrides nothing.
 func (m *Manager) RemovePhysicalVolume(ctx context.Context, pv PhysicalVolume) error {
+	if err := m.requireOwnedDevice(ctx, pv); err != nil {
+		return err
+	}
 	_, err := m.exec(ctx, []string{pv.DevicePath}, "pvremove", "--yes", pv.DevicePath)
 	if err != nil {
 		if isAlreadyGone(err) {
@@ -115,7 +119,9 @@ func (m *Manager) CreateVolumeGroup(
 	ctx context.Context, volumeGroup VolumeGroup, pvs ...PhysicalVolume,
 ) (VolumeGroup, error) {
 	paths := devicePaths(pvs)
-	args := append([]string{"vgcreate", volumeGroup.Name}, paths...)
+	// Tagged in the same command that makes it, so no group of ours ever exists
+	// without the tag, however the process ends.
+	args := append([]string{"vgcreate", "--addtag", OwnerTag, volumeGroup.Name}, paths...)
 	if _, err := m.exec(ctx, paths, args...); err != nil {
 		return VolumeGroup{}, fmt.Errorf("vgcreate %s on %v: %w", volumeGroup.Name, paths, err)
 	}
@@ -125,6 +131,9 @@ func (m *Manager) CreateVolumeGroup(
 // ActivateVolumeGroup activates volumeGroup's logical volumes (vgchange -ay),
 // never recreating or reformatting anything.
 func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "-ay", volumeGroup.Name); err != nil {
 		return fmt.Errorf("activate VG %s: %w", volumeGroup.Name, err)
 	}
@@ -134,6 +143,9 @@ func (m *Manager) ActivateVolumeGroup(ctx context.Context, volumeGroup VolumeGro
 // DeactivateVolumeGroup deactivates (but does not destroy) volumeGroup
 // (vgchange -an).
 func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "-an", volumeGroup.Name); err != nil {
 		return fmt.Errorf("deactivate VG %s: %w", volumeGroup.Name, err)
 	}
@@ -148,6 +160,12 @@ func (m *Manager) DeactivateVolumeGroup(ctx context.Context, volumeGroup VolumeG
 // the ordinary answer rather than an unusual one, because the group's metadata
 // lives on a device the release has already detached.
 func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		if errors.Is(err, errGroupGone) {
+			return nil
+		}
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgremove", "-f", volumeGroup.Name); err != nil {
 		if isAlreadyGone(err) {
 			return nil
@@ -167,6 +185,12 @@ func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup VolumeGroup
 // is what stands between a mis-ordered teardown and a pod losing its filesystem
 // underneath it, so it is returned rather than overridden.
 func (m *Manager) RemoveLogicalVolume(ctx context.Context, logicalVolume LogicalVolume) error {
+	if err := m.requireOwned(ctx, logicalVolume.VolumeGroup); err != nil {
+		if errors.Is(err, errGroupGone) {
+			return nil
+		}
+		return err
+	}
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	if _, err := m.exec(ctx, nil, "lvremove", "--yes", path); err != nil {
 		if isAlreadyGone(err) {
@@ -217,9 +241,12 @@ func (m *Manager) LogicalVolumeActive(ctx context.Context, logicalVolume Logical
 func (m *Manager) CreateLogicalVolume(
 	ctx context.Context, volumeGroup VolumeGroup, poolName, logicalVolume string, def LogicalVolumeDefinition,
 ) (LogicalVolume, error) {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return LogicalVolume{}, err
+	}
 	args := []string{"lvcreate", "-n", logicalVolume, "-l", "100%FREE"}
 	args = append(args, stripeArgs(def)...)
-	args = append(args, createTarget(volumeGroup, poolName), "--yes")
+	args = append(args, createTarget(volumeGroup, poolName), "--yes", "--addtag", OwnerTag)
 
 	for _, handler := range volumeProvisioning {
 		if !handler.Handles(def) {

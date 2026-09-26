@@ -14,7 +14,7 @@ func TestManager_ForgetDevice(t *testing.T) {
 		t.Fatalf("ForgetDevice: %v", err)
 	}
 	want := []string{"lvmdevices", "--devices", "/dev/nvme1n1", "--deldev", "/dev/nvme1n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

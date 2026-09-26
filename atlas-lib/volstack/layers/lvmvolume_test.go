@@ -366,7 +366,7 @@ func TestLVMVolumeRecordsWhatItWasBuiltWith(t *testing.T) {
 // recovery reads, so the tests spell it out rather than sharing the constant
 // with the layer: a renamed constant that changed what is written to disk would
 // otherwise pass every test here.
-const wantMarker = "simplyblock.creating"
+const wantMarker = "storage.simplyblock.io/creating"
 
 // testPool is the pool a VDO-backed volume is created inside.
 const testPool = "vdopool"
@@ -429,7 +429,7 @@ func TestLVMVolumeCreateMarksTheGroupAroundLvcreate(t *testing.T) {
 // can have written into a pool that has no volume inside it, and the marker says
 // whose interrupted work it is.
 func TestLVMVolumeRecoversItsOwnInterruptedPoolCreate(t *testing.T) {
-	f := newPooledLVMVolume("  "+testPool+"\n", "  "+wantMarker+"\n")
+	f := newPooledLVMVolume("  "+testPool+"\n", "  "+lvm.OwnerTag+","+wantMarker+"\n")
 
 	state, _, err := f.layer.Observe(context.Background(), belowArtifact())
 	if err != nil {
@@ -461,7 +461,7 @@ func TestLVMVolumeRecoversItsOwnInterruptedPoolCreate(t *testing.T) {
 // say what it found, since the alternative is a stage that retries forever with
 // LVM's own message.
 func TestLVMVolumeRefusesAPoolWithoutItsMarker(t *testing.T) {
-	f := newPooledLVMVolume("  "+testPool+"\n", "\n")
+	f := newPooledLVMVolume("  "+testPool+"\n", "  "+lvm.OwnerTag+"\n")
 
 	_, err := f.layer.Ensure(context.Background(), belowArtifact())
 	if err == nil {
@@ -483,7 +483,7 @@ func TestLVMVolumeRefusesAPoolWithoutItsMarker(t *testing.T) {
 // changes nothing, because the marker vouches for an empty group and this one is
 // not empty. Nothing is removed, and nothing is created beside it either.
 func TestLVMVolumeRefusesAPoolBesideAnotherVolume(t *testing.T) {
-	f := newPooledLVMVolume("  "+testPool+"\n  source-lv\n", "  "+wantMarker+"\n")
+	f := newPooledLVMVolume("  "+testPool+"\n  source-lv\n", "  "+lvm.OwnerTag+","+wantMarker+"\n")
 
 	_, err := f.layer.Ensure(context.Background(), belowArtifact())
 	if err == nil {
@@ -524,7 +524,7 @@ func TestLVMVolumeRefusesAForeignVolumeInItsGroup(t *testing.T) {
 // The next bring-up clears it on the way through, creating nothing.
 func TestLVMVolumeClearsAStaleMarkerFromACompleteGroup(t *testing.T) {
 	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-------\n", lvm.LogicalVolumeDefinition{})
-	f.cmds.out["vgs:vg_tags"] = "  " + wantMarker + "\n"
+	f.cmds.out["vgs:vg_tags"] = "  " + lvm.OwnerTag + "," + wantMarker + "\n"
 
 	if _, err := f.layer.Ensure(context.Background(), belowArtifact()); err != nil {
 		t.Fatalf("Ensure: %v", err)

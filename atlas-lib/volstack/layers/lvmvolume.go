@@ -250,11 +250,9 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 // It goes on before lvcreate and comes off after, in the group's own metadata,
 // so it survives the reboot, follows the volume to another node, and is copied
 // into a clone taken from a source that was mid-create, which carries no data
-// either.
-//
-// Spelled out on disk, so it is a contract rather than a name: the tests write
-// the same string, and a recovery on another build reads it.
-const creatingMarker = "simplyblock.creating"
+// either. The string is the `lvm` package's, next to the ownership tag it lives
+// beside.
+const creatingMarker = lvm.CreatingMarker
 
 // create makes the logical volume, and is what both a fresh create and an
 // interrupted one end in. The marker brackets lvcreate, which is the only

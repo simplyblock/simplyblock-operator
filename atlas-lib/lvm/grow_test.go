@@ -14,7 +14,7 @@ func TestManager_ExpandPhysicalVolume(t *testing.T) {
 		t.Fatalf("ExpandPhysicalVolume: %v", err)
 	}
 	want := []string{"pvresize", "/dev/nvme0n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -27,7 +27,7 @@ func TestManager_ExtendVolumeGroup(t *testing.T) {
 		t.Fatalf("ExtendVolumeGroup: %v", err)
 	}
 	want := []string{"vgextend", "striped-vg", "/dev/nvme1n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -56,7 +56,7 @@ func TestManager_ExpandLogicalVolume(t *testing.T) {
 	// target. See the method's doc comment for why an unprefixed 100%FREE
 	// would be a real bug here.
 	want := []string{"lvextend", "-l+100%FREE", "vdo-abc123/vdopool"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -100,7 +100,7 @@ func TestManager_ExtendLogicalVolumeToSize(t *testing.T) {
 		t.Fatalf("ExtendLogicalVolumeToSize: %v", err)
 	}
 	want := []string{"lvextend", "-L8589934592B", "vdo-abc123/abc123"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

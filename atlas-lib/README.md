@@ -1150,8 +1150,11 @@ make on any device before staging it:
 // Refresh, probe the device's own identity, and if it is somebody else's
 // volume group, re-stamp it and rename the logical volume inside. Returns the
 // foreign VolumeGroup it found, or the zero value when there was nothing to
-// resolve.
-previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
+// resolve. A group without the ownership tag is re-stamped only when the
+// recognizer knows its layout as the driver's from before the tag existed;
+// plans.RecognizeStack is the one the driver uses.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName,
+    plans.RecognizeStack(poolName), poolName)
 if err != nil {
     handleError(err)
 }
