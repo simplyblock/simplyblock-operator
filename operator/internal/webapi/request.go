@@ -51,8 +51,14 @@ func (c *Client) DoWithHeaders(
 		return nil, nil, 0, fmt.Errorf("create request: %w", err)
 	}
 
-	// Attach auth header
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.saToken))
+	// Attach auth header. A token WithBearerToken attached to ctx wins over
+	// this process's own service-account token, for a call scoped to a
+	// cluster whose control plane lives on a different Kubernetes cluster.
+	token := c.saToken
+	if override, ok := BearerTokenFromContext(ctx); ok {
+		token = override
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	req.Header.Set("Content-Type", "application/json")
 
 	// Execute the request

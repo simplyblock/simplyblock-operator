@@ -81,6 +81,14 @@ type ControlPlane interface {
 	// outcome being asked for reached by another route, so the implementation
 	// reads a 404 as success.
 	CancelTask(ctx context.Context, clusterID, taskID string) error
+
+	// Endpoint is the base URL this call would currently reach the control
+	// plane at, resolved the same way every other call resolves it (§3.3).
+	// upsertCSICredentials carries it into the CSI driver's aggregate Secret,
+	// since the CSI driver dials it directly rather than through this
+	// reconciler, and a hardcoded in-cluster address is wrong the moment the
+	// control plane is a ControlPlane.spec.source.managed one.
+	Endpoint(ctx context.Context) string
 }
 
 // httpControlPlane is the ControlPlane the operator runs with: one method per
@@ -94,6 +102,12 @@ type httpControlPlane struct {
 	// startup client is the only one.
 	resolve controlplane.EndpointResolver
 
+	// credential answers what a managed control plane's CreateCluster and
+	// ClusterByName calls authenticate with (see adminContext). Nil, or a
+	// resolver that answers false, means neither call adds a bearer token
+	// beyond whatever webapi.Client already carries.
+	credential controlplane.CredentialResolver
+
 	// mu guards resolved, which is rebuilt when the published endpoint changes.
 	mu       sync.Mutex
 	resolved *webapi.Client
@@ -101,11 +115,16 @@ type httpControlPlane struct {
 
 // NewControlPlane returns the HTTP-backed control-plane surface.
 //
-// The resolver may be nil, which is what a test passes: calls then go to the
-// startup client and nothing reads a ControlPlane object.
-func NewControlPlane(resolve controlplane.EndpointResolver) ControlPlane {
-	return &httpControlPlane{client: webapi.NewClient(), resolve: resolve}
+// Either resolver may be nil, which is what a test passes: calls then go to
+// the startup client, unauthenticated beyond its own saToken, and nothing
+// reads a ControlPlane object.
+func NewControlPlane(
+	resolve controlplane.EndpointResolver, credential controlplane.CredentialResolver,
+) ControlPlane {
+	return &httpControlPlane{client: webapi.NewClient(), resolve: resolve, credential: credential}
 }
+
+func (c *httpControlPlane) Endpoint(ctx context.Context) string { return c.clientFor(ctx).BaseURL }
 
 func (c *httpControlPlane) Ready(ctx context.Context) error {
 	_, err := c.call(ctx, http.MethodGet, "/api/v2/_meta/ready", nil)
@@ -115,7 +134,7 @@ func (c *httpControlPlane) Ready(ctx context.Context) error {
 func (c *httpControlPlane) CreateCluster(
 	ctx context.Context, params utils.ClusterAddParams,
 ) (webapi.ClusterResponse, error) {
-	body, err := c.call(ctx, http.MethodPost, "/api/v2/clusters/", params)
+	body, err := c.call(c.adminContext(ctx), http.MethodPost, "/api/v2/clusters/", params)
 	if err != nil {
 		return webapi.ClusterResponse{}, err
 	}
@@ -135,7 +154,7 @@ func (c *httpControlPlane) Cluster(
 func (c *httpControlPlane) ClusterByName(
 	ctx context.Context, name string,
 ) (utils.ClusterListEntry, bool, error) {
-	body, err := c.call(ctx, http.MethodGet, "/api/v2/clusters/", nil)
+	body, err := c.call(c.adminContext(ctx), http.MethodGet, "/api/v2/clusters/", nil)
 	if err != nil {
 		return utils.ClusterListEntry{}, false, err
 	}
@@ -295,4 +314,28 @@ func (c *httpControlPlane) clientFor(ctx context.Context) *webapi.Client {
 		c.resolved = webapi.NewClient(endpoint)
 	}
 	return c.resolved
+}
+
+// adminContext is what CreateCluster and ClusterByName call with, instead of
+// ctx directly.
+//
+// Both run before any cluster secret exists -- there is no cluster yet to
+// have one, and no adoption has happened either -- so a managed control
+// plane's admin credential is the only thing that can authenticate them, and
+// nothing else in this package has a stronger claim to the context's bearer
+// token slot. A ctx that already carries one (a caller more specific than
+// this method wins, though none exists on this interface today) is left
+// alone.
+func (c *httpControlPlane) adminContext(ctx context.Context) context.Context {
+	if c.credential == nil {
+		return ctx
+	}
+	if _, ok := webapi.BearerTokenFromContext(ctx); ok {
+		return ctx
+	}
+	token, ok := c.credential(ctx)
+	if !ok {
+		return ctx
+	}
+	return webapi.WithBearerToken(ctx, token)
 }

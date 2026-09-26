@@ -13,7 +13,17 @@ import (
 )
 
 type NonBlockingGRPCServer interface {
-	Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer)
+	// register is called once per extra service (csi-addons Identity and
+	// Replication) with the same *grpc.Server the CSI services register on,
+	// so csicommon never has to import csi-addons: the caller builds the
+	// closures and this package only invokes them.
+	Start(
+		endpoint string,
+		ids csi.IdentityServer,
+		cs csi.ControllerServer,
+		ns csi.NodeServer,
+		register ...func(*grpc.Server),
+	)
 	Wait()
 	Stop()
 	ForceStop()
@@ -33,10 +43,11 @@ func (s *nonBlockingGRPCServer) Start(
 	ids csi.IdentityServer,
 	cs csi.ControllerServer,
 	ns csi.NodeServer,
+	register ...func(*grpc.Server),
 ) {
 	s.wg.Add(1)
 
-	go s.serve(endpoint, ids, cs, ns)
+	go s.serve(endpoint, ids, cs, ns, register)
 }
 
 func (s *nonBlockingGRPCServer) Wait() {
@@ -56,6 +67,7 @@ func (s *nonBlockingGRPCServer) serve(
 	ids csi.IdentityServer,
 	cs csi.ControllerServer,
 	ns csi.NodeServer,
+	register []func(*grpc.Server),
 ) {
 	var err error
 
@@ -111,6 +123,9 @@ func (s *nonBlockingGRPCServer) serve(
 	}
 	if ns != nil {
 		csi.RegisterNodeServer(server, ns)
+	}
+	for _, r := range register {
+		r(server)
 	}
 
 	klog.Infof("Listening for connections on address: %#v", listener.Addr())

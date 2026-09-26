@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -247,7 +248,7 @@ func TestAShutdownIssuesOneCallAndWaitsForTheCluster(t *testing.T) {
 		cluster: func(string) (webapi.ClusterResponse, error) {
 			reading := activeCluster()
 			if !active {
-				reading.Status = "suspended"
+				reading.Status = statusSuspended
 			}
 			return reading, nil
 		},
@@ -265,6 +266,60 @@ func TestAShutdownIssuesOneCallAndWaitsForTheCluster(t *testing.T) {
 	}
 }
 
+// An operation against an already-adopted cluster may reach a control plane
+// on a different Kubernetes cluster (a ControlPlane.spec.source.managed one),
+// the same as StorageClusterReconciler: it authenticates as the cluster's own
+// recorded secret instead of as this operator's Kubernetes identity, since a
+// Kubernetes TokenReview can never cross a cluster boundary. Every Cluster()
+// call across the run is checked, not just the last, so a later correctly-
+// authenticated read can't hide a regression in an earlier one.
+func TestAnOperationAuthenticatesAsItsClusterOnceItsSecretIsKnown(t *testing.T) {
+	var calls []struct {
+		token string
+		ok    bool
+	}
+	active := true
+	api := &fakeControlPlane{
+		cluster: func(string) (webapi.ClusterResponse, error) {
+			reading := activeCluster()
+			if !active {
+				reading.Status = statusSuspended
+			}
+			return reading, nil
+		},
+		clusterCtx: func(ctx context.Context) {
+			token, ok := webapi.BearerTokenFromContext(ctx)
+			calls = append(calls, struct {
+				token string
+				ok    bool
+			}{token, ok})
+		},
+		shutdown: func(string) error { active = false; return nil },
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: objectMeta("simplyblock-cluster-" + testClusterName),
+		Data:       map[string][]byte{"secret": []byte(testClusterSecret)},
+	}
+	r := newOpsReconciler(t, api, &recorder{},
+		newTestCluster(), newTestOps(simplyblockv1alpha2.StorageClusterOpsActionShutdown), secret)
+
+	reconcileOps(t, r, 6)
+
+	if len(calls) == 0 {
+		t.Fatal("the control plane was never asked for the cluster")
+	}
+	for i, call := range calls {
+		if !call.ok {
+			t.Errorf("call %d: carried no bearer-token override", i)
+			continue
+		}
+		if call.token != testClusterSecret {
+			t.Errorf("call %d: bearer token = %q, want the cluster's own recorded secret %q",
+				i, call.token, testClusterSecret)
+		}
+	}
+}
+
 // Restart is the one action with two side effects, because the control plane
 // has no restart endpoint of its own.
 func TestARestartShutsDownThenStarts(t *testing.T) {
@@ -275,7 +330,7 @@ func TestARestartShutsDownThenStarts(t *testing.T) {
 			reading.Status = status
 			return reading, nil
 		},
-		shutdown: func(string) error { status = "suspended"; return nil },
+		shutdown: func(string) error { status = statusSuspended; return nil },
 		start:    func(string) error { status = utils.ClusterStatusActive; return nil },
 	}
 	r := newOpsReconciler(t, api, &recorder{},

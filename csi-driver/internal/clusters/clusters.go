@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/errs/deferrers"
 	"github.com/simplyblock/atlas/lvol"
 	"k8s.io/klog"
@@ -102,33 +103,9 @@ func List() ([]string, error) {
 // pool. poolIDOrName may be a pool UUID (used as-is), a pool name (resolved via
 // the API), or empty (no pool context, so only cluster-level operations work).
 func Client(ctx context.Context, clusterID, poolIDOrName string) (*controlplane.ClusterClient, error) {
-	clusters, err := Load()
+	clusterConfig, credential, err := resolve(clusterID)
 	if err != nil {
 		return nil, err
-	}
-
-	var clusterConfig *Config
-	for _, cluster := range clusters.Clusters {
-		if cluster.ClusterID == clusterID {
-			clusterConfig = &cluster
-			break
-		}
-	}
-
-	if clusterConfig == nil {
-		return nil, fmt.Errorf("failed to find secret for clusterID %s: %w", clusterID, controlplane.ErrClusterNotFound)
-	}
-
-	if clusterConfig.ClusterEndpoint == "" {
-		return nil, fmt.Errorf("invalid cluster configuration for clusterID %s: missing endpoint", clusterID)
-	}
-
-	credential := credentialFor(clusterConfig)
-	if credential == "" {
-		return nil, fmt.Errorf(
-			"invalid cluster configuration for clusterID %s: no cluster_secret and no API token available",
-			clusterID,
-		)
 	}
 
 	klog.Infof("Simplyblock client created for ClusterID:%s, Endpoint:%s",
@@ -150,6 +127,54 @@ func Client(ctx context.Context, clusterID, poolIDOrName string) (*controlplane.
 	}
 
 	return client, nil
+}
+
+// ReplicationClient creates the generated, atlas-lib control-plane client for
+// a cluster, sharing this package's secret.json resolution and credential
+// precedence with Client. It is a sibling rather than a Client return-type
+// change: Client's hand-rolled controlplane.ClusterClient is what every
+// existing Volume/Snapshot/Clone RPC already depends on, and only the
+// Replication service (csi-addons) is built against the generated client.
+func ReplicationClient(_ context.Context, clusterID string) (*atlascp.Client, error) {
+	clusterConfig, credential, err := resolve(clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return atlascp.New(atlascp.Config{Endpoint: clusterConfig.ClusterEndpoint, Token: credential})
+}
+
+// resolve looks up the named cluster's endpoint and credential in the driver's
+// secret.json. It is the lookup Client and ReplicationClient share, so a
+// cluster missing from the secret is invisible to neither or both, never one.
+func resolve(clusterID string) (*Config, string, error) {
+	clusters, err := Load()
+	if err != nil {
+		return nil, "", err
+	}
+
+	var clusterConfig *Config
+	for _, cluster := range clusters.Clusters {
+		if cluster.ClusterID == clusterID {
+			clusterConfig = &cluster
+			break
+		}
+	}
+
+	if clusterConfig == nil {
+		return nil, "", fmt.Errorf("failed to find secret for clusterID %s: %w", clusterID, controlplane.ErrClusterNotFound)
+	}
+	if clusterConfig.ClusterEndpoint == "" {
+		return nil, "", fmt.Errorf("invalid cluster configuration for clusterID %s: missing endpoint", clusterID)
+	}
+
+	credential := credentialFor(clusterConfig)
+	if credential == "" {
+		return nil, "", fmt.Errorf(
+			"invalid cluster configuration for clusterID %s: no cluster_secret and no API token available",
+			clusterID,
+		)
+	}
+	return clusterConfig, credential, nil
 }
 
 // credentialFor returns the bearer credential for a cluster: the API token when

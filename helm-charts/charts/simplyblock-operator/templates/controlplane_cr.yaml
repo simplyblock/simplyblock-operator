@@ -75,6 +75,10 @@ spec:
         {{- end }}
       {{- end }}
       {{- end }}
+      {{- if .Values.controlplane.local.adminTokenSecretRef }}
+      adminTokenSecretRef:
+        name: {{ .Values.controlplane.local.adminTokenSecretRef | quote }}
+      {{- end }}
 {{- else }}
     # A control plane elsewhere manages this cluster's storage. The operator
     # installs nothing here: it resolves the endpoint, probes it, and reports.
@@ -87,6 +91,9 @@ spec:
       {{- if .Values.controlplane.managed.caBundleSecretRef }}
       caBundleSecretRef:
         name: {{ .Values.controlplane.managed.caBundleSecretRef | quote }}
+      {{- end }}
+      {{- if .Values.controlplane.managed.storageNodeImage }}
+      storageNodeImage: {{ .Values.controlplane.managed.storageNodeImage | quote }}
       {{- end }}
 {{- end }}
 

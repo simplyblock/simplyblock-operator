@@ -84,6 +84,22 @@ type SidecarImages struct {
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	// +optional
 	NodeDriverRegistrar string `json:"nodeDriverRegistrar,omitempty"`
+
+	// CSIAddons is the kubernetes-csi-addons sidecar, on the controller
+	// plugin. It connects to the plugin's socket, probes the csi-addons
+	// Identity service for capabilities, and publishes a CSIAddonsNode so the
+	// kubernetes-csi-addons controller-manager (design
+	// design-csi-addons-replication.md §4.1) can reach the Replication
+	// service this driver serves.
+	//
+	// Unlike the other sidecars above, this one's upstream home is the
+	// csi-addons project's own registry, not simplyblock's: the allowlist
+	// carries quay.io/csiaddons alongside the simplyblock registries so a
+	// deployment can run the stock kubernetes-csi-addons sidecar image
+	// directly, ahead of (or instead of) a quay.io/simplyblock-io mirror.
+	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block|quay\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	CSIAddons string `json:"csiAddons,omitempty"`
 }
 
 // DriverTLSProvider is where the TLS certificate on this connection comes
@@ -208,8 +224,8 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	NodeResources corev1.ResourceRequirements `json:"nodeResources,omitempty"`
 
-	// SidecarImages overrides the six CSI sidecars, one field each. Unset takes
-	// the version this operator release ships.
+	// SidecarImages overrides the seven CSI sidecars, one field each. Unset
+	// takes the version this operator release ships.
 	// +optional
 	SidecarImages SidecarImages `json:"sidecarImages,omitempty"`
 

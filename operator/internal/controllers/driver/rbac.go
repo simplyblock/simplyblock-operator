@@ -1,5 +1,7 @@
-// The RBAC the two plugins need: a ServiceAccount each, and the five ClusterRole
-// and ClusterRoleBinding pairs behind them.
+// The RBAC the two plugins need: a ServiceAccount each, the five ClusterRole and
+// ClusterRoleBinding pairs behind the sidecars that watch cluster-scoped kinds,
+// and one namespaced Role and RoleBinding pair for the csi-addons sidecar, whose
+// CSIAddonsNode is namespaced.
 //
 // The rules are the ones the chart applies, because adoption reconciles toward
 // the state that is running and a rule this file widens or narrows is a
@@ -8,7 +10,7 @@
 // runs a second set of its own and each set says which sidecar needs what.
 //
 // Specified by operator/docs/designs/crd-redesign/design-simplyblockdriver.md
-// §4.1 and §4.3.
+// §4.1 and §4.3, and operator/docs/designs/design-csi-addons-replication.md §4.1.
 
 package driver
 
@@ -30,6 +32,8 @@ var (
 	storage       = []string{"storage.k8s.io"}
 	snapshot      = []string{"snapshot.storage.k8s.io"}
 	groupsnapshot = []string{"groupsnapshot.storage.k8s.io"}
+	csiaddons     = []string{"csiaddons.openshift.io"}
+	coordination  = []string{"coordination.k8s.io"}
 )
 
 // clusterRoleRules is the rule set of each of the five roles, keyed by the
@@ -91,6 +95,84 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		rule(core, []string{"pods"}, "get", "list", "watch"),
 		rule(core, []string{"events"}, "get", "list", "watch", "create", "patch"),
 	},
+}
+
+// csiAddonsRoleRules is the csi-addons sidecar's rule set, granted as a
+// namespaced Role rather than added to clusterRoleRules: the sidecar only ever
+// touches its own CSIAddonsNode and its own leader-election Lease, both in
+// this deployment's namespace, and neither kind justifies a cluster-wide grant.
+var csiAddonsRoleRules = []rbacv1.PolicyRule{
+	// rbac-justified: the sidecar publishes and maintains exactly one
+	// CSIAddonsNode, naming itself, so the kubernetes-csi-addons
+	// controller-manager (design-csi-addons-replication.md §4.1) can find its
+	// endpoint. It does not read any other driver's CSIAddonsNode.
+	rule(csiaddons, []string{"csiaddonsnodes"}, "get", "list", "watch", "create", "update", "delete"),
+	rule(csiaddons, []string{"csiaddonsnodes/status"}, "get", "update", "patch"),
+	// rbac-justified: only one replica of the controller StatefulSet serves
+	// CONTROLLER_SERVICE requests at a time; the Lease is how the sidecar
+	// replicas elect that one, in this namespace only.
+	rule(coordination, []string{"leases"}, "get", "list", "watch", "create", "update", "delete"),
+	rule(core, []string{"events"}, "create", "patch"),
+}
+
+func csiAddonsRole(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.Role {
+	n := names(d)
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: n.role(csiAddonsComponent), Namespace: d.Namespace},
+		Rules:      csiAddonsRoleRules,
+	}
+}
+
+func csiAddonsRoleBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.RoleBinding {
+	n := names(d)
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: n.roleBinding(csiAddonsComponent), Namespace: d.Namespace},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      n.controllerServiceAccount,
+			Namespace: d.Namespace,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "Role",
+			Name:     n.role(csiAddonsComponent),
+		},
+	}
+}
+
+// authDelegatorClusterRole is the well-known, built-in ClusterRole every
+// component that validates bearer tokens via TokenReview binds to, rather
+// than each defining its own copy of the same two-verb rule.
+const authDelegatorClusterRole = "system:auth-delegator"
+
+// csiAddonsAuthDelegatorBinding grants the controller plugin's account
+// tokenreviews.authentication.k8s.io:create, cluster-scoped since TokenReview
+// has no namespaced form. Required, not optional: the csi-addons sidecar's
+// gRPC server authenticates every incoming call from the controller-manager
+// by reviewing its bearer token (internal/kubernetes/token/grpc.go,
+// --enable-auth defaults to true) — confirmed against a live cluster, where
+// omitting this left every connection attempt failing with "failed to
+// review token ... is forbidden ... at the cluster scope". Binding to the
+// built-in role rather than a hand-rolled ClusterRole needs no new marker on
+// the operator's own ClusterRole: the operator already holds `bind` on
+// every ClusterRole unconditionally (rbac.go's clusterroles;clusterrolebindings
+// marker), which is what Kubernetes' escalation prevention checks for
+// referencing an existing role instead of granting its permissions directly.
+func csiAddonsAuthDelegatorBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.ClusterRoleBinding {
+	n := names(d)
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: n.clusterRoleBinding("csi-addons-auth-delegator")},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      n.controllerServiceAccount,
+			Namespace: d.Namespace,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     authDelegatorClusterRole,
+		},
+	}
 }
 
 // serviceAccountFor names the account each role is bound to. The node plugin has

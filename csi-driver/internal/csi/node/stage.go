@@ -545,7 +545,7 @@ func (ns *Server) refreshVolumeContext(ctx context.Context, volumeID string, vc 
 			// The source volume was deleted by a migration with --delete-source.
 			// The replication relationship survives it and names the active
 			// volume on the target cluster, which is what this redirects to.
-			connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
+			connInfo = redirectToActiveVolume(ctx, sbcClient, spdkVol.VolumeID, volumeID, vc)
 		}
 		if connInfo == nil {
 			klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)

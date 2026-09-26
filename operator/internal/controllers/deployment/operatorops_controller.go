@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -70,6 +71,19 @@ const (
 	// when the caller named nothing.
 	configNamePrefix  = "discovered-"
 	clusterNameSuffix = "-cluster"
+
+	// clusterNameLimit is the longest name a StorageCluster (and so the
+	// backend cluster it registers under) can carry. Restated here because
+	// draftFor enforces it directly rather than relying on the apiserver to
+	// refuse an over-length name later, which is what CreatingCluster would do
+	// with no way to say why.
+	clusterNameLimit = 63
+
+	// disambiguatorLength is how much of the kube-system Namespace's UID
+	// clusterDisambiguator keeps. Long enough that two Kubernetes clusters
+	// collide by chance only astronomically rarely, short enough that it
+	// barely touches clusterNameLimit.
+	disambiguatorLength = 8
 )
 
 // The reasons a discovery run emits. They are constants rather than literals at
@@ -132,6 +146,7 @@ type OperatorOpsReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile advances one operator operation by one step.
@@ -592,7 +607,7 @@ func (r *OperatorOpsReconciler) write(
 			plan.ExplainWithin(maxEventMessage-len(refusalPreamble)))
 	}
 
-	config, notes := r.draftFor(ops, spec, plan)
+	config, notes := r.draftFor(ctx, ops, spec, plan)
 	if err := r.Create(ctx, config); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return false, err
@@ -648,9 +663,45 @@ func refuseUnreadableFilter(spec *simplyblockv1alpha2.DiscoverSpec) error {
 	return nil
 }
 
+// clusterDisambiguator is a short, stable-per-Kubernetes-cluster suffix for the
+// cluster name a discovery run proposes.
+//
+// InitialDiscoveryName is deliberately identical on every install, which is
+// fine for the OperatorOps and the ClusterDeploymentConfig it writes -- both
+// live in this Kubernetes cluster's own API server, where the name collides
+// with nothing else. The StorageCluster the document proposes does not stay
+// local, though: it is registered on the control plane by name
+// (StorageClusterReconciler.creationParams), and a second Kubernetes cluster
+// pointed at the same one (ControlPlane.spec.source.managed) would otherwise
+// propose the identical name. StorageClusterReconciler.postCluster's
+// create-conflict fallback exists to resume a retried create of the SAME
+// cluster and cannot tell that apart from a name that belongs to an entirely
+// different Kubernetes cluster's own -- so it silently adopts the other one.
+//
+// The kube-system Namespace's UID is the closest thing a Kubernetes cluster has
+// to its own fixed identity: present from the moment its API server first
+// comes up, and never reissued afterward. An unreadable namespace answers the
+// empty string rather than an error -- a cluster this cannot be read from is
+// not going to succeed at registering on the control plane a moment later
+// either, and the caller falls back to the name exactly as it was before this
+// existed.
+func (r *OperatorOpsReconciler) clusterDisambiguator(ctx context.Context) string {
+	var ns corev1.Namespace
+	key := client.ObjectKey{Name: metav1.NamespaceSystem}
+	if err := r.Get(ctx, key, &ns); err != nil || ns.UID == "" {
+		return ""
+	}
+	id := strings.ReplaceAll(string(ns.UID), "-", "")
+	if len(id) > disambiguatorLength {
+		id = id[:disambiguatorLength]
+	}
+	return id
+}
+
 // draftFor builds the document, and the notes explaining the numbers in it that
 // were not read off the hardware.
 func (r *OperatorOpsReconciler) draftFor(
+	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
 	plan discoverypkg.Plan,
@@ -699,7 +750,21 @@ func (r *OperatorOpsReconciler) draftFor(
 		notes = append(notes, fmt.Sprintf(
 			"the draft grows the existing cluster %s, so it proposes no cluster layout", spec.ClusterRef))
 	} else {
-		template := discoverypkg.ClusterTemplateFor(name+clusterNameSuffix, plan)
+		clusterName := name + clusterNameSuffix
+		if disambiguator := r.clusterDisambiguator(ctx); disambiguator != "" {
+			base := name
+			// Truncated so the disambiguated name still fits, the same way a
+			// name too long for the limit already does not (§ gap G-11): this
+			// does not newly break a base name that already did not fit, only
+			// keeps this suffix from being the reason a borderline one no
+			// longer does.
+			room := clusterNameLimit - len(clusterNameSuffix) - len(disambiguator) - 1
+			if room > 0 && len(base) > room {
+				base = base[:room]
+			}
+			clusterName = base + "-" + disambiguator + clusterNameSuffix
+		}
+		template := discoverypkg.ClusterTemplateFor(clusterName, plan)
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
 

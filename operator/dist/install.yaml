@@ -2146,6 +2146,32 @@ spec:
                   local:
                     description: Local is a control plane the operator installs.
                     properties:
+                      adminTokenSecretRef:
+                        description: |-
+                          AdminTokenSecretRef names a Secret in this namespace holding a static
+                          admin bearer token this control plane accepts, under the `token` key, in
+                          addition to this deployment's own Kubernetes identity
+                          (SB_K8S_ADMIN_SERVICE_ACCOUNTS). It is what lets a cluster this control
+                          plane manages remotely (spec.source.managed there,
+                          ManagedControlPlane.CredentialsSecretRef naming the same value)
+                          authenticate a CreateCluster call, since a Kubernetes TokenReview can
+                          never cross a cluster boundary.
+
+                          The Secret is projected into the management API container's environment
+                          with secretKeyRef, so this operator never itself reads the plaintext.
+                          Absent grants no credential beyond the operator's own service account.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
                       foundationDB:
                         description: FoundationDB sizes the FoundationDB the management
                           API stores its state in.
@@ -2443,6 +2469,20 @@ spec:
                           same outbound-URL guard every other outbound endpoint in this group uses,
                           so a loopback or link-local address is rejected.
                         pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                        type: string
+                      storageNodeImage:
+                        description: |-
+                          StorageNodeImage is the storage-node image a StorageCluster on this
+                          Kubernetes cluster defaults to when its own spec.storageNodes.image is
+                          unset. A local control plane's own spec.source.local.image doubles as
+                          this default (StorageNodeWorkloadReconciler.image), because a
+                          self-hosted deployment's control plane and its storage nodes are one
+                          release. A managed one is a different Kubernetes cluster's install and
+                          says nothing about what this cluster's storage nodes should run, so
+                          there is no equivalent to fall back to without this field -- every
+                          StorageCluster on a managed deployment must get an image from here or
+                          from its own spec.
+                        pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                         type: string
                     required:
                     - endpoint
@@ -4354,12 +4394,28 @@ spec:
                 type: object
               sidecarImages:
                 description: |-
-                  SidecarImages overrides the six CSI sidecars, one field each. Unset takes
-                  the version this operator release ships.
+                  SidecarImages overrides the seven CSI sidecars, one field each. Unset
+                  takes the version this operator release ships.
                 properties:
                   attacher:
                     description: Attacher is csi-attacher, on the controller plugin.
                     pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                    type: string
+                  csiAddons:
+                    description: |-
+                      CSIAddons is the kubernetes-csi-addons sidecar, on the controller
+                      plugin. It connects to the plugin's socket, probes the csi-addons
+                      Identity service for capabilities, and publishes a CSIAddonsNode so the
+                      kubernetes-csi-addons controller-manager (design
+                      design-csi-addons-replication.md §4.1) can reach the Replication
+                      service this driver serves.
+
+                      Unlike the other sidecars above, this one's upstream home is the
+                      csi-addons project's own registry, not simplyblock's: the allowlist
+                      carries quay.io/csiaddons alongside the simplyblock registries so a
+                      deployment can run the stock kubernetes-csi-addons sidecar image
+                      directly, ahead of (or instead of) a quay.io/simplyblock-io mirror.
+                    pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block|quay\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                     type: string
                   healthMonitor:
                     description: |-
@@ -11884,6 +11940,36 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - csiaddons.openshift.io
+  resources:
+  - csiaddonsnodes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - csiaddons.openshift.io
+  resources:
+  - csiaddonsnodes/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - discovery.k8s.io
   resources:

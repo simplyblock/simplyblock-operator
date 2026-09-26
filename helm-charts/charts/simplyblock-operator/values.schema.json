@@ -433,6 +433,10 @@
             "nodeDriverRegistrar": {
               "type": "string",
               "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
+            },
+            "csiAddons": {
+              "type": "string",
+              "pattern": "^($|(quay\\.io/simplyblock-io|docker\\.io/simplyblock|public\\.ecr\\.aws/simply-block|quay\\.io/csiaddons)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$"
             }
           }
         }

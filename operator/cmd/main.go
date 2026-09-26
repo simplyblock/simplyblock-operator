@@ -169,7 +169,9 @@ func main() {
 			"turn it back on while migrations raised against it drain. A rename and a scope "+
 			"change make a new CRD rather than a new version, so an in-flight migration cannot "+
 			"be carried across.")
+	var csiLinkEnabled bool
 	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	flag.BoolVar(&csiLinkEnabled, "csi-link", false, "Serve the CSI link.")
 	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
 		"The address the CSI link endpoint binds to.")
 	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
@@ -332,27 +334,29 @@ func main() {
 	// plugins; a reconciler reaching a node goes through it, and treats
 	// link.ErrNoSession as a requeue rather than a failure.
 	//
-	// Always served, because both plugins always dial it. TLS when a
-	// certificate is configured, plaintext when none is.
-	var certFile, keyFile string
-	if csiLinkCertPath != "" {
-		certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
-		keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+	// Off by default, on with --csi-link. TLS when a certificate is
+	// configured, plaintext when none is.
+	if csiLinkEnabled {
+		var certFile, keyFile string
+		if csiLinkCertPath != "" {
+			certFile = filepath.Join(csiLinkCertPath, csiLinkCertName)
+			keyFile = filepath.Join(csiLinkCertPath, csiLinkCertKey)
+		}
+		csiPeers, err := csilink.Setup(mgr, csilink.Config{
+			BindAddress:              csiLinkAddr,
+			CertFile:                 certFile,
+			KeyFile:                  keyFile,
+			Namespace:                operatorNamespace,
+			Audiences:                []string{csiLinkAudience},
+			NodeServiceAccount:       "simplyblock-csi-node-sa",
+			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to set up the CSI link")
+			os.Exit(1)
+		}
+		_ = csiPeers // handed to reconcilers as they start using it
 	}
-	csiPeers, err := csilink.Setup(mgr, csilink.Config{
-		BindAddress:              csiLinkAddr,
-		CertFile:                 certFile,
-		KeyFile:                  keyFile,
-		Namespace:                operatorNamespace,
-		Audiences:                []string{csiLinkAudience},
-		NodeServiceAccount:       "simplyblock-csi-node-sa",
-		ControllerServiceAccount: "simplyblock-csi-controller-sa",
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to set up the CSI link")
-		os.Exit(1)
-	}
-	_ = csiPeers // handed to reconcilers as they start using it
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
 	// driven by scopes that reconcilers register (the StorageNode controller adds
@@ -518,6 +522,14 @@ func main() {
 	controlPlaneEndpoint := controlplanecontroller.NewEndpointResolver(
 		mgr.GetClient(), operatorNamespace)
 
+	// What a managed control plane's CreateCluster and ClusterByName calls
+	// authenticate with, read from the same ControlPlane object
+	// (spec.source.managed.credentialsSecretRef) for the same reason: a
+	// StorageCluster CR applied against a remote control plane has no other
+	// credential to create its backend identity with.
+	controlPlaneCredential := controlplanecontroller.NewCredentialResolver(
+		mgr.GetClient(), operatorNamespace)
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -538,7 +550,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     mgr.GetEventRecorder("storagecluster-controller"),
-		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:          clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Namespace:    operatorNamespace,
 		Clusters:     clusterSubscription,
 		Tasks:        taskSubscription,
@@ -572,10 +584,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&pool.StoragePoolReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
-		VolumeScopes: volumeScopes,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes:     volumeScopes,
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -804,7 +817,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
-		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint),
+		API:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 		Clusters: clusterSubscription,
 		Nodes:    nodeSubscription,
 		Tasks:    taskSubscription,
@@ -840,8 +853,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
 		os.Exit(1)
@@ -854,8 +868,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPairReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EndpointResolver: controlPlaneEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
 		os.Exit(1)

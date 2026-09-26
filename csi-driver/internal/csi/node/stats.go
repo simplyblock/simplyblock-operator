@@ -99,48 +99,76 @@ func (ns *Server) NodeGetVolumeStats(
 	}, nil
 }
 
+// clusterClientFor resolves a cluster and pool to a control-plane client. A
+// package variable, so redirectToActiveVolume's chain walk is testable with
+// fake clients instead of a live secret file.
+var clusterClientFor = func(ctx context.Context, clusterID, poolID string) (controlplane.ClusterAPI, error) {
+	return clusters.Client(ctx, clusterID, poolID)
+}
+
 // redirectToActiveVolume is called when VolumeInfo returns ErrVolumeNotFound for
-// the source volume, typically after a migration with --delete-source removed it.
-// It queries the replication relationship on the source cluster (which survives
-// volume deletion) to find the active volume on the target cluster, then fetches
-// connection info from the target. Returns nil if redirection is not possible.
-func (ns *Server) redirectToActiveVolume(
+// the source volume, typically after a migration with --delete-source removed it
+// or after a fail-over retired it. It follows the replication relationship
+// (which survives volume deletion) to the volume actually serving the data and
+// fetches connection info from there. Returns nil if redirection is not possible.
+//
+// The walk follows CHAINED pairings hop by hop: a relocate round trip leaves
+// original -> hop-1 clone -> hop-2 clone, where only the last hop is live
+// (each record names it as active_lvol_id, resolved transitively by the
+// backend). Each hop uses that record's own target triple -- its cluster,
+// pool, and lvol are consistent with EACH OTHER, while active_lvol_id may
+// live on an entirely different cluster than the record's target fields
+// describe. Pairing the first record's active_lvol_id with its target
+// cluster asked cluster B for a volume living on cluster A, fell back to a
+// stale stashed context, and timed the mount out (confirmed live 2026-09-24,
+// relocate M-02's round trip).
+func redirectToActiveVolume(
 	ctx context.Context,
 	srcClient controlplane.ClusterAPI,
 	srcLvolID, volumeID string,
 	vc map[string]string,
 ) map[string]string {
-	rel, err := srcClient.GetRelationship(ctx, srcLvolID)
-	if err != nil || rel == nil {
-		klog.Warningf("replication relationship lookup failed for deleted volume %s: %v", volumeID, err)
-		return nil
+	client, lvolID := srcClient, srcLvolID
+	for range 8 { // one hop per past fail-over; capped far above any real chain
+		rel, err := client.GetRelationship(ctx, lvolID)
+		if err != nil || rel == nil {
+			klog.Warningf("replication relationship lookup failed for deleted volume %s (at hop %s): %v",
+				volumeID, lvolID, err)
+			return nil
+		}
+		if rel.TargetLvolID == "" || rel.TargetClusterID == "" || rel.TargetPoolID == "" {
+			klog.Warningf("relationship for %s has incomplete target info (cluster=%s pool=%s lvol=%s)",
+				volumeID, rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
+			return nil
+		}
+		tgtClient, err := clusterClientFor(ctx, rel.TargetClusterID, rel.TargetPoolID)
+		if err != nil {
+			klog.Warningf("target cluster %s not in secret file for deleted volume %s: %v",
+				rel.TargetClusterID, volumeID, err)
+			return nil
+		}
+		if rel.ActiveLvolID != "" && rel.ActiveLvolID != rel.TargetLvolID {
+			// This pairing's target was itself superseded by a later
+			// fail-over; keep walking from it toward the active volume.
+			client, lvolID = tgtClient, rel.TargetLvolID
+			continue
+		}
+		connInfo, err := tgtClient.VolumeInfo(ctx, rel.TargetLvolID, vc["hostNQN"])
+		if err != nil {
+			klog.Warningf("failed to fetch connection info from target cluster %s for volume %s: %v",
+				rel.TargetClusterID, rel.TargetLvolID, err)
+			return nil
+		}
+		klog.Infof("redirected deleted volume %s → active volume %s on cluster %s",
+			volumeID, rel.TargetLvolID, rel.TargetClusterID)
+		// Override cluster_id and poolID so the initiator uses the active
+		// volume's cluster for any subsequent API calls. Without this the
+		// initiator inherits the source cluster_id from vc and fails looking
+		// up the volume there.
+		connInfo[csicommon.ParamClusterID] = rel.TargetClusterID
+		connInfo["poolID"] = rel.TargetPoolID
+		return connInfo
 	}
-	activeLvolID := rel.ActiveLvolID
-	targetClusterID := rel.TargetClusterID
-	targetPoolID := rel.TargetPoolID
-	if activeLvolID == "" || targetClusterID == "" || targetPoolID == "" {
-		klog.Warningf("relationship for %s has incomplete target info (cluster=%s pool=%s active=%s)",
-			volumeID, targetClusterID, targetPoolID, activeLvolID)
-		return nil
-	}
-	tgtClient, err := clusters.Client(ctx, targetClusterID, targetPoolID)
-	if err != nil {
-		klog.Warningf("target cluster %s not in secret file for deleted volume %s: %v",
-			targetClusterID, volumeID, err)
-		return nil
-	}
-	connInfo, err := tgtClient.VolumeInfo(ctx, activeLvolID, vc["hostNQN"])
-	if err != nil {
-		klog.Warningf("failed to fetch connection info from target cluster %s for volume %s: %v",
-			targetClusterID, activeLvolID, err)
-		return nil
-	}
-	klog.Infof("redirected deleted volume %s → active volume %s on cluster %s",
-		volumeID, activeLvolID, targetClusterID)
-	// Override cluster_id and poolID so the initiator uses the target cluster
-	// for any subsequent API calls. Without this the initiator inherits the
-	// source cluster_id from vc and fails looking up the target volume there.
-	connInfo[csicommon.ParamClusterID] = targetClusterID
-	connInfo["poolID"] = targetPoolID
-	return connInfo
+	klog.Warningf("replication chain for deleted volume %s did not converge within 8 hops", volumeID)
+	return nil
 }

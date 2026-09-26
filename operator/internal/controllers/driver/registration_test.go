@@ -135,9 +135,23 @@ func TestSidecarsDefaultToTheOperatorsRelease(t *testing.T) {
 		snapshotter:         defaultSnapshotterImage,
 		healthMonitor:       defaultHealthMonitorImage,
 		nodeDriverRegistrar: defaultNodeDriverRegistrarImage,
+		csiAddons:           defaultCSIAddonsImage,
 	}
 	if got != want {
 		t.Errorf("sidecars = %+v, want %+v", got, want)
+	}
+}
+
+// The csi-addons sidecar's default names the real upstream image
+// (quay.io/csiaddons/k8s-sidecar) rather than a quay.io/simplyblock-io mirror
+// that does not exist yet -- unlike the other six sidecars, which do have one.
+// TestSidecarsDefaultToTheOperatorsRelease checks defaultCSIAddonsImage
+// against itself, so a wrong constant would still pass it; this pins the
+// literal a pod actually pulls.
+func TestTheCSIAddonsSidecarDefaultsToTheRealUpstreamImage(t *testing.T) {
+	const wantImage = "quay.io/csiaddons/k8s-sidecar:v0.15.0"
+	if got := sidecars(testDriver("simplyblock")).csiAddons; got != wantImage {
+		t.Errorf("csiAddons default = %q, want the real upstream image %q", got, wantImage)
 	}
 }
 

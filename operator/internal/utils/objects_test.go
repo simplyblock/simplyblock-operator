@@ -138,6 +138,21 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		t.Fatalf("ResolveClusterCRByUUID should fail for an unknown UUID")
 	}
 
+	// A ReplicationPair naming a cluster that lives on a different physical
+	// Kubernetes cluster carries only that cluster's backend UUID -- there is
+	// no local StorageCluster object to match by name, because the object
+	// itself only exists on the other cluster's own API server. Passing a raw
+	// UUID through unresolved (rather than requiring a local name match) is
+	// what makes cross-cluster ReplicationPair authoring possible at all.
+	const remoteUUID = "e7afccef-1d5a-4b77-88aa-bfbe90d8b3a3"
+	remoteResolved, err := ResolveClusterUUID(ctx, c, "ns1", remoteUUID)
+	if err != nil {
+		t.Fatalf("ResolveClusterUUID should pass a raw UUID through even with no local match: %v", err)
+	}
+	if remoteResolved != remoteUUID {
+		t.Fatalf("ResolveClusterUUID got %q want pass-through of %q", remoteResolved, remoteUUID)
+	}
+
 	if _, err := ResolveClusterCRByUUID(ctx, c, "ns2", "uuid-a"); err == nil {
 		t.Fatalf("ResolveClusterCRByUUID should not find a cluster from a different namespace")
 	}

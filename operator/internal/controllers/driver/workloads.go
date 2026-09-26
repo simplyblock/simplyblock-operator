@@ -14,6 +14,7 @@ package driver
 
 import (
 	"slices"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -254,6 +255,7 @@ func controllerStatefulSet(d *simplyblockv1alpha2.SimplyblockDriver, image strin
 			"--leader-election=false",
 		}),
 		controllerPluginContainer(d, image),
+		csiAddonsSidecarContainer(d, s.csiAddons, sidecarMount),
 	}
 	// The snapshotter runs privileged in the chart, and the health monitor
 	// exposes a port. Both are properties of the container rather than of the
@@ -311,6 +313,70 @@ func controllerSidecar(
 		Args:            args,
 		VolumeMounts:    mounts,
 		Resources:       d.Spec.ControllerResources,
+	}
+}
+
+// csiAddonsControllerPort is where this sidecar's own gRPC server listens for
+// the kubernetes-csi-addons controller-manager (design
+// design-csi-addons-replication.md §4.1). The manager never hardcodes it: it
+// reads the endpoint the sidecar published on its own CSIAddonsNode, so this
+// number only has to be free and to agree with the container port below it.
+const csiAddonsControllerPort int32 = 9070
+
+// csiAddonsSidecarContainer runs the kubernetes-csi-addons sidecar (upstream
+// quay.io/csiaddons/k8s-sidecar), which is a separate binary from the
+// controller-manager P0-5 already vendored: it connects to this pod's own CSI
+// socket to probe the csi-addons Identity/Replication services this driver
+// now serves alongside its CSI ones (driver.go), publishes a CSIAddonsNode
+// naming this pod so the manager can find it, and leader-elects across
+// replicas of this StatefulSet before serving controller requests.
+//
+// The endpoint the sidecar advertises MUST be the pod://<pod>.<namespace>
+// form, never a bare ip:port: the controller-manager's own resolveEndpoint
+// (internal/controller/csiaddons/csiaddonsnode_controller.go, v0.15.0)
+// hard-requires url.Parse's Scheme to equal "pod" and rejects everything
+// else with "endpoint scheme %q not supported" -- confirmed against a live
+// cluster, where passing --controller-ip produced the OTHER branch of the
+// sidecar's own BuildEndpointURL (a bare "<ip>:<port>", no scheme at all)
+// and the controller-manager failed every connection attempt with "first
+// path segment in URL cannot contain colon" until it gave up and deleted
+// the CSIAddonsNode. Omitting --controller-ip is the fix, not a missing
+// feature: the manager resolves the pod's CURRENT IP itself via a live API
+// read at connection time (see resolveEndpoint), which is more robust than
+// baking a static IP into the object anyway -- it survives the pod
+// restarting with a new IP without anyone having to update anything.
+func csiAddonsSidecarContainer(
+	d *simplyblockv1alpha2.SimplyblockDriver, image string, mounts []corev1.VolumeMount,
+) corev1.Container {
+	return corev1.Container{
+		Name:            "csi-addons",
+		Image:           image,
+		ImagePullPolicy: pullPolicy(d),
+		Args: []string{
+			verbosity,
+			"--csi-addons-address=" + controllerSocketPath,
+			"--node-id=$(NODE_ID)",
+			"--controller-port=" + strconv.Itoa(int(csiAddonsControllerPort)),
+			"--pod=$(POD_NAME)",
+			"--namespace=$(POD_NAMESPACE)",
+			"--pod-uid=$(POD_UID)",
+			"--leader-election-namespace=$(POD_NAMESPACE)",
+		},
+		Env: []corev1.EnvVar{
+			// Required, not cosmetic: csiaddonsnode.Manager.Node ("the
+			// hostname of the system where the sidecar is running") rejects
+			// an empty value with "invalid configuration: missing node"
+			// before it ever creates the CSIAddonsNode object.
+			fieldRefEnv("NODE_ID", "spec.nodeName"),
+			fieldRefEnv("POD_NAME", "metadata.name"),
+			fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
+			fieldRefEnv("POD_UID", "metadata.uid"),
+		},
+		Ports: []corev1.ContainerPort{
+			{ContainerPort: csiAddonsControllerPort, Name: "csi-addons", Protocol: corev1.ProtocolTCP},
+		},
+		Resources:    d.Spec.ControllerResources,
+		VolumeMounts: mounts,
 	}
 }
 

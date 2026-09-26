@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +31,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -46,6 +48,52 @@ const (
 type ReplicationPairReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// EndpointResolver answers where the control plane currently is, resolved
+	// per reconcile the same way internal/controllers/pool's StoragePoolReconciler
+	// does. Nil means the default/SIMPLYBLOCK_WEBAPI_BASE_URL client is the only
+	// one, which is what a standalone deployment and every pre-existing test
+	// still get. Without this, a ReplicationPair reconciled on a
+	// ControlPlane.spec.source.managed member cluster can never reach its
+	// control plane: webapi.NewClient() defaults to a Service that cluster
+	// never runs (confirmed live: cross-cluster ReplicationPair authoring
+	// failed with "dial tcp: lookup simplyblock-webappapi ... no such host").
+	EndpointResolver controlplane.EndpointResolver
+}
+
+// apiClient resolves the control-plane client for one reconcile call, through
+// EndpointResolver when set, exactly as StoragePoolReconciler.apiClient does.
+func (r *ReplicationPairReconciler) apiClient(ctx context.Context) *webapi.Client {
+	if r.EndpointResolver == nil {
+		return webapi.NewClient()
+	}
+
+	if endpoint := r.EndpointResolver(ctx); endpoint != "" {
+		return webapi.NewClient(endpoint)
+	}
+
+	return webapi.NewClient()
+}
+
+// clusterSecret reads the credential StorageClusterReconciler.persist wrote
+// for the named local StorageCluster, so a call authenticates as that
+// cluster instead of as this operator's own Kubernetes identity -- the only
+// way to reach a control plane a different Kubernetes cluster runs, since a
+// TokenReview can never cross that boundary. Mirrors
+// internal/controllers/pool's identically named method (and
+// internal/controllers/cluster's, internal/controllers/node's).
+func (r *ReplicationPairReconciler) clusterSecret(
+	ctx context.Context, namespace, clusterName string,
+) (string, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", clusterName),
+		Namespace: namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;create;update;patch;delete
@@ -62,7 +110,11 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	apiClient := webapi.NewClient()
+	if secret, err := r.clusterSecret(ctx, pair.Namespace, pair.Spec.SourceCluster); err == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	apiClient := r.apiClient(ctx)
 
 	if !pair.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &pair, apiClient)

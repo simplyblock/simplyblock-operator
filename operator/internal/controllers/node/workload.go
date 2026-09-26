@@ -89,14 +89,50 @@ type Workload struct {
 	ManagerNode string
 }
 
-// NodeAddress is the per-pod DNS name the control plane is given as node_address
-// when a node is added or restarted.
+// NodeAddress is what the control plane is given as node_address when a node
+// is added or restarted.
 //
-// It is the precondition for both: a restart issued against a name that does not
-// yet resolve fails name resolution inside the control plane, and the control
-// plane's response to that is to reset the node to offline (§5.4).
-func (w *Workload) NodeAddress(worker, namespace string) string {
+// A local control plane resolves the per-pod DNS name itself, which is the
+// existing precondition for both: a restart issued against a name that does
+// not yet resolve fails name resolution inside the control plane, and the
+// control plane's response to that is to reset the node to offline (§5.4).
+//
+// A managed control plane runs on a different Kubernetes cluster and can
+// never resolve this cluster's own Service DNS, so it is given the worker's
+// real, routable address instead -- one the storage-node-api pod already
+// answers on directly, since it runs with hostNetwork (BuildStorageNodeDaemonSet).
+// Reading the worker Node's own reported address is what keeps this additive:
+// a deployment with no managed control plane takes exactly the path it always
+// did.
+func (w *Workload) NodeAddress(ctx context.Context, worker, namespace string) string {
+	if address, ok := w.managedNodeAddress(ctx, worker, namespace); ok {
+		return address
+	}
 	return utils.StorageNodeSetAPIAddress(worker, namespace)
+}
+
+// managedNodeAddress answers the worker's real address when the singleton
+// ControlPlane names a managed control plane, and false otherwise -- including
+// when the singleton or the worker Node cannot be read, since an operator that
+// cannot tell falls back to the address that has always worked for a control
+// plane this cluster hosts.
+func (w *Workload) managedNodeAddress(ctx context.Context, worker, namespace string) (string, bool) {
+	var cp simplyblockv1alpha2.ControlPlane
+	key := client.ObjectKey{Namespace: namespace, Name: SingletonControlPlaneName}
+	if err := w.Get(ctx, key, &cp); err != nil || cp.Spec.Source.Managed == nil {
+		return "", false
+	}
+
+	var node corev1.Node
+	if err := w.Get(ctx, client.ObjectKey{Name: worker}, &node); err != nil {
+		return "", false
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP && addr.Address != "" {
+			return fmt.Sprintf("%s:5000", addr.Address), true
+		}
+	}
+	return "", false
 }
 
 // LabelWorker puts one worker into a cluster's storage plane and rewrites the

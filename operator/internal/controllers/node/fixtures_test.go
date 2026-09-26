@@ -88,9 +88,22 @@ type scriptedControlPlane struct {
 	// once reads.
 	calls []string
 
+	// bearerTokens parallels calls: bearerTokens[i] is what
+	// webapi.BearerTokenFromContext reported for calls[i]'s own context, so a
+	// test can check that a cluster-scoped call authenticated as the cluster
+	// it was actually asked about rather than as this operator's own
+	// Kubernetes identity.
+	bearerTokens []bearerObservation
+
 	// restarts carries the parameters of each restart, because three actions
 	// issue one and they differ precisely in what they fill in.
 	restarts []RestartParams
+}
+
+// bearerObservation is one entry of scriptedControlPlane.bearerTokens.
+type bearerObservation struct {
+	token string
+	ok    bool
 }
 
 // aControlPlane reports one online node and nothing else.
@@ -147,15 +160,17 @@ func (c *scriptedControlPlane) asked(method string) int {
 	return count
 }
 
-func (c *scriptedControlPlane) record(method, argument string) error {
+func (c *scriptedControlPlane) record(ctx context.Context, method, argument string) error {
+	token, ok := webapi.BearerTokenFromContext(ctx)
 	c.calls = append(c.calls, method+":"+argument)
+	c.bearerTokens = append(c.bearerTokens, bearerObservation{token, ok})
 	return c.refuse[method]
 }
 
 func (c *scriptedControlPlane) StorageNode(
-	_ context.Context, _, nodeID string,
+	ctx context.Context, _, nodeID string,
 ) (NodeReading, bool, error) {
-	if err := c.record("StorageNode", nodeID); err != nil {
+	if err := c.record(ctx, "StorageNode", nodeID); err != nil {
 		return NodeReading{}, false, err
 	}
 	reading, found := c.nodes[nodeID]
@@ -163,9 +178,9 @@ func (c *scriptedControlPlane) StorageNode(
 }
 
 func (c *scriptedControlPlane) StorageNodes(
-	_ context.Context, clusterID string,
+	ctx context.Context, clusterID string,
 ) ([]NodeReading, error) {
-	if err := c.record("StorageNodes", clusterID); err != nil {
+	if err := c.record(ctx, "StorageNodes", clusterID); err != nil {
 		return nil, err
 	}
 	readings := make([]NodeReading, 0, len(c.nodes))
@@ -176,58 +191,58 @@ func (c *scriptedControlPlane) StorageNodes(
 }
 
 func (c *scriptedControlPlane) AddNode(
-	_ context.Context, clusterID string, _ utils.StorageNodeSetAddParams,
+	ctx context.Context, clusterID string, _ utils.StorageNodeSetAddParams,
 ) error {
-	return c.record("AddNode", clusterID)
+	return c.record(ctx, "AddNode", clusterID)
 }
 
-func (c *scriptedControlPlane) Suspend(_ context.Context, _, nodeID string) error {
-	return c.record("Suspend", nodeID)
+func (c *scriptedControlPlane) Suspend(ctx context.Context, _, nodeID string) error {
+	return c.record(ctx, "Suspend", nodeID)
 }
 
-func (c *scriptedControlPlane) Resume(_ context.Context, _, nodeID string) error {
-	return c.record("Resume", nodeID)
+func (c *scriptedControlPlane) Resume(ctx context.Context, _, nodeID string) error {
+	return c.record(ctx, "Resume", nodeID)
 }
 
-func (c *scriptedControlPlane) ShutdownNode(_ context.Context, _, nodeID string) error {
-	return c.record("ShutdownNode", nodeID)
+func (c *scriptedControlPlane) ShutdownNode(ctx context.Context, _, nodeID string) error {
+	return c.record(ctx, "ShutdownNode", nodeID)
 }
 
 func (c *scriptedControlPlane) RestartNode(
-	_ context.Context, _, nodeID string, params RestartParams,
+	ctx context.Context, _, nodeID string, params RestartParams,
 ) error {
 	c.restarts = append(c.restarts, params)
-	return c.record("RestartNode", nodeID)
+	return c.record(ctx, "RestartNode", nodeID)
 }
 
-func (c *scriptedControlPlane) Promote(_ context.Context, _, nodeID string) error {
-	return c.record("Promote", nodeID)
+func (c *scriptedControlPlane) Promote(ctx context.Context, _, nodeID string) error {
+	return c.record(ctx, "Promote", nodeID)
 }
 
-func (c *scriptedControlPlane) RemoveNode(_ context.Context, _, nodeID string) error {
-	return c.record("RemoveNode", nodeID)
+func (c *scriptedControlPlane) RemoveNode(ctx context.Context, _, nodeID string) error {
+	return c.record(ctx, "RemoveNode", nodeID)
 }
 
 func (c *scriptedControlPlane) StoragePools(
-	_ context.Context, clusterID string,
+	ctx context.Context, clusterID string,
 ) ([]webapi.StoragePoolInfo, error) {
-	if err := c.record("StoragePools", clusterID); err != nil {
+	if err := c.record(ctx, "StoragePools", clusterID); err != nil {
 		return nil, err
 	}
 	return c.pools, nil
 }
 
 func (c *scriptedControlPlane) PoolVolumes(
-	_ context.Context, _, poolID string,
+	ctx context.Context, _, poolID string,
 ) ([]webapi.VolumeInfo, error) {
-	if err := c.record("PoolVolumes", poolID); err != nil {
+	if err := c.record(ctx, "PoolVolumes", poolID); err != nil {
 		return nil, err
 	}
 	return c.volumes[poolID], nil
 }
 
-func (c *scriptedControlPlane) DeleteVolume(_ context.Context, _, _, volumeID string) error {
-	return c.record("DeleteVolume", volumeID)
+func (c *scriptedControlPlane) DeleteVolume(ctx context.Context, _, _, volumeID string) error {
+	return c.record(ctx, "DeleteVolume", volumeID)
 }
 
 // anOpsNode is the node every operation in these suites targets: provisioned,

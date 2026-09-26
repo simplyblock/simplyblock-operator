@@ -100,6 +100,87 @@ func TestDeleteVolume_ControlPlaneErrorMapping(t *testing.T) {
 		})
 }
 
+// testReplActiveVolumeID stands in for the volume a relocate round trip
+// leaves actually serving the workload -- the SECOND hop's clone, which the
+// FIRST pairing's records know only as active_lvol_id.
+const testReplActiveVolumeID = "88888888-8888-8888-8888-888888888890"
+
+// Regression: 2026-09-24-delete-foreign-handle-leak — Ramen keeps every PV on
+// the ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that
+// cleans up a retired side arrives carrying an identity whose own lvol record
+// is already reaped, while the actual local copy -- the pairing's superseded
+// target clone -- lives on untouched (confirmed live 2026-09-24, relocate
+// M-02 round trip: cluster B kept clone 6102a48e, with the replication policy
+// still attached to it, after its PV was deleted). DeleteVolume must follow
+// the relationship and remove the retired, non-active members.
+func TestDeleteVolumeRemovesTheRetiredReplicaBehindAForeignHandle(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-retired-clone", Size: 1 << 30,
+	}
+	mock.volumes[testReplActiveVolumeID] = &mockVolume{
+		UUID: testReplActiveVolumeID, Name: "repl-vol-active", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplActiveVolumeID,
+	}
+	delete(mock.volumes, testReplVolumeID) // the original's record, reaped after fail-over
+
+	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mock.volumes[testReplTargetVolumeID]; ok {
+		t.Error("the retired clone still exists: DeleteVolume never followed the relationship to it")
+	}
+	if _, ok := mock.volumes[testReplActiveVolumeID]; !ok {
+		t.Error("the ACTIVE volume was deleted: the workload was running on it")
+	}
+}
+
+// The safety half of the same contract, pinned so the cleanup above can never
+// be "fixed" into deleting the live side: when the pairing's target IS the
+// active volume (a fail-over whose destination still serves the workload),
+// a DeleteVolume carrying the dead source handle must delete nothing.
+func TestDeleteVolumeNeverDeletesTheActiveReplicaThroughADeadHandle(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-live", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplTargetVolumeID,
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mock.volumes[testReplTargetVolumeID]; !ok {
+		t.Error("the ACTIVE volume was deleted through the dead source handle")
+	}
+}
+
 // TestControllerExpandVolume_ControlPlaneErrorMapping drives ControllerExpandVolume
 // through every control-plane response.
 func TestControllerExpandVolume_ControlPlaneErrorMapping(t *testing.T) {

@@ -239,6 +239,18 @@ func (r *StorageNodeReconciler) Reconcile(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Every control-plane call below authenticates as this node's cluster,
+	// using its own recorded secret, rather than as this operator's own
+	// Kubernetes identity -- the only way to reach a control plane a
+	// different Kubernetes cluster runs (a ControlPlane.spec.source.managed
+	// one), since a Kubernetes TokenReview can never cross a cluster
+	// boundary. cluster is nil for one the object outlived (§3.4), which
+	// leaves ctx unauthenticated the same as before this fix: nothing below
+	// reaches the control plane for a node whose cluster is gone.
+	if cluster != nil {
+		secret, err := clusterSecretByName(ctx, r.Client, cluster.Namespace, cluster.Name)
+		ctx = authenticatedContext(ctx, secret, err)
+	}
 
 	if !node.DeletionTimestamp.IsZero() {
 		return r.teardown(ctx, &node)
@@ -762,7 +774,7 @@ func (r *StorageNodeReconciler) postNode(
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) error {
-	params := r.addParams(node, cluster)
+	params := r.addParams(ctx, node, cluster)
 	if err := r.API.AddNode(ctx, cluster.Status.UUID, params); err != nil {
 		return fmt.Errorf("add node %s on worker %s: %w",
 			node.Name, node.Spec.WorkerNode, err)
@@ -1451,6 +1463,7 @@ func (r *StorageNodeReconciler) upgradeAdoption(
 // addParams is what the node-add call carries. The node describes itself, so every
 // value but the subsystem cap comes from its own spec.config (§3.1).
 func (r *StorageNodeReconciler) addParams(
+	ctx context.Context,
 	node *simplyblockv1alpha2.StorageNode,
 	cluster *simplyblockv1alpha2.StorageCluster,
 ) utils.StorageNodeSetAddParams {
@@ -1461,7 +1474,7 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(node.Spec.WorkerNode, node.Namespace),
+		NodeAddress:      r.Workload.NodeAddress(ctx, node.Spec.WorkerNode, node.Namespace),
 		InterfaceName:    workload.MgmtInterface,
 		SPDKImage:        config.SpdkImage,
 		SPDKProxyImage:   config.SpdkProxyImage,

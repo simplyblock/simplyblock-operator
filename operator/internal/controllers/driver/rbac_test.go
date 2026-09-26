@@ -181,6 +181,94 @@ func TestNoRuleIsAWildcard(t *testing.T) {
 	}
 }
 
+// The csi-addons sidecar is the one component whose grant is a namespaced Role:
+// CSIAddonsNode is namespaced (helm-charts'
+// csiaddons.openshift.io_csiaddonsnodes.yaml sets scope: Namespaced), so a
+// ClusterRole would be wider than the sidecar's own job.
+func TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	role := csiAddonsRole(d)
+	if role.Namespace != d.Namespace {
+		t.Errorf("role namespace = %q, want %q", role.Namespace, d.Namespace)
+	}
+	if len(role.Rules) == 0 {
+		t.Error("csi-addons role has no rules, so its sidecar can do nothing")
+	}
+
+	binding := csiAddonsRoleBinding(d)
+	if binding.Namespace != d.Namespace {
+		t.Errorf("binding namespace = %q, want %q", binding.Namespace, d.Namespace)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != n.controllerServiceAccount ||
+		binding.Subjects[0].Namespace != d.Namespace {
+		t.Errorf("binding subject = %+v, want the controller account in %q",
+			binding.Subjects, d.Namespace)
+	}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name {
+		t.Errorf("roleRef = %+v, want Role %q", binding.RoleRef, role.Name)
+	}
+}
+
+// The csi-addons sidecar's gRPC server authenticates every incoming call
+// from the controller-manager via TokenReview (internal/kubernetes/token/grpc.go,
+// --enable-auth defaults to true), which is cluster-scoped and so cannot be
+// granted by the namespaced Role above -- confirmed against a live cluster,
+// where omitting this left every connection failing with "failed to review
+// token ... is forbidden ... at the cluster scope".
+func TestCSIAddonsSidecarCanAuthenticateIncomingCalls(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	binding := csiAddonsAuthDelegatorBinding(d)
+	if binding.Namespace != "" {
+		t.Errorf("namespace = %q, want \"\" (ClusterRoleBinding is cluster-scoped)", binding.Namespace)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != n.controllerServiceAccount ||
+		binding.Subjects[0].Namespace != d.Namespace {
+		t.Errorf("binding subject = %+v, want the controller account in %q",
+			binding.Subjects, d.Namespace)
+	}
+	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "system:auth-delegator" {
+		t.Errorf("roleRef = %+v, want the built-in ClusterRole system:auth-delegator", binding.RoleRef)
+	}
+}
+
+// The rule set is exactly what the sidecar's own job needs: its CSIAddonsNode
+// and its leader-election Lease, both scoped to this namespace.
+func TestCSIAddonsRoleRulesAreScopedToItsOwnJob(t *testing.T) {
+	tests := []struct {
+		group    string
+		resource string
+		verbs    []string
+	}{
+		{"csiaddons.openshift.io", "csiaddonsnodes", []string{"get", "list", "watch", "create", "update", "delete"}},
+		{"csiaddons.openshift.io", "csiaddonsnodes/status", []string{"get", "update", "patch"}},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "delete"}},
+		{"", "events", []string{"create", "patch"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.resource, func(t *testing.T) {
+			var found *rbacv1.PolicyRule
+			for i, r := range csiAddonsRoleRules {
+				if len(r.APIGroups) == 1 && r.APIGroups[0] == tc.group &&
+					len(r.Resources) == 1 && r.Resources[0] == tc.resource {
+					found = &csiAddonsRoleRules[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("no rule for %s in the csi-addons role", tc.resource)
+			}
+			if !slices.Equal(found.Verbs, tc.verbs) {
+				t.Errorf("verbs = %v, want %v", found.Verbs, tc.verbs)
+			}
+		})
+	}
+}
+
 // The csi-snapshotter sidecar watches VolumeGroupSnapshotContent and drives
 // the GroupController when the CSIVolumeGroupSnapshot gate is on
 // (design-consistency-groups.md §9, P0-4). The chart granted these on the

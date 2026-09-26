@@ -46,6 +46,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -530,7 +531,13 @@ func (r *StorageClusterReconciler) upgradeClaim(
 		return adoption{}, false, nil
 	}
 
-	found, err := r.API.Cluster(ctx, uuid)
+	// This read authenticates as the cluster itself, using the secret the
+	// upgrade Secret names, rather than as this operator's own Kubernetes
+	// identity: the control plane this cluster belongs to may be a
+	// ControlPlane.spec.source.managed one, on a different Kubernetes
+	// cluster, where a Kubernetes TokenReview of this operator's own
+	// service-account token can never succeed.
+	found, err := r.API.Cluster(webapi.WithBearerToken(ctx, clusterSecret), uuid)
 	if err != nil {
 		// The Secret names a cluster the control plane does not have. That is
 		// worth retrying rather than failing: the control plane may be
@@ -663,7 +670,8 @@ func (r *StorageClusterReconciler) sync(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
+	secret, err := r.clusterSecret(ctx, cluster)
+	if err == nil && secret != "" {
 		if err := r.upsertCSICredentials(ctx, cluster.Status.UUID, secret); err != nil {
 			log.Error(err, "the CSI credentials entry could not be restored",
 				"cluster", cluster.Name)
@@ -671,13 +679,24 @@ func (r *StorageClusterReconciler) sync(
 		}
 	}
 
-	reading, err := r.reading(ctx, cluster.Status.UUID)
+	// Every read below authenticates as this cluster, using its own recorded
+	// secret, rather than as this operator's own Kubernetes identity: the
+	// control plane this cluster belongs to may be a
+	// ControlPlane.spec.source.managed one, on a different Kubernetes
+	// cluster, where a Kubernetes TokenReview of this operator's own
+	// service-account token can never succeed.
+	readCtx := ctx
+	if secret != "" {
+		readCtx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	reading, err := r.reading(readCtx, cluster.Status.UUID)
 	if err != nil {
 		log.Error(err, "the cluster could not be read", "cluster", cluster.Name)
 		return ctrl.Result{RequeueAfter: clusterResync}, nil
 	}
 
-	tasks := r.readTasks(ctx, cluster)
+	tasks := r.readTasks(readCtx, cluster)
 
 	ftt := int32(reading.MaxFaultTolerance) //nolint:gosec // a fault tolerance is a small count
 	err = r.writeStatus(ctx, cluster, func(status *simplyblockv1alpha2.StorageClusterStatus) {
@@ -871,7 +890,15 @@ func (r *StorageClusterReconciler) teardown(
 
 	if cluster.Status.UUID != "" {
 		r.closeStreams(cluster.Status.UUID)
-		if err := r.API.DeleteCluster(ctx, cluster.Status.UUID); err != nil {
+		// Authenticates as this cluster, using its own recorded secret, for
+		// the same reason sync() does: the control plane this cluster
+		// belongs to may be a ControlPlane.spec.source.managed one, on a
+		// different Kubernetes cluster than this operator.
+		deleteCtx := ctx
+		if secret, err := r.clusterSecret(ctx, cluster); err == nil && secret != "" {
+			deleteCtx = webapi.WithBearerToken(ctx, secret)
+		}
+		if err := r.API.DeleteCluster(deleteCtx, cluster.Status.UUID); err != nil {
 			log.Error(err, "the cluster could not be deleted; retrying",
 				"cluster", cluster.Name, "uuid", cluster.Status.UUID)
 			return ctrl.Result{RequeueAfter: clusterRetry}, nil
@@ -1094,7 +1121,7 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 	return r.editCSICredentials(ctx, func(creds *CSICredentials) {
 		entry := CSIClusterEntry{
 			ClusterID:       clusterID,
-			ClusterEndpoint: utils.ENDPOINT,
+			ClusterEndpoint: r.API.Endpoint(ctx),
 			ClusterSecret:   clusterSecret,
 		}
 		for i := range creds.Clusters {
