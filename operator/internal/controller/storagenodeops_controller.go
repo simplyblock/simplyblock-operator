@@ -1003,7 +1003,12 @@ func (r *StorageNodeOpsReconciler) runDrain(
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying:
 		return r.drainVerify(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling:
-		return r.drainReshuffle(ctx, ops, sn, clusterUUID, apiClient)
+		// Legacy: a CR that entered this phase before replica reallocation moved
+		// back into the removal. Nothing to do here any more -- the DELETE that
+		// Removing issues reallocates the roles itself, in the order that step
+		// requires. Advancing rather than failing lets an op that is mid-flight
+		// across the upgrade finish instead of stranding its node.
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving:
 		return r.drainRemove(ctx, ops, sn, clusterUUID, apiClient)
 	default:
@@ -1710,7 +1715,7 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
 }
 
 func (r *StorageNodeOpsReconciler) drainRemove(

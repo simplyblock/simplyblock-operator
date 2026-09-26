@@ -64,14 +64,21 @@ const (
 	StorageNodeOpsSubPhaseMigratingDevices StorageNodeOpsSubPhase = "MigratingDevices"
 	StorageNodeOpsSubPhaseMigrating        StorageNodeOpsSubPhase = "Migrating"
 	StorageNodeOpsSubPhaseVerifying        StorageNodeOpsSubPhase = "Verifying"
-	// StorageNodeOpsSubPhaseReshuffling marks the last step before the node is
-	// deleted: its lvstore replica roles are reallocated, so no surviving volume
-	// is left with a secondary or tertiary on a node that is about to go away.
+	// StorageNodeOpsSubPhaseReshuffling is retained only so a CR that is
+	// mid-flight across an upgrade can leave it; nothing enters it any more.
 	//
-	// Also its own phase for the reason above -- it used to be the tail of the
-	// control plane's delete -- and because it is the step that decides the
-	// fleet's failure-domain diversity afterwards, which is worth being able to
-	// watch and to fail on its own.
+	// Reallocating this node's replica roles was briefly its own drain phase,
+	// calling the control plane's phase 3b on its own. That step has a
+	// precondition the drain could not meet: the removal frees the departing
+	// node's own replica slots in phase 3a first, and 3b relies on those slots
+	// to have somewhere to move into. Run without 3a on a cluster whose replica
+	// slots are all occupied, it found no free slot, walked the ring of
+	// occupants and refused on a cycle -- forever, since the step retried for
+	// four hours (2026-09-26, a 7-node FTT2 cluster).
+	//
+	// Reallocation belongs to the removal, which owns that ordering. Removing
+	// issues the DELETE and the control plane does 3a, then 3b, as it always
+	// did.
 	StorageNodeOpsSubPhaseReshuffling StorageNodeOpsSubPhase = "Reshuffling"
 	StorageNodeOpsSubPhaseRemoving    StorageNodeOpsSubPhase = "Removing"
 	// StorageNodeOpsSubPhasePreparing marks that a migrate op is preparing the
@@ -213,13 +220,15 @@ type StorageNodeOpsStatus struct {
 	// +optional
 	DevicesTotal int `json:"devicesTotal,omitempty"`
 
-	// DevicesTriggered and ReshuffleTriggered are the once-only latches for the
-	// two steps that start with a POST and are then polled, matching what
-	// Triggered does for Suspending. Separate fields because a drain passes
-	// through all three and one shared latch would let a later step inherit an
-	// earlier step's "already sent".
+	// DevicesTriggered is the once-only latch for the device rebuild, which
+	// starts with a POST and is then polled, matching what Triggered does for
+	// Suspending. Its own field rather than a shared one so a later step cannot
+	// inherit an earlier step's "already sent".
 	// +optional
 	DevicesTriggered bool `json:"devicesTriggered,omitempty"`
+	// ReshuffleTriggered is retained so an upgrade does not drop the field from
+	// a CR that still carries it. Nothing reads or writes it: see
+	// StorageNodeOpsSubPhaseReshuffling.
 	// +optional
 	ReshuffleTriggered bool `json:"reshuffleTriggered,omitempty"`
 

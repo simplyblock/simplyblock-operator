@@ -2454,11 +2454,10 @@ spec:
                 type: integer
               devicesTriggered:
                 description: |-
-                  DevicesTriggered and ReshuffleTriggered are the once-only latches for the
-                  two steps that start with a POST and are then polled, matching what
-                  Triggered does for Suspending. Separate fields because a drain passes
-                  through all three and one shared latch would let a later step inherit an
-                  earlier step's "already sent".
+                  DevicesTriggered is the once-only latch for the device rebuild, which
+                  starts with a POST and is then polled, matching what Triggered does for
+                  Suspending. Its own field rather than a shared one so a later step cannot
+                  inherit an earlier step's "already sent".
                 type: boolean
               drainTargetsTried:
                 description: |-
@@ -2520,6 +2519,10 @@ spec:
                 - Failed
                 type: string
               reshuffleTriggered:
+                description: |-
+                  ReshuffleTriggered is retained so an upgrade does not drop the field from
+                  a CR that still carries it. Nothing reads or writes it: see
+                  StorageNodeOpsSubPhaseReshuffling.
                 type: boolean
               startedAt:
                 description: StartedAt is when the operation began.

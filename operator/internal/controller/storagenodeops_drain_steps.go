@@ -35,7 +35,6 @@ const (
 	// The device rebuild moves real data and takes minutes, so it is polled far
 	// less often than the sub-second steps around it.
 	drainRequeueDevices   = 20 * time.Second
-	drainRequeueReshuffle = 10 * time.Second
 )
 
 // drainProgress is what both step endpoints report. Done is authoritative: a
@@ -168,77 +167,3 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
 }
 
-// drainReshuffle reallocates the lvstore replica roles that still point at the
-// node, so nothing survives the removal with a secondary or tertiary on a node
-// that is about to disappear.
-//
-// It runs after Verifying, once the node holds no volume of its own, because the
-// roles being moved belong to OTHER nodes' volumes: this node is their replica,
-// not their primary. Reallocating earlier would compete with the drain for the
-// same peers.
-func (r *StorageNodeOpsReconciler) drainReshuffle(
-	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageNodeOps,
-	sn *simplyblockv1alpha1.StorageNode,
-	clusterUUID string,
-	apiClient *webapi.Client,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-	nodeUUID := sn.Status.UUID
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/reshuffle-replicas",
-		clusterUUID, nodeUUID)
-
-	if !ops.Status.ReshuffleTriggered {
-		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("status %d", status)
-			}
-			log.Error(err, "drain: failed to start replica reshuffle", "node", nodeUUID)
-			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "ReshuffleStartFailed",
-				"ReshuffleStartFailed", "could not start replica reshuffle for %s: %v", nodeUUID, err)
-			return ctrl.Result{RequeueAfter: drainRequeueReshuffle}, nil
-		}
-
-		patch := client.MergeFrom(ops.DeepCopy())
-		ops.Status.ReshuffleTriggered = true
-		ops.Status.Message = "Reshuffling: reallocating replica roles off this node"
-		_ = r.Status().Patch(ctx, ops, patch)
-
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "ReshuffleStarted", "ReshuffleStarted",
-			"reallocating secondary/tertiary roles away from %s", nodeUUID)
-		return ctrl.Result{RequeueAfter: drainRequeueReshuffle}, nil
-	}
-
-	progress, err := fetchDrainProgress(ctx, apiClient, endpoint)
-	if err != nil {
-		log.Error(err, "drain: failed to read reshuffle progress", "node", nodeUUID)
-		return ctrl.Result{RequeueAfter: drainRequeueReshuffle}, nil
-	}
-
-	patch := client.MergeFrom(ops.DeepCopy())
-	if progress.Total > 0 {
-		ops.Status.Message = fmt.Sprintf("Reshuffling: %d of %d replica roles reallocated",
-			progress.Completed, progress.Total)
-	}
-	_ = r.Status().Patch(ctx, ops, patch)
-
-	// A role that could not be placed means some volume would keep a replica on
-	// a node that is about to be deleted. Deleting anyway is the one outcome
-	// this step exists to prevent, so it fails the op instead.
-	if progress.Failed > 0 {
-		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
-			fmt.Sprintf("could not reallocate %d replica role(s) off %s: %s",
-				progress.Failed, nodeUUID, progress.Message))
-	}
-
-	if !progress.Done {
-		return ctrl.Result{RequeueAfter: drainRequeueReshuffle}, nil
-	}
-
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "ReshuffleCompleted", "ReshuffleCompleted",
-		"replica roles reallocated off %s", nodeUUID)
-	r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "ReshuffleCompleted",
-		fmt.Sprintf("replica roles reallocated off %s", nodeUUID))
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving)
-}

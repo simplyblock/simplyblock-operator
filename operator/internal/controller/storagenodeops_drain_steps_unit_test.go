@@ -154,69 +154,54 @@ func TestDrainMigrateDevices_AFailedDeviceStopsTheDrain(t *testing.T) {
 	}
 }
 
-// The reshuffle is likewise started once.
-func TestDrainReshuffle_StartsTheReallocationOnlyOnce(t *testing.T) {
-	posts := 0
-	srv := drainStepServer(t, `{"done":false,"total":2,"completed":0}`, &posts)
+// Replica reallocation is no longer a drain phase: it is phase 3b of the
+// control plane's removal, and it depends on phase 3a having freed the
+// departing node's own replica slots first. Calling it on its own skipped 3a,
+// so on a cluster with every replica slot occupied it had nowhere to move to
+// and refused on a cycle -- retrying for four hours. Verifying therefore hands
+// straight to the delete, which runs both phases in the order 3b requires.
+func TestDrainVerify_AdvancesStraightToRemoving(t *testing.T) {
+	// No pools, so the node holds no volume: verification passes and the drain
+	// is finished with this node's data.
+	srv := drainStepServer(t, `[]`, nil)
 	defer srv.Close()
 
-	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling)
-	client := webapi.NewClient(srv.URL)
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
 
-	if _, err := r.drainReshuffle(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
-		t.Fatalf("first pass: %v", err)
+	if _, err := r.drainVerify(context.Background(), ops, sn, "cluster-uuid",
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("drainVerify: %v", err)
 	}
-	ops = reloadOps(t, r)
-	if !ops.Status.ReshuffleTriggered {
-		t.Fatal("the reshuffle start was not latched")
+
+	got := reloadOps(t, r).Status.SubPhase
+	if got == simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling {
+		t.Fatal("Verifying still routes through Reshuffling, which runs phase 3b without 3a")
 	}
-	if _, err := r.drainReshuffle(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-	if posts != 1 {
-		t.Errorf("the reshuffle was started %d times, want 1", posts)
+	if got != simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving {
+		t.Errorf("subPhase: got %q, want Removing", got)
 	}
 }
 
-// Done advances to the delete.
-func TestDrainReshuffle_AdvancesToRemovingWhenDone(t *testing.T) {
-	srv := drainStepServer(t, `{"done":true,"total":2,"completed":2}`, nil)
+// An op already sitting in Reshuffling when the operator is upgraded must be
+// able to leave it. Failing instead would strand a node that is shut down with
+// its volumes already moved -- exactly the state the stuck drain was left in.
+func TestDrainReshuffle_LegacyPhaseAdvancesInsteadOfStranding(t *testing.T) {
+	srv := drainStepServer(t, `{"done":false,"total":2,"completed":0}`, nil)
 	defer srv.Close()
 
 	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling)
 	ops.Status.ReshuffleTriggered = true
 
-	if _, err := r.drainReshuffle(context.Background(), ops, sn, "cluster-uuid",
+	if _, err := r.runDrain(context.Background(), ops, sn, "cluster-uuid",
 		webapi.NewClient(srv.URL)); err != nil {
-		t.Fatalf("drainReshuffle: %v", err)
-	}
-
-	if got := reloadOps(t, r).Status.SubPhase; got != simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving {
-		t.Errorf("subPhase: got %q, want Removing once the roles were reallocated", got)
-	}
-}
-
-// A role that could not be placed must not be followed by the delete: that is
-// the one outcome this step exists to prevent -- a surviving volume left with a
-// replica on a node that is about to go away.
-func TestDrainReshuffle_AnUnplaceableRoleStopsTheDelete(t *testing.T) {
-	srv := drainStepServer(t, `{"done":false,"total":2,"completed":1,"failed":1,"message":"no diverse candidate"}`, nil)
-	defer srv.Close()
-
-	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling)
-	ops.Status.ReshuffleTriggered = true
-
-	if _, err := r.drainReshuffle(context.Background(), ops, sn, "cluster-uuid",
-		webapi.NewClient(srv.URL)); err != nil {
-		t.Fatalf("drainReshuffle: %v", err)
+		t.Fatalf("dispatch: %v", err)
 	}
 
 	updated := reloadOps(t, r)
-	if updated.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
-		t.Errorf("phase: got %q, want Failed when a replica role could not be placed",
-			updated.Status.Phase)
+	if updated.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		t.Error("a legacy Reshuffling op was failed rather than carried forward")
 	}
-	if updated.Status.SubPhase == simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving {
-		t.Error("advanced to the node delete with a replica role still on the dying node")
+	if updated.Status.SubPhase != simplyblockv1alpha1.StorageNodeOpsSubPhaseRemoving {
+		t.Errorf("subPhase: got %q, want Removing", updated.Status.SubPhase)
 	}
 }
