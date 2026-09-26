@@ -395,7 +395,8 @@ func (l *lvmCommands) indexOfWith(command, arg string) int {
 	return -1
 }
 
-// A create is several LVM commits for a pooled type, and a node can die between
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. A
+// create is several LVM commits for a pooled type, and a node can die between
 // them. The layer says so before it starts, on the group itself, so that whoever
 // finds the leftovers knows they are an interrupted create of ours and not
 // somebody's data. The marker goes on before lvcreate and comes off after it,
@@ -412,7 +413,7 @@ func TestLVMVolumeCreateMarksTheGroupAroundLvcreate(t *testing.T) {
 	if added < 0 || created < 0 || removed < 0 {
 		t.Fatalf("want the marker added, the volume created, and the marker removed:\n%s", f.cmds.issued())
 	}
-	if !(added < created && created < removed) {
+	if added >= created || created >= removed {
 		t.Fatalf("the marker has to bracket lvcreate, and instead:\n%s", f.cmds.issued())
 	}
 	if f.cmds.indexOfWith("vgchange", wantMarker) < 0 {
@@ -420,7 +421,8 @@ func TestLVMVolumeCreateMarksTheGroupAroundLvcreate(t *testing.T) {
 	}
 }
 
-// The interrupted create of a pooled type leaves the pool behind under the very
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. The
+// interrupted create of a pooled type leaves the pool behind under the very
 // name the retry needs, so completing the create means removing it first. That
 // is allowed on exactly one reading of the group: it holds the pool and nothing
 // else, and it carries the marker this layer put there before lvcreate. Nothing
@@ -453,7 +455,8 @@ func TestLVMVolumeRecoversItsOwnInterruptedPoolCreate(t *testing.T) {
 	}
 }
 
-// A pool with no marker is a shape this layer did not make, whatever it looks
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. A
+// pool with no marker is a shape this layer did not make, whatever it looks
 // like, and the only safe thing to do with it is nothing. The refusal has to
 // say what it found, since the alternative is a stage that retries forever with
 // LVM's own message.
@@ -474,7 +477,8 @@ func TestLVMVolumeRefusesAPoolWithoutItsMarker(t *testing.T) {
 	}
 }
 
-// A pool with another volume beside it is somebody's data: a clone whose volume
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. A
+// pool with another volume beside it is somebody's data: a clone whose volume
 // has not been renamed yet, or a volume a human renamed. The marker being there
 // changes nothing, because the marker vouches for an empty group and this one is
 // not empty. Nothing is removed, and nothing is created beside it either.
@@ -495,7 +499,8 @@ func TestLVMVolumeRefusesAPoolBesideAnotherVolume(t *testing.T) {
 	}
 }
 
-// The same holds for a volume of a plain type: our group, holding a volume that
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. The
+// same holds for a volume of a plain type: our group, holding a volume that
 // is not ours, is not an interrupted create to complete. It is somebody's, and
 // an lvcreate into it is at best a failure over free space and at worst a
 // second volume beside data nobody declared.
@@ -508,5 +513,28 @@ func TestLVMVolumeRefusesAForeignVolumeInItsGroup(t *testing.T) {
 	}
 	if f.cmds.ran("lvcreate") {
 		t.Fatalf("the refusal ran lvcreate:\n%s", f.cmds.issued())
+	}
+}
+
+// Regression: 2026-09-26-vdopool-already-exists-after-interrupted-lvcreate. The
+// marker comes off after lvcreate, and that removal can fail with the volume
+// already made. A group carrying the marker with its volume in it is then
+// complete, and the marker is stale: nothing about it is an interrupted create,
+// and a clone of it, or a later shape, must not read the marker as permission.
+// The next bring-up clears it on the way through, creating nothing.
+func TestLVMVolumeClearsAStaleMarkerFromACompleteGroup(t *testing.T) {
+	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-------\n", lvm.LogicalVolumeDefinition{})
+	f.cmds.out["vgs:vg_tags"] = "  " + wantMarker + "\n"
+
+	if _, err := f.layer.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if f.cmds.indexOfWith("vgchange", "--deltag") < 0 {
+		t.Fatalf("the stale marker was left on a complete group:\n%s", f.cmds.issued())
+	}
+	for _, forbidden := range []string{"lvcreate", "lvremove"} {
+		if f.cmds.ran(forbidden) {
+			t.Fatalf("clearing a marker ran %s:\n%s", forbidden, f.cmds.issued())
+		}
 	}
 }
