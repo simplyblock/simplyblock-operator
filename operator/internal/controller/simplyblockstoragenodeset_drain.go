@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -203,32 +204,62 @@ func getNodeBackendStatus(
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (string, error) {
+	status, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
+	return status, err
+}
+
+// getNodeBackendStatusWithCode is getNodeBackendStatus for callers that need
+// to tell "the node is gone" (404) apart from "the API is unavailable": the
+// removal's last step reads a vanished record as success, not as an error.
+func getNodeBackendStatusWithCode(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+) (string, int, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: %w", err)
+		return "", 0, fmt.Errorf("getNodeBackendStatus: %w", err)
 	}
 	if status >= 300 {
-		return "", fmt.Errorf("getNodeBackendStatus: status %d", status)
+		return "", status, fmt.Errorf("getNodeBackendStatus: status %d", status)
 	}
 	var resp utils.NodeStatusResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
+		return "", status, fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
 	}
-	return resp.Status, nil
+	return resp.Status, status, nil
 }
 
-// roundRobinTargetNodes lists all online nodes (excluding the drained node) and
-// assigns each PV name a target node UUID using round-robin order. The i-th PV
-// in pvNames is assigned to onlineNodes[i % len(onlineNodes)], distributing
-// migrations evenly across the cluster without requiring persistent state.
-// Returns an error if no online peer node is available.
+// roundRobinTargetNodes assigns each PV name a target node UUID, round-robin
+// over the online nodes that are eligible to receive a volume from the node
+// being drained. The i-th eligible PV goes to eligible[i % len(eligible)],
+// spreading the migrations without needing persistent state.
+//
+// triedFor reports the targets already exhausted for a PV; nil means none.
+// Passed in rather than read from the ops object so this stays a pure function
+// of its inputs and can be tested without one.
+type triedFor func(pvName string) []string
+
+// roundRobinTargetNodes assigns each PV a target, round-robin over the online
+// peers, skipping any target that has already failed for that PV.
+//
+// A node HA-paired with the drained node is NOT excluded. A migration creates
+// the volume on the target's whole HA pair, so if half that pair is the
+// departing node the control plane has to tolerate it — and it does: the
+// overlap-drain cases in _get_target_secondary_node / _get_target_tertiary_node
+// allow a replica that is the migration source itself. Those cases only ever
+// recognised SUSPENDED, which is why such a target stalled a drain for 75
+// minutes on 2026-09-25; sbcli now admits every draining status there, so the
+// target is legitimate again and excluding it here would only shrink the
+// candidate set that escalation depends on.
 func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	excludeNodeUUID string,
 	pvNames []string,
+	tried triedFor,
 ) (map[string]string, error) {
 	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
@@ -247,7 +278,31 @@ func roundRobinTargetNodes(
 
 	assignment := make(map[string]string, len(pvNames))
 	for i, pv := range pvNames {
-		assignment[pv] = online[i%len(online)]
+		// Round-robin sets where this PV starts looking, so several PVs still
+		// spread across the cluster; the exhausted list then moves this one on.
+		// Scanning from its own offset rather than always from 0 keeps that
+		// spread instead of funnelling every retry onto the same next node.
+		var exhausted []string
+		if tried != nil {
+			exhausted = tried(pv)
+		}
+		picked := ""
+		for off := 0; off < len(online); off++ {
+			cand := online[(i+off)%len(online)]
+			if !slices.Contains(exhausted, cand) {
+				picked = cand
+				break
+			}
+		}
+		if picked == "" {
+			// Every peer has already failed for this volume. Saying so is the
+			// point of tracking them: the alternative is handing it back to a
+			// node that just failed, for ever.
+			return nil, fmt.Errorf(
+				"roundRobinTargetNodes: every online peer of %s has already failed "+
+					"for %s (%d tried)", excludeNodeUUID, pv, len(exhausted))
+		}
+		assignment[pv] = picked
 	}
 	return assignment, nil
 }

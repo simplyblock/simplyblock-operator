@@ -34,15 +34,53 @@ const (
 // StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
 // steps when action=remove, and the Preparing → Migrating → Promoting steps when
 // action=migrate.
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Preparing;Restarting;Promoting
+// +kubebuilder:validation:Enum=Validating;Suspending;ShuttingDown;MigratingDevices;Migrating;Verifying;Reshuffling;Removing;Preparing;Restarting;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
 	StorageNodeOpsSubPhaseValidating StorageNodeOpsSubPhase = "Validating"
 	StorageNodeOpsSubPhaseSuspending StorageNodeOpsSubPhase = "Suspending"
-	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
-	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
-	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
+	// StorageNodeOpsSubPhaseShuttingDown stops the node before anything is
+	// moved off it, which is the first thing a removal does on either path.
+	//
+	// Suspending only excluded the node from new volume placement and left it
+	// serving, so a drain and a `sbctl sn remove` reached the migration steps
+	// with the node in opposite states. Every check asking "can this node still
+	// answer?" was then right for one path and wrong for the other -- a class of
+	// bug found repeatedly, one live cluster at a time. With the node down on
+	// both paths, its volumes are served by their replicas for the whole drain
+	// and the migration steps mean one thing.
+	StorageNodeOpsSubPhaseShuttingDown StorageNodeOpsSubPhase = "ShuttingDown"
+	// StorageNodeOpsSubPhaseMigratingDevices marks the pre-removal step: the
+	// node's devices are failed and their data rebuilt onto peers, before any
+	// lvol leaves the node.
+	//
+	// It is a phase of its own because until now this work happened inside the
+	// control plane's node delete, where it had no status, no events and no
+	// progress: an operator watching a removal saw "Removing" for as long as it
+	// took. The volumes still hosted here are served from their replicas while
+	// it runs, which is measurably slower, so the phase reports how far along it
+	// is rather than leaving that degradation unexplained.
+	StorageNodeOpsSubPhaseMigratingDevices StorageNodeOpsSubPhase = "MigratingDevices"
+	StorageNodeOpsSubPhaseMigrating        StorageNodeOpsSubPhase = "Migrating"
+	StorageNodeOpsSubPhaseVerifying        StorageNodeOpsSubPhase = "Verifying"
+	// StorageNodeOpsSubPhaseReshuffling is retained only so a CR that is
+	// mid-flight across an upgrade can leave it; nothing enters it any more.
+	//
+	// Reallocating this node's replica roles was briefly its own drain phase,
+	// calling the control plane's phase 3b on its own. That step has a
+	// precondition the drain could not meet: the removal frees the departing
+	// node's own replica slots in phase 3a first, and 3b relies on those slots
+	// to have somewhere to move into. Run without 3a on a cluster whose replica
+	// slots are all occupied, it found no free slot, walked the ring of
+	// occupants and refused on a cycle -- forever, since the step retried for
+	// four hours (2026-09-26, a 7-node FTT2 cluster).
+	//
+	// Reallocation belongs to the removal, which owns that ordering. Removing
+	// issues the DELETE and the control plane does 3a, then 3b, as it always
+	// did.
+	StorageNodeOpsSubPhaseReshuffling StorageNodeOpsSubPhase = "Reshuffling"
+	StorageNodeOpsSubPhaseRemoving    StorageNodeOpsSubPhase = "Removing"
 	// StorageNodeOpsSubPhasePreparing marks that a migrate op is preparing the
 	// target worker: cloning per-node config, labeling it into the storage
 	// plane, and waiting until its storage-node-api pod is Ready and its per-pod
@@ -120,6 +158,33 @@ type StorageNodeOpsSpec struct {
 	Drain *DrainOpsSpec `json:"drain,omitempty"`
 }
 
+// VolumeDrainTargets is the set of migration targets already exhausted for one
+// volume during a drain. Keyed by PV name because that is what the drain builds
+// its VolumeMigration CRs from, so the key survives a control-plane restart and
+// matches the CR that failed.
+type VolumeDrainTargets struct {
+	// PVName is the PersistentVolume whose migration these targets failed for.
+	PVName string `json:"pvName"`
+
+	// Targets are storage node UUIDs that have already failed for this volume
+	// and must not be chosen again for it.
+	// +optional
+	Targets []string `json:"targets,omitempty"`
+
+	// Failures counts consecutive failures for this volume that could not be
+	// blamed on the target -- a consumer pod that is down, an unresolvable PV, a
+	// busy cluster. Such a failure must not burn the target, or one dead client
+	// exhausts every candidate; but it must not be retried for ever either, or
+	// the drain recreates the same migration against the same node until someone
+	// notices. The count bounds the second case: past MaxUnattributedFailures the
+	// target is abandoned anyway, on the grounds that something here is not
+	// working even if it cannot be pinned on the node.
+	//
+	// Reset whenever a target is burned, so the next candidate starts fresh.
+	// +optional
+	Failures int `json:"failures,omitempty"`
+}
+
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
 type StorageNodeOpsStatus struct {
 	// Phase is the high-level lifecycle phase.
@@ -146,6 +211,47 @@ type StorageNodeOpsStatus struct {
 	// Suspending to avoid duplicate POSTs across reconcile iterations).
 	// +optional
 	Triggered bool `json:"triggered,omitempty"`
+
+	// DevicesMigrated and DevicesTotal report the pre-removal device rebuild,
+	// so the wait has a number attached to it rather than being a silent
+	// several-minute pause in MigratingDevices.
+	// +optional
+	DevicesMigrated int `json:"devicesMigrated,omitempty"`
+	// +optional
+	DevicesTotal int `json:"devicesTotal,omitempty"`
+
+	// DevicesTriggered is the once-only latch for the device rebuild, which
+	// starts with a POST and is then polled, matching what Triggered does for
+	// Suspending. Its own field rather than a shared one so a later step cannot
+	// inherit an earlier step's "already sent".
+	// +optional
+	DevicesTriggered bool `json:"devicesTriggered,omitempty"`
+	// ReshuffleTriggered is retained so an upgrade does not drop the field from
+	// a CR that still carries it. Nothing reads or writes it: see
+	// StorageNodeOpsSubPhaseReshuffling.
+	// +optional
+	ReshuffleTriggered bool `json:"reshuffleTriggered,omitempty"`
+	// RemoveTriggered latches that the node DELETE was accepted. The DELETE
+	// queues the removal rather than performing it, so Removing sends it once
+	// and then follows the node to removed / removed_failed. Its own latch
+	// because the status the drain hands the node over in (migrating_lvols)
+	// is also one a running removal reads as, so the status alone cannot say
+	// whether the DELETE has been sent.
+	// +optional
+	RemoveTriggered bool `json:"removeTriggered,omitempty"`
+
+	// DrainTargetsTried records, per volume, the migration targets that have
+	// already failed for it.
+	//
+	// Without it a retry is not a retry: the target is re-picked from the same
+	// ordered candidate list with no memory, so a volume whose migration fails
+	// on one node is handed straight back to that node. With a single volume
+	// the pick is the first candidate every time, which is a loop rather than
+	// an escalation. Recording the failure lets the next attempt move on, and
+	// lets the drain say "every target has been tried" instead of retrying for
+	// ever.
+	// +optional
+	DrainTargetsTried []VolumeDrainTargets `json:"drainTargetsTried,omitempty"`
 
 	// StartedAt is when the operation began.
 	// +optional
