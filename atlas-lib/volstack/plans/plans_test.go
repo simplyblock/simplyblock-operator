@@ -244,6 +244,9 @@ func TestThePoolSurvivesACloneResolution(t *testing.T) {
 	commands := &recordingLVM{out: map[string]string{
 		"pvs": "vol-other\n",
 		"lvs": "  vdopool\n  lv-other\n",
+		// Adopted on its device before the import, so the group reads as owned
+		// by the time anything is renamed in it.
+		"vgs": "  " + lvm.OwnerTag + "\n",
 	}}
 	node := NewNode(NodeConfig{
 		Manager: lvm.NewManagerWithRunner(commands.run),
@@ -277,6 +280,7 @@ func TestALinearVolumePreservesNothing(t *testing.T) {
 	commands := &recordingLVM{out: map[string]string{
 		"pvs": "vol-other\n",
 		"lvs": "  lv-other\n",
+		"vgs": "  " + lvm.OwnerTag + "\n",
 	}}
 	node := NewNode(NodeConfig{
 		Manager: lvm.NewManagerWithRunner(commands.run),

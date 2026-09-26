@@ -3,6 +3,7 @@ package lvm
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,12 +14,54 @@ type fakeRunner struct {
 	calls [][]string
 	out   map[string]string
 	err   map[string]error
+
+	// unowned makes every group the fake reports carry no OwnerTag, which is
+	// the shape a test of a refusal sets. Left false, a tags listing nobody
+	// scripted answers with the tag, since every group the driver makes has it.
+	unowned bool
 }
 
 func (f *fakeRunner) run(_ context.Context, args ...string) (string, error) {
 	f.calls = append(f.calls, args)
 	key := joinKey(args)
-	return f.out[key], f.err[key]
+	if out, ok := f.out[key]; ok || f.err[key] != nil {
+		return out, f.err[key]
+	}
+	if isTagsListing(args) && !f.unowned {
+		if args[0] == "pvs" {
+			// vg_name,vg_tags for the device: a group named after the operand.
+			return "  vg1 " + OwnerTag + "\n", nil
+		}
+		return "  " + OwnerTag + "\n", nil
+	}
+	return "", nil
+}
+
+// isTagsListing reports whether args read a group's tags.
+func isTagsListing(args []string) bool {
+	if len(args) == 0 || (args[0] != "vgs" && args[0] != "pvs") {
+		return false
+	}
+	for _, a := range args {
+		if strings.Contains(a, "vg_tags") {
+			return true
+		}
+	}
+	return false
+}
+
+// mutating is the calls that change something: everything but the listings the
+// ownership check and the identity probes read.
+func (f *fakeRunner) mutating() [][]string {
+	var out [][]string
+	for _, call := range f.calls {
+		switch call[0] {
+		case "vgs", "pvs", "lvs":
+			continue
+		}
+		out = append(out, call)
+	}
+	return out
 }
 
 func joinKey(args []string) string {
@@ -61,7 +104,7 @@ func TestManager_exec_InsertsDeviceScopeAfterBinary(t *testing.T) {
 		t.Fatalf("exec: %v", err)
 	}
 	want := []string{"pvcreate", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -75,7 +118,7 @@ func TestManager_exec_NoDevicesRunsUnscoped(t *testing.T) {
 		t.Fatalf("exec: %v", err)
 	}
 	want := []string{"vgchange", "-an", "vdo-abc123"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v (no --devices flag)", fake.calls, want)
 	}
 }
@@ -90,7 +133,7 @@ func TestManager_Run_IsUnscoped(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	want := []string{"lvchange", "--compression", "y", "vdo-abc123/vdopool"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

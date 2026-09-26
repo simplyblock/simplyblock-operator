@@ -22,6 +22,11 @@ const (
 	CSIStorageNameKey      = CSIStorageBaseKey + "/name"
 	CSIStorageNamespaceKey = CSIStorageBaseKey + "/namespace"
 
+	// CSIStoragePVNameKey is how external-provisioner names the PersistentVolume
+	// in the same context. The node service writes it, with the claim's two
+	// keys above, into the volume's LVM metadata as informational tags.
+	CSIStoragePVNameKey = "csi.storage.k8s.io/pv/name"
+
 	// ParamClusterID names the simplyblock cluster a StorageClass provisions
 	// into.
 	ParamClusterID = "cluster_id"

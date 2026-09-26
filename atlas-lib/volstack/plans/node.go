@@ -155,6 +155,7 @@ func (n *Node) physicalVolume(volume Volume, options LogicalVolumeOptions) volst
 		VolumeGroup:            volume.VolumeGroup(),
 		LogicalVolume:          volume.LogicalVolume(),
 		PreserveLogicalVolumes: preserve,
+		RecognizeStack:         RecognizeStack,
 		Manager:                n.cfg.Manager,
 		Content:                n.cfg.Content,
 	})
@@ -163,8 +164,10 @@ func (n *Node) physicalVolume(volume Volume, options LogicalVolumeOptions) volst
 // volumeGroup is the layer between the physical volumes and the logical one.
 func (n *Node) volumeGroup(volume Volume) volstack.Layer {
 	return layers.NewLVMVolumeGroup(layers.LVMVolumeGroupConfig{
-		VolumeGroup: volume.VolumeGroup(),
-		Manager:     n.cfg.Manager,
+		VolumeGroup:   volume.VolumeGroup(),
+		LogicalVolume: volume.LogicalVolume(),
+		Tags:          volume.InformationalTags(),
+		Manager:       n.cfg.Manager,
 	})
 }
 

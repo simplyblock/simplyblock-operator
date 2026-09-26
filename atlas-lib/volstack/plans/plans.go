@@ -26,6 +26,8 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/volstack"
 	"github.com/simplyblock/atlas/volstack/layers"
+	"slices"
+	"strings"
 )
 
 // The prefixes the LVM names carry. They exist to keep the group and the volume
@@ -61,6 +63,16 @@ type Volume struct {
 	// geometry underneath.
 	FormatOptions []string
 
+	// PVName, PVCNamespace, and PVCName are the Kubernetes objects the volume
+	// serves, as the node service was told them. They are written into the
+	// group's LVM metadata as informational tags for whoever reads a node, and
+	// decide nothing: a claim can be rebound, and the tags follow it on the next
+	// bring-up. Empty when the node service was not told, which a volume staged
+	// outside Kubernetes is.
+	PVName       string
+	PVCNamespace string
+	PVCName      string
+
 	// ReservedBlocksPercent is how much of the filesystem is held back for
 	// privileged processes, for a filesystem that has such a notion. Empty leaves
 	// it at that filesystem's own default, which is not what asking for zero
@@ -89,6 +101,32 @@ func VolumeGroupName(uuid string) string { return volumeGroupPrefix + uuid }
 
 // LogicalVolumeName is the same rule for the volume inside the group.
 func LogicalVolumeName(uuid string) string { return logicalVolumePrefix + uuid }
+
+// RecognizeStack answers whether a group carrying no ownership tag is a stack of
+// this driver's from before the tag existed: one named by VolumeGroupName over a
+// volume named by LogicalVolumeName from the same UUID. Nothing else makes that
+// pair, so it is the one shape adoption accepts.
+func RecognizeStack(volumeGroup string, logicalVolumes []string) bool {
+	uuid, ok := strings.CutPrefix(volumeGroup, volumeGroupPrefix)
+	if !ok || uuid == "" {
+		return false
+	}
+	return slices.Contains(logicalVolumes, LogicalVolumeName(uuid))
+}
+
+// InformationalTags is what the group carries for whoever reads a node's LVM
+// metadata: which volume it is, and which PersistentVolume and claim it serves
+// when the node service was told.
+func (v Volume) InformationalTags() []string {
+	tags := []string{lvm.InformationalTag("lvol", v.UUID)}
+	if v.PVName != "" {
+		tags = append(tags, lvm.InformationalTag("pv", v.PVName))
+	}
+	if v.PVCNamespace != "" && v.PVCName != "" {
+		tags = append(tags, lvm.InformationalTag("pvc", v.PVCNamespace+"/"+v.PVCName))
+	}
+	return tags
+}
 
 // LogicalVolumeOptions is what the LVM rows differ in. The linear, VDO, and
 // striped plans use one lvmLogicalVolume layer with different contents here,

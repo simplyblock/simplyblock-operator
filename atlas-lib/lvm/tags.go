@@ -20,6 +20,9 @@ import (
 // Convergent: adding a tag the group already carries is not an error to LVM,
 // which is what a create resuming after a crash depends on.
 func (m *Manager) AddVolumeGroupTag(ctx context.Context, volumeGroup VolumeGroup, tag string) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "--addtag", tag, volumeGroup.Name); err != nil {
 		return fmt.Errorf("vgchange --addtag %s %s: %w", tag, volumeGroup.Name, err)
 	}
@@ -30,6 +33,9 @@ func (m *Manager) AddVolumeGroupTag(ctx context.Context, volumeGroup VolumeGroup
 //
 // Convergent for the same reason: LVM accepts removing a tag that is not there.
 func (m *Manager) RemoveVolumeGroupTag(ctx context.Context, volumeGroup VolumeGroup, tag string) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	if _, err := m.exec(ctx, nil, "vgchange", "--deltag", tag, volumeGroup.Name); err != nil {
 		return fmt.Errorf("vgchange --deltag %s %s: %w", tag, volumeGroup.Name, err)
 	}

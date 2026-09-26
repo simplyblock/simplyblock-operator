@@ -24,8 +24,8 @@ func TestVolumeGroupTagsRoundTrip(t *testing.T) {
 		{"vgchange", "--addtag", "simplyblock.creating", "vol-abc123"},
 		{"vgchange", "--deltag", "simplyblock.creating", "vol-abc123"},
 	}
-	if !reflect.DeepEqual(fake.calls, want) {
-		t.Fatalf("issued %v, want %v", fake.calls, want)
+	if !reflect.DeepEqual(fake.mutating(), want) {
+		t.Fatalf("issued %v, want %v", fake.mutating(), want)
 	}
 }
 

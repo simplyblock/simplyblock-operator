@@ -14,6 +14,9 @@ import (
 // every member of that group, so a scope narrowed to this one device would
 // hide the rest of the group from a command that has to write to it.
 func (m *Manager) ExpandPhysicalVolume(ctx context.Context, pv PhysicalVolume) error {
+	if err := m.requireOwnedDevice(ctx, pv); err != nil {
+		return err
+	}
 	_, err := m.exec(ctx, nil, "pvresize", pv.DevicePath)
 	if err != nil {
 		return fmt.Errorf("pvresize %s: %w", pv.DevicePath, err)
@@ -30,6 +33,9 @@ func (m *Manager) ExpandPhysicalVolume(ctx context.Context, pv PhysicalVolume) e
 // resolve the existing volume group, whose current members are not among
 // pvs.
 func (m *Manager) ExtendVolumeGroup(ctx context.Context, volumeGroup VolumeGroup, pvs ...PhysicalVolume) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	paths := devicePaths(pvs)
 	args := append([]string{"vgextend", volumeGroup.Name}, paths...)
 	if _, err := m.exec(ctx, nil, args...); err != nil {
@@ -50,6 +56,9 @@ func (m *Manager) ExtendVolumeGroup(ctx context.Context, volumeGroup VolumeGroup
 // volume's current size. "+100%FREE" is additive (current size + free
 // space), which is what "grow to consume all newly available space" means.
 func (m *Manager) ExpandLogicalVolume(ctx context.Context, logicalVolume LogicalVolume) error {
+	if err := m.requireOwned(ctx, logicalVolume.VolumeGroup); err != nil {
+		return err
+	}
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	_, err := m.exec(ctx, nil, "lvextend", "-l+100%FREE", path)
 	if err != nil {
@@ -80,6 +89,9 @@ func isAlreadyAtSize(err error) bool {
 // ExtendLogicalVolumeToSize grows logicalVolume to an absolute size in bytes
 // (lvextend -L<size>B).
 func (m *Manager) ExtendLogicalVolumeToSize(ctx context.Context, logicalVolume LogicalVolume, sizeBytes int64) error {
+	if err := m.requireOwned(ctx, logicalVolume.VolumeGroup); err != nil {
+		return err
+	}
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	_, err := m.exec(ctx, nil, "lvextend", fmt.Sprintf("-L%dB", sizeBytes), path)
 	if err != nil {

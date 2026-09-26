@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
@@ -27,6 +28,18 @@ type LVMVolumeGroupConfig struct {
 	// VolumeGroup is derived from the volume's identity, so a plan replayed on
 	// another host arrives at the same name.
 	VolumeGroup string
+
+	// LogicalVolume is the name of the volume inside the group. It belongs to
+	// the layer above, and this layer needs it to recognize a group made before
+	// ownership tags existed: one that is complete, holding the volume under
+	// that name, is adopted and tagged. One that is not is refused.
+	LogicalVolume string
+
+	// Tags are the informational tags the group carries for whoever reads the
+	// node's LVM metadata, rendered by lvm.InformationalTag. They are made to
+	// match on every bring-up, because the claim a volume belongs to can change,
+	// and they decide nothing: the owner tag alone does.
+	Tags []string
 
 	Manager *lvm.Manager
 }
@@ -158,6 +171,17 @@ func (l *LVMVolumeGroup) Ensure(ctx context.Context, below volstack.Artifact) (v
 		if _, err := l.cfg.Manager.CreateVolumeGroup(ctx, l.group(), held.unknown...); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmVolumeGroup: %w", err)
 		}
+	default:
+		// The group exists. Before anything is done to it, it has to be the
+		// driver's, and a group from before the tag says so only by its shape.
+		if err := l.ensureOwned(ctx); err != nil {
+			return volstack.Artifact{}, err
+		}
+	}
+
+	switch {
+	case len(held.joined) == 0:
+		// Made above.
 	case len(held.unknown) > 0:
 		// Members that have not joined yet. Adding them is what lets a volume grow
 		// by gaining capacity rather than by its capacity growing, and it has to
@@ -170,7 +194,52 @@ func (l *LVMVolumeGroup) Ensure(ctx context.Context, below volstack.Artifact) (v
 	if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
 		return volstack.Artifact{}, fmt.Errorf("lvmVolumeGroup: %w", err)
 	}
+	// Last, and on every bring-up: the claim a volume belongs to can change
+	// between two stages, and a clone arrives carrying its source's.
+	if err := l.cfg.Manager.ReconcileInformationalTags(ctx, l.group(), l.cfg.Tags); err != nil {
+		return volstack.Artifact{}, fmt.Errorf("lvmVolumeGroup: %w", err)
+	}
 	return volstack.Artifact{Devices: below.Devices, Geometry: below.Geometry}, nil
+}
+
+// ensureOwned establishes that the existing group is the driver's.
+//
+// A group carrying the owner tag is. One carrying none was made before the tag
+// existed or was made by somebody else, and the two are told apart by the one
+// shape nobody makes by accident: our group, holding the volume under our name.
+// That group is adopted, which puts the tag on it and on its volumes, and every
+// mutation after that finds the tag. Anything else is refused untouched, with
+// what was found in the message, since the alternative is a stage retried
+// forever with LVM's own words.
+func (l *LVMVolumeGroup) ensureOwned(ctx context.Context) error {
+	tags, err := l.cfg.Manager.VolumeGroupTags(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmVolumeGroup: %w", err)
+	}
+	if slices.Contains(tags, lvm.OwnerTag) {
+		return nil
+	}
+	volumes, err := l.cfg.Manager.ListLogicalVolumes(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmVolumeGroup: list the volumes in %s: %w", l.cfg.VolumeGroup, err)
+	}
+	names := make([]string, 0, len(volumes))
+	complete := false
+	for _, v := range volumes {
+		names = append(names, v.Name)
+		if v.Name == l.cfg.LogicalVolume {
+			complete = true
+		}
+	}
+	if !complete {
+		return fmt.Errorf(
+			"lvmVolumeGroup: %w: %s carries no %s tag and holds %v rather than %s, so it is not a stack of this driver's from before the tag; nothing was changed",
+			lvm.ErrNotOwned, l.cfg.VolumeGroup, lvm.OwnerTag, names, l.cfg.LogicalVolume)
+	}
+	if err := l.cfg.Manager.AdoptVolumeGroup(ctx, l.group()); err != nil {
+		return fmt.Errorf("lvmVolumeGroup: %w", err)
+	}
+	return nil
 }
 
 // Release unmaps the group on this host and keeps every byte of it. It is what

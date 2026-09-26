@@ -2,8 +2,10 @@ package lvm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // ImportClonedVolumeGroup regenerates fresh PV/VG UUIDs for pv and renames
@@ -21,6 +23,16 @@ import (
 // naming the device is the only thing that says which of the two to
 // re-stamp.
 func (m *Manager) ImportClonedVolumeGroup(ctx context.Context, newVolumeGroup VolumeGroup, pv PhysicalVolume) error {
+	if err := m.requireOwnedDevice(ctx, pv); err != nil {
+		return err
+	}
+	return m.importClone(ctx, newVolumeGroup, pv)
+}
+
+// importClone is the import itself, for a caller that has just established
+// ownership: ResolveClonedVolumeGroup, after it adopted a source that predates
+// the tag.
+func (m *Manager) importClone(ctx context.Context, newVolumeGroup VolumeGroup, pv PhysicalVolume) error {
 	_, err := m.exec(ctx, []string{pv.DevicePath}, "vgimportclone", "--basevgname", newVolumeGroup.Name, pv.DevicePath)
 	if err != nil {
 		return fmt.Errorf("vgimportclone %s to %s: %w", pv.DevicePath, newVolumeGroup.Name, err)
@@ -36,6 +48,9 @@ func (m *Manager) ImportClonedVolumeGroup(ctx context.Context, newVolumeGroup Vo
 // Unscoped: by the time this runs, ImportClonedVolumeGroup has already given
 // the clone a volume group name of its own, so the name identifies it.
 func (m *Manager) RenameLogicalVolume(ctx context.Context, volumeGroup VolumeGroup, oldName, newName string) error {
+	if err := m.requireOwned(ctx, volumeGroup); err != nil {
+		return err
+	}
 	_, err := m.exec(ctx, nil, "lvrename", volumeGroup.Name, oldName, newName)
 	if err != nil {
 		return fmt.Errorf("rename LV %s/%s to %s: %w", volumeGroup.Name, oldName, newName, err)
@@ -70,7 +85,8 @@ func (m *Manager) RenameLogicalVolume(ctx context.Context, volumeGroup VolumeGro
 // which is why it reads the identity itself rather than taking a "this is a
 // clone" flag.
 func (m *Manager) ResolveClonedVolumeGroup(
-	ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup, logicalVolume string, preserve ...string,
+	ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup, logicalVolume string,
+	recognize StackRecognizer, preserve ...string,
 ) (VolumeGroup, error) {
 	// Best-effort: pvscan --cache only refreshes what LVM has cached, and the
 	// probe below reads pv's content directly, so a failed refresh costs
@@ -85,7 +101,29 @@ func (m *Manager) ResolveClonedVolumeGroup(
 		return VolumeGroup{}, nil
 	}
 
-	if err := m.ImportClonedVolumeGroup(ctx, volumeGroup, pv); err != nil {
+	// The group is somebody's until it is shown to be the driver's: a clone of a
+	// tagged volume carries the tag already, and one of a volume made before the
+	// tag existed is known by its names alone. Anything else is refused here,
+	// with the group untouched, which is the whole point of the tag.
+	if err := m.requireOwnedDevice(ctx, pv); err != nil {
+		if !errors.Is(err, ErrNotOwned) {
+			return VolumeGroup{}, err
+		}
+		volumes, listErr := m.listLogicalVolumesOn(ctx, pv, current)
+		if listErr != nil {
+			return VolumeGroup{}, fmt.Errorf("list the volumes in %s on %s: %w", current.Name, pv.DevicePath, listErr)
+		}
+		if recognize == nil || !recognize(current.Name, volumes) {
+			return VolumeGroup{}, fmt.Errorf(
+				"%w: %s on %s holds %v and is not a stack of this driver's, so it is not re-identified",
+				ErrNotOwned, current.Name, pv.DevicePath, volumes)
+		}
+		if err := m.adoptOnDevice(ctx, pv, current); err != nil {
+			return VolumeGroup{}, err
+		}
+	}
+
+	if err := m.importClone(ctx, volumeGroup, pv); err != nil {
 		return VolumeGroup{}, err
 	}
 
@@ -103,4 +141,14 @@ func (m *Manager) ResolveClonedVolumeGroup(
 		break
 	}
 	return current, nil
+}
+
+// listLogicalVolumesOn is ListLogicalVolumes scoped to one device, for a group
+// whose name and UUID a source elsewhere on the host may share.
+func (m *Manager) listLogicalVolumesOn(ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup) ([]string, error) {
+	out, err := m.exec(ctx, []string{pv.DevicePath}, "lvs", "--noheadings", "-o", "lv_name", volumeGroup.Name)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
 }
