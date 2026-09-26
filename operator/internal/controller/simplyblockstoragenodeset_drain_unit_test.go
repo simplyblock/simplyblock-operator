@@ -28,6 +28,15 @@ const (
 	drainTestClusterUUID = "cccc0000-0000-0000-0000-000000000001"
 	drainTestNodeUUID    = "aaaa0000-0000-0000-0000-000000000001"
 	drainTestNodeUUID2   = "aaaa0000-0000-0000-0000-000000000002"
+
+	// Short names for the drain-escalation tests. goconst flags these as
+	// repeated literals, and naming them also says which is a volume and which
+	// is a node -- "pv-a" and "node-2" read alike at a glance.
+	drainTestPVA   = "pv-a"
+	drainTestPVB   = "pv-b"
+	drainTestNode1 = "node-1"
+	drainTestNode2 = "node-2"
+	drainTestNode3 = "node-3"
 )
 
 func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
@@ -74,15 +83,15 @@ func TestRoundRobinEscalatesPastATargetThatAlreadyFailed(t *testing.T) {
 	mock := threeOnlineNodes(t)
 	defer mock.Close()
 
-	tried := func(pv string) []string { return []string{"node-2"} }
+	tried := func(pv string) []string { return []string{drainTestNode2} }
 	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
-		drainTestClusterUUID, "node-1", []string{"pv-a"}, tried)
+		drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, tried)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if assignment["pv-a"] != "node-3" {
+	if assignment[drainTestPVA] != drainTestNode3 {
 		t.Errorf("pv-a went to %q; node-2 already failed for it, so the only "+
-			"remaining candidate is node-3", assignment["pv-a"])
+			"remaining candidate is node-3", assignment[drainTestPVA])
 	}
 }
 
@@ -92,13 +101,13 @@ func TestRoundRobinErrorsWhenEveryTargetHasFailedForTheVolume(t *testing.T) {
 	mock := threeOnlineNodes(t)
 	defer mock.Close()
 
-	tried := func(pv string) []string { return []string{"node-2", "node-3"} }
+	tried := func(pv string) []string { return []string{drainTestNode2, drainTestNode3} }
 	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
-		drainTestClusterUUID, "node-1", []string{"pv-a"}, tried)
+		drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, tried)
 	if err == nil {
 		t.Fatal("a target was assigned although every peer had already failed for it")
 	}
-	if !strings.Contains(err.Error(), "pv-a") {
+	if !strings.Contains(err.Error(), drainTestPVA) {
 		t.Errorf("error should name the volume that ran out of targets, got: %v", err)
 	}
 }
@@ -110,42 +119,42 @@ func TestRoundRobinEscalationIsPerVolume(t *testing.T) {
 	defer mock.Close()
 
 	tried := func(pv string) []string {
-		if pv == "pv-a" {
-			return []string{"node-2"}
+		if pv == drainTestPVA {
+			return []string{drainTestNode2}
 		}
 		return nil
 	}
 	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
-		drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"}, tried)
+		drainTestClusterUUID, drainTestNode1, []string{drainTestPVA, drainTestPVB}, tried)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if assignment["pv-a"] == "node-2" {
+	if assignment[drainTestPVA] == drainTestNode2 {
 		t.Error("pv-a was sent back to node-2, which had already failed for it")
 	}
-	if assignment["pv-b"] != "node-3" {
+	if assignment[drainTestPVB] != drainTestNode3 {
 		t.Errorf("pv-b went to %q; nothing has failed for it, so it keeps its "+
-			"round-robin slot", assignment["pv-b"])
+			"round-robin slot", assignment[drainTestPVB])
 	}
 }
 
 func TestRecordDrainTargetTried(t *testing.T) {
 	ops := &simplyblockv1alpha1.StorageNodeOps{}
 
-	if !recordDrainTargetTried(ops, "pv-a", "node-2") {
+	if !recordDrainTargetTried(ops, drainTestPVA, drainTestNode2) {
 		t.Fatal("recording a new target reported no change")
 	}
-	if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 1 || got[0] != "node-2" {
+	if got := drainTargetsTriedFor(ops, drainTestPVA); len(got) != 1 || got[0] != drainTestNode2 {
 		t.Fatalf("tried targets for pv-a = %v, want [node-2]", got)
 	}
 	// Re-observing the same failed CR must not keep patching the status.
-	if recordDrainTargetTried(ops, "pv-a", "node-2") {
+	if recordDrainTargetTried(ops, drainTestPVA, drainTestNode2) {
 		t.Error("recording the same target again reported a change")
 	}
-	if !recordDrainTargetTried(ops, "pv-a", "node-3") {
+	if !recordDrainTargetTried(ops, drainTestPVA, drainTestNode3) {
 		t.Error("recording a second target reported no change")
 	}
-	if got := drainTargetsTriedFor(ops, "pv-b"); got != nil {
+	if got := drainTargetsTriedFor(ops, drainTestPVB); got != nil {
 		t.Errorf("pv-b inherited pv-a's exhausted targets: %v", got)
 	}
 }
@@ -162,8 +171,8 @@ func TestRoundRobinDistributesEvenly(t *testing.T) {
 		]`},
 	)
 
-	pvNames := []string{"pv-a", "pv-b", "pv-c", "pv-d", "pv-e", "pv-f"}
-	excluded := "node-1"
+	pvNames := []string{drainTestPVA, drainTestPVB, "pv-c", "pv-d", "pv-e", "pv-f"}
+	excluded := drainTestNode1
 	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, excluded, pvNames, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -183,7 +192,7 @@ func TestRoundRobinDistributesEvenly(t *testing.T) {
 	for _, target := range assignment {
 		counts[target]++
 	}
-	for _, node := range []string{"node-2", "node-3"} {
+	for _, node := range []string{drainTestNode2, drainTestNode3} {
 		if counts[node] != 3 {
 			t.Errorf("node %s expected 3 assignments, got %d", node, counts[node])
 		}
@@ -201,7 +210,7 @@ func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
 		]`},
 	)
 
-	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a"}, nil)
+	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, nil)
 	if err == nil {
 		t.Fatal("expected error when no online peer node is available")
 	}
@@ -219,15 +228,15 @@ func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
 		]`},
 	)
 
-	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, "node-1", []string{"pv-a", "pv-b"}, nil)
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, drainTestNode1, []string{drainTestPVA, drainTestPVB}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for pv, target := range assignment {
-		if target == "node-2" {
+		if target == drainTestNode2 {
 			t.Errorf("pv %s assigned to offline node-2", pv)
 		}
-		if target == "node-1" {
+		if target == drainTestNode1 {
 			t.Errorf("pv %s assigned to excluded node-1", pv)
 		}
 	}
@@ -264,7 +273,7 @@ func newPVC(name string, pinned bool) *corev1.PersistentVolumeClaim {
 }
 
 func TestMatchVolumesToPVs_PVManaged(t *testing.T) {
-	pv := newPV("pv-a", "vol-1111")
+	pv := newPV(drainTestPVA, "vol-1111")
 	pvc := newPVC("pv-a-pvc", false)
 	r := newDrainReconciler(t, pv, pvc)
 
@@ -279,13 +288,13 @@ func TestMatchVolumesToPVs_PVManaged(t *testing.T) {
 	if len(pinned) != 0 || len(unmanaged) != 0 {
 		t.Errorf("expected no pinned/unmanaged, got pinned=%v unmanaged=%v", pinned, unmanaged)
 	}
-	if byUUID["vol-1111"] != "pv-a" {
+	if byUUID["vol-1111"] != drainTestPVA {
 		t.Errorf("expected pvName=pv-a, got %q", byUUID["vol-1111"])
 	}
 }
 
 func TestMatchVolumesToPVs_Pinned(t *testing.T) {
-	pv := newPV("pv-b", "vol-2222")
+	pv := newPV(drainTestPVB, "vol-2222")
 	pvc := newPVC("pv-b-pvc", true) // pinned
 	r := newDrainReconciler(t, pv, pvc)
 
@@ -444,15 +453,15 @@ func TestRecordExhaustedTargetsIgnoresFailuresBeforeTheTargetWasReached(t *testi
 
 	ops := &simplyblockv1alpha1.StorageNodeOps{}
 	failed := []simplyblockv1alpha1.VolumeMigration{
-		vm("pv-a", "node-2", "node-src"), // ran, then failed: node-2 is implicated
-		vm("pv-a", "node-3", ""),         // failed in validation: node-3 is not
+		vm(drainTestPVA, drainTestNode2, "node-src"), // ran, then failed: node-2 is implicated
+		vm(drainTestPVA, drainTestNode3, ""),         // failed in validation: node-3 is not
 	}
 
 	if !recordExhaustedTargets(ops, failed) {
 		t.Fatal("the engaged target was not recorded")
 	}
-	got := drainTargetsTriedFor(ops, "pv-a")
-	if len(got) != 1 || got[0] != "node-2" {
+	got := drainTargetsTriedFor(ops, drainTestPVA)
+	if len(got) != 1 || got[0] != drainTestNode2 {
 		t.Errorf("exhausted targets = %v, want [node-2] only -- node-3 failed "+
 			"before the migration reached it and must stay available", got)
 	}
@@ -473,13 +482,13 @@ func TestUnattributedFailuresAreBoundedNotIgnored(t *testing.T) {
 	}
 
 	ops := &simplyblockv1alpha1.StorageNodeOps{}
-	failed := []simplyblockv1alpha1.VolumeMigration{vm("pv-a", "node-2", "")}
+	failed := []simplyblockv1alpha1.VolumeMigration{vm(drainTestPVA, drainTestNode2, "")}
 
 	// Below the bound the target stays available: the failure says nothing
 	// about it, and another candidate is not obviously better.
 	for i := 1; i < MaxUnattributedFailures; i++ {
 		recordExhaustedTargets(ops, failed)
-		if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 0 {
+		if got := drainTargetsTriedFor(ops, drainTestPVA); len(got) != 0 {
 			t.Fatalf("after %d unattributed failures the target was already "+
 				"burned (%v); a failure it did not cause must not exhaust it", i, got)
 		}
@@ -488,15 +497,15 @@ func TestUnattributedFailuresAreBoundedNotIgnored(t *testing.T) {
 	// At the bound it is abandoned anyway: something here is not working, even
 	// if it cannot be pinned on the node.
 	recordExhaustedTargets(ops, failed)
-	got := drainTargetsTriedFor(ops, "pv-a")
-	if len(got) != 1 || got[0] != "node-2" {
+	got := drainTargetsTriedFor(ops, drainTestPVA)
+	if len(got) != 1 || got[0] != drainTestNode2 {
 		t.Fatalf("exhausted targets = %v, want [node-2] once the bound is "+
 			"reached -- otherwise the drain retries one target indefinitely", got)
 	}
 
 	// And the count resets, so the next candidate is judged on its own attempts.
 	for i := range ops.Status.DrainTargetsTried {
-		if ops.Status.DrainTargetsTried[i].PVName == "pv-a" &&
+		if ops.Status.DrainTargetsTried[i].PVName == drainTestPVA &&
 			ops.Status.DrainTargetsTried[i].Failures != 0 {
 			t.Errorf("failure count = %d after burning the target, want 0",
 				ops.Status.DrainTargetsTried[i].Failures)
@@ -507,14 +516,14 @@ func TestUnattributedFailuresAreBoundedNotIgnored(t *testing.T) {
 func TestAnAttributableFailureStillBurnsImmediately(t *testing.T) {
 	// Attribution decides how fast a target is abandoned, not whether it is.
 	m := simplyblockv1alpha1.VolumeMigration{}
-	m.Spec.PVName = "pv-a"
-	m.Spec.TargetNodeUUID = "node-2"
+	m.Spec.PVName = drainTestPVA
+	m.Spec.TargetNodeUUID = drainTestNode2
 	m.Status.SourceNodeUUID = "node-src" // the migration ran against it
 
 	ops := &simplyblockv1alpha1.StorageNodeOps{}
 	recordExhaustedTargets(ops, []simplyblockv1alpha1.VolumeMigration{m})
 
-	if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 1 {
+	if got := drainTargetsTriedFor(ops, drainTestPVA); len(got) != 1 {
 		t.Errorf("a failure the target caused did not burn it on the first "+
 			"attempt: %v", got)
 	}

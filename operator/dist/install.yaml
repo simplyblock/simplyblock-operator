@@ -2444,6 +2444,69 @@ spec:
                   or not).
                 format: date-time
                 type: string
+              devicesMigrated:
+                description: |-
+                  DevicesMigrated and DevicesTotal report the pre-removal device rebuild,
+                  so the wait has a number attached to it rather than being a silent
+                  several-minute pause in MigratingDevices.
+                type: integer
+              devicesTotal:
+                type: integer
+              devicesTriggered:
+                description: |-
+                  DevicesTriggered and ReshuffleTriggered are the once-only latches for the
+                  two steps that start with a POST and are then polled, matching what
+                  Triggered does for Suspending. Separate fields because a drain passes
+                  through all three and one shared latch would let a later step inherit an
+                  earlier step's "already sent".
+                type: boolean
+              drainTargetsTried:
+                description: |-
+                  DrainTargetsTried records, per volume, the migration targets that have
+                  already failed for it.
+
+                  Without it a retry is not a retry: the target is re-picked from the same
+                  ordered candidate list with no memory, so a volume whose migration fails
+                  on one node is handed straight back to that node. With a single volume
+                  the pick is the first candidate every time, which is a loop rather than
+                  an escalation. Recording the failure lets the next attempt move on, and
+                  lets the drain say "every target has been tried" instead of retrying for
+                  ever.
+                items:
+                  description: |-
+                    VolumeDrainTargets is the set of migration targets already exhausted for one
+                    volume during a drain. Keyed by PV name because that is what the drain builds
+                    its VolumeMigration CRs from, so the key survives a control-plane restart and
+                    matches the CR that failed.
+                  properties:
+                    failures:
+                      description: |-
+                        Failures counts consecutive failures for this volume that could not be
+                        blamed on the target -- a consumer pod that is down, an unresolvable PV, a
+                        busy cluster. Such a failure must not burn the target, or one dead client
+                        exhausts every candidate; but it must not be retried for ever either, or
+                        the drain recreates the same migration against the same node until someone
+                        notices. The count bounds the second case: past MaxUnattributedFailures the
+                        target is abandoned anyway, on the grounds that something here is not
+                        working even if it cannot be pinned on the node.
+
+                        Reset whenever a target is burned, so the next candidate starts fresh.
+                      type: integer
+                    pvName:
+                      description: PVName is the PersistentVolume whose migration
+                        these targets failed for.
+                      type: string
+                    targets:
+                      description: |-
+                        Targets are storage node UUIDs that have already failed for this volume
+                        and must not be chosen again for it.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - pvName
+                  type: object
+                type: array
               message:
                 description: Message is a human-readable description of the current
                   state or failure reason.
@@ -2456,6 +2519,8 @@ spec:
                 - Succeeded
                 - Failed
                 type: string
+              reshuffleTriggered:
+                type: boolean
               startedAt:
                 description: StartedAt is when the operation began.
                 format: date-time
@@ -2466,8 +2531,11 @@ spec:
                 enum:
                 - Validating
                 - Suspending
+                - ShuttingDown
+                - MigratingDevices
                 - Migrating
                 - Verifying
+                - Reshuffling
                 - Removing
                 - Preparing
                 - Restarting
