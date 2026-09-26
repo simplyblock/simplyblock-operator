@@ -11,6 +11,7 @@ package layers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/simplyblock/atlas/blockdev"
@@ -357,5 +358,155 @@ func TestLVMVolumeRecordsWhatItWasBuiltWith(t *testing.T) {
 	}
 	if params.Stripes != 4 || params.StripeChunkBytes != 65536 {
 		t.Errorf("Params() = %+v, want the striping it was built with", params)
+	}
+}
+
+// wantMarker is the tag the layer puts on the volume group before it runs
+// lvcreate and removes once lvcreate has returned. It is the on-disk contract a
+// recovery reads, so the tests spell it out rather than sharing the constant
+// with the layer: a renamed constant that changed what is written to disk would
+// otherwise pass every test here.
+const wantMarker = "simplyblock.creating"
+
+// testPool is the pool a VDO-backed volume is created inside.
+const testPool = "vdopool"
+
+// newPooledLVMVolume is newLVMVolume for a volume of a pooled type, told what
+// vgs answers for the group's tags as well.
+func newPooledLVMVolume(lvs, tags string) *lvmVolumeFixture {
+	f := newLVMVolume("  "+testVG+"\n", lvs, "", lvm.LogicalVolumeDefinition{Deduplication: true})
+	f.cmds.out["vgs:vg_tags"] = tags
+	f.layer.cfg.PoolName = testPool
+	return f
+}
+
+// indexOfWith is where a command carrying this argument was issued, or -1.
+func (l *lvmCommands) indexOfWith(command, arg string) int {
+	for i, call := range l.calls {
+		if call[0] != command {
+			continue
+		}
+		for _, a := range call[1:] {
+			if a == arg {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// A create is several LVM commits for a pooled type, and a node can die between
+// them. The layer says so before it starts, on the group itself, so that whoever
+// finds the leftovers knows they are an interrupted create of ours and not
+// somebody's data. The marker goes on before lvcreate and comes off after it,
+// and a recovery that finds it still there knows lvcreate never finished.
+func TestLVMVolumeCreateMarksTheGroupAroundLvcreate(t *testing.T) {
+	f := newLVMVolume("\n", "", "", lvm.LogicalVolumeDefinition{})
+
+	if _, err := f.layer.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	added := f.cmds.indexOfWith("vgchange", "--addtag")
+	created := f.cmds.indexOf("lvcreate")
+	removed := f.cmds.indexOfWith("vgchange", "--deltag")
+	if added < 0 || created < 0 || removed < 0 {
+		t.Fatalf("want the marker added, the volume created, and the marker removed:\n%s", f.cmds.issued())
+	}
+	if !(added < created && created < removed) {
+		t.Fatalf("the marker has to bracket lvcreate, and instead:\n%s", f.cmds.issued())
+	}
+	if f.cmds.indexOfWith("vgchange", wantMarker) < 0 {
+		t.Fatalf("the marker written is not %q:\n%s", wantMarker, f.cmds.issued())
+	}
+}
+
+// The interrupted create of a pooled type leaves the pool behind under the very
+// name the retry needs, so completing the create means removing it first. That
+// is allowed on exactly one reading of the group: it holds the pool and nothing
+// else, and it carries the marker this layer put there before lvcreate. Nothing
+// can have written into a pool that has no volume inside it, and the marker says
+// whose interrupted work it is.
+func TestLVMVolumeRecoversItsOwnInterruptedPoolCreate(t *testing.T) {
+	f := newPooledLVMVolume("  "+testPool+"\n", "  "+wantMarker+"\n")
+
+	state, _, err := f.layer.Observe(context.Background(), belowArtifact())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if state != volstack.StatePartial {
+		t.Fatalf("state = %s, want Partial", state)
+	}
+
+	if _, err := f.layer.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	removed := f.cmds.indexOfWith("lvremove", testVG+"/"+testPool)
+	created := f.cmds.indexOf("lvcreate")
+	if removed < 0 || created < 0 {
+		t.Fatalf("want the orphan pool removed and the create rerun:\n%s", f.cmds.issued())
+	}
+	if removed > created {
+		t.Fatalf("the pool has to go before lvcreate can take its name:\n%s", f.cmds.issued())
+	}
+	if f.cmds.indexOfWith("vgchange", "--deltag") < created {
+		t.Fatalf("the marker came off before the create finished:\n%s", f.cmds.issued())
+	}
+}
+
+// A pool with no marker is a shape this layer did not make, whatever it looks
+// like, and the only safe thing to do with it is nothing. The refusal has to
+// say what it found, since the alternative is a stage that retries forever with
+// LVM's own message.
+func TestLVMVolumeRefusesAPoolWithoutItsMarker(t *testing.T) {
+	f := newPooledLVMVolume("  "+testPool+"\n", "\n")
+
+	_, err := f.layer.Ensure(context.Background(), belowArtifact())
+	if err == nil {
+		t.Fatalf("a pool of unknown origin was converged over:\n%s", f.cmds.issued())
+	}
+	for _, forbidden := range []string{"lvremove", "lvcreate"} {
+		if f.cmds.ran(forbidden) {
+			t.Fatalf("the refusal ran %s:\n%s", forbidden, f.cmds.issued())
+		}
+	}
+	if !strings.Contains(err.Error(), testPool) {
+		t.Errorf("the refusal does not name what it found: %v", err)
+	}
+}
+
+// A pool with another volume beside it is somebody's data: a clone whose volume
+// has not been renamed yet, or a volume a human renamed. The marker being there
+// changes nothing, because the marker vouches for an empty group and this one is
+// not empty. Nothing is removed, and nothing is created beside it either.
+func TestLVMVolumeRefusesAPoolBesideAnotherVolume(t *testing.T) {
+	f := newPooledLVMVolume("  "+testPool+"\n  source-lv\n", "  "+wantMarker+"\n")
+
+	_, err := f.layer.Ensure(context.Background(), belowArtifact())
+	if err == nil {
+		t.Fatalf("a group holding another volume was converged over:\n%s", f.cmds.issued())
+	}
+	for _, forbidden := range []string{"lvremove", "lvcreate"} {
+		if f.cmds.ran(forbidden) {
+			t.Fatalf("the refusal ran %s:\n%s", forbidden, f.cmds.issued())
+		}
+	}
+	if !strings.Contains(err.Error(), "source-lv") {
+		t.Errorf("the refusal does not name what it found: %v", err)
+	}
+}
+
+// The same holds for a volume of a plain type: our group, holding a volume that
+// is not ours, is not an interrupted create to complete. It is somebody's, and
+// an lvcreate into it is at best a failure over free space and at worst a
+// second volume beside data nobody declared.
+func TestLVMVolumeRefusesAForeignVolumeInItsGroup(t *testing.T) {
+	f := newLVMVolume("  "+testVG+"\n", "  somebody-elses\n", "", lvm.LogicalVolumeDefinition{})
+
+	_, err := f.layer.Ensure(context.Background(), belowArtifact())
+	if err == nil {
+		t.Fatalf("a group holding a foreign volume was created into:\n%s", f.cmds.issued())
+	}
+	if f.cmds.ran("lvcreate") {
+		t.Fatalf("the refusal ran lvcreate:\n%s", f.cmds.issued())
 	}
 }
