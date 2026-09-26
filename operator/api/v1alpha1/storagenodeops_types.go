@@ -163,6 +163,19 @@ type VolumeDrainTargets struct {
 	// and must not be chosen again for it.
 	// +optional
 	Targets []string `json:"targets,omitempty"`
+
+	// Failures counts consecutive failures for this volume that could not be
+	// blamed on the target -- a consumer pod that is down, an unresolvable PV, a
+	// busy cluster. Such a failure must not burn the target, or one dead client
+	// exhausts every candidate; but it must not be retried for ever either, or
+	// the drain recreates the same migration against the same node until someone
+	// notices. The count bounds the second case: past MaxUnattributedFailures the
+	// target is abandoned anyway, on the grounds that something here is not
+	// working even if it cannot be pinned on the node.
+	//
+	// Reset whenever a target is burned, so the next candidate starts fresh.
+	// +optional
+	Failures int `json:"failures,omitempty"`
 }
 
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.

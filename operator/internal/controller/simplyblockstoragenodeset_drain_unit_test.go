@@ -457,3 +457,65 @@ func TestRecordExhaustedTargetsIgnoresFailuresBeforeTheTargetWasReached(t *testi
 			"before the migration reached it and must stay available", got)
 	}
 }
+
+func TestUnattributedFailuresAreBoundedNotIgnored(t *testing.T) {
+	// The bound that stops the escalation deadlocking in the other direction.
+	// Not burning a target for a failure it did not cause is right -- one dead
+	// consumer pod must not exhaust six good nodes -- but with nothing counted
+	// there is also nothing to escalate to, and the drain recreates the same
+	// migration against the same node for ever (2026-09-26).
+	vm := func(pv, target, sourceNode string) simplyblockv1alpha1.VolumeMigration {
+		m := simplyblockv1alpha1.VolumeMigration{}
+		m.Spec.PVName = pv
+		m.Spec.TargetNodeUUID = target
+		m.Status.SourceNodeUUID = sourceNode // only set once the migration ran
+		return m
+	}
+
+	ops := &simplyblockv1alpha1.StorageNodeOps{}
+	failed := []simplyblockv1alpha1.VolumeMigration{vm("pv-a", "node-2", "")}
+
+	// Below the bound the target stays available: the failure says nothing
+	// about it, and another candidate is not obviously better.
+	for i := 1; i < MaxUnattributedFailures; i++ {
+		recordExhaustedTargets(ops, failed)
+		if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 0 {
+			t.Fatalf("after %d unattributed failures the target was already "+
+				"burned (%v); a failure it did not cause must not exhaust it", i, got)
+		}
+	}
+
+	// At the bound it is abandoned anyway: something here is not working, even
+	// if it cannot be pinned on the node.
+	recordExhaustedTargets(ops, failed)
+	got := drainTargetsTriedFor(ops, "pv-a")
+	if len(got) != 1 || got[0] != "node-2" {
+		t.Fatalf("exhausted targets = %v, want [node-2] once the bound is "+
+			"reached -- otherwise the drain retries one target indefinitely", got)
+	}
+
+	// And the count resets, so the next candidate is judged on its own attempts.
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == "pv-a" &&
+			ops.Status.DrainTargetsTried[i].Failures != 0 {
+			t.Errorf("failure count = %d after burning the target, want 0",
+				ops.Status.DrainTargetsTried[i].Failures)
+		}
+	}
+}
+
+func TestAnAttributableFailureStillBurnsImmediately(t *testing.T) {
+	// Attribution decides how fast a target is abandoned, not whether it is.
+	m := simplyblockv1alpha1.VolumeMigration{}
+	m.Spec.PVName = "pv-a"
+	m.Spec.TargetNodeUUID = "node-2"
+	m.Status.SourceNodeUUID = "node-src" // the migration ran against it
+
+	ops := &simplyblockv1alpha1.StorageNodeOps{}
+	recordExhaustedTargets(ops, []simplyblockv1alpha1.VolumeMigration{m})
+
+	if got := drainTargetsTriedFor(ops, "pv-a"); len(got) != 1 {
+		t.Errorf("a failure the target caused did not burn it on the first "+
+			"attempt: %v", got)
+	}
+}

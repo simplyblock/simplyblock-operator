@@ -1387,14 +1387,65 @@ func recordExhaustedTargets(
 	recorded := false
 	for i := range failed {
 		target := failed[i].Spec.TargetNodeUUID
-		if target == "" || !targetWasEngaged(&failed[i]) {
+		if target == "" {
 			continue
 		}
-		if recordDrainTargetTried(ops, failed[i].Spec.PVName, target) {
-			recorded = true
+		pv := failed[i].Spec.PVName
+
+		// Attribution decides how FAST a target is abandoned, never whether it
+		// ever is. A failure the target caused burns it at once. One it did not
+		// cause is retried, but counted -- otherwise the drain recreates the
+		// same migration against the same node for ever, which is what happens
+		// when nothing can be blamed and nothing is bounded.
+		if targetWasEngaged(&failed[i]) {
+			if recordDrainTargetTried(ops, pv, target) {
+				recorded = true
+			}
+			continue
 		}
+
+		if bumpUnattributedFailure(ops, pv) >= MaxUnattributedFailures {
+			if recordDrainTargetTried(ops, pv, target) {
+				resetUnattributedFailures(ops, pv)
+				recorded = true
+			}
+			continue
+		}
+		recorded = true // the count itself is state worth persisting
 	}
 	return recorded
+}
+
+// MaxUnattributedFailures bounds how many times one volume's migration may fail
+// for a reason outside the target before that target is abandoned anyway.
+//
+// Mirrors NODE_DRAIN_MAX_RESTARTS_PER_TARGET in the control plane's own drain,
+// which has always had this bound; the operator's escalation was written
+// without it and could loop indefinitely.
+const MaxUnattributedFailures = 10
+
+// bumpUnattributedFailure increments and returns the failure count for pvName.
+func bumpUnattributedFailure(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) int {
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == pvName {
+			ops.Status.DrainTargetsTried[i].Failures++
+			return ops.Status.DrainTargetsTried[i].Failures
+		}
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Failures: 1})
+	return 1
+}
+
+// resetUnattributedFailures clears the count so the next candidate target is
+// judged on its own attempts rather than inheriting the previous one's.
+func resetUnattributedFailures(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) {
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName == pvName {
+			ops.Status.DrainTargetsTried[i].Failures = 0
+			return
+		}
+	}
 }
 
 // targetWasEngaged reports whether a failed migration ever reached the point of

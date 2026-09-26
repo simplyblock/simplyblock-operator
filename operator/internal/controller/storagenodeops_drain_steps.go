@@ -146,6 +146,25 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 		"DeviceMigrationCompleted", "all %d device(s) rebuilt onto peers", progress.Completed)
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "DeviceMigrationCompleted",
 		fmt.Sprintf("all %d device(s) rebuilt onto peers", progress.Completed))
+
+	// Move the node's own status on with the phase. The control plane stamps
+	// the device half itself (that is what /migrate-devices does), but the
+	// volume half is driven from here, so nothing else would ever move it --
+	// and a node left saying migrating_devices through the whole volume phase
+	// makes `sbctl sn list` disagree with this CR about where a removal is.
+	//
+	// Best-effort: it is a status label, not a precondition, and failing the
+	// drain because a cosmetic patch did not land would be worse than the
+	// label being briefly stale. The next reconcile re-POSTs it.
+	endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/migrating-lvols",
+		clusterUUID, nodeUUID)
+	if _, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil); err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d", status)
+		}
+		log.Error(err, "drain: could not mark the node migrating_lvols (continuing)")
+	}
+
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
 }
 
