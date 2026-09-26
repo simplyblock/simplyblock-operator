@@ -60,6 +60,15 @@ jobs:
         with:
           go-version: stable
 
+      # Ubuntu's Azure kernel keeps the NVMe-oF modules out of the image's own
+      # module package: nvmet and dm-vdo are in it, nvmet-tcp and nvme-tcp are in
+      # the extra package for the running kernel, which the runner does not
+      # install. Read out of the archive's file lists for 6.17.0-1022-azure.
+      - name: Install the extra modules for the running kernel
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+
       # Named one by one, so that a kernel missing one of them says which, and
       # the run reads as a kernel the job cannot use rather than as a stack that
       # failed to come up.
