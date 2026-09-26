@@ -994,8 +994,8 @@ func (r *StorageNodeOpsReconciler) runDrain(
 	switch ops.Status.SubPhase {
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating:
 		return r.drainValidate(ctx, ops, sn, clusterUUID, apiClient)
-	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
-		return r.drainSuspend(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown:
+		return r.drainShutdown(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices:
 		return r.drainMigrateDevices(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
@@ -1091,7 +1091,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 			"removing node %s would violate failure-domain balance: %s", nodeUUID, reason))
 	}
 
-	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown)
 }
 
 // fdRemovalBalanceCheck reports whether removing sn would violate the
@@ -1153,7 +1153,29 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	return fdRemovalBalanceViolation(counts), nil
 }
 
-func (r *StorageNodeOpsReconciler) drainSuspend(
+// isNodeStopped reports whether a node's SPDK is no longer serving, which is
+// what the drain waits for before it moves anything.
+//
+// Several statuses mean it: the shutdown's own in_shutdown/offline, and the
+// removal statuses a re-driven drain may already have reached. Waiting for one
+// exact status would hang whenever the node arrived at a different one -- and
+// the shutdown's landing status is not something this controller chooses.
+func isNodeStopped(status string) bool {
+	switch status {
+	case utils.NodeStatusOffline,
+		utils.NodeStatusInShutdown,
+		"migrating_devices",
+		"migrating_lvols",
+		"in_removal",
+		"removed",
+		"removed_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *StorageNodeOpsReconciler) drainShutdown(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
 	sn *simplyblockv1alpha1.StorageNode,
@@ -1169,16 +1191,16 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 			log.Error(err, "drain: could not read node status before suspend, retrying")
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
-		if currentStatus == utils.NodeStatusSuspended {
-			log.Info("drain: node already suspended, advancing without POST")
+		if isNodeStopped(currentStatus) {
+			log.Info("drain: node already stopped, advancing without POST")
 			patch := client.MergeFrom(ops.DeepCopy())
 			ops.Status.Triggered = true
-			ops.Status.Message = "node already suspended"
+			ops.Status.Message = "node already stopped"
 			_ = r.Status().Patch(ctx, ops, patch)
 			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/suspend", clusterUUID, nodeUUID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nodeUUID)
 		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
@@ -1189,7 +1211,7 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		ops.Status.Message = "suspend request sent, waiting for node to suspend"
+		ops.Status.Message = "shutdown request sent, waiting for the node to stop"
 		_ = r.Status().Patch(ctx, ops, patch)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
@@ -1209,10 +1231,10 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		log.Error(err, "drain: failed to unmarshal node status")
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	if nodeResp.Status != utils.NodeStatusSuspended {
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainSuspendPending", "DrainSuspendPending",
-			"waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
+	if !isNodeStopped(nodeResp.Status) {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainShutdownPending", "DrainShutdownPending",
+			"waiting for node %s to stop (current status: %s)", nodeUUID, nodeResp.Status)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainShutdownPending", fmt.Sprintf("waiting for node %s to stop (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 	// Devices before lvols: the node's devices are failed and rebuilt onto peers

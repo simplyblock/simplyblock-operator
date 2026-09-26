@@ -219,6 +219,7 @@ spec:
                 enum:
                 - Validating
                 - Suspending
+                - ShuttingDown
                 - MigratingDevices
                 - Migrating
                 - Verifying

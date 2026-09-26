@@ -34,12 +34,23 @@ const (
 // StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
 // steps when action=remove, and the Preparing → Migrating → Promoting steps when
 // action=migrate.
-// +kubebuilder:validation:Enum=Validating;Suspending;MigratingDevices;Migrating;Verifying;Reshuffling;Removing;Preparing;Restarting;Promoting
+// +kubebuilder:validation:Enum=Validating;Suspending;ShuttingDown;MigratingDevices;Migrating;Verifying;Reshuffling;Removing;Preparing;Restarting;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
 	StorageNodeOpsSubPhaseValidating StorageNodeOpsSubPhase = "Validating"
 	StorageNodeOpsSubPhaseSuspending StorageNodeOpsSubPhase = "Suspending"
+	// StorageNodeOpsSubPhaseShuttingDown stops the node before anything is
+	// moved off it, which is the first thing a removal does on either path.
+	//
+	// Suspending only excluded the node from new volume placement and left it
+	// serving, so a drain and a `sbctl sn remove` reached the migration steps
+	// with the node in opposite states. Every check asking "can this node still
+	// answer?" was then right for one path and wrong for the other -- a class of
+	// bug found repeatedly, one live cluster at a time. With the node down on
+	// both paths, its volumes are served by their replicas for the whole drain
+	// and the migration steps mean one thing.
+	StorageNodeOpsSubPhaseShuttingDown StorageNodeOpsSubPhase = "ShuttingDown"
 	// StorageNodeOpsSubPhaseMigratingDevices marks the pre-removal step: the
 	// node's devices are failed and their data rebuilt onto peers, before any
 	// lvol leaves the node.
