@@ -34,7 +34,7 @@ import (
 const (
 	// The device rebuild moves real data and takes minutes, so it is polled far
 	// less often than the sub-second steps around it.
-	drainRequeueDevices   = 20 * time.Second
+	drainRequeueDevices = 20 * time.Second
 )
 
 // drainProgress is what both step endpoints report. Done is authoritative: a
@@ -166,4 +166,3 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
 }
-
