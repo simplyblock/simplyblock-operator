@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
@@ -84,9 +85,11 @@ func (l *LVMLogicalVolume) path() string {
 //
 // The four states are four different things to do, and the first two are the
 // ones that matter: Absent creates, Inactive reactivates, and confusing them
-// destroys a volume. Partial is the interrupted create, whose volume group
-// activates successfully while producing no usable device, and Ready is complete
-// and mapped.
+// destroys a volume. Partial is a group of ours without this volume in it, which
+// activates successfully while producing no usable device: an interrupted create
+// when the group is empty or holds only the pool a pooled create makes first,
+// and somebody's data otherwise, which Ensure tells apart. Ready is complete and
+// mapped.
 func (l *LVMLogicalVolume) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
@@ -194,13 +197,25 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 
 	switch state {
 	case volstack.StateReady:
+		// Complete and mapped. The one thing to do is clear a marker a create
+		// left behind, which is what a failed vgchange --deltag after a
+		// successful lvcreate leaves.
+		if err := l.clearStaleMarker(ctx); err != nil {
+			return volstack.Artifact{}, err
+		}
 		return own, nil
 
-	case volstack.StateAbsent, volstack.StatePartial:
-		// A group with no volume in it and a group with an unfinished one are the
-		// same thing to do something about, and the group itself is the layer
-		// below's business either way.
+	case volstack.StateAbsent:
+		// A group with nothing in it, made by the layer below and never filled.
 		if err := l.create(ctx); err != nil {
+			return volstack.Artifact{}, err
+		}
+
+	case volstack.StatePartial:
+		// A group that exists and does not hold this volume. What else it holds
+		// decides whether a create may run, and for a pooled type an interrupted
+		// create is what it usually holds.
+		if err := l.completeInterruptedCreate(ctx); err != nil {
 			return volstack.Artifact{}, err
 		}
 
@@ -210,6 +225,9 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 		// and costs nothing when it is already mapped.
 		if err := l.cfg.Manager.ActivateVolumeGroup(ctx, l.group()); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("lvmLogicalVolume: %w", err)
+		}
+		if err := l.clearStaleMarker(ctx); err != nil {
+			return volstack.Artifact{}, err
 		}
 
 	case volstack.StateForeign:
@@ -222,14 +240,111 @@ func (l *LVMLogicalVolume) Ensure(ctx context.Context, below volstack.Artifact) 
 	return l.artifact()
 }
 
+// creatingMarker is the tag the group carries while lvcreate runs.
+//
+// lvcreate is one command and, for a pooled type, several LVM commits: the pool
+// as a plain volume, then formatted, then converted, and the volume inside it
+// last. A node that dies between the first and the last leaves the pool behind
+// under the name the retry needs, and nothing on the device says whether that
+// pool is this layer's unfinished work or somebody's volume. The marker says so.
+// It goes on before lvcreate and comes off after, in the group's own metadata,
+// so it survives the reboot, follows the volume to another node, and is copied
+// into a clone taken from a source that was mid-create, which carries no data
+// either.
+//
+// Spelled out on disk, so it is a contract rather than a name: the tests write
+// the same string, and a recovery on another build reads it.
+const creatingMarker = "simplyblock.creating"
+
 // create makes the logical volume, and is what both a fresh create and an
-// interrupted one end in.
+// interrupted one end in. The marker brackets lvcreate, which is the only
+// command here that a crash can leave half done.
 func (l *LVMLogicalVolume) create(ctx context.Context) error {
+	if err := l.cfg.Manager.AddVolumeGroupTag(ctx, l.group(), creatingMarker); err != nil {
+		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
 	if _, err := l.cfg.Manager.CreateLogicalVolume(
 		ctx, l.group(), l.cfg.PoolName, l.cfg.LogicalVolume, l.cfg.Definition); err != nil {
 		return fmt.Errorf("lvmLogicalVolume: %w", err)
 	}
+	if err := l.cfg.Manager.RemoveVolumeGroupTag(ctx, l.group(), creatingMarker); err != nil {
+		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
 	return nil
+}
+
+// clearStaleMarker takes the marker off a group whose volume exists.
+//
+// create removes it after lvcreate, and that removal can fail with the volume
+// already made. The group is complete then, and the marker says nothing true
+// about it: it is not an interrupted create, and a clone of it must not read the
+// marker as permission to remove anything. So every bring-up that finds the
+// volume takes the marker off on the way through, which costs one vgs read and,
+// almost always, nothing else.
+func (l *LVMLogicalVolume) clearStaleMarker(ctx context.Context) error {
+	tags, err := l.cfg.Manager.VolumeGroupTags(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
+	if !slices.Contains(tags, creatingMarker) {
+		return nil
+	}
+	if err := l.cfg.Manager.RemoveVolumeGroupTag(ctx, l.group(), creatingMarker); err != nil {
+		return fmt.Errorf("lvmLogicalVolume: clear the stale marker: %w", err)
+	}
+	return nil
+}
+
+// completeInterruptedCreate finishes a create that a group without this volume
+// is the remains of, when that is what the group is.
+//
+// Three readings, and only two of them are a create to complete. A group with
+// nothing in it is the plain interrupted create, where the layer below finished
+// and this one never ran, and lvcreate is simply run. A group holding this
+// volume's pool and nothing else, under the marker create put there, is a
+// pooled create that died between LVM's commits: no volume ever existed inside
+// that pool, so nothing can have written into it, and the marker says it is this
+// layer's own work. The pool is removed and lvcreate is run again. Any other
+// content is refused: a pool without the marker was not made by a create of
+// ours that this layer knows how to finish, and a group holding any volume that
+// is not ours holds somebody's data, whether or not the marker is there. The
+// refusal names what it found, because the alternative is a stage retried
+// forever with LVM's own message and nothing to say why.
+func (l *LVMLogicalVolume) completeInterruptedCreate(ctx context.Context) error {
+	volumes, err := l.cfg.Manager.ListLogicalVolumes(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmLogicalVolume: list the volumes in %s: %w", l.cfg.VolumeGroup, err)
+	}
+	if len(volumes) == 0 {
+		return l.create(ctx)
+	}
+
+	names := make([]string, 0, len(volumes))
+	for _, v := range volumes {
+		names = append(names, v.Name)
+	}
+	onlyThePool := l.cfg.PoolName != "" && len(volumes) == 1 && volumes[0].Name == l.cfg.PoolName
+	if !onlyThePool {
+		return fmt.Errorf(
+			"lvmLogicalVolume: %s holds %v and not %s, which is not an interrupted create this layer can finish; nothing was removed",
+			l.cfg.VolumeGroup, names, l.cfg.LogicalVolume)
+	}
+
+	tags, err := l.cfg.Manager.VolumeGroupTags(ctx, l.group())
+	if err != nil {
+		return fmt.Errorf("lvmLogicalVolume: %w", err)
+	}
+	if !slices.Contains(tags, creatingMarker) {
+		return fmt.Errorf(
+			"lvmLogicalVolume: %s holds the pool %s and no volume, and carries no %s marker, so the pool is not known to be this layer's interrupted work; nothing was removed",
+			l.cfg.VolumeGroup, l.cfg.PoolName, creatingMarker)
+	}
+
+	pool := lvm.LogicalVolume{VolumeGroup: l.group(), Name: l.cfg.PoolName}
+	if err := l.cfg.Manager.RemoveLogicalVolume(ctx, pool); err != nil {
+		return fmt.Errorf("lvmLogicalVolume: remove the orphaned pool: %w", err)
+	}
+	return l.create(ctx)
 }
 
 // Release does nothing, because what holds a logical volume on a host is its

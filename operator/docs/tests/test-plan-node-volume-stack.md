@@ -92,19 +92,25 @@ File: `atlas-lib/volstack/runner_test.go` (new)
 
 File: `atlas-lib/volstack/layers/state_test.go` (new)
 
-| #    | Scenario                                                                                                                                                           | Type       | Test |
-|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------|
-| U-30 | A device carrying no LVM signature classifies as `StateAbsent`                                                                                                     | Positive   | —    |
-| U-31 | A volume group with its logical volume present classifies as `StateReady`                                                                                          | Positive   | —    |
-| U-32 | A volume group present but reporting zero logical volumes classifies as `StatePartial`, not `StateReady`                                                           | Boundary   | —    |
-| U-33 | A volume group present, complete, and not activated classifies as `StateInactive`, not `StateAbsent`                                                               | Boundary   | —    |
-| U-34 | A device whose on-disk volume group belongs to another volume classifies as `StateForeign`                                                                         | Negative   | —    |
-| U-35 | `Ensure` on `StateInactive` activates and issues no `vgcreate`, `lvcreate`, or `mkfs`, asserted by the command runner's recorded calls                             | Negative   | —    |
-| U-36 | `Ensure` on `StateForeign` re-identifies before activating, asserted by the order of the recorded calls                                                            | Positive   | —    |
-| U-37 | `Ensure` on `StatePartial` completes the object and does not recreate the volume group                                                                             | Positive   | —    |
-| U-38 | An LVM probe whose output carries a `WARNING:` line ahead of the field value still classifies correctly, which a byte-level clone produces (pins PR #402 defect 7) | Regression | —    |
-| U-39 | A probe that fails outright classifies as `StateAbsent` rather than propagating an error, matching the "nothing to resolve" reading                                | Boundary   | —    |
-| U-40 | An unformatted device classifies as `StateAbsent` for the filesystem layer, and a formatted one as `StateInactive` when unmounted                                  | Positive   | —    |
+| #    | Scenario                                                                                                                                                                                                                       | Type       | Test                                                |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-30 | A device carrying no LVM signature classifies as `StateAbsent`                                                                                                                                                                 | Positive   | —                                                   |
+| U-31 | A volume group with its logical volume present classifies as `StateReady`                                                                                                                                                      | Positive   | —                                                   |
+| U-32 | A volume group present but reporting zero logical volumes classifies as `StatePartial`, not `StateReady`                                                                                                                       | Boundary   | —                                                   |
+| U-33 | A volume group present, complete, and not activated classifies as `StateInactive`, not `StateAbsent`                                                                                                                           | Boundary   | —                                                   |
+| U-34 | A device whose on-disk volume group belongs to another volume classifies as `StateForeign`                                                                                                                                     | Negative   | —                                                   |
+| U-35 | `Ensure` on `StateInactive` activates and issues no `vgcreate`, `lvcreate`, or `mkfs`, asserted by the command runner's recorded calls                                                                                         | Negative   | —                                                   |
+| U-36 | `Ensure` on `StateForeign` re-identifies before activating, asserted by the order of the recorded calls                                                                                                                        | Positive   | —                                                   |
+| U-37 | `Ensure` on `StatePartial` completes the object and does not recreate the volume group                                                                                                                                         | Positive   | —                                                   |
+| U-38 | An LVM probe whose output carries a `WARNING:` line ahead of the field value still classifies correctly, which a byte-level clone produces (pins PR #402 defect 7)                                                             | Regression | —                                                   |
+| U-39 | A probe that fails outright classifies as `StateAbsent` rather than propagating an error, matching the "nothing to resolve" reading                                                                                            | Boundary   | —                                                   |
+| U-40 | An unformatted device classifies as `StateAbsent` for the filesystem layer, and a formatted one as `StateInactive` when unmounted                                                                                              | Positive   | —                                                   |
+| U-86 | A create tags the volume group `simplyblock.creating` before `lvcreate` and removes the tag after it, asserted by the order of the recorded calls (pins the 2026-09-26 interrupted `lvcreate --type vdo`, e2e run 36219557238) | Regression | `TestLVMVolumeCreateMarksTheGroupAroundLvcreate`    |
+| U-87 | `Ensure` on `StatePartial` over a group holding only the pool, under the marker, removes the pool before rerunning `lvcreate`, and takes the marker off only after the create                                                  | Regression | `TestLVMVolumeRecoversItsOwnInterruptedPoolCreate`  |
+| U-88 | `Ensure` on `StatePartial` over a pool without the marker refuses, names the pool, and issues neither `lvremove` nor `lvcreate`                                                                                                | Regression | `TestLVMVolumeRefusesAPoolWithoutItsMarker`         |
+| U-89 | `Ensure` on `StatePartial` over the pool beside another volume refuses even with the marker present, names the other volume, and removes nothing                                                                               | Regression | `TestLVMVolumeRefusesAPoolBesideAnotherVolume`      |
+| U-90 | `Ensure` on `StatePartial` over a group holding a volume that is not this one, for a plain type, refuses and issues no `lvcreate`                                                                                              | Regression | `TestLVMVolumeRefusesAForeignVolumeInItsGroup`      |
+| U-91 | `Ensure` on `StateInactive` or `StateReady` over a group still carrying the marker clears it and creates nothing, so a failed `--deltag` after a successful `lvcreate` cannot leave stale permission behind                    | Regression | `TestLVMVolumeClearsAStaleMarkerFromACompleteGroup` |
 
 ### Artifact and Geometry Propagation (design §4.3)
 
@@ -401,16 +407,18 @@ nobody will release.
 
 | Class          | Scenarios | Covered | Not covered                           |
 |----------------|-----------|---------|---------------------------------------|
-| Unit           | 85        | 3       | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
+| Unit           | 91        | 9       | U-01 … U-70, U-73 … U-76, U-78 … U-85 |
 | Integration    | 15        | 0       | I-01 … I-15                           |
 | E2E            | 27        | 10      | E-11 … E-27                           |
 | Unit — Phase 4 | 7         | 0       | U-P4-01 … U-P4-07                     |
 | Manual         | 4         | 0       | M-01 … M-04                           |
 
-The three covered unit scenarios are existing tests whose behavior this design
-preserves rather than introduces: `TestDisconnectGlobOnLastNamespace` (U-71),
-`TestDisconnectGlobOnRealNode` (U-72), and
-`TestMatchNamespaceDeviceRejectsNeighbouringNamespaces` (U-77). The ten covered
+Three of the covered unit scenarios are existing tests whose behavior this
+design preserves rather than introduces: `TestDisconnectGlobOnLastNamespace`
+(U-71), `TestDisconnectGlobOnRealNode` (U-72), and
+`TestMatchNamespaceDeviceRejectsNeighbouringNamespaces` (U-77). The other six
+(U-86 … U-91) pin the interrupted-create recovery of 2026-09-26 and are in
+`atlas-lib/volstack/layers/lvmvolume_test.go`. The ten covered
 end-to-end scenarios are the existing suite, which is the assertion that Phase 1
 changes nothing observable (design §16).
 
