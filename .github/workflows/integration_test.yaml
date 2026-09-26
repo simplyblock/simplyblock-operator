@@ -32,6 +32,87 @@ env:
   TALOSCTL_VERSION: v1.13.8
 
 jobs:
+  # The on-node suite on the runner's own kernel, for the cases the Talos cluster
+  # cannot host. Talos builds no dm-vdo, so a VDO plan never gets past activation
+  # there and its cases skip. The runner's Ubuntu kernel carries dm-vdo, nvmet,
+  # and nvme-tcp as modules. The suite runs in the driver image with the runner
+  # as both target and initiator, the same collapse onto one machine the suite
+  # already handles on a Talos node, and needs no cluster at all: the on-node
+  # binary drives the volume stack itself, and Kubernetes was only ever how the
+  # Talos harness got it onto a Linux kernel.
+  #
+  # A case that skips here is a failure, not a pass. The whole point of this job
+  # is to run what the cluster job cannot, and a skip would report green for a
+  # kernel or an image that never exercised the stack.
+  onnode-runner:
+    name: On-node suite on the runner kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NQN: nqn.2024-01.io.simplyblock.integration:runner
+      # The build workflow passes the image it has just published. On its own,
+      # this job falls back to the newest published driver image.
+      STACK_IMAGE: ${{ inputs.csi_image || 'docker.io/simplyblock/spdkcsi:main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      # Named one by one, so that a kernel missing one of them says which, and
+      # the run reads as a kernel the job cannot use rather than as a stack that
+      # failed to come up.
+      - name: Load the kernel modules the fabric and the stack need
+        run: |
+          uname -r
+          for m in nvmet nvmet-tcp nvme-tcp dm-vdo; do
+            sudo modprobe "$m" || { echo "::error::the runner kernel $(uname -r) cannot load $m"; exit 1; }
+          done
+          lsmod | grep -E '^(nvmet|nvmet_tcp|nvme_tcp|dm_vdo) '
+
+      - name: Build the on-node suite
+        working-directory: test/integration
+        run: CGO_ENABLED=0 go test -c -o /tmp/onnode.test ./onnode/
+
+      # The same configfs steps the fabric package performs on a Talos node,
+      # against a loop device over a sparse file. Sparse and generous, because
+      # a VDO pool spends gigabytes on its own index before a volume gets any.
+      - name: Publish a namespace over NVMe-oF TCP on loopback
+        run: |
+          set -e
+          IMG=/var/tmp/nvmet/runner-ns1.img
+          sudo mkdir -p "$(dirname "$IMG")"
+          sudo truncate -s 12G "$IMG"
+          DEV=$(sudo losetup -f --show "$IMG")
+          C=/sys/kernel/config/nvmet
+          S="$C/subsystems/$NQN"
+          P="$C/ports/1"
+          N="$S/namespaces/1"
+          sudo sh -c "mkdir -p '$S' && echo 1 > '$S/attr_allow_any_host' \
+            && mkdir -p '$N' && echo '$DEV' > '$N/device_path' && echo 1 > '$N/enable' \
+            && mkdir -p '$P' && echo ipv4 > '$P/addr_adrfam' && echo tcp > '$P/addr_trtype' \
+            && echo 127.0.0.1 > '$P/addr_traddr' && echo 4420 > '$P/addr_trsvcid' \
+            && ln -sfn '$S' '$P/subsystems/$NQN'"
+          echo "published $NQN over $DEV on 127.0.0.1:4420"
+
+      # Only the VDO cases: the rest of the suite runs on the cluster job next to
+      # this one, and running it twice would report the same names twice.
+      - name: Run the VDO cases in the driver image
+        run: |
+          set -o pipefail
+          docker run --rm --privileged --network host --pid host \
+            -v /dev:/dev -v /sys:/sys -v /lib/modules:/lib/modules:ro \
+            -v /tmp/onnode.test:/onnode.test:ro \
+            -e SB_ONNODE=1 -e SB_TARGET_NQN="$NQN" -e SB_TARGET_ADDR=127.0.0.1 \
+            -e SB_TARGET_PORT=4420 -e SB_TARGET_NSID=1 \
+            --entrypoint /onnode.test "$STACK_IMAGE" -test.v -test.run 'TestVDO' 2>&1 | tee onnode.log
+          if grep -q -- '--- SKIP: TestVDO' onnode.log; then
+            echo "::error::a VDO case skipped on the runner, which is the one place it must run"
+            exit 1
+          fi
+          grep -q -- '--- PASS: TestVDO' onnode.log
+
   # Boots a Talos cluster in QEMU and runs the suite against it. Separate from
   # the unit-test workflows because it needs hardware virtualization and takes
   # minutes rather than seconds.
