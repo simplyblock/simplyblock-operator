@@ -142,10 +142,13 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 				// atlas already reads from /sys.
 				initiator.MarkDevicePresent(device.DevicePath, lvolID)
 
+				// A subsystem with no live path is the case that most needs
+				// recovery, not one to skip: every controller the host held has
+				// gone, which is what an lvol migrated onto nodes this host has
+				// never connected to looks like from here. recoverPathsWithANA
+				// treats an empty path set as "connect the optimized path", so
+				// this falls through to it rather than returning.
 				numActive := len(subsystem.Paths)
-				if numActive == 0 {
-					continue
-				}
 
 				expected := resolveExpectedPathCount(subsystem.NQN, clusterID, lvolID, numActive, hostNQN)
 
@@ -226,9 +229,27 @@ func isNodeOnline(ctx context.Context, client *controlplane.ClusterClient, nodeI
 	return true
 }
 
+// subsystemsForDevice is the recheck's view of the host's NVMe topology, behind a
+// variable so a test can stand in for the one call that shells out to the host.
+var subsystemsForDevice = initiator.SubsystemsForDevice
+
 // confirmSubsystemNeedsRecovery re-checks the subsystem 5 times over 5 seconds
 // and returns true only if the path count remained stable at initialPathCount for
 // all 5 checks. This debounces spurious triggers during normal ANA switchovers.
+//
+// A subsystem that has disappeared entirely is not one of those spurious
+// triggers. An lvol migrated to a node pair this host never connected to leaves
+// exactly that trace: the ANA flip steers nothing, because ANA only orders paths
+// the host already holds, and deleting the source subsystems takes the rest away.
+// The host then has one ctrl_loss_tmo -- about a minute -- to be pointed at the
+// new location before the kernel removes the controllers and fails the I/O, and
+// answering "no recovery needed" spends that minute doing nothing.
+//
+// So a vanished subsystem asks for recovery instead of suppressing it.
+// recoverPathsWithANA re-resolves the volume against the control plane, which is
+// the only thing that knows where it went, and refuses to act on a volume the API
+// reports no connections for -- so a deleted volume still resolves to no
+// reconnect, just by a path that first goes and asks.
 func confirmSubsystemNeedsRecovery(
 	ctx context.Context,
 	subsystem *initiator.Subsystem,
@@ -236,7 +257,7 @@ func confirmSubsystemNeedsRecovery(
 	initialPathCount int,
 ) bool {
 	for i := 0; i < 5; i++ {
-		recheck, err := initiator.SubsystemsForDevice(ctx, devicePath)
+		recheck, err := subsystemsForDevice(ctx, devicePath)
 		if err != nil {
 			klog.Errorf("failed to recheck subsystems for device %s: %v", devicePath, err)
 			continue
@@ -255,8 +276,9 @@ func confirmSubsystemNeedsRecovery(
 		}
 
 		if !found {
-			klog.Warningf("Subsystem %s not found during recheck, assuming it's gone", subsystem.NQN)
-			return false
+			klog.Warningf("Subsystem %s is no longer on any path this host holds; "+
+				"re-resolving it against the control plane in case it moved", subsystem.NQN)
+			return true
 		}
 
 		time.Sleep(1 * time.Second)
