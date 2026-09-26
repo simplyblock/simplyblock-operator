@@ -219,3 +219,105 @@ func TestVDOStackConvergesAfterAnInterruptedPoolCreate(t *testing.T) {
 			h.volume.VolumeGroup(), got, h.volume.LogicalVolume())
 	}
 }
+
+// The recovery above removes a pool, and the only thing that makes that safe is
+// the reading it is gated on: the pool alone, under the marker. This is the
+// other reading, and the one that costs data if it is ever converged over: the
+// same group, the same marker, and a volume beside the pool that is not ours,
+// which is what an interrupted clone resolution leaves. The bring-up has to
+// refuse, and refusing has to leave the volume and its bytes where they were.
+//
+// Not red before the fix: the unchanged layer refused this shape too, by
+// accident, because the pool's name blocked its lvcreate. What this case pins is
+// that the recovery did not widen that into a removal.
+func TestVDOStackRefusesAPoolBesideSomebodysVolume(t *testing.T) {
+	requireLVM(t)
+	requireVDO(t)
+	h := newHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
+	defer cancel()
+
+	h.blank(ctx, h.targets[0])
+
+	options := plans.LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Deduplication: true},
+		PoolName:   vdoPoolName,
+	}
+	connection := h.targets[0].Connection()
+
+	// A complete volume first, so that there is data to lose.
+	plan := h.node.LVM(connection, h.volume, options)
+	art := h.up(ctx, plan)
+	want := []byte("somebody's data")
+	if err := os.WriteFile(filepath.Join(art.Path, "theirs"), want, 0o600); err != nil {
+		t.Fatalf("write into the staged filesystem: %v", err)
+	}
+	h.down(ctx, plan)
+
+	// Then the shape: the volume renamed out from under its own name, as a
+	// clone import that died before renaming it back would leave it, and the
+	// marker on the group, as the most permissive reading the gate could meet.
+	h.overGroup(ctx, h.targets[0], func(group string) {
+		run := func(args ...string) {
+			if out, err := h.node.manager.Run(ctx, args...); err != nil {
+				t.Fatalf("%v: %v\n%s", args, err, out)
+			}
+		}
+		run("vgchange", "-an", group)
+		run("lvrename", group, h.volume.LogicalVolume(), "somebody-elses")
+		run("vgchange", "--addtag", "simplyblock.creating", group)
+	})
+
+	_, err := h.runner().Up(ctx, h.handle(), plan)
+	if err == nil {
+		t.Fatal("a group holding somebody's volume beside the pool was converged over")
+	}
+	t.Logf("refused, as it must: %v", err)
+
+	// Untouched: the volume is still there under its name, and so are its bytes.
+	got := h.logicalVolumesIn(ctx, h.targets[0], h.volume.VolumeGroup())
+	slices.Sort(got)
+	if want := []string{"somebody-elses", vdoPoolName}; !slices.Equal(got, want) {
+		t.Fatalf("the refusal changed the group: holds %v, want %v", got, want)
+	}
+	h.overGroup(ctx, h.targets[0], func(group string) {
+		run := func(args ...string) string {
+			out, err := h.node.manager.Run(ctx, args...)
+			if err != nil {
+				t.Fatalf("%v: %v\n%s", args, err, out)
+			}
+			return out
+		}
+		run("vgchange", "-ay", group)
+		defer run("vgchange", "-an", group)
+		mount := t.TempDir()
+		if err := (shellFilesystem{}).Mount(ctx, "/dev/"+group+"/somebody-elses", mount, h.volume.FsType, nil); err != nil {
+			t.Fatalf("mount the renamed volume to read it back: %v", err)
+		}
+		defer func() { _ = (shellFilesystem{}).Unmount(ctx, mount) }()
+		got, err := os.ReadFile(filepath.Join(mount, "theirs")) //nolint:gosec // a path the test made
+		if err != nil {
+			t.Fatalf("the refusal lost the volume's data: %v", err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("the volume reads %q after the refusal, want %q", got, want)
+		}
+	})
+}
+
+// overGroup attaches the namespace, hands the group's name to fn, and detaches
+// again, for a case that has to reshape a group by hand between bring-ups.
+func (h *harness) overGroup(ctx context.Context, target Target, fn func(group string)) {
+	h.t.Helper()
+	plan := h.node.RawBlock(target.Connection())
+	handle := h.volume.UUID + "-reshape"
+	if _, err := h.runner().Up(ctx, handle, plan); err != nil {
+		h.t.Fatalf("attach %s in order to reshape its group: %v", target.NQN, err)
+	}
+	defer func() {
+		if err := h.runner().Down(ctx, handle, plan); err != nil {
+			h.t.Fatalf("detach %s after reshaping its group: %v", target.NQN, err)
+		}
+	}()
+	fn(h.volume.VolumeGroup())
+}
