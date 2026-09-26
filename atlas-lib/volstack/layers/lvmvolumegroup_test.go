@@ -357,3 +357,38 @@ func TestLVMVolumeGroupKeepsItsInformationalTagsCurrent(t *testing.T) {
 		t.Fatalf("the stale claim was not removed:\n%s", cmds.issued())
 	}
 }
+
+// A refusal is not device loss. Release falls back to unmapping by name when
+// LVM cannot answer, and a group that is not the driver's answers perfectly
+// well: it is refused. Unmapping it anyway would take a volume out from under
+// whoever holds it.
+func TestLVMVolumeGroupReleaseDoesNotUnmapAGroupThatIsNotItsOwn(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.unowned = true
+
+	err := l.Release(context.Background(), belowMembers(1))
+	if !errors.Is(err, lvm.ErrNotOwned) {
+		t.Fatalf("Release: %v, want ErrNotOwned", err)
+	}
+	if cmds.ran("dmsetup") {
+		t.Fatalf("the force path unmapped a group that is not ours:\n%s", cmds.issued())
+	}
+}
+
+// Our volume beside somebody's is not our stack with a stranger in it, it is a
+// group nobody can vouch for. Adoption tags every volume in the group, so the
+// group has to hold ours and the structural names and nothing else.
+func TestLVMVolumeGroupRefusesToAdoptAGroupHoldingAForeignVolumeBesideItsOwn(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	l.cfg.PreserveLogicalVolumes = []string{"vdopool"}
+	cmds.unowned = true
+	cmds.out["lvs:lv_name"] = "  " + testLV + "\n  vdopool\n  theirs\n"
+
+	_, err := l.Ensure(context.Background(), belowArtifact())
+	if !errors.Is(err, lvm.ErrNotOwned) {
+		t.Fatalf("Ensure: %v, want ErrNotOwned", err)
+	}
+	if cmds.indexOfWith("vgchange", "--addtag") >= 0 || cmds.ran("lvchange") {
+		t.Fatalf("the refusal adopted the group:\n%s", cmds.issued())
+	}
+}

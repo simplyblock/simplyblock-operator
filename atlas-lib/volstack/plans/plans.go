@@ -104,14 +104,31 @@ func LogicalVolumeName(uuid string) string { return logicalVolumePrefix + uuid }
 
 // RecognizeStack answers whether a group carrying no ownership tag is a stack of
 // this driver's from before the tag existed: one named by VolumeGroupName over a
-// volume named by LogicalVolumeName from the same UUID. Nothing else makes that
-// pair, so it is the one shape adoption accepts.
-func RecognizeStack(volumeGroup string, logicalVolumes []string) bool {
-	uuid, ok := strings.CutPrefix(volumeGroup, volumeGroupPrefix)
-	if !ok || uuid == "" {
+// volume named by LogicalVolumeName from the same UUID, and nothing else in it
+// but the structural volumes the stack makes for itself, which preserve names.
+// Nothing else makes that exact layout, so it is the one shape adoption accepts.
+func RecognizeStack(preserve ...string) lvm.StackRecognizer {
+	return func(volumeGroup string, logicalVolumes []string) bool {
+		uuid, ok := strings.CutPrefix(volumeGroup, volumeGroupPrefix)
+		if !ok || uuid == "" {
+			return false
+		}
+		return exactStack(LogicalVolumeName(uuid), logicalVolumes, preserve)
+	}
+}
+
+// exactStack reports whether logicalVolumes is the volume plus a subset of the
+// structural names, and nothing else.
+func exactStack(volume string, logicalVolumes, preserve []string) bool {
+	if !slices.Contains(logicalVolumes, volume) {
 		return false
 	}
-	return slices.Contains(logicalVolumes, LogicalVolumeName(uuid))
+	for _, name := range logicalVolumes {
+		if name != volume && !slices.Contains(preserve, name) {
+			return false
+		}
+	}
+	return true
 }
 
 // InformationalTags is what the group carries for whoever reads a node's LVM
@@ -215,7 +232,7 @@ func (n *Node) lvmStack(volume Volume, options LogicalVolumeOptions) volstack.Pl
 func (n *Node) lvmStackRaw(volume Volume, options LogicalVolumeOptions) volstack.Plan {
 	return volstack.Plan{
 		n.physicalVolume(volume, options),
-		n.volumeGroup(volume),
+		n.volumeGroup(volume, options),
 		n.logicalVolume(volume, options),
 	}
 }

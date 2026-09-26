@@ -535,3 +535,27 @@ func TestANodeWithoutAManagerStillGetsOne(t *testing.T) {
 		t.Log("the volume-group layer answered without an LVM present, which is fine")
 	}
 }
+
+// The one shape adoption accepts, and the shapes next to it that it does not.
+func TestRecognizeStackAcceptsOnlyTheDriversLayout(t *testing.T) {
+	recognize := RecognizeStack("vdopool")
+	for name, tt := range map[string]struct {
+		group   string
+		volumes []string
+		want    bool
+	}{
+		"the volume alone":              {"vol-abc", []string{"lv-abc"}, true},
+		"the volume and its pool":       {"vol-abc", []string{"vdopool", "lv-abc"}, true},
+		"a foreign volume beside ours":  {"vol-abc", []string{"lv-abc", "theirs"}, false},
+		"the pool without the volume":   {"vol-abc", []string{"vdopool"}, false},
+		"another volume's name":         {"vol-abc", []string{"lv-xyz"}, false},
+		"not the driver's group prefix": {"data", []string{"lv-data"}, false},
+		"the prefix and nothing after":  {"vol-", []string{"lv-"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := recognize(tt.group, tt.volumes); got != tt.want {
+				t.Errorf("RecognizeStack(%q, %v) = %v, want %v", tt.group, tt.volumes, got, tt.want)
+			}
+		})
+	}
+}

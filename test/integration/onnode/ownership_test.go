@@ -32,11 +32,7 @@ func (h *harness) groupTags(ctx context.Context, target Target, group string) []
 		if err != nil {
 			h.t.Fatalf("read the tags of %s: %v", group, err)
 		}
-		for tag := range strings.SplitSeq(strings.TrimSpace(out), ",") {
-			if tag = strings.TrimSpace(tag); tag != "" {
-				tags = append(tags, tag)
-			}
-		}
+		tags = tagsOfLastLine(out)
 	})
 	return tags
 }
@@ -127,8 +123,15 @@ func (h *harness) groupTagsNow(ctx context.Context, group string) []string {
 	if err != nil {
 		h.t.Fatalf("read the tags of %s: %v", group, err)
 	}
+	return tagsOfLastLine(out)
+}
+
+// tagsOfLastLine reads a tags listing's value line, which comes after whatever
+// notices LVM printed first.
+func tagsOfLastLine(out string) []string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 	var tags []string
-	for tag := range strings.SplitSeq(strings.TrimSpace(out), ",") {
+	for tag := range strings.SplitSeq(strings.TrimSpace(lines[len(lines)-1]), ",") {
 		if tag = strings.TrimSpace(tag); tag != "" {
 			tags = append(tags, tag)
 		}
@@ -204,7 +207,10 @@ func TestLVMStackRefusesAGroupThatIsNotItsOwn(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read the group back: %v", err)
 				}
-				fields := strings.Fields(out)
+				// The last line: LVM prints its notices about the harness's
+				// lvm.conf ahead of the report, on the same stream.
+				lines := strings.Split(strings.TrimSpace(out), "\n")
+				fields := strings.Fields(lines[len(lines)-1])
 				if len(fields) < 2 || fields[0] != group || fields[1] != "theirs" || strings.Contains(out, lvm.OwnerTag) {
 					t.Fatalf("the refusal changed the group: %q", strings.TrimSpace(out))
 				}

@@ -35,6 +35,11 @@ type LVMVolumeGroupConfig struct {
 	// that name, is adopted and tagged. One that is not is refused.
 	LogicalVolume string
 
+	// PreserveLogicalVolumes are the structural volumes a stack makes for itself
+	// beside the one above, a VDO pool being the one that exists today. They are
+	// the only company the volume may have in a group adoption accepts.
+	PreserveLogicalVolumes []string
+
 	// Tags are the informational tags the group carries for whoever reads the
 	// node's LVM metadata, rendered by lvm.InformationalTag. They are made to
 	// match on every bring-up, because the claim a volume belongs to can change,
@@ -223,17 +228,24 @@ func (l *LVMVolumeGroup) ensureOwned(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("lvmVolumeGroup: list the volumes in %s: %w", l.cfg.VolumeGroup, err)
 	}
+	// Exactly our volume and the structural names, and nothing else. Adoption
+	// tags every volume in the group, so a stranger beside ours is a group
+	// nobody can vouch for, not our stack with a passenger.
 	names := make([]string, 0, len(volumes))
-	complete := false
+	ours := false
+	strangers := false
 	for _, v := range volumes {
 		names = append(names, v.Name)
-		if v.Name == l.cfg.LogicalVolume {
-			complete = true
+		switch {
+		case v.Name == l.cfg.LogicalVolume:
+			ours = true
+		case !slices.Contains(l.cfg.PreserveLogicalVolumes, v.Name):
+			strangers = true
 		}
 	}
-	if !complete {
+	if !ours || strangers {
 		return fmt.Errorf(
-			"lvmVolumeGroup: %w: %s carries no %s tag and holds %v rather than %s, so it is not a stack of this driver's from before the tag; nothing was changed",
+			"lvmVolumeGroup: %w: %s carries no %s tag and holds %v rather than %s alone, so it is not a stack of this driver's from before the tag; nothing was changed",
 			lvm.ErrNotOwned, l.cfg.VolumeGroup, lvm.OwnerTag, names, l.cfg.LogicalVolume)
 	}
 	if err := l.cfg.Manager.AdoptVolumeGroup(ctx, l.group()); err != nil {
@@ -251,8 +263,15 @@ func (l *LVMVolumeGroup) ensureOwned(ctx context.Context) error {
 // device-mapper nodes are removed directly. That escaping has to double the
 // dashes the way device-mapper does, or it matches nothing.
 func (l *LVMVolumeGroup) Release(ctx context.Context, below volstack.Artifact) error {
-	if err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group()); err == nil {
+	err := l.cfg.Manager.DeactivateVolumeGroup(ctx, l.group())
+	if err == nil {
 		return nil
+	}
+	if errors.Is(err, lvm.ErrNotOwned) {
+		// Not device loss: LVM answered, and what it said is that the group is
+		// not the driver's. The force path unmaps by name, and a name is the
+		// one thing this group shares with ours.
+		return fmt.Errorf("lvmVolumeGroup: %w", err)
 	}
 	if err := l.cfg.Manager.RemoveOrphanedDMNodes(ctx, l.group()); err != nil {
 		return fmt.Errorf("lvmVolumeGroup: %w", err)

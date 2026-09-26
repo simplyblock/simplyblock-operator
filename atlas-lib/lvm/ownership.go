@@ -87,22 +87,28 @@ func (m *Manager) requireOwnedDevice(ctx context.Context, pv PhysicalVolume) err
 // group the caller has established is the driver's by other means: one made
 // before the tag existed. It is the one write in this package that does not
 // require the tag first, and the caller's evidence is the whole of its safety.
+//
+// The volumes are tagged first and the group last, so that the group's tag is
+// the commit: an adoption that died between the two leaves a group that still
+// reads as unowned, and the next bring-up runs the whole of it again. Tagging a
+// volume twice is nothing to LVM.
 func (m *Manager) AdoptVolumeGroup(ctx context.Context, volumeGroup VolumeGroup) error {
-	if _, err := m.exec(ctx, nil, "vgchange", "--addtag", OwnerTag, volumeGroup.Name); err != nil {
-		return fmt.Errorf("adopt VG %s: %w", volumeGroup.Name, err)
-	}
-	if _, err := m.exec(ctx, nil, "lvchange", "--addtag", OwnerTag, volumeGroup.Name); err != nil {
-		return fmt.Errorf("adopt the volumes in VG %s: %w", volumeGroup.Name, err)
-	}
-	return nil
+	return m.adopt(ctx, nil, volumeGroup)
 }
 
 // adoptOnDevice is AdoptVolumeGroup scoped to one device, for a clone whose
 // group still carries its source's name and UUID: unscoped, the command could
 // find the source instead.
 func (m *Manager) adoptOnDevice(ctx context.Context, pv PhysicalVolume, volumeGroup VolumeGroup) error {
-	if _, err := m.exec(ctx, []string{pv.DevicePath}, "vgchange", "--addtag", OwnerTag, volumeGroup.Name); err != nil {
-		return fmt.Errorf("adopt VG %s on %s: %w", volumeGroup.Name, pv.DevicePath, err)
+	return m.adopt(ctx, []string{pv.DevicePath}, volumeGroup)
+}
+
+func (m *Manager) adopt(ctx context.Context, devices []string, volumeGroup VolumeGroup) error {
+	if _, err := m.exec(ctx, devices, "lvchange", "--addtag", OwnerTag, volumeGroup.Name); err != nil {
+		return fmt.Errorf("adopt the volumes in VG %s: %w", volumeGroup.Name, err)
+	}
+	if _, err := m.exec(ctx, devices, "vgchange", "--addtag", OwnerTag, volumeGroup.Name); err != nil {
+		return fmt.Errorf("adopt VG %s: %w", volumeGroup.Name, err)
 	}
 	return nil
 }

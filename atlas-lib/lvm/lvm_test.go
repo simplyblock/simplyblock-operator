@@ -3,6 +3,7 @@ package lvm
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,16 @@ type fakeRunner struct {
 func (f *fakeRunner) run(_ context.Context, args ...string) (string, error) {
 	f.calls = append(f.calls, args)
 	key := joinKey(args)
+	// An adoption is what makes a group read as owned from then on: unscoped,
+	// every later listing answers with the tag; on a device, that device does.
+	if args[0] == "vgchange" && slices.Contains(args, "--addtag") && slices.Contains(args, OwnerTag) {
+		if args[1] == "--devices" {
+			dev, group := args[2], args[len(args)-1]
+			f.out[joinKey([]string{"pvs", "--devices", dev, "--noheadings", "-o", "vg_name,vg_tags", dev})] = "  " + group + " " + OwnerTag + "\n"
+		} else {
+			f.unowned = false
+		}
+	}
 	if out, ok := f.out[key]; ok || f.err[key] != nil {
 		return out, f.err[key]
 	}

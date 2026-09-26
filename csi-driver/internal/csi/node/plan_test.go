@@ -8,8 +8,9 @@
 package node
 
 import (
-	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"testing"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // An encrypted volume is planned as one whose content cannot be read, because

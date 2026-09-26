@@ -108,9 +108,12 @@ func TestAdoptVolumeGroupTagsTheGroupAndItsVolumes(t *testing.T) {
 	if err := NewManagerWithRunner(fake.run).AdoptVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); err != nil {
 		t.Fatalf("AdoptVolumeGroup: %v", err)
 	}
+	// The volumes first and the group last, so that the group's tag is the
+	// commit: an adoption that died between the two is retried whole, since the
+	// group still reads as unowned.
 	want := [][]string{
-		{"vgchange", "--addtag", OwnerTag, "vg1"},
 		{"lvchange", "--addtag", OwnerTag, "vg1"},
+		{"vgchange", "--addtag", OwnerTag, "vg1"},
 	}
 	if !reflect.DeepEqual(fake.calls, want) {
 		t.Fatalf("issued %v, want %v", fake.calls, want)
@@ -164,14 +167,12 @@ func TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource(t *testing.
 	lvs := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vdo-clone1"})
 	driverShaped := func(group string, volumes []string) bool { return group == "vdo-source" && len(volumes) == 2 }
 
-	t.Run("recognized: adopted on the device, then imported", func(t *testing.T) {
+	t.Run("recognized: adopted on the device, volumes and group, then imported", func(t *testing.T) {
 		fake := &fakeRunner{
 			out: map[string]string{pvs: "vdo-source\n", owned: "  vdo-source\n", lvsOn: "  vdopool\n  source-lv\n", lvs: "  vdopool\n  source-lv\n"},
 			err: map[string]error{},
 		}
 		mgr := NewManagerWithRunner(fake.run)
-		// Once adopted, the device answers with the tag.
-		fake.out[owned] = "  vdo-source " + OwnerTag + "\n"
 		_, err := mgr.ResolveClonedVolumeGroup(context.Background(), PhysicalVolume{DevicePath: "/dev/nvme1n1"},
 			VolumeGroup{Name: "vdo-clone1"}, "clone1", driverShaped, "vdopool")
 		if err != nil {
@@ -179,6 +180,8 @@ func TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource(t *testing.
 		}
 		want := [][]string{
 			{"pvscan", "--devices", "/dev/nvme1n1", "--cache"},
+			{"lvchange", "--devices", "/dev/nvme1n1", "--addtag", OwnerTag, "vdo-source"},
+			{"vgchange", "--devices", "/dev/nvme1n1", "--addtag", OwnerTag, "vdo-source"},
 			{"vgimportclone", "--devices", "/dev/nvme1n1", "--basevgname", "vdo-clone1", "/dev/nvme1n1"},
 			{"lvrename", "vdo-clone1", "source-lv", "clone1"},
 		}
@@ -203,4 +206,24 @@ func TestResolveClonedVolumeGroupRecognizesOrRefusesAnUntaggedSource(t *testing.
 			}
 		}
 	})
+}
+
+// LVM prints its notices ahead of a report's values and on the same stream, and
+// the harness's own lvm.conf makes it print two of them before every listing. A
+// reading that took the first line would take the notice for the value, which
+// on a tags listing reads as a group that is not the driver's.
+func TestListingsSkipTheNoticesLVMPrintsFirst(t *testing.T) {
+	vg := VolumeGroup{Name: "vg1"}
+	key := joinKey([]string{"vgs", "--noheadings", "-o", "vg_tags", "vg1"})
+	out := "Please remove the lvm.conf global_filter, it is ignored with the devices file.\n" +
+		"  Please remove the lvm.conf filter, it is ignored with the devices file.\n" +
+		"  " + OwnerTag + "\n"
+	fake := &fakeRunner{out: map[string]string{key: out}, err: map[string]error{}}
+	got, err := NewManagerWithRunner(fake.run).VolumeGroupTags(context.Background(), vg)
+	if err != nil {
+		t.Fatalf("VolumeGroupTags: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{OwnerTag}) {
+		t.Fatalf("tags = %v, want only %s", got, OwnerTag)
+	}
 }

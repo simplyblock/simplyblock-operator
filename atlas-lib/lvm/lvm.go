@@ -157,7 +157,11 @@ func (m *Manager) exec(ctx context.Context, devices []string, args ...string) (s
 func firstRealLine(out string) string {
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "WARNING:") {
+		// LVM's notices come first and on the same stream: "WARNING:" lines,
+		// and the "Please remove the lvm.conf filter" pair a devices file
+		// prints under a filtered configuration. One of them read as a value
+		// is a group that reads as nobody's.
+		if line == "" || strings.HasPrefix(line, "WARNING:") || strings.HasPrefix(line, "Please ") {
 			continue
 		}
 		return line

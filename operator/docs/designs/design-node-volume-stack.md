@@ -751,16 +751,22 @@ decided what may be labeled. Two operations cannot check and say so where they
 are `pvcreate`, because the device carries no group yet, which is why
 `lvmPhysicalVolume` decides from the device's content (§5.3), and the
 device-mapper force path of §5.4, which unmaps nodes on this host after LVM has
-stopped answering and changes nothing on the device.
+stopped answering and changes nothing on the device. A refusal is not device
+loss: `lvmVolumeGroup`'s release reaches the force path only when LVM could not
+answer, and returns the refusal without unmapping anything.
 
 **A group from before the tag is adopted by its shape, and only by its shape.**
 The one shape nothing makes by accident is a complete stack under the driver's
 names: a group named `vol-<uuid>` holding a volume named `lv-<uuid>` from the same
-UUID. `lvmVolumeGroup` meets that case on the group it is named for and adopts it
+UUID, and beside it nothing but the structural volumes the stack makes for itself
+(§5.3's preserved names). A stranger beside the volume makes the group one nobody
+can vouch for, since adoption tags every volume in it. `lvmVolumeGroup` meets that case on the group it is named for and adopts it
 before it touches anything else, which puts the tag on the group and on its
 volumes. `lvmPhysicalVolume` meets it on a clone whose source predates the tag,
 where the group still carries the source's name, and recognizes it through
-`plans.RecognizeStack` before the re-identification of §5.3 runs. A group under
+`plans.RecognizeStack` before the re-identification of §5.3 runs. Adoption tags the
+volumes first and the group last, so the group's tag is the commit: an adoption
+that dies between the two is retried whole. A group under
 the driver's name that holds anything else, and a group under any other name that
 the recognizer does not know, are somebody's, and both are refused with what was
 found in the message. A refusal is the only outcome that leaves no way to lose a
