@@ -1897,6 +1897,11 @@ func (r *StorageNodeOpsReconciler) succeedOps(
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded
 	ops.Status.SubPhase = ""
+	// Message is progress commentary for a running op -- the last step's pause
+	// or wait. Left in place it outlived the op: a Succeeded drain kept
+	// reporting "drain paused: cluster status is in_shrink" (2026-09-26).
+	// failOps writes the reason; success has nothing to add to the phase.
+	ops.Status.Message = ""
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{}, err

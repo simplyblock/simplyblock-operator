@@ -265,8 +265,12 @@ func TestDrainRemove_SendsTheDeleteOnceAndWaitsForTheNode(t *testing.T) {
 	if _, err := r.drainRemove(context.Background(), ops, sn, "cluster-uuid", client); err != nil {
 		t.Fatalf("third pass: %v", err)
 	}
-	if got := reloadOps(t, r).Status.Phase; got != simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
-		t.Errorf("phase: got %q, want Succeeded once the node reads removed", got)
+	final := reloadOps(t, r)
+	if final.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
+		t.Errorf("phase: got %q, want Succeeded once the node reads removed", final.Status.Phase)
+	}
+	if final.Status.Message != "" {
+		t.Errorf("a Succeeded op still carries progress commentary: %q", final.Status.Message)
 	}
 	if deletes != 1 {
 		t.Errorf("the DELETE was sent %d times, want 1", deletes)
