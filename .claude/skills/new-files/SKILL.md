@@ -93,6 +93,14 @@ The comment is prose, so the `house-style` skill applies to it: American
 English, the lowercase `simplyblock` brand, the Oxford comma, and the gates that
 check all three (comments in Go, Python, and YAML are checked).
 
+**A new file under `operator/api/**` inverts the middle bullet.** Its comments
+are published: controller-gen copies them into the CRD description that ships in
+the chart and that `kubectl explain` prints, so they are written for a user who
+has no repository. Why the type lives in this package, which design document
+settled it, and what the generators do with it are all invisible to that reader
+and belong in the design document instead. The rule is `house-style`, "A
+published comment is written for someone without the source."
+
 ## Where the file goes, and what to run after
 
 | New file                     | Directory                                                 | After adding it                                                                                           |
