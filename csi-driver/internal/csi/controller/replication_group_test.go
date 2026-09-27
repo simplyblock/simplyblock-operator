@@ -55,6 +55,26 @@ func TestEnableVolumeReplicationRoutesAGroupHandle(t *testing.T) {
 	}
 }
 
+// The group fail-over target has no reverse policy on its VolumeGroupReplication
+// class either, so Enable on the cg: handle must be a no-op there; PromoteGroup
+// clones and reconstitutes the group. Regression: 2026-09-27-failover-empty-policy.
+func TestEnableVolumeReplicationEmptyPolicyIsNoOpForGroup(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newGroupReplTestServer(t, mock)
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(vgGroupHandle),
+		Parameters:        map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("empty policy should be a no-op on the group fail-over target, got: %v", err)
+	}
+	if got := mock.groups[vgGroupID].PolicyID; got != "" {
+		t.Fatalf("group policy = %q, want empty (nothing attached when no policy)", got)
+	}
+}
+
 func TestDisableVolumeReplicationRoutesAGroupHandle(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()

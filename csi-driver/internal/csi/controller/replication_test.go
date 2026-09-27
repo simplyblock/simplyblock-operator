@@ -131,7 +131,7 @@ func TestEnableVolumeReplicationResolvesToTargetWhenGivenTheSourceSideOfARelatio
 }
 
 // simplyblock's replication is one-way and the destination never carries a
-// persistent, independently-provisioned LVol of its own (confirmed live
+// persistent, independently provisioned LVol of its own (confirmed live
 // 2026-09-23, relocate M-02): the writable clone only comes into existence
 // when PromoteVolume clones the last replicated snapshot. csi-addons always
 // calls EnableVolumeReplication before PromoteVolume, unconditionally, for
@@ -157,7 +157,15 @@ func TestEnableVolumeReplicationNoOpsWhenVolumeDoesNotExistYet(t *testing.T) {
 	}
 }
 
-func TestEnableVolumeReplicationMissingPolicyParam(t *testing.T) {
+// An empty replicationPolicyID is the FAIL-OVER TARGET: the side becoming
+// primary carries no reverse-direction policy yet (the reverse direction is a
+// fail-back-time concern, design-ramen-integration.md §6.2). csi-addons always
+// calls Enable before Promote for the side becoming Primary, so Enable must be a
+// no-op here -- there is nothing to attach, and PromoteVolume clones from the
+// replicated snapshot and does the real work. Rejecting it as "required" blocked
+// every fail-over whose target VolumeReplicationClass had no policy.
+// Regression: 2026-09-27-failover-empty-policy.
+func TestEnableVolumeReplicationEmptyPolicyIsNoOp(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
 	cs := newReplicationTestServer(t, mock)
@@ -165,9 +173,11 @@ func TestEnableVolumeReplicationMissingPolicyParam(t *testing.T) {
 	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
 		VolumeId: testReplVolID,
 	})
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Errorf("code = %v, want InvalidArgument", st.Code())
+	if err != nil {
+		t.Fatalf("empty policy should be a no-op on the fail-over target, got: %v", err)
+	}
+	if got := mock.volumes[testReplVolumeID].ReplicationPolicyID; got != "" {
+		t.Errorf("ReplicationPolicyID = %q, want empty (nothing attached when no policy)", got)
 	}
 }
 

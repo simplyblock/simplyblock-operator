@@ -138,9 +138,19 @@ func (cs *Server) EnableVolumeReplication(
 	req *replication.EnableVolumeReplicationRequest,
 ) (*replication.EnableVolumeReplicationResponse, error) {
 	policyID := req.GetParameters()[replicationPolicyParam]
+	// An empty replicationPolicyID is the FAIL-OVER TARGET: the side becoming
+	// primary carries no reverse-direction policy yet, because the reverse
+	// direction is a fail-back-time concern (design-ramen-integration.md §6.2) --
+	// nothing on that side replicates until it becomes primary. csi-addons always
+	// calls Enable before Promote for whichever side is becoming Primary, so this
+	// Enable is a legitimate no-op there: there is nothing to attach, and
+	// Promote/PromoteGroup is what clones the replicated snapshot (and, for a
+	// group, reconstitutes it) and does the real work. Rejecting it as a hard
+	// "required" error blocked every fail-over whose target class had no policy,
+	// both per-volume and group. Mirrors the per-volume ErrNotFound tolerance
+	// below (Enable handed a handle that names nothing yet).
 	if policyID == "" {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"VolumeReplicationClass parameter %q is required", replicationPolicyParam)
+		return &replication.EnableVolumeReplicationResponse{}, nil
 	}
 	// A group handle drives the whole consistency group as one unit through the
 	// group-replication endpoints (design §14.4); a per-volume handle takes the
