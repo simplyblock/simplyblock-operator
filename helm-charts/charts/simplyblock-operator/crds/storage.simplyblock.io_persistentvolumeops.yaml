@@ -73,9 +73,8 @@ spec:
               PersistentVolumeOpsSpec is one operation to perform against one
               PersistentVolume.
 
-              The rule keeps the action and its parameter block in agreement, which is a
-              statement about this object alone and so belongs on the type rather than in
-              the webhook.
+              The action and its parameter block have to agree: Migrate requires
+              spec.migrate, and no other action accepts it.
             properties:
               abort:
                 description: |-
@@ -368,10 +367,9 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the running action's state machine, as the shared
-                  statemachine.KubeSnapshot. It is persisted before the side effect that
-                  step performs. The rule is what an Enum marker would do if a marker could
-                  reach a field of a shared type.
+                  Step is the position of the running action's state machine. It is
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-

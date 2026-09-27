@@ -120,7 +120,7 @@ type StorageClusterOpsSpec struct {
 	// not delete the cluster it operated on.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
@@ -174,9 +174,8 @@ type StorageClusterOpsStatus struct {
 	// +optional
 	Phase StorageClusterOpsPhase `json:"phase,omitempty"`
 
-	// Step is the position of the running action's state machine, as the shared
-	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-	// marker could reach a field of a shared type.
+	// Step is the position of the running action's state machine. The value is
+	// one of the steps the running action declares.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers','ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

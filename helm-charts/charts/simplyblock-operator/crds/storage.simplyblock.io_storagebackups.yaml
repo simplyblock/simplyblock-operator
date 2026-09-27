@@ -252,7 +252,7 @@ spec:
                     With BackupID it is the whole of this object's identity.
 
                     Bounded at what a StorageCluster name may be, since a longer value names
-                    nothing that can exist (design-api-upgrade.md §19.4).
+                    nothing that can exist.
                   maxLength: 63
                   type: string
                   x-kubernetes-validations:
@@ -294,9 +294,8 @@ spec:
                       type: string
                     s3ID:
                       description: |-
-                        S3ID is the object behind the copy in the store. The appendix does not
-                        list it and §5.2 names it, and it is what somebody reconciling a bill
-                        against a bucket listing matches on.
+                        S3ID is the object behind the copy in the store. It is what somebody
+                        reconciling a bill against a bucket listing matches on.
                       format: int64
                       type: integer
                     size:
@@ -316,12 +315,10 @@ spec:
                 clusterID:
                   description: |-
                     ClusterID is the backend cluster whose stream this backup was last
-                    observed on. The appendix does not list it, and the mirror cannot work
-                    without it: an object outliving its backup has to say which scope's
+                    observed on. An object outliving its backup has to say which scope's
                     silence is authoritative before it may be deleted, and spec.clusterRef
-                    names a Kubernetes object rather than a backend one. It is the same field,
-                    for the same reason, that StorageDevice carries
-                    (design-storagedevice.md §5.1).
+                    names a Kubernetes object rather than a backend one. StorageDevice carries
+                    the same field for the same reason.
                   type: string
                 message:
                   description: |-
@@ -372,8 +369,7 @@ spec:
                       type: string
                     nodeID:
                       description: |-
-                        NodeID is the storage node the copy was read from. The appendix does not
-                        list it and §1 counts it among the twenty-two, and it belongs to the
+                        NodeID is the storage node the copy was read from. It belongs to the
                         source rather than to the copy: it says which machine held the data, which
                         is what somebody correlating a backup against a node failure needs.
                       type: string

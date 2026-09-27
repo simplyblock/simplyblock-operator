@@ -27,12 +27,12 @@ import (
 // rather than work to perform.
 //
 // It exists for one caller: the upgrade's absorption of a finished BackupRestore
-// into this kind (design-storagebackup.md §13). That object is an audit record
-// of a restore that ran under the old kind, and it is born into a world where
-// everything the admission checks look for is already true — the claim exists,
-// because the restore it records produced it, and the backup it names may have
-// been pruned years ago. Checking a record of the past against the present
-// rejects every object the absorption exists to preserve.
+// into this kind. That object is an audit record of a restore that ran under
+// the old kind, and it is born into a world where everything the admission
+// checks look for is already true: the claim exists, because the restore it
+// records produced it, and the backup it names may have been pruned years ago.
+// Checking a record of the past against the present rejects every object the
+// absorption exists to preserve.
 //
 // Two things read it, and both have to, or the marker would be worse than
 // nothing. The validator skips the reference checks, because the references
@@ -41,7 +41,7 @@ import (
 // volume and try to bind a claim that exists.
 //
 // A user can set it, and what that buys them is an inert object with references
-// nothing resolves — a false line in an audit log, which somebody able to create
+// nothing resolves, a false line in an audit log that somebody able to create
 // this kind can write in a dozen other ways. It buys them no action, which is
 // the property that matters: the controller refuses to run a marked operation
 // whoever wrote it.
@@ -141,7 +141,7 @@ type StorageBackupOpsSpec struct {
 	// ClusterRef names the StorageCluster the operation runs against.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
@@ -187,9 +187,8 @@ type StorageBackupOpsStatus struct {
 	Phase StorageBackupOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine. It is
-	// persisted before the side effect that step performs. The closed set is a
-	// CEL rule rather than an Enum marker because a marker cannot reach a field
-	// whose type is declared in another module.
+	// persisted before the side effect that step performs, so a step reported
+	// here is a step that started.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Restoring','AwaitingVolume','Binding']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

@@ -219,7 +219,7 @@ type DiscoverSpec struct {
 	// cluster.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`

@@ -190,10 +190,9 @@ type StorageNodeConfig struct {
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with, as a size string such as 4G or 512M. It carries no immutability
-	// marker, because a node whose device count grew legitimately needs it
-	// raised, and the webhook that guards spec.config is what decides who may
-	// raise it.
+	// with, as a size string such as 4G or 512M. It can be raised, because a
+	// node whose device count grew legitimately needs more, and who may raise it
+	// is decided at admission.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
@@ -298,7 +297,7 @@ type StorageNodeSpec struct {
 	// its nodes.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
@@ -313,9 +312,8 @@ type StorageNodeSpec struct {
 	NodeSet string `json:"nodeSet,omitempty"`
 
 	// WorkerNode is the Kubernetes worker hostname this node runs on. It is not
-	// marked immutable, because a migration re-points it, but the StorageNode
-	// validating webhook rejects any change made by an identity outside the
-	// operator's namespace.
+	// immutable, because a migration re-points it, but a change made by anything
+	// outside the operator's namespace is rejected.
 	// +kubebuilder:validation:Required
 	WorkerNode string `json:"workerNode"`
 
@@ -489,9 +487,8 @@ type StorageNodeStatus struct {
 	// +optional
 	Phase StorageNodePhase `json:"phase,omitempty"`
 
-	// Step is the position of the provisioning machine, as the shared
-	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-	// marker could reach a field of a shared type.
+	// Step is the position of the provisioning machine. The value is one of the
+	// steps that machine declares.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

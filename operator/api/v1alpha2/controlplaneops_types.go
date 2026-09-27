@@ -27,8 +27,8 @@ import (
 
 // ControlPlaneOpsAction is the operation a ControlPlaneOps performs. Every
 // action acts on what the operator installed, so every action requires a managed
-// control plane, and the validating webhook of §6 rejects an operation naming an
-// managed one at creation rather than letting it be created and fail.
+// control plane. An operation naming a control plane the operator did not
+// install is rejected at creation rather than created and failed.
 // +kubebuilder:validation:Enum=Restart;Upgrade;Backup
 type ControlPlaneOpsAction string
 
@@ -112,8 +112,8 @@ type UpgradeSpec struct {
 
 // RestartSpec parameterizes the Restart action and is ignored by the others.
 type RestartSpec struct {
-	// Components names the workloads to recycle, from the table in §4.3. Empty
-	// recycles the whole control plane. Naming only components that table marks
+	// Components names the workloads to recycle. Empty recycles the whole
+	// control plane. Naming only components that status.components reports as
 	// non-essential skips the drain, because recycling them interrupts nothing.
 	// +listType=set
 	// +optional
@@ -144,10 +144,8 @@ type BackupSpec struct {
 // spec.restart.components before Restarting recycles them. An edit in between
 // produces an operation that checked one thing and did another.
 //
-// The rules are declared here rather than as +k8s:immutable on each field.
-// controller-gen emits that marker's rules in an order that varies between runs
-// once a type carries several, and it freezes a block whole; what has to be
-// frozen is each block's presence together with its contents.
+// What is frozen is each parameter block's presence together with its
+// contents.
 // +kubebuilder:validation:XValidation:rule="has(self.upgrade) == has(oldSelf.upgrade) && (!has(self.upgrade) || self.upgrade == oldSelf.upgrade)",message="spec.upgrade is immutable: Preflight checked the image the operation was admitted with, and Applying writes it several steps later"
 // +kubebuilder:validation:XValidation:rule="has(self.restart) == has(oldSelf.restart) && (!has(self.restart) || self.restart == oldSelf.restart)",message="spec.restart is immutable: the drain is decided from the component list, so widening it afterward skips a drain the wider list would have required"
 // +kubebuilder:validation:XValidation:rule="has(self.backup) == has(oldSelf.backup) && (!has(self.backup) || self.backup == oldSelf.backup)",message="spec.backup is immutable: the destination is what Requesting created the FoundationDBBackup against"
@@ -194,9 +192,8 @@ type ControlPlaneOpsStatus struct {
 	Phase ControlPlaneOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine. It is
-	// persisted before the side effect that step performs. The rule repeats the
-	// ControlPlaneOpsStep enum because a marker cannot reach a field of the
-	// shared snapshot type.
+	// persisted before the side effect that step performs, so a step reported
+	// here is a step that started.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Draining','Restarting','Awaiting','Preflight','Applying','Verifying','Requesting']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

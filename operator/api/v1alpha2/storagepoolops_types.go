@@ -101,9 +101,8 @@ type StoragePoolOpsStatus struct {
 	Phase StoragePoolOpsPhase `json:"phase,omitempty"`
 
 	// Step is the position of the running action's state machine. It is
-	// persisted before the side effect that step performs. The rule repeats the
-	// StoragePoolOpsStep enum because a marker cannot reach a field of the
-	// shared snapshot type.
+	// persisted before the side effect that step performs, so a step reported
+	// here is a step that started.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

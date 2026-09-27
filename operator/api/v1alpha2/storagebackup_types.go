@@ -125,8 +125,7 @@ type BackupSource struct {
 	// +optional
 	SnapshotName string `json:"snapshotName,omitempty"`
 
-	// NodeID is the storage node the copy was read from. The appendix does not
-	// list it and §1 counts it among the twenty-two, and it belongs to the
+	// NodeID is the storage node the copy was read from. It belongs to the
 	// source rather than to the copy: it says which machine held the data, which
 	// is what somebody correlating a backup against a node failure needs.
 	// +optional
@@ -145,9 +144,8 @@ type BackupCopy struct {
 	// +optional
 	BackupID string `json:"backupID,omitempty"`
 
-	// S3ID is the object behind the copy in the store. The appendix does not
-	// list it and §5.2 names it, and it is what somebody reconciling a bill
-	// against a bucket listing matches on.
+	// S3ID is the object behind the copy in the store. It is what somebody
+	// reconciling a bill against a bucket listing matches on.
 	// +optional
 	S3ID int64 `json:"s3ID,omitempty"`
 
@@ -174,13 +172,13 @@ type BackupCopy struct {
 
 // StorageBackupSpec is the identity of one backup the operator found in a
 // cluster's store, and nothing else. The object is created by the operator and
-// by nobody else (§5.1), so there is no request here to carry.
+// by nobody else, so there is no request here to carry.
 type StorageBackupSpec struct {
 	// ClusterRef names the StorageCluster whose store this backup was found in.
 	// With BackupID it is the whole of this object's identity.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
@@ -213,12 +211,10 @@ type StorageBackupStatus struct {
 	APIStatus string `json:"apiStatus,omitempty"`
 
 	// ClusterID is the backend cluster whose stream this backup was last
-	// observed on. The appendix does not list it, and the mirror cannot work
-	// without it: an object outliving its backup has to say which scope's
+	// observed on. An object outliving its backup has to say which scope's
 	// silence is authoritative before it may be deleted, and spec.clusterRef
-	// names a Kubernetes object rather than a backend one. It is the same field,
-	// for the same reason, that StorageDevice carries
-	// (design-storagedevice.md §5.1).
+	// names a Kubernetes object rather than a backend one. StorageDevice carries
+	// the same field for the same reason.
 	// +optional
 	ClusterID string `json:"clusterID,omitempty"`
 

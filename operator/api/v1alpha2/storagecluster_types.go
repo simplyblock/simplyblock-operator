@@ -189,8 +189,7 @@ type BackupStoreSpec struct {
 
 // StorageClusterDeviceClass is the class of backend storage a cluster is built
 // out of. The values are the two classes simplyblock accepts, spelled as the
-// standards that name them are, which is the exception design-crd-model.md §7.8
-// carries for a word this group did not invent.
+// standards that name them are.
 // +kubebuilder:validation:Enum=NVMe;LogicalBlock
 type StorageClusterDeviceClass string
 
@@ -439,11 +438,9 @@ type RebalancingMetrics struct {
 // that reaches a terminal outcome leaves status.tasks, and what remains of it
 // is an event.
 //
-// It carries what the control plane's own TaskDTO carries and nothing more.
-// The design's Appendix A also declares a progress figure and a creation date,
-// and that schema has neither, so both are absent rather than declared and
-// never written (design-crd-model.md §7.9). Their absence is what makes the
-// list's order the control plane's own rather than newest first.
+// It carries no progress figure and no creation date, because the control plane
+// reports neither, which is why the list is in the control plane's order rather
+// than newest first.
 type ClusterTask struct {
 	// ID is the control plane's identifier, and it is how a CancelTask
 	// operation names the task. A position in the list is not an identity,
@@ -451,9 +448,8 @@ type ClusterTask struct {
 	// +kubebuilder:validation:Required
 	ID string `json:"id"`
 
-	// Type is what kind of job it is, in the control plane's own spelling for
-	// the reason design-crd-model.md §7.8 gives: the value is the backend's
-	// rather than this group's.
+	// Type is what kind of job it is, in the control plane's own spelling: the
+	// value is the backend's rather than this API's.
 	// +optional
 	Type string `json:"type,omitempty"`
 
@@ -733,9 +729,8 @@ type StorageClusterSpec struct {
 	// or places a volume's primary node. The control plane carries it into the
 	// cluster map it pushes to each node, where it sets the local node's index,
 	// and what changes is which copy of a chunk is read.
-	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
-	// Tier 1" is the longer account, and the co-location of a workload with its
-	// primary node is the separate mechanism described there.
+	// Co-locating a workload with the primary node of its volume is a separate
+	// mechanism and is not configured here.
 	// +optional
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -887,9 +882,8 @@ type StorageClusterStatus struct {
 	// +optional
 	Phase StorageClusterPhase `json:"phase,omitempty"`
 
-	// Step is the position of the creation machine, as the shared
-	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-	// marker could reach a field of a shared type.
+	// Step is the position of the creation machine. The value is one of the
+	// steps that machine declares.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Claiming','CheckingControlPlane','ResolvingConfig','Creating','Adopting','Persisting']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
@@ -958,11 +952,9 @@ type StorageClusterStatus struct {
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
 	// Tasks are the control plane's running and pending jobs, capped at twenty
-	// and in the order the control plane reports them: its TaskDTO carries no
-	// creation date, so newest-first is not orderable from what is on the wire
-	// (design-storagecluster.md §12.1). Completed and canceled tasks are not
-	// here: they leave the list and become events, so the length tracks
-	// concurrency rather than history.
+	// and in the order the control plane reports them, which is not newest
+	// first. Completed and canceled tasks are not here: they leave the list and
+	// become events, so the length tracks concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`

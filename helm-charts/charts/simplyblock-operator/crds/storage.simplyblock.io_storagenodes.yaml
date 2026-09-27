@@ -452,7 +452,7 @@ spec:
                     its nodes.
 
                     Bounded at what a StorageCluster name may be, since a longer value names
-                    nothing that can exist (design-api-upgrade.md §19.4).
+                    nothing that can exist.
                   maxLength: 63
                   type: string
                   x-kubernetes-validations:
@@ -647,10 +647,9 @@ spec:
                     spdkSystemMemory:
                       description: |-
                         SpdkSystemMemory is the memory the control plane starts this node's SPDK
-                        with, as a size string such as 4G or 512M. It carries no immutability
-                        marker, because a node whose device count grew legitimately needs it
-                        raised, and the webhook that guards spec.config is what decides who may
-                        raise it.
+                        with, as a size string such as 4G or 512M. It can be raised, because a
+                        node whose device count grew legitimately needs more, and who may raise it
+                        is decided at admission.
                       pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                       type: string
                   required:
@@ -718,9 +717,8 @@ spec:
                 workerNode:
                   description: |-
                     WorkerNode is the Kubernetes worker hostname this node runs on. It is not
-                    marked immutable, because a migration re-points it, but the StorageNode
-                    validating webhook rejects any change made by an identity outside the
-                    operator's namespace.
+                    immutable, because a migration re-points it, but a change made by anything
+                    outside the operator's namespace is rejected.
                   type: string
               required:
                 - clusterRef
@@ -899,9 +897,8 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the provisioning machine, as the shared
-                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                    marker could reach a field of a shared type.
+                    Step is the position of the provisioning machine. The value is one of the
+                    steps that machine declares.
                   properties:
                     deadline:
                       description: |-

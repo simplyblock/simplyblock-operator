@@ -1,19 +1,15 @@
-// Package v1alpha2 is the storage version of the simplyblock API group and the
-// shape every controller reads. It holds two kinds of type, which differ in
-// whether anything converts into them.
+// Package v1alpha2 is the current version of the storage.simplyblock.io API
+// group and the version the cluster stores. It declares the kinds that run
+// simplyblock on Kubernetes: entity kinds such as StorageCluster, StorageNode,
+// StoragePool, and StorageDevice, whose spec is the desired state simplyblock
+// converges on, and the Ops kind beside each of them, which requests one
+// imperative operation against its subject and reports how far that operation
+// got.
 //
-// A kind the CRD redesign renamed a property on has a v1alpha1 spoke: this
-// package declares the settled names, v1alpha1 keeps the names that shipped, and
-// the conversion webhook translates between them, so no reconciler has to know
-// that an older spelling exists. Those types implement conversion.Hub and
-// nothing else; the spoke side lives beside the older types, in
-// api/v1alpha1/*_conversion.go, and
-// operator/docs/designs/crd-redesign/design-property-renames.md is the inventory
-// of what moved and why.
-//
-// A kind the redesign introduces has no spoke and needs no Hub: it was never
-// published under v1alpha1, so there is no older shape to convert from and its
-// CRD declares one version.
+// Several of these kinds also exist as v1alpha1, under property names that have
+// since been renamed. A manifest written against v1alpha1 is still accepted and
+// converted, and a client that asks for v1alpha1 gets the older spelling back.
+// A kind introduced in v1alpha2 has no v1alpha1 spelling.
 //
 // +kubebuilder:object:generate=true
 // +groupName=storage.simplyblock.io
@@ -25,7 +21,7 @@ import (
 )
 
 var (
-	// GroupVersion is group version used to register these objects.
+	// GroupVersion is the group version these objects are registered under.
 	GroupVersion = schema.GroupVersion{Group: "storage.simplyblock.io", Version: "v1alpha2"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.

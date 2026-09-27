@@ -797,9 +797,8 @@ spec:
                     or places a volume's primary node. The control plane carries it into the
                     cluster map it pushes to each node, where it sets the local node's index,
                     and what changes is which copy of a chunk is read.
-                    design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
-                    Tier 1" is the longer account, and the co-location of a workload with its
-                    primary node is the separate mechanism described there.
+                    Co-locating a workload with the primary node of its volume is a separate
+                    mechanism and is not configured here.
                   type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -1647,9 +1646,8 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the creation machine, as the shared
-                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                    marker could reach a field of a shared type.
+                    Step is the position of the creation machine. The value is one of the
+                    steps that machine declares.
                   properties:
                     deadline:
                       description: |-
@@ -1670,11 +1668,9 @@ spec:
                 tasks:
                   description: |-
                     Tasks are the control plane's running and pending jobs, capped at twenty
-                    and in the order the control plane reports them: its TaskDTO carries no
-                    creation date, so newest-first is not orderable from what is on the wire
-                    (design-storagecluster.md §12.1). Completed and canceled tasks are not
-                    here: they leave the list and become events, so the length tracks
-                    concurrency rather than history.
+                    and in the order the control plane reports them, which is not newest
+                    first. Completed and canceled tasks are not here: they leave the list and
+                    become events, so the length tracks concurrency rather than history.
                   items:
                     description: |-
                       ClusterTask is one asynchronous job the control plane is running, as of the
@@ -1682,11 +1678,9 @@ spec:
                       that reaches a terminal outcome leaves status.tasks, and what remains of it
                       is an event.
 
-                      It carries what the control plane's own TaskDTO carries and nothing more.
-                      The design's Appendix A also declares a progress figure and a creation date,
-                      and that schema has neither, so both are absent rather than declared and
-                      never written (design-crd-model.md §7.9). Their absence is what makes the
-                      list's order the control plane's own rather than newest first.
+                      It carries no progress figure and no creation date, because the control plane
+                      reports neither, which is why the list is in the control plane's order rather
+                      than newest first.
                     properties:
                       id:
                         description: |-
@@ -1711,9 +1705,8 @@ spec:
                         type: string
                       type:
                         description: |-
-                          Type is what kind of job it is, in the control plane's own spelling for
-                          the reason design-crd-model.md §7.8 gives: the value is the backend's
-                          rather than this group's.
+                          Type is what kind of job it is, in the control plane's own spelling: the
+                          value is the backend's rather than this API's.
                         type: string
                     required:
                       - id

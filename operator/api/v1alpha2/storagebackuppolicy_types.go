@@ -36,7 +36,7 @@ type StorageBackupPolicySpec struct {
 	// to.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +kubebuilder:validation:Required
@@ -58,13 +58,12 @@ type StorageBackupPolicySpec struct {
 	// d, and w.
 	//
 	// Immutable, and that is a property of the control plane rather than a
-	// choice. design-storagebackup.md §10 lists a PUT that applies a changed
-	// schedule, and the v2 API offers no such endpoint: it creates, deletes,
-	// attaches, and detaches a policy and nothing else. A mutable field the
-	// operator cannot reconcile would leave the declaration and the backups
-	// actually being taken permanently disagreeing, with the object still
-	// reporting Active, so the schedule is fixed at creation until the endpoint
-	// exists. Changing one means replacing the policy.
+	// choice. The control plane offers no call that applies a changed schedule:
+	// it creates, deletes, attaches, and detaches a policy and nothing else. A
+	// mutable field the operator cannot reconcile would leave the declaration
+	// and the backups actually being taken permanently disagreeing, with the
+	// object still reporting Active, so the schedule is fixed at creation until
+	// that call exists. Changing one means replacing the policy.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
 	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
 	// +k8s:immutable

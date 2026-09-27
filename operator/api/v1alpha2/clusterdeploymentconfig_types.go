@@ -79,8 +79,7 @@ const (
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
-// the distributions' own names, which is the exception design-crd-model.md §7.8
-// carries for a word this group did not invent.
+// the distributions' own names.
 // +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
 type KubernetesEnvironment string
 
@@ -321,8 +320,7 @@ type ClusterTemplate struct {
 	// Name is the StorageCluster's name, and is therefore held to what such a
 	// name may be rather than to what an object name may be. A longer value is a
 	// document the API server accepts and a CreatingCluster step that can never
-	// succeed, since the cluster it would write is one the API server refuses
-	// (design-api-upgrade.md §19.4).
+	// succeed, since the cluster it would write is one the API server refuses.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
@@ -543,9 +541,8 @@ type ClusterTemplate struct {
 	// or places a volume's primary node. The control plane carries it into the
 	// cluster map it pushes to each node, where it sets the local node's index,
 	// and what changes is which copy of a chunk is read.
-	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
-	// Tier 1" is the longer account, and the co-location of a workload with its
-	// primary node is the separate mechanism described there.
+	// Co-locating a workload with the primary node of its volume is a separate
+	// mechanism and is not configured here.
 	//
 	// It is on the document because it is immutable on the cluster: the control
 	// plane takes it at cluster create and never re-applies it, so this is the
@@ -556,13 +553,11 @@ type ClusterTemplate struct {
 	// Backup is where this cluster's backups live, and it expands into
 	// StorageCluster.spec.backup unchanged.
 	//
-	// It is here for the reason KMS is: the expansion creates the cluster and
-	// its own reconciler reads it back on the next pass, so a store stated on
-	// the document is present at the cluster's creation rather than patched in
-	// afterward by whoever remembers. Unlike most of what this template
-	// carries, the field it fills is mutable, so a document that states none
-	// costs nothing permanent — a cluster can be given a store whenever there
-	// is one to give.
+	// It is here for the reason KMS is: a store stated on the document is
+	// present when the cluster is created rather than patched in afterward by
+	// whoever remembers. Unlike most of what this template carries, the field it
+	// fills is mutable, so a document that states none costs nothing permanent.
+	// A cluster can be given a store whenever there is one to give.
 	//
 	// The Secret it names is not resolved at admission. It is a core object a
 	// deployment legitimately creates alongside the document or after it, and
@@ -570,12 +565,9 @@ type ClusterTemplate struct {
 	// +optional
 	Backup *BackupStoreSpec `json:"backup,omitempty"`
 
-	// KMS selects where the cluster stores volume encryption keys. It is here
-	// rather than left to be set on the StorageCluster afterward because the
-	// expansion's own reconciler reads it back off that object on the very next
-	// pass, before anything external could patch it in; stating it on the
-	// document is what makes it present at the cluster's creation rather than a
-	// race with one.
+	// KMS selects where the cluster stores volume encryption keys. Stating it on
+	// the document is what makes it present when the cluster is created, where
+	// setting it on the StorageCluster afterward races with that creation.
 	// +optional
 	KMS *KMSSpec `json:"kms,omitempty"`
 }
@@ -710,8 +702,7 @@ type ClusterDeploymentConfigSpec struct {
 	// is refused rather than reconciled.
 	//
 	// The maximum is what a StorageCluster name may be and not the 253 an object
-	// name may be: a reference between the two names nothing that can exist
-	// (design-api-upgrade.md §19.4).
+	// name may be: a reference between the two names nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
@@ -725,12 +716,8 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	Images *DeploymentImages `json:"images,omitempty"`
 
-	// NodeSets are the nodes the deployment is made of.
-	//
-	// The upper bound is what makes the device-class rule above estimable: the
-	// API server costs a CEL rule against the largest value the schema permits,
-	// and a list with no bound is costed as unbounded, which the rule's nested
-	// all() then multiplies past the budget.
+	// NodeSets are the nodes the deployment is made of. At least one, and at
+	// most 64.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
@@ -777,9 +764,9 @@ type ClusterDeploymentConfigStatus struct {
 	// the difference is the whole point: how long a deployment takes is measured
 	// from the moment somebody said yes.
 	//
-	// It is the start of §9.2's expansion_duration_seconds. A histogram needs an
-	// instant that survives the operator restarting mid-expansion, which nothing
-	// in memory and no step deadline supplies.
+	// It is the start of the expansion_duration_seconds metric, whose histogram
+	// needs an instant that survives the operator restarting mid-expansion,
+	// which nothing in memory and no step deadline supplies.
 	// +optional
 	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
 }
