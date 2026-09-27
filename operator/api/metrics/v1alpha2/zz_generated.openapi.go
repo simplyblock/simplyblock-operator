@@ -249,9 +249,8 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_LogicalVolumeMetricsList(r
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use. openapi-gen enforces the streaming-list convention on a type it generates definitions for, and that convention names omitempty; a CRD is never checked against it, which is why the two differ.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
 						},
 					},
 					"items": {
@@ -412,9 +411,8 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageClusterMetricsList(
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
 						},
 					},
 					"items": {
@@ -576,9 +574,8 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageDeviceMetricsList(r
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
 						},
 					},
 					"items": {
@@ -747,9 +744,8 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StorageNodeMetricsList(ref
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
 						},
 					},
 					"items": {
@@ -911,9 +907,8 @@ func schema_simplyblock_operator_api_metrics_v1alpha2_StoragePoolMetricsList(ref
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The tag is omitempty rather than the omitzero the CRD kinds in this repository use, because openapi-gen enforces the streaming-list convention on a type it generates definitions for and that convention names omitempty.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ListMeta{}.OpenAPIModelName()),
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
 						},
 					},
 					"items": {

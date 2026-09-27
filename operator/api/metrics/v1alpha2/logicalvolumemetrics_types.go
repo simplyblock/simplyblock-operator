@@ -109,10 +109,6 @@ type LogicalVolumeMetrics struct {
 // +k8s:openapi-gen=true
 type LogicalVolumeMetricsList struct {
 	metav1.TypeMeta `json:",inline"`
-	// The tag is omitempty rather than the omitzero the CRD kinds in this
-	// repository use. openapi-gen enforces the streaming-list convention on a
-	// type it generates definitions for, and that convention names omitempty; a
-	// CRD is never checked against it, which is why the two differ.
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []LogicalVolumeMetrics `json:"items"`
 }
