@@ -774,13 +774,11 @@ spec:
                       Backup is where this cluster's backups live, and it expands into
                       StorageCluster.spec.backup unchanged.
 
-                      It is here for the reason KMS is: the expansion creates the cluster and
-                      its own reconciler reads it back on the next pass, so a store stated on
-                      the document is present at the cluster's creation rather than patched in
-                      afterward by whoever remembers. Unlike most of what this template
-                      carries, the field it fills is mutable, so a document that states none
-                      costs nothing permanent — a cluster can be given a store whenever there
-                      is one to give.
+                      It is here for the reason KMS is: a store stated on the document is
+                      present when the cluster is created rather than patched in afterward by
+                      whoever remembers. Unlike most of what this template carries, the field it
+                      fills is mutable, so a document that states none costs nothing permanent.
+                      A cluster can be given a store whenever there is one to give.
 
                       The Secret it names is not resolved at admission. It is a core object a
                       deployment legitimately creates alongside the document or after it, and
@@ -984,9 +982,8 @@ spec:
                       or places a volume's primary node. The control plane carries it into the
                       cluster map it pushes to each node, where it sets the local node's index,
                       and what changes is which copy of a chunk is read.
-                      design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
-                      Tier 1" is the longer account, and the co-location of a workload with its
-                      primary node is the separate mechanism described there.
+                      Co-locating a workload with the primary node of its volume is a separate
+                      mechanism and is not configured here.
 
                       It is on the document because it is immutable on the cluster: the control
                       plane takes it at cluster create and never re-applies it, so this is the
@@ -1067,12 +1064,9 @@ spec:
                     type: object
                   kms:
                     description: |-
-                      KMS selects where the cluster stores volume encryption keys. It is here
-                      rather than left to be set on the StorageCluster afterward because the
-                      expansion's own reconciler reads it back off that object on the very next
-                      pass, before anything external could patch it in; stating it on the
-                      document is what makes it present at the cluster's creation rather than a
-                      race with one.
+                      KMS selects where the cluster stores volume encryption keys. Stating it on
+                      the document is what makes it present when the cluster is created, where
+                      setting it on the StorageCluster afterward races with that creation.
                     properties:
                       vault:
                         description: Vault stores keys in HashiCorp Vault.
@@ -1109,8 +1103,7 @@ spec:
                       Name is the StorageCluster's name, and is therefore held to what such a
                       name may be rather than to what an object name may be. A longer value is a
                       document the API server accepts and a CreatingCluster step that can never
-                      succeed, since the cluster it would write is one the API server refuses
-                      (design-api-upgrade.md §19.4).
+                      succeed, since the cluster it would write is one the API server refuses.
                     maxLength: 63
                     type: string
                   nodeProvisioningBudget:
@@ -1317,8 +1310,7 @@ spec:
                   is refused rather than reconciled.
 
                   The maximum is what a StorageCluster name may be and not the 253 an object
-                  name may be: a reference between the two names nothing that can exist
-                  (design-api-upgrade.md §19.4).
+                  name may be: a reference between the two names nothing that can exist.
                 maxLength: 63
                 type: string
               edgeCluster:
@@ -1477,12 +1469,8 @@ spec:
                 type: object
               nodeSets:
                 description: |-
-                  NodeSets are the nodes the deployment is made of.
-
-                  The upper bound is what makes the device-class rule above estimable: the
-                  API server costs a CEL rule against the largest value the schema permits,
-                  and a list with no bound is costed as unbounded, which the rule's nested
-                  all() then multiplies past the budget.
+                  NodeSets are the nodes the deployment is made of. At least one, and at
+                  most 64.
                 items:
                   description: |-
                     NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -1666,9 +1654,9 @@ spec:
                   the difference is the whole point: how long a deployment takes is measured
                   from the moment somebody said yes.
 
-                  It is the start of §9.2's expansion_duration_seconds. A histogram needs an
-                  instant that survives the operator restarting mid-expansion, which nothing
-                  in memory and no step deadline supplies.
+                  It is the start of the expansion_duration_seconds metric, whose histogram
+                  needs an instant that survives the operator restarting mid-expansion,
+                  which nothing in memory and no step deadline supplies.
                 format: date-time
                 type: string
               message:
@@ -1800,10 +1788,8 @@ spec:
               spec.restart.components before Restarting recycles them. An edit in between
               produces an operation that checked one thing and did another.
 
-              The rules are declared here rather than as +k8s:immutable on each field.
-              controller-gen emits that marker's rules in an order that varies between runs
-              once a type carries several, and it freezes a block whole; what has to be
-              frozen is each block's presence together with its contents.
+              What is frozen is each parameter block's presence together with its
+              contents.
             properties:
               abort:
                 description: |-
@@ -1860,8 +1846,8 @@ spec:
                 properties:
                   components:
                     description: |-
-                      Components names the workloads to recycle, from the table in §4.3. Empty
-                      recycles the whole control plane. Naming only components that table marks
+                      Components names the workloads to recycle. Empty recycles the whole
+                      control plane. Naming only components that status.components reports as
                       non-essential skips the drain, because recycling them interrupts nothing.
                     items:
                       type: string
@@ -1943,9 +1929,8 @@ spec:
               step:
                 description: |-
                   Step is the position of the running action's state machine. It is
-                  persisted before the side effect that step performs. The rule repeats the
-                  ControlPlaneOpsStep enum because a marker cannot reach a field of the
-                  shared snapshot type.
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-
@@ -2256,7 +2241,7 @@ spec:
                         description: |-
                           Replicas is the number of management API instances. Two is what the chart
                           ships and what the phases assume: a single instance makes Degraded
-                          unreachable for this component and every restart an outage (§5.1).
+                          unreachable for this component and every restart an outage.
                         format: int32
                         minimum: 1
                         type: integer
@@ -2471,10 +2456,10 @@ spec:
                 type: string
               components:
                 description: |-
-                  Components is the per-component readiness the phase is derived from
-                  (§4.3), one entry per workload the managed install applies. It is empty
-                  for a remote control plane, which has no components the operator owns.
-                  Without it a Degraded phase says that something is wrong and not what.
+                  Components is the per-component readiness the phase is derived from, one
+                  entry per workload the managed install applies. It is empty for a remote
+                  control plane, which has no components the operator owns. Without it a
+                  Degraded phase says that something is wrong and not what.
                 items:
                   description: |-
                     ControlPlaneComponentStatus is one workload of a managed control plane and how
@@ -2493,9 +2478,9 @@ spec:
                     essential:
                       description: |-
                         Essential states whether this component at zero ready makes the control
-                        plane Unavailable rather than Degraded. It is decided by the table in
-                        §4.3 rather than by a user, and it is reported here so that a phase can be
-                        explained without reading the operator's source.
+                        plane Unavailable rather than Degraded. It is decided by the operator
+                        rather than by a user, and it is reported here so that a phase can be
+                        explained.
                       type: boolean
                     name:
                       description: Name is the workload's name, as applied.
@@ -2671,7 +2656,7 @@ spec:
                       cluster.
 
                       Bounded at what a StorageCluster name may be, since a longer value names
-                      nothing that can exist (design-api-upgrade.md §19.4).
+                      nothing that can exist.
                     maxLength: 63
                     type: string
                   configName:
@@ -3024,9 +3009,8 @@ spec:
               PersistentVolumeOpsSpec is one operation to perform against one
               PersistentVolume.
 
-              The rule keeps the action and its parameter block in agreement, which is a
-              statement about this object alone and so belongs on the type rather than in
-              the webhook.
+              The action and its parameter block have to agree: Migrate requires
+              spec.migrate, and no other action accepts it.
             properties:
               abort:
                 description: |-
@@ -3319,10 +3303,9 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the running action's state machine, as the shared
-                  statemachine.KubeSnapshot. It is persisted before the side effect that
-                  step performs. The rule is what an Enum marker would do if a marker could
-                  reach a field of a shared type.
+                  Step is the position of the running action's state machine. It is
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-
@@ -4278,8 +4261,8 @@ spec:
                   because the default Image is a moving tag: it follows the operator's own,
                   and a development build's tag is rebuilt in place. IfNotPresent against a
                   tag that moved leaves the workers that already pulled it running the old
-                  plugin and the workers that had not running the new one, which is the
-                  skew of §5 inside one deployment and invisible from the object.
+                  plugin and the workers that had not running the new one, which is version
+                  skew inside one deployment and invisible from the object.
                 enum:
                 - Always
                 - Never
@@ -4393,10 +4376,9 @@ spec:
                 description: |-
                   TLS configures whether both plugins reach the control plane over TLS.
                   Unset is plaintext, the shape every deployment ran before this field
-                  existed, so adoption of a deployment already running TLS needs this to
-                  already agree with what the plugins are configured for — see
-                  adoption.go's tlsAdoptionMismatch — rather than reading it off a live
-                  object the way spec.driverName's default cannot be.
+                  existed. Adopting a deployment that already runs TLS requires this to
+                  agree with what its plugins are configured for, because it is not read
+                  off the running objects.
                 properties:
                   enableMutualTLS:
                     default: false
@@ -4648,7 +4630,7 @@ spec:
                   ClusterRef names the StorageCluster the operation runs against.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -4782,9 +4764,8 @@ spec:
               step:
                 description: |-
                   Step is the position of the running action's state machine. It is
-                  persisted before the side effect that step performs. The closed set is a
-                  CEL rule rather than an Enum marker because a marker cannot reach a field
-                  whose type is declared in another module.
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-
@@ -4933,7 +4914,7 @@ spec:
                   to.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -4967,13 +4948,12 @@ spec:
                   d, and w.
 
                   Immutable, and that is a property of the control plane rather than a
-                  choice. design-storagebackup.md §10 lists a PUT that applies a changed
-                  schedule, and the v2 API offers no such endpoint: it creates, deletes,
-                  attaches, and detaches a policy and nothing else. A mutable field the
-                  operator cannot reconcile would leave the declaration and the backups
-                  actually being taken permanently disagreeing, with the object still
-                  reporting Active, so the schedule is fixed at creation until the endpoint
-                  exists. Changing one means replacing the policy.
+                  choice. The control plane offers no call that applies a changed schedule:
+                  it creates, deletes, attaches, and detaches a policy and nothing else. A
+                  mutable field the operator cannot reconcile would leave the declaration
+                  and the backups actually being taken permanently disagreeing, with the
+                  object still reporting Active, so the schedule is fixed at creation until
+                  that call exists. Changing one means replacing the policy.
                 pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string
                 x-kubernetes-validations:
@@ -5335,7 +5315,7 @@ spec:
                   With BackupID it is the whole of this object's identity.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -5378,9 +5358,8 @@ spec:
                     type: string
                   s3ID:
                     description: |-
-                      S3ID is the object behind the copy in the store. The appendix does not
-                      list it and §5.2 names it, and it is what somebody reconciling a bill
-                      against a bucket listing matches on.
+                      S3ID is the object behind the copy in the store. It is what somebody
+                      reconciling a bill against a bucket listing matches on.
                     format: int64
                     type: integer
                   size:
@@ -5401,12 +5380,10 @@ spec:
               clusterID:
                 description: |-
                   ClusterID is the backend cluster whose stream this backup was last
-                  observed on. The appendix does not list it, and the mirror cannot work
-                  without it: an object outliving its backup has to say which scope's
+                  observed on. An object outliving its backup has to say which scope's
                   silence is authoritative before it may be deleted, and spec.clusterRef
-                  names a Kubernetes object rather than a backend one. It is the same field,
-                  for the same reason, that StorageDevice carries
-                  (design-storagedevice.md §5.1).
+                  names a Kubernetes object rather than a backend one. StorageDevice carries
+                  the same field for the same reason.
                 type: string
               message:
                 description: |-
@@ -5458,8 +5435,7 @@ spec:
                     type: string
                   nodeID:
                     description: |-
-                      NodeID is the storage node the copy was read from. The appendix does not
-                      list it and §1 counts it among the twenty-two, and it belongs to the
+                      NodeID is the storage node the copy was read from. It belongs to the
                       source rather than to the copy: it says which machine held the data, which
                       is what somebody correlating a backup against a node failure needs.
                     type: string
@@ -5756,7 +5732,7 @@ spec:
                   not delete the cluster it operated on.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -5841,9 +5817,8 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the running action's state machine, as the shared
-                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                  marker could reach a field of a shared type.
+                  Step is the position of the running action's state machine. The value is
+                  one of the steps the running action declares.
                 properties:
                   deadline:
                     description: |-
@@ -6713,9 +6688,8 @@ spec:
                   or places a volume's primary node. The control plane carries it into the
                   cluster map it pushes to each node, where it sets the local node's index,
                   and what changes is which copy of a chunk is read.
-                  design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
-                  Tier 1" is the longer account, and the co-location of a workload with its
-                  primary node is the separate mechanism described there.
+                  Co-locating a workload with the primary node of its volume is a separate
+                  mechanism and is not configured here.
                 type: boolean
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -7579,9 +7553,8 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the creation machine, as the shared
-                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                  marker could reach a field of a shared type.
+                  Step is the position of the creation machine. The value is one of the
+                  steps that machine declares.
                 properties:
                   deadline:
                     description: |-
@@ -7602,11 +7575,9 @@ spec:
               tasks:
                 description: |-
                   Tasks are the control plane's running and pending jobs, capped at twenty
-                  and in the order the control plane reports them: its TaskDTO carries no
-                  creation date, so newest-first is not orderable from what is on the wire
-                  (design-storagecluster.md §12.1). Completed and canceled tasks are not
-                  here: they leave the list and become events, so the length tracks
-                  concurrency rather than history.
+                  and in the order the control plane reports them, which is not newest
+                  first. Completed and canceled tasks are not here: they leave the list and
+                  become events, so the length tracks concurrency rather than history.
                 items:
                   description: |-
                     ClusterTask is one asynchronous job the control plane is running, as of the
@@ -7614,11 +7585,9 @@ spec:
                     that reaches a terminal outcome leaves status.tasks, and what remains of it
                     is an event.
 
-                    It carries what the control plane's own TaskDTO carries and nothing more.
-                    The design's Appendix A also declares a progress figure and a creation date,
-                    and that schema has neither, so both are absent rather than declared and
-                    never written (design-crd-model.md §7.9). Their absence is what makes the
-                    list's order the control plane's own rather than newest first.
+                    It carries no progress figure and no creation date, because the control plane
+                    reports neither, which is why the list is in the control plane's order rather
+                    than newest first.
                   properties:
                     id:
                       description: |-
@@ -7643,9 +7612,8 @@ spec:
                       type: string
                     type:
                       description: |-
-                        Type is what kind of job it is, in the control plane's own spelling for
-                        the reason design-crd-model.md §7.8 gives: the value is the backend's
-                        rather than this group's.
+                        Type is what kind of job it is, in the control plane's own spelling: the
+                        value is the backend's rather than this API's.
                       type: string
                   required:
                   - id
@@ -8417,9 +8385,8 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the running action's state machine, as the shared
-                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                  marker could reach a field of a shared type.
+                  Step is the position of the running action's state machine. The value is
+                  one of the steps the running action declares.
                 properties:
                   deadline:
                     description: |-
@@ -8938,7 +8905,7 @@ spec:
                   its nodes.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -9135,10 +9102,9 @@ spec:
                   spdkSystemMemory:
                     description: |-
                       SpdkSystemMemory is the memory the control plane starts this node's SPDK
-                      with, as a size string such as 4G or 512M. It carries no immutability
-                      marker, because a node whose device count grew legitimately needs it
-                      raised, and the webhook that guards spec.config is what decides who may
-                      raise it.
+                      with, as a size string such as 4G or 512M. It can be raised, because a
+                      node whose device count grew legitimately needs more, and who may raise it
+                      is decided at admission.
                     pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                     type: string
                 required:
@@ -9206,9 +9172,8 @@ spec:
               workerNode:
                 description: |-
                   WorkerNode is the Kubernetes worker hostname this node runs on. It is not
-                  marked immutable, because a migration re-points it, but the StorageNode
-                  validating webhook rejects any change made by an identity outside the
-                  operator's namespace.
+                  immutable, because a migration re-points it, but a change made by anything
+                  outside the operator's namespace is rejected.
                 type: string
             required:
             - clusterRef
@@ -9392,9 +9357,8 @@ spec:
                 type: string
               step:
                 description: |-
-                  Step is the position of the provisioning machine, as the shared
-                  statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                  marker could reach a field of a shared type.
+                  Step is the position of the provisioning machine. The value is one of the
+                  steps that machine declares.
                 properties:
                   deadline:
                     description: |-
@@ -10424,9 +10388,8 @@ spec:
               step:
                 description: |-
                   Step is the position of the running action's state machine. It is
-                  persisted before the side effect that step performs. The rule repeats the
-                  StoragePoolOpsStep enum because a marker cannot reach a field of the
-                  shared snapshot type.
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-
@@ -10794,8 +10757,8 @@ spec:
 
                   The maximum is what a StorageCluster name may be rather than what a
                   reference may be: a longer value names nothing that can exist, and the
-                  reference is immutable, so admitting one creates a pool whose only
-                  remedy is deletion (design-api-upgrade.md §19.4).
+                  reference is immutable, so admitting one creates a pool whose only remedy
+                  is deletion.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
