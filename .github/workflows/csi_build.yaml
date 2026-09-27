@@ -118,11 +118,16 @@ jobs:
           echo "::error::branch name ${{ github.ref_name }} sanitizes to an empty image tag"
           exit 1
         fi
-        # Non-release runs never pushed to quay.io, so pull from ECR instead.
+        # Non-release runs never pushed to quay.io, so the suite pulls from
+        # Docker Hub. It used to pull from ECR Public, which throttles an
+        # anonymous pull per source address: the runner's own pulls are
+        # authenticated, but the Talos nodes' kubelets are not, and they share
+        # that address, so the shell pod of every volume-stack case failed to
+        # start on 429 while the image itself was fine.
         if [ -n "${{ inputs.version }}" ]; then
           image_name="${QUAY_IMAGE_NAME}"
         else
-          image_name="${ECR_IMAGE_NAME}"
+          image_name="${IMAGE_NAME}"
         fi
         echo "ref=${image_name}:${tag}" >> "$GITHUB_OUTPUT"
 

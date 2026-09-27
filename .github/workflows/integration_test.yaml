@@ -84,10 +84,18 @@ jobs:
         working-directory: test/integration
         run: CGO_ENABLED=0 go test -c -o /tmp/onnode.test ./onnode/
 
-      # Authenticated, because ECR Public throttles anonymous pulls per source
-      # address and the runners share theirs: a run that pulled fine one hour
-      # answered "toomanyrequests: Rate exceeded" the next. The build workflow
-      # logs in the same way, and passes its secrets on.
+      # Authenticated, because every public registry throttles anonymous pulls
+      # per source address and the runners share theirs: a run that pulled fine
+      # one hour answered "toomanyrequests: Rate exceeded" the next. The build
+      # workflow logs in the same way, and passes its secrets on. Docker Hub is
+      # where the driver image the suite runs comes from, and ECR Public is
+      # where the base images it builds on do.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
