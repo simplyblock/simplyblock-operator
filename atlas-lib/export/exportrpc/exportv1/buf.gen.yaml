@@ -1,0 +1,19 @@
+# Code generation for the link handshake protocol.
+#
+# buf compiles the .proto in pure Go -- no protoc -- and shells out to the two
+# generators, which it looks up on PATH. The atlas-lib Makefile puts the
+# repo-root .bin (populated with checksum-pinned versions by scripts/tools.sh)
+# in front of PATH, so `make generate` runs the pinned generators rather than
+# whatever happens to be installed. Run it via the Makefile, not `buf generate`
+# directly.
+#
+# The generated *.pb.go are committed: consumers build them without any of this
+# toolchain present.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: paths=source_relative
