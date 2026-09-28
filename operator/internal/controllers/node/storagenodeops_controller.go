@@ -241,6 +241,47 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		return ctrl.Result{}, r.releaseLock(ctx, &ops)
 	}
 
+	// The cluster gate is the admission check of §7.1, and it is not the same as
+	// the lock. An operation that moves data into a cluster that is mid-rebalance
+	// or not active is either rejected by the control plane or succeeds into an
+	// inconsistent layout, so it holds in Pending, without the node's lock, and
+	// is admitted when the cluster is ready.
+	//
+	// It is asked once, before the lock, and never of an admitted operation. An
+	// admitted operation changes the cluster's own reading: a relocation restarts
+	// the node and a maintenance window shuts it down, and either makes the
+	// cluster degraded until the node is back. Asking again on every pass held
+	// each of them on the consequence of its own action, which is how a shutdown
+	// held its node's lock for hours on 2026-09-28. The steps a running operation
+	// performs are guarded by their own preconditions and by their deadlines.
+	//
+	// Admission is the lock rather than the phase. The lock is patched onto the
+	// node and the phase is written afterward, and a crash between the two
+	// restores an operation that holds its lock at Pending. Asking the gate of
+	// that one would hold a lock it already owns for as long as the cluster
+	// stays unready, which is exactly the queue behind it waiting on a wait.
+	//
+	// A node that does not exist is left to the lock, which fails the operation
+	// with the reason, rather than held here with a read error forever.
+	if !running(&ops) && !skipsClusterGate(&ops) {
+		node, err := r.node(ctx, &ops)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return ctrl.Result{}, err
+		case node.Status.ActiveOpsRef == ops.Name:
+		default:
+			ready, reason, err := r.clusterReady(ctx, node)
+			if err != nil {
+				return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, err.Error())
+			}
+			if !ready {
+				r.emit(ctx, &ops, corev1.EventTypeWarning, ClusterNotReady, reason)
+				return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, reason)
+			}
+		}
+	}
+
 	acquired, err := r.acquireLock(ctx, &ops)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -281,19 +322,11 @@ func (r *StorageNodeOpsReconciler) advance(
 		return r.unwind(ctx, ops, machine, current)
 	}
 
-	// The cluster gate is not the same as the lock. A node operation runs inside
-	// a cluster, and one whose cluster is mid-rebalance or not active will either
-	// be rejected by the control plane or succeed into an inconsistent layout. It
-	// holds rather than fails, and resumes when the cluster does (§7.1).
-	if !skipsClusterGate(ops) {
-		if ready, reason, err := r.clusterReady(ctx, ops); err != nil {
-			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, err.Error())
-		} else if !ready {
-			r.emit(ctx, ops, corev1.EventTypeWarning, ClusterNotReady, reason)
-			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, reason)
-		}
-	}
-
+	// The deadline is read before the step is, on every pass, so that no step can
+	// be waited on past its budget. Nothing else stands between the abort and
+	// this check: the cluster gate is asked at admission in Reconcile and never
+	// of a running operation, because a gate in front of the deadline is a
+	// deadline a held operation can never reach (§7.1).
 	if machine.TimeoutReached() {
 		operationStepDeadlineExceededTotal.
 			WithLabelValues(r.clusterLabel(ctx, ops), string(ops.Spec.Action), string(current)).Inc()
@@ -744,30 +777,54 @@ func (r *StorageNodeOpsReconciler) target(
 // skipsClusterGate reports the operations that run whatever the cluster says
 // about itself.
 //
-// Removal is the one. A node is removed from an unready cluster precisely to
-// make the cluster ready, so holding the removal until the cluster is active
-// closes a loop with no way out: the node cannot be removed until the cluster is
-// active, and the cluster cannot become active while the node it is stuck on is
-// still in it. That is not hypothetical — it is what a node whose add never
-// finished does to the cluster it was being added to.
+// They are the operations whose effect is the cluster's reading changing, so a
+// gate on that reading holds each of them on itself. A node is removed from an
+// unready cluster precisely to make the cluster ready; holding the removal until
+// the cluster is active closes a loop with no way out, and it is what a node
+// whose add never finished does to the cluster it was being added to. A shutdown
+// or a suspend is what makes a cluster degraded, and a restart or a resume is
+// what makes it active again: a shutdown held on the degraded cluster it
+// produced is the loop that held a node's lock for hours on 2026-09-28, and a
+// restart held on the same reading is the recovery being unavailable exactly
+// when it is needed.
 //
-// Nothing else is exempt. The gate exists to keep an operation that moves data
-// off a cluster that cannot take it, and an exemption wider than the one case
-// that needs it is a gate that stops meaning anything.
+// The two actions that move data still wait. The gate exists to keep a
+// relocation or a maintenance window off a cluster that cannot take it, and
+// those are the two that move data (§7.1).
 func skipsClusterGate(ops *simplyblockv1alpha2.StorageNodeOps) bool {
-	return ops.Spec.Action == simplyblockv1alpha2.StorageNodeOpsActionRemove
+	switch ops.Spec.Action {
+	case simplyblockv1alpha2.StorageNodeOpsActionRemove,
+		simplyblockv1alpha2.StorageNodeOpsActionShutdown,
+		simplyblockv1alpha2.StorageNodeOpsActionRestart,
+		simplyblockv1alpha2.StorageNodeOpsActionSuspend,
+		simplyblockv1alpha2.StorageNodeOpsActionResume:
+		return true
+	default:
+		return false
+	}
+}
+
+// running reports an operation that has been admitted: it holds its node's lock
+// and is somewhere in its graph. The cluster gate is asked of every other one.
+func running(ops *simplyblockv1alpha2.StorageNodeOps) bool {
+	return ops.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseRunning
 }
 
 func (r *StorageNodeOpsReconciler) clusterReady(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, string, error) {
-	node, err := r.node(ctx, ops)
-	if err != nil {
-		return false, "", err
-	}
 	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
 	if err := r.Get(ctx, key, &cluster); err != nil {
+		// A cluster object that does not exist is a cluster the operation cannot
+		// run in, which is a reason to hold rather than an error to retry, and
+		// not the same thing as a node that does not exist: that one the lock
+		// fails the operation on.
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf(
+				"StorageCluster %s, which node %s belongs to, does not exist",
+				node.Spec.ClusterRef, node.Name), nil
+		}
 		return false, "", err
 	}
 	if cluster.Status.UUID == "" {

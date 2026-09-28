@@ -30,7 +30,7 @@ import (
 // derived so that the assertion below compares two independent statements of the
 // same set: deriving it from the graph would make the test agree with itself.
 var everyStep = []string{
-	"Awaiting", "AwaitingHost", "AwaitingNode", "Cleanup", "Holding",
+	"Awaiting", "AwaitingHost", "AwaitingNode", "Cleanup", "Departing", "Holding",
 	"MigratingVolumes", "Preparing", "Promoting", "Relocating", "Releasing",
 	"Removing", "Requesting", "Restarting", "ShuttingDown", "Suspending",
 	"Validating", "Verifying",
@@ -103,7 +103,7 @@ func celRuleValues(rule string) []string {
 // rule living in a struct tag; the tests above are what make the copies worth
 // having.
 const opsStepCELRule = "!has(self.state) || self.state in " +
-	"['Requesting','Awaiting','Validating','Suspending','MigratingVolumes','Verifying'," +
+	"['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying'," +
 	"'Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding'," +
 	"'ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']"
 
@@ -146,6 +146,8 @@ func TestNoStepPastThePointOfNoReturnIsAbortable(t *testing.T) {
 		// operation is the only thing watching it back.
 		stepRelocating,
 		stepAwaitingNode,
+		// The restart has been issued and is the control plane's to finish.
+		stepDeparting,
 		// The node is down for a reboot nothing else will bring it back from.
 		stepShuttingDown,
 		stepReleasing,
@@ -253,12 +255,18 @@ func TestTheHostMaintenanceGraphIsTheSixStepWindow(t *testing.T) {
 func TestTheSingleStepActionsShareOneLine(t *testing.T) {
 	for _, a := range []simplyblockv1alpha2.StorageNodeOpsAction{
 		simplyblockv1alpha2.StorageNodeOpsActionShutdown,
-		simplyblockv1alpha2.StorageNodeOpsActionRestart,
 		simplyblockv1alpha2.StorageNodeOpsActionSuspend,
 		simplyblockv1alpha2.StorageNodeOpsActionResume,
 	} {
 		assertLine(t, a, []step{stepRequesting, stepAwaiting})
 	}
+}
+
+// A restart waits for the node to leave online before it waits for it to
+// return, because its completion state is the state it started in.
+func TestTheRestartGraphWaitsForTheDepartureFirst(t *testing.T) {
+	assertLine(t, simplyblockv1alpha2.StorageNodeOpsActionRestart,
+		[]step{stepRequesting, stepDeparting, stepAwaiting})
 }
 
 // assertLine walks an action's graph from its initial state and checks it is the
