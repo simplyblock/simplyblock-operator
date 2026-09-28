@@ -12,16 +12,41 @@
 # never in CI. Nothing it does touches a device it did not create: every format
 # targets a loop device backed by a file under the work directory.
 #
-# Usage: capture-image.sh <output-dir> [name ...]
+# The second mode captures a device that is already in service, for the formats
+# no local tool writes: a storage node's own pages, and anything a fleet turned
+# out to be carrying. It only ever reads, it never attaches a loop device, and it
+# fills the manifest's provenance with placeholders, because a device found in
+# the field cannot say which tool wrote it. Those fields are edited by hand
+# afterward; the checksums cover the captured bytes and not the manifest, so
+# editing it is safe and leaving it is not.
+#
+# Usage: capture-image.sh [--region <bytes>] <output-dir> [name ...]
+#        capture-image.sh [--region <bytes>] --device <path> <output-dir> <name> [note]
 
 set -euo pipefail
 
-OUT=${1:?usage: capture-image.sh <output-dir> [name ...]}
+REGION=$((1024 * 1024)) # one mebibyte, the prober's default region size
+DEVICE=
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    --region)
+        REGION=${2:?--region needs a size in bytes}
+        shift 2
+        ;;
+    --device)
+        DEVICE=${2:?--device needs a path}
+        shift 2
+        ;;
+    *) break ;;
+    esac
+done
+
+OUT=${1:?usage: capture-image.sh [--region <bytes>] [--device <path>] <output-dir> [name ...]}
 shift || true
 WANTED=("$@")
 
 WORK=$(mktemp -d /var/tmp/blockdev-capture.XXXXXX)
-REGION=$((1024 * 1024)) # one mebibyte, the prober's default region size
 
 # Detaching is driven off what losetup reports for this run's work directory
 # rather than off a list the script kept: attach runs inside a command
@@ -71,9 +96,12 @@ capture() {
     size=$(blockdev --getsize64 "$dev")
     block=$(blockdev --getss "$dev")
 
+    # The tail is skipped to in bytes rather than in regions: a device whose
+    # size is not a whole number of regions would otherwise be captured short of
+    # its end, and the signatures that live in a tail are placed against the end.
     dd if="$dev" of="$dir/head.bin" bs="$REGION" count=1 iflag=direct status=none
-    dd if="$dev" of="$dir/tail.bin" bs="$REGION" count=1 iflag=direct status=none \
-        skip=$(((size - REGION) / REGION))
+    dd if="$dev" of="$dir/tail.bin" bs="$REGION" count=1 status=none \
+        iflag=direct,skip_bytes skip=$((size - REGION))
 
     # blkid escapes spaces in its values ("LVM2\ 001"), so the backslashes and
     # quotes are escaped again on the way into JSON.
@@ -106,6 +134,20 @@ ver() { "$@" 2>&1 | head -1 | tr -d '\n'; }
 
 mkdir -p "$OUT"
 echo "capturing into $OUT"
+
+# Device mode runs alone: the catalog below formats things, and a run that was
+# pointed at a device in service must not reach it.
+if [ -n "$DEVICE" ]; then
+    [ -b "$DEVICE" ] || {
+        echo "$DEVICE is not a block device" >&2
+        exit 1
+    }
+    name=${WANTED[0]:?usage: capture-image.sh --device <path> <output-dir> <name> [note]}
+    capture "$name" "$DEVICE" "(unknown: captured from a device in service)" "unknown" \
+        "(not reproducible locally: this device was read, not written)" "${WANTED[1]:-}"
+    echo "done"
+    exit 0
+fi
 
 if want blank; then
     dev=$(attach blank 64)
