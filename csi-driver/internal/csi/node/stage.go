@@ -65,18 +65,28 @@ func (ns *Server) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if isStaged {
-		// A staged volume whose backing NVMe-oF device was lost leaves a dead
-		// (EIO) mount that isStaged still reports as staged. Repair it in place
-		// instead of short-circuiting.
-		if !ns.mounter.IsDead(stagingTargetPath) {
+		if _, ctxErr := lookupVolumeContext(stagingParentPath); ctxErr != nil {
+			// A mount with no stash means staging was interrupted before the stash
+			// was written (a crash, or tune2fs choking on an ext4 feature flag).
+			// Force-unmount and fall through to a fresh stage, which rewrites both.
+			klog.Warningf("volume %s mount exists at %s but no stash found (%v); unmounting for re-stage",
+				volumeID, stagingTargetPath, ctxErr)
+			if umountErr := ns.mounter.ForceUnmount(stagingTargetPath); umountErr != nil {
+				klog.Warningf("failed to unmount orphaned staging path %s: %v", stagingTargetPath, umountErr)
+			}
+		} else if !ns.mounter.IsDead(stagingTargetPath) {
+			// A staged volume whose backing NVMe-oF device was lost leaves a dead
+			// (EIO) mount that isStaged still reports as staged. Repair it in place
+			// instead of short-circuiting.
 			klog.Warning("volume already staged")
 			return &csi.NodeStageVolumeResponse{}, nil
+		} else {
+			klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
+			if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
+				return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
+			}
+			return &csi.NodeStageVolumeResponse{}, nil
 		}
-		klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
-		if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
-			return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
-		}
-		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
 	vc := req.GetVolumeContext()

@@ -517,6 +517,47 @@ func TestExpandOfARawBlockVolumeGrowsNoFilesystem(t *testing.T) {
 	}
 }
 
+// Regression: PR #384. A mount left behind by an interrupted stage, with no
+// stash written for it yet, must be re-staged rather than waved through as
+// already staged — the latter leaves every RPC after it with no stash to read.
+func TestStageRecoversAMountLeftBehindByAnInterruptedStage(t *testing.T) {
+	runner := newRecordingRunner()
+	parent := stagingDir(t)
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     stagedContext(),
+	}
+	stagingTargetPath := getStagingTargetPath(req)
+	// FakeMounter's IsLikelyNotMountPoint stats the real path.
+	if err := os.MkdirAll(stagingTargetPath, 0o755); err != nil {
+		t.Fatalf("create the staging path a real mount would have left: %v", err)
+	}
+
+	s, _ := newTestStack(t, runner)
+	ns := &Server{
+		// Mounted already, with no stash — what an interrupted stage leaves.
+		mounter: mount.NewWith(k8smount.NewFakeMounter([]k8smount.MountPoint{
+			{Device: fakeDevice, Path: stagingTargetPath, Type: extFS},
+		}), nil),
+		stack:       s,
+		volumeLocks: csicommon.NewVolumeLocks(),
+	}
+
+	if _, err := ns.NodeStageVolume(context.Background(), req); err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+
+	if !runner.called("up") {
+		t.Fatalf("the orphaned mount was never re-staged; NodeStageVolume answered success over a "+
+			"mount with no stash, which blocks every NodePublishVolume after it forever: calls=%v", runner.calls)
+	}
+	if _, err := lookupVolumeContext(parent); err != nil {
+		t.Fatalf("NodeStageVolume left no stash behind for the volume it just claimed was staged: %v", err)
+	}
+}
+
 // writeRecord puts a stack record on the store, naming the layers given.
 func writeRecord(t *testing.T, s *stack, handle string, names []string) {
 	t.Helper()
