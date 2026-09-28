@@ -212,15 +212,13 @@ This matches the PoC notes precisely:
 
 - Clients attach the underlying NVMe-oF namespaces directly (`nvme connect`) and create a
   `/dev/disk/by-id/` alias so the kernel can match the designator the MDS names in the
-  layout. **The name is `nvme-eui.${NGUID}`**, not `nvme-eui64.` as earlier drafts said:
-  `bl_parse_scsi` builds the path itself and tries exactly three prefixes, in order —
-  `dm-uuid-mpath-0x`, `wwn-0x`, then `nvme-eui.`. udev creates none of them for an NVMe-oF
-  namespace (it makes `nvme-uuid.` and a model alias), so csi-node must. The lookup is the
-  client kernel's own, not `blkmapd`'s.
+  layout. **The name is `nvme-eui.${NGUID}`.** `bl_parse_scsi` builds the path itself and
+  tries exactly three prefixes, in order — `dm-uuid-mpath-0x`, `wwn-0x`, then `nvme-eui.`.
+  udev creates none of them for an NVMe-oF namespace (it makes `nvme-uuid.` and a model
+  alias), so csi-node must. The lookup is the client kernel's own, not `blkmapd`'s.
 - The XFS filesystem is exported with the `pnfs` option. **XFS is the only Linux filesystem that can act as a pNFS SCSI-layout server**.
-- **Persistent Reservations are required before a layout is issued at all**, which is
-  stronger than the fencing argument this section used to make. `nfsd` registers its own
-  reservation key (`NFSD_MDS_PR_KEY`) on the exported device inside
+- **Persistent Reservations are required before a layout is issued at all.** `nfsd`
+  registers its own reservation key (`NFSD_MDS_PR_KEY`) on the exported device inside
   `nfsd4_scsi_proc_getdeviceinfo`, and refuses to hand out a SCSI layout if that
   registration fails. Fencing a dead or misbehaving client is the second thing reservations
   buy, not the first. A namespace without the capability logs
@@ -236,8 +234,7 @@ This matches the PoC notes precisely:
 - **A kernel carrying `nvme_get_unique_id`** is required on both clients and MDS, which is
   what lets nfsd identify an NVMe device to name it in a layout. This is a symbol, not a
   version: RHEL 9.8's 5.14.0-687 has it and works, RHEL 9.5's 5.14.0-503 does not and
-  reports `pnfs=not configured` on every client. Earlier drafts said "≥ 6.11" without
-  naming what needed it.
+  reports `pnfs=not configured` on every client.
 
 If the client cannot establish the block path (device missing, fenced, reservation conflict), NFSv4.1 **transparently falls back to routing that I/O through the MDS**. Correctness is preserved, throughput degrades. That is the safety net (§16).
 
