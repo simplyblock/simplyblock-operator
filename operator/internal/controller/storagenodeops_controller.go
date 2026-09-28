@@ -1894,6 +1894,24 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
 
+		// A 400 is the control plane's answer to every refused removal, the
+		// final ones and the passing ones alike: "cluster is not active",
+		// "cluster is rebalancing", "task found" come back exactly like a
+		// removal that can never succeed, and the body carries no reason
+		// (the endpoint maps remove_storage_node's False to a bare 400). So a
+		// removal issued while the cluster was still settling from the
+		// volume migrations was failed outright -- on a stopped node, with
+		// nothing to resume. The cluster's own state tells the two apart:
+		// while it is not active or is rebalancing, the refusal is the
+		// passing kind, and the op waits for it exactly as the other drain
+		// steps do; refused with the cluster active, it is final.
+		if status == http.StatusBadRequest {
+			if res, paused := r.clusterPauseCheck(ctx, ops, apiClient); paused {
+				log.Info("drain: node DELETE refused while the cluster is not ready; retrying", "status", status)
+				return res, nil
+			}
+		}
+
 		// The DELETE was refused before anything was dismantled. A node that
 		// is still up can be handed back; one the drain has already stopped
 		// cannot be resumed -- the resume itself fails, and retrying it
