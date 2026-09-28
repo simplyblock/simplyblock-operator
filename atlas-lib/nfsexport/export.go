@@ -1,10 +1,10 @@
-// Package export publishes a pNFS export on its metadata-server host.
+// Package nfsexport publishes a pNFS export on its metadata-server host.
 //
 // An export is a volume stack (the namespace attached, formatted, and mounted)
 // with an exports(5) entry in front of it. The stack is the same one the block
 // path stages: the consumer builds the plan, volstack's runner walks it, and
 // what is left here is the publishing.
-package export
+package nfsexport
 
 import (
 	"context"

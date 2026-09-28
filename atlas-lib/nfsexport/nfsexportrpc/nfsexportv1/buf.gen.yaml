@@ -1,4 +1,4 @@
-# Code generation for the link handshake protocol.
+# Code generation for the pNFS export protocol.
 #
 # buf compiles the .proto in pure Go -- no protoc -- and shells out to the two
 # generators, which it looks up on PATH. The atlas-lib Makefile puts the

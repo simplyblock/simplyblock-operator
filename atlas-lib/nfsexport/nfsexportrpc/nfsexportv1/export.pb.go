@@ -4,8 +4,8 @@
 // 	protoc        (unknown)
 // source: export.proto
 
-// Package atlas.export.v1 carries pNFS export assembly to the host that serves
-// it.
+// Package atlas.nfsexport.v1 carries pNFS export assembly to the host that
+// serves it.
 //
 // Unlike atlas.storage.v1, which is read-only by construction, everything here
 // mutates the node: it makes filesystems, mounts them, and publishes them. That
@@ -16,7 +16,7 @@
 // an export, so kubelet never issues a stage for it and something else has to
 // ask; this is that something.
 
-package exportv1
+package nfsexportv1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -409,7 +409,7 @@ var File_export_proto protoreflect.FileDescriptor
 
 const file_export_proto_rawDesc = "" +
 	"\n" +
-	"\fexport.proto\x12\x0fatlas.export.v1\"\xc5\x01\n" +
+	"\fexport.proto\x12\x12atlas.nfsexport.v1\"\xc5\x01\n" +
 	"\n" +
 	"ExportSpec\x12\x1f\n" +
 	"\vvolume_uuid\x18\x01 \x01(\tR\n" +
@@ -420,22 +420,22 @@ const file_export_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x05 \x01(\tR\tclusterId\x12\x17\n" +
 	"\apool_id\x18\x06 \x01(\tR\x06poolId\x12\x1c\n" +
-	"\tencrypted\x18\a \x01(\bR\tencrypted\"F\n" +
-	"\x13CreateExportRequest\x12/\n" +
-	"\x04spec\x18\x01 \x01(\v2\x1b.atlas.export.v1.ExportSpecR\x04spec\"\x16\n" +
-	"\x14CreateExportResponse\"F\n" +
-	"\x13DeleteExportRequest\x12/\n" +
-	"\x04spec\x18\x01 \x01(\v2\x1b.atlas.export.v1.ExportSpecR\x04spec\"\x16\n" +
-	"\x14DeleteExportResponse\"E\n" +
-	"\x12CheckExportRequest\x12/\n" +
-	"\x04spec\x18\x01 \x01(\v2\x1b.atlas.export.v1.ExportSpecR\x04spec\"G\n" +
+	"\tencrypted\x18\a \x01(\bR\tencrypted\"I\n" +
+	"\x13CreateExportRequest\x122\n" +
+	"\x04spec\x18\x01 \x01(\v2\x1e.atlas.nfsexport.v1.ExportSpecR\x04spec\"\x16\n" +
+	"\x14CreateExportResponse\"I\n" +
+	"\x13DeleteExportRequest\x122\n" +
+	"\x04spec\x18\x01 \x01(\v2\x1e.atlas.nfsexport.v1.ExportSpecR\x04spec\"\x16\n" +
+	"\x14DeleteExportResponse\"H\n" +
+	"\x12CheckExportRequest\x122\n" +
+	"\x04spec\x18\x01 \x01(\v2\x1e.atlas.nfsexport.v1.ExportSpecR\x04spec\"G\n" +
 	"\x13CheckExportResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2\xa3\x02\n" +
-	"\rExportService\x12[\n" +
-	"\fCreateExport\x12$.atlas.export.v1.CreateExportRequest\x1a%.atlas.export.v1.CreateExportResponse\x12[\n" +
-	"\fDeleteExport\x12$.atlas.export.v1.DeleteExportRequest\x1a%.atlas.export.v1.DeleteExportResponse\x12X\n" +
-	"\vCheckExport\x12#.atlas.export.v1.CheckExportRequest\x1a$.atlas.export.v1.CheckExportResponseBAZ?github.com/simplyblock/atlas/export/exportrpc/exportv1;exportv1b\x06proto3"
+	"\x06reason\x18\x02 \x01(\tR\x06reason2\xb5\x02\n" +
+	"\rExportService\x12a\n" +
+	"\fCreateExport\x12'.atlas.nfsexport.v1.CreateExportRequest\x1a(.atlas.nfsexport.v1.CreateExportResponse\x12a\n" +
+	"\fDeleteExport\x12'.atlas.nfsexport.v1.DeleteExportRequest\x1a(.atlas.nfsexport.v1.DeleteExportResponse\x12^\n" +
+	"\vCheckExport\x12&.atlas.nfsexport.v1.CheckExportRequest\x1a'.atlas.nfsexport.v1.CheckExportResponseBMZKgithub.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1;nfsexportv1b\x06proto3"
 
 var (
 	file_export_proto_rawDescOnce sync.Once
@@ -451,24 +451,24 @@ func file_export_proto_rawDescGZIP() []byte {
 
 var file_export_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_export_proto_goTypes = []any{
-	(*ExportSpec)(nil),           // 0: atlas.export.v1.ExportSpec
-	(*CreateExportRequest)(nil),  // 1: atlas.export.v1.CreateExportRequest
-	(*CreateExportResponse)(nil), // 2: atlas.export.v1.CreateExportResponse
-	(*DeleteExportRequest)(nil),  // 3: atlas.export.v1.DeleteExportRequest
-	(*DeleteExportResponse)(nil), // 4: atlas.export.v1.DeleteExportResponse
-	(*CheckExportRequest)(nil),   // 5: atlas.export.v1.CheckExportRequest
-	(*CheckExportResponse)(nil),  // 6: atlas.export.v1.CheckExportResponse
+	(*ExportSpec)(nil),           // 0: atlas.nfsexport.v1.ExportSpec
+	(*CreateExportRequest)(nil),  // 1: atlas.nfsexport.v1.CreateExportRequest
+	(*CreateExportResponse)(nil), // 2: atlas.nfsexport.v1.CreateExportResponse
+	(*DeleteExportRequest)(nil),  // 3: atlas.nfsexport.v1.DeleteExportRequest
+	(*DeleteExportResponse)(nil), // 4: atlas.nfsexport.v1.DeleteExportResponse
+	(*CheckExportRequest)(nil),   // 5: atlas.nfsexport.v1.CheckExportRequest
+	(*CheckExportResponse)(nil),  // 6: atlas.nfsexport.v1.CheckExportResponse
 }
 var file_export_proto_depIdxs = []int32{
-	0, // 0: atlas.export.v1.CreateExportRequest.spec:type_name -> atlas.export.v1.ExportSpec
-	0, // 1: atlas.export.v1.DeleteExportRequest.spec:type_name -> atlas.export.v1.ExportSpec
-	0, // 2: atlas.export.v1.CheckExportRequest.spec:type_name -> atlas.export.v1.ExportSpec
-	1, // 3: atlas.export.v1.ExportService.CreateExport:input_type -> atlas.export.v1.CreateExportRequest
-	3, // 4: atlas.export.v1.ExportService.DeleteExport:input_type -> atlas.export.v1.DeleteExportRequest
-	5, // 5: atlas.export.v1.ExportService.CheckExport:input_type -> atlas.export.v1.CheckExportRequest
-	2, // 6: atlas.export.v1.ExportService.CreateExport:output_type -> atlas.export.v1.CreateExportResponse
-	4, // 7: atlas.export.v1.ExportService.DeleteExport:output_type -> atlas.export.v1.DeleteExportResponse
-	6, // 8: atlas.export.v1.ExportService.CheckExport:output_type -> atlas.export.v1.CheckExportResponse
+	0, // 0: atlas.nfsexport.v1.CreateExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0, // 1: atlas.nfsexport.v1.DeleteExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	0, // 2: atlas.nfsexport.v1.CheckExportRequest.spec:type_name -> atlas.nfsexport.v1.ExportSpec
+	1, // 3: atlas.nfsexport.v1.ExportService.CreateExport:input_type -> atlas.nfsexport.v1.CreateExportRequest
+	3, // 4: atlas.nfsexport.v1.ExportService.DeleteExport:input_type -> atlas.nfsexport.v1.DeleteExportRequest
+	5, // 5: atlas.nfsexport.v1.ExportService.CheckExport:input_type -> atlas.nfsexport.v1.CheckExportRequest
+	2, // 6: atlas.nfsexport.v1.ExportService.CreateExport:output_type -> atlas.nfsexport.v1.CreateExportResponse
+	4, // 7: atlas.nfsexport.v1.ExportService.DeleteExport:output_type -> atlas.nfsexport.v1.DeleteExportResponse
+	6, // 8: atlas.nfsexport.v1.ExportService.CheckExport:output_type -> atlas.nfsexport.v1.CheckExportResponse
 	6, // [6:9] is the sub-list for method output_type
 	3, // [3:6] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name

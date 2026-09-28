@@ -2,12 +2,12 @@
 // trip intact, and that the two error shapes a caller has to tell apart arrive
 // distinguishable on the far side.
 //
-// What the assembler does with a spec is tested in the export package. What is
+// What the assembler does with a spec is tested in the nfsexport package. What is
 // pinned here is only that the wire does not quietly change it, because a
 // dropped client set would publish an export to nobody and a dropped fsid would
 // publish one whose file handles no longer survive a move.
 
-package exportrpc
+package nfsexportrpc
 
 import (
 	"context"
@@ -22,19 +22,19 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/simplyblock/atlas/errs"
-	"github.com/simplyblock/atlas/export"
+	"github.com/simplyblock/atlas/nfsexport"
 )
 
 // recordingAssembler captures what reached the node.
 type recordingAssembler struct {
-	created  []export.Spec
-	deleted  []export.Spec
-	checked  []export.Spec
+	created  []nfsexport.Spec
+	deleted  []nfsexport.Spec
+	checked  []nfsexport.Spec
 	err      error
 	checkErr error
 }
 
-func (a *recordingAssembler) Create(_ context.Context, spec export.Spec) error {
+func (a *recordingAssembler) Create(_ context.Context, spec nfsexport.Spec) error {
 	if a.err != nil {
 		return a.err
 	}
@@ -42,7 +42,7 @@ func (a *recordingAssembler) Create(_ context.Context, spec export.Spec) error {
 	return nil
 }
 
-func (a *recordingAssembler) Delete(_ context.Context, spec export.Spec) error {
+func (a *recordingAssembler) Delete(_ context.Context, spec nfsexport.Spec) error {
 	if a.err != nil {
 		return a.err
 	}
@@ -50,7 +50,7 @@ func (a *recordingAssembler) Delete(_ context.Context, spec export.Spec) error {
 	return nil
 }
 
-func (a *recordingAssembler) Check(_ context.Context, spec export.Spec) error {
+func (a *recordingAssembler) Check(_ context.Context, spec nfsexport.Spec) error {
 	a.checked = append(a.checked, spec)
 	return a.checkErr
 }
@@ -80,7 +80,7 @@ func serve(t *testing.T, assembler Assembler) *Client {
 	return Remote(conn)
 }
 
-var fullSpec = export.Spec{
+var fullSpec = nfsexport.Spec{
 	VolumeUUID: "cb2f293c-6d6f-4687-ad13-eb81fbec7314",
 	ClusterID:  "f0bb9077-78c4-4482-9ccf-a5693ce2df78",
 	PoolID:     "9d016dd4-34d7-42f0-b549-52a5af2f1399",
@@ -162,7 +162,7 @@ func TestCheckReportsAnUnhealthyExportAsAnError(t *testing.T) {
 // A refused spec has to arrive as a refusal, not as a transport failure: the
 // caller retries one and gives up on the other.
 func TestInvalidSpecArrivesAsInvalid(t *testing.T) {
-	client := serve(t, &recordingAssembler{err: export.ErrInvalidSpec})
+	client := serve(t, &recordingAssembler{err: nfsexport.ErrInvalidSpec})
 
 	err := client.Create(context.Background(), fullSpec)
 	if err == nil {
@@ -198,7 +198,7 @@ func TestNewServerRefusesANilAssembler(t *testing.T) {
 // left to drift with a rename.
 func TestCapabilityNameIsStable(t *testing.T) {
 	caps := Capabilities()
-	if len(caps) != 1 || caps[0] != "atlas.export.v1.ExportService" {
+	if len(caps) != 1 || caps[0] != "atlas.nfsexport.v1.ExportService" {
 		t.Errorf("capabilities = %v, want the ExportService name", caps)
 	}
 }

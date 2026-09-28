@@ -1,4 +1,4 @@
-package export
+package nfsexport
 
 import (
 	"context"

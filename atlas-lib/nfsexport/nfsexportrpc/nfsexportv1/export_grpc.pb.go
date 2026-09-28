@@ -4,8 +4,8 @@
 // - protoc             (unknown)
 // source: export.proto
 
-// Package atlas.export.v1 carries pNFS export assembly to the host that serves
-// it.
+// Package atlas.nfsexport.v1 carries pNFS export assembly to the host that
+// serves it.
 //
 // Unlike atlas.storage.v1, which is read-only by construction, everything here
 // mutates the node: it makes filesystems, mounts them, and publishes them. That
@@ -16,7 +16,7 @@
 // an export, so kubelet never issues a stage for it and something else has to
 // ask; this is that something.
 
-package exportv1
+package nfsexportv1
 
 import (
 	context "context"
@@ -31,9 +31,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ExportService_CreateExport_FullMethodName = "/atlas.export.v1.ExportService/CreateExport"
-	ExportService_DeleteExport_FullMethodName = "/atlas.export.v1.ExportService/DeleteExport"
-	ExportService_CheckExport_FullMethodName  = "/atlas.export.v1.ExportService/CheckExport"
+	ExportService_CreateExport_FullMethodName = "/atlas.nfsexport.v1.ExportService/CreateExport"
+	ExportService_DeleteExport_FullMethodName = "/atlas.nfsexport.v1.ExportService/DeleteExport"
+	ExportService_CheckExport_FullMethodName  = "/atlas.nfsexport.v1.ExportService/CheckExport"
 )
 
 // ExportServiceClient is the client API for ExportService service.
@@ -218,7 +218,7 @@ func _ExportService_CheckExport_Handler(srv interface{}, ctx context.Context, de
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var ExportService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "atlas.export.v1.ExportService",
+	ServiceName: "atlas.nfsexport.v1.ExportService",
 	HandlerType: (*ExportServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

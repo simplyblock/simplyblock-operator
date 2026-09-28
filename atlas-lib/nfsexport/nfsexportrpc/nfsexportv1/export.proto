@@ -1,7 +1,7 @@
 syntax = "proto3";
 
-// Package atlas.export.v1 carries pNFS export assembly to the host that serves
-// it.
+// Package atlas.nfsexport.v1 carries pNFS export assembly to the host that
+// serves it.
 //
 // Unlike atlas.storage.v1, which is read-only by construction, everything here
 // mutates the node: it makes filesystems, mounts them, and publishes them. That
@@ -11,9 +11,9 @@ syntax = "proto3";
 // The operator is the only caller. No consuming pod runs on the host that serves
 // an export, so kubelet never issues a stage for it and something else has to
 // ask; this is that something.
-package atlas.export.v1;
+package atlas.nfsexport.v1;
 
-option go_package = "github.com/simplyblock/atlas/export/exportrpc/exportv1;exportv1";
+option go_package = "github.com/simplyblock/atlas/nfsexport/nfsexportrpc/nfsexportv1;nfsexportv1";
 
 // ExportService assembles and tears down exports on the node it runs on. Both
 // calls are idempotent, because the caller is a reconciler and will make them
