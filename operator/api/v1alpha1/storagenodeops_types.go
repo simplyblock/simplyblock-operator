@@ -183,6 +183,14 @@ type VolumeDrainTargets struct {
 	// Reset whenever a target is burned, so the next candidate starts fresh.
 	// +optional
 	Failures int `json:"failures,omitempty"`
+
+	// FailingTarget is the target the Failures count refers to. Unattributed
+	// failures are only comparable against one node: ten failures spread over
+	// three candidates say nothing about the third, but a count kept per volume
+	// alone would have burnt it. The count restarts whenever the failing
+	// migration's target differs from this one.
+	// +optional
+	FailingTarget string `json:"failingTarget,omitempty"`
 }
 
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.

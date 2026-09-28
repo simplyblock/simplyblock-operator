@@ -1460,7 +1460,7 @@ func recordExhaustedTargets(
 			continue
 		}
 
-		if bumpUnattributedFailure(ops, pv) >= MaxUnattributedFailures {
+		if bumpUnattributedFailure(ops, pv, target) >= MaxUnattributedFailures {
 			if recordDrainTargetTried(ops, pv, target) {
 				resetUnattributedFailures(ops, pv)
 				recorded = true
@@ -1480,16 +1480,31 @@ func recordExhaustedTargets(
 // without it and could loop indefinitely.
 const MaxUnattributedFailures = 10
 
-// bumpUnattributedFailure increments and returns the failure count for pvName.
-func bumpUnattributedFailure(ops *simplyblockv1alpha1.StorageNodeOps, pvName string) int {
+// bumpUnattributedFailure increments and returns the count of consecutive
+// unattributed failures of pvName's migration against target.
+//
+// The count is per target, not per volume. Failures nobody can pin on a node
+// are only comparable while the node stays the same: the bound exists to
+// abandon a target that keeps failing for reasons outside itself, and ten
+// such failures spread over three candidates -- the online set changed, a
+// retry landed elsewhere -- say nothing about the third. A count kept per
+// volume alone reached the bound on that third node and burnt it for
+// failures it never saw. A different target restarts the count at one.
+func bumpUnattributedFailure(ops *simplyblockv1alpha1.StorageNodeOps, pvName, target string) int {
 	for i := range ops.Status.DrainTargetsTried {
-		if ops.Status.DrainTargetsTried[i].PVName == pvName {
-			ops.Status.DrainTargetsTried[i].Failures++
-			return ops.Status.DrainTargetsTried[i].Failures
+		entry := &ops.Status.DrainTargetsTried[i]
+		if entry.PVName != pvName {
+			continue
 		}
+		if entry.FailingTarget != target {
+			entry.FailingTarget = target
+			entry.Failures = 0
+		}
+		entry.Failures++
+		return entry.Failures
 	}
 	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
-		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Failures: 1})
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, Failures: 1, FailingTarget: target})
 	return 1
 }
 
@@ -1499,6 +1514,7 @@ func resetUnattributedFailures(ops *simplyblockv1alpha1.StorageNodeOps, pvName s
 	for i := range ops.Status.DrainTargetsTried {
 		if ops.Status.DrainTargetsTried[i].PVName == pvName {
 			ops.Status.DrainTargetsTried[i].Failures = 0
+			ops.Status.DrainTargetsTried[i].FailingTarget = ""
 			return
 		}
 	}
