@@ -28,9 +28,9 @@ func failedVM(name, target, sourceNode string) simplyblockv1alpha1.VolumeMigrati
 	return m
 }
 
-func entryFor(ops *simplyblockv1alpha1.StorageNodeOps, pv string) *simplyblockv1alpha1.VolumeDrainTargets {
+func entryFor(ops *simplyblockv1alpha1.StorageNodeOps) *simplyblockv1alpha1.VolumeDrainTargets {
 	for i := range ops.Status.DrainTargetsTried {
-		if ops.Status.DrainTargetsTried[i].PVName == pv {
+		if ops.Status.DrainTargetsTried[i].PVName == drainTestPVA {
 			return &ops.Status.DrainTargetsTried[i]
 		}
 	}
@@ -55,7 +55,7 @@ func TestUnattributedFailuresAreCountedPerTarget(t *testing.T) {
 		t.Fatalf("burnt %v after %d failures on one node and %d on another: the count "+
 			"must not carry over between targets", got, half, half)
 	}
-	e := entryFor(ops, drainTestPVA)
+	e := entryFor(ops)
 	if e == nil || e.FailingTarget != drainTestNode3 || e.Failures != half {
 		t.Fatalf("count should follow the current target: got %+v", e)
 	}
@@ -70,8 +70,32 @@ func TestUnattributedFailuresOnOneTargetStillReachTheBound(t *testing.T) {
 	if got := drainTargetsTriedFor(ops, drainTestPVA); len(got) != 1 || got[0] != drainTestNode2 {
 		t.Fatalf("exhausted = %v, want [node-2] after %d unattributed failures on it", got, MaxUnattributedFailures)
 	}
-	if e := entryFor(ops, drainTestPVA); e.Failures != 0 || e.FailingTarget != "" {
+	if e := entryFor(ops); e.Failures != 0 || e.FailingTarget != "" {
 		t.Errorf("after burning the target the count must restart: %+v", e)
+	}
+}
+
+func TestAFailedCRIsCountedOnceHoweverOftenItIsObserved(t *testing.T) {
+	// A failed CR stays until the drain deletes it; a pass cut short by a
+	// refused status write, a refused delete or a restart observes the same
+	// CR again. The count must not move on the repeat.
+	ops := &simplyblockv1alpha1.StorageNodeOps{}
+	same := failedVM("once", drainTestNode2, "")
+	for i := 0; i < MaxUnattributedFailures+2; i++ {
+		recordExhaustedTargets(ops, []simplyblockv1alpha1.VolumeMigration{same})
+	}
+	if e := entryFor(ops); e == nil || e.Failures != 1 {
+		t.Fatalf("one failure observed %d times counted as %+v, want Failures=1", MaxUnattributedFailures+2, e)
+	}
+	if got := drainTargetsTriedFor(ops, drainTestPVA); len(got) != 0 {
+		t.Fatalf("a single failure re-observed burnt the target: %v", got)
+	}
+
+	// A new CR for the same volume (a recreated one has a new UID) counts.
+	next := failedVM("twice", drainTestNode2, "")
+	recordExhaustedTargets(ops, []simplyblockv1alpha1.VolumeMigration{next})
+	if e := entryFor(ops); e.Failures != 2 {
+		t.Errorf("a distinct failed CR was not counted: %+v", e)
 	}
 }
 

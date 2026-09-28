@@ -191,6 +191,15 @@ type VolumeDrainTargets struct {
 	// migration's target differs from this one.
 	// +optional
 	FailingTarget string `json:"failingTarget,omitempty"`
+
+	// CountedFailure is the UID of the last failed VolumeMigration counted for
+	// this volume. A failed CR stays until the drain deletes it, and the
+	// reconcile that counts it can end before the delete lands -- the status
+	// write failed, the delete failed, the operator restarted -- so the next
+	// pass observes the same failure again. Recording which CR was counted
+	// makes each failure count once. A recreated CR has a new UID.
+	// +optional
+	CountedFailure string `json:"countedFailure,omitempty"`
 }
 
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.

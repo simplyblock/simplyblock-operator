@@ -1448,6 +1448,15 @@ func recordExhaustedTargets(
 		}
 		pv := failed[i].Spec.PVName
 
+		// Once per failed CR. The CR outlives the pass that counts it until
+		// the delete lands, so a pass cut short -- status write refused,
+		// delete refused, operator restarted -- re-observes the same Failed
+		// CR and would count it again, pushing the unattributed count toward
+		// the bound on repeats of one failure. A recreated CR has a new UID.
+		if markFailureCounted(ops, pv, string(failed[i].UID)) {
+			continue
+		}
+
 		// Attribution decides how FAST a target is abandoned, never whether it
 		// ever is. A failure the target caused burns it at once. One it did not
 		// cause is retried, but counted -- otherwise the drain recreates the
@@ -1546,6 +1555,28 @@ func resetUnattributedFailures(ops *simplyblockv1alpha1.StorageNodeOps, pvName s
 // Failed, losing the phase the failure came from.
 func targetWasEngaged(vm *simplyblockv1alpha1.VolumeMigration) bool {
 	return vm.Status.SourceNodeUUID != ""
+}
+
+// markFailureCounted records that the failed CR with uid has been counted for
+// pvName, and reports whether it already had been. An empty uid (an object
+// that never went through the API server) is never deduplicated.
+func markFailureCounted(ops *simplyblockv1alpha1.StorageNodeOps, pvName, uid string) bool {
+	if uid == "" {
+		return false
+	}
+	for i := range ops.Status.DrainTargetsTried {
+		if ops.Status.DrainTargetsTried[i].PVName != pvName {
+			continue
+		}
+		if ops.Status.DrainTargetsTried[i].CountedFailure == uid {
+			return true
+		}
+		ops.Status.DrainTargetsTried[i].CountedFailure = uid
+		return false
+	}
+	ops.Status.DrainTargetsTried = append(ops.Status.DrainTargetsTried,
+		simplyblockv1alpha1.VolumeDrainTargets{PVName: pvName, CountedFailure: uid})
+	return false
 }
 
 // recordDrainTargetTried marks target as exhausted for pvName. Returns true if
