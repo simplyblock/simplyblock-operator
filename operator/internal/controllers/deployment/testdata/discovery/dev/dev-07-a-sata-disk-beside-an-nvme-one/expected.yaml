@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableJournalDevice: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-dev-07-cluster
