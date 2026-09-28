@@ -337,26 +337,14 @@ under it, and the parameter that governs them already exists: `ptpl_file` on
 `nvmf_subsystem_add_ns`.
 
 A namespace is Persist-Through-Power-Loss capable exactly when it was added with a
-`ptpl_file` — SPDK's `nvmf_ns_is_ptpl_capable()` is literally
-`ns->ptpl_file != NULL` — and only such a namespace sets RESCAP bit 0
-(`lib/nvmf/ctrlr_bdev.c`). Every other reservation bit is set unconditionally, which is
-why an unfixed namespace reads `rescap = 0xfe`.
-
-sbcli already had the plumbing. It was written inside an `if eui64:` branch in
-`rpc_client.py`, and no caller passes `eui64`, so the line never ran:
-
-```python
-if eui64:
-    params['namespace']['eui64'] = eui64
-    params['namespace']['ptpl_file'] = "/mnt/ns_resv" + eui64 + ".json"   # dead
-```
-
-The fix is to key the file off whichever identifier the namespace has, leaving `eui64`
-alone because it is device identity. No API, model, or DTO change is needed, and no new
-create parameter has to cross the CSI boundary — which also removes the
+`ptpl_file` (SPDK's `nvmf_ns_is_ptpl_capable()` is `ns->ptpl_file != NULL`), which is what
+sets RESCAP bit 0; without it every namespace reads `rescap = 0xfe`. sbcli's
+`rpc_client.py` already sets `ptpl_file`, but only inside an `if eui64:` branch that no
+caller ever triggers. The fix keys the file off whichever identifier the namespace has, so
+no API, model, or DTO change is needed — which also removes the
 `enable_persistent_reservation` field §9.3 step 3 asks `CreateLVolData` to carry.
 
-Two operational consequences the earlier design did not consider, both open:
+Two operational consequences follow, both open:
 
 - `ptpl_file` writes one small JSON file per namespace under `/mnt` on the storage node.
   That path must be writable and genuinely persistent (not the ramdisk SPDK keeps its
