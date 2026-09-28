@@ -50,6 +50,59 @@ func TestValidateThreadCount(t *testing.T) {
 	}
 }
 
+// ensureNFSDThreads reports whether it started the threads, which is what
+// EnsureNFSD uses to decide whether a fresh thread pool needs selfCheckNFSD
+// before anything else can reach it: a sandbox has no /proc/fs/nfsd, so this
+// always takes the "start" path.
+func TestEnsureNFSDThreadsReportsThatItStarted(t *testing.T) {
+	var calls []string
+	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
+		calls = append(calls, name)
+		return nil, 0, nil
+	}
+	started, err := ensureNFSDThreads(context.Background(), run)
+	if err != nil {
+		t.Fatalf("ensureNFSDThreads: %v", err)
+	}
+	if !started {
+		t.Error("started = false, want true: a sandbox has no nfsdControl file to read as already running")
+	}
+	if len(calls) != 1 || calls[0] != "rpc.nfsd" {
+		t.Errorf("calls = %v, want exactly one call to rpc.nfsd", calls)
+	}
+}
+
+// selfCheckNFSD exists because a freshly started nfsd can pass every other
+// check here and still never answer -- see its own package comment. It
+// reports that by trying a real, but bounded, mount of nfsd's pseudo-root.
+func TestSelfCheckNFSDFailsWhenNFSDNeverAnswers(t *testing.T) {
+	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
+		if name == "mount" {
+			// What a soft mount's own bounded give-up looks like: a non-zero
+			// exit, not an error running the command at all.
+			return []byte("mount.nfs4: Connection timed out"), 32, nil
+		}
+		return nil, 0, nil
+	}
+	if err := selfCheckNFSD(context.Background(), run); err == nil {
+		t.Fatal("selfCheckNFSD passed against a mount that reported nfsd never answered")
+	}
+}
+
+func TestSelfCheckNFSDPassesAndCleansUpWhenNFSDAnswers(t *testing.T) {
+	var calls []string
+	run := func(_ context.Context, name string, _ ...string) ([]byte, int, error) {
+		calls = append(calls, name)
+		return nil, 0, nil
+	}
+	if err := selfCheckNFSD(context.Background(), run); err != nil {
+		t.Fatalf("selfCheckNFSD: %v", err)
+	}
+	if len(calls) != 2 || calls[0] != "mount" || calls[1] != "umount" {
+		t.Errorf("calls = %v, want exactly a mount then an umount", calls)
+	}
+}
+
 // nfsd is checked before the export sitting on it: an export cannot be well
 // served by a kernel NFS server with no threads running, whatever its own
 // mount and export-table state says. A sandbox has no /proc/fs/nfsd, so this

@@ -38,7 +38,20 @@ const aliasPrefix = "nvme-eui."
 
 // nfsMountOptions are the options every pNFS mount carries. 4.1 is the floor:
 // layouts do not exist before it.
-var nfsMountOptions = []string{"vers=4.1"}
+//
+// soft, not the default hard: this connection carries metadata only, never
+// data (that is the whole point of a layout -- see stagePNFS and
+// primeLayout), so a metadata call that never gets a reply should surface as
+// a failure this node's own retry loop can act on, not hang the mounting
+// task in uninterruptible sleep forever. Found live: a freshly started nfsd
+// can silently never answer a client's very first call, and under the
+// default hard mount that leaves the mount(8) process unkillable and blocks
+// every later NFS mount attempt from the same node behind it, not just this
+// one (RPC's own per-server client init is serialized). timeo/retrans bound
+// how long that takes to surface: generous enough that a real but loaded MDS
+// is not mistaken for a dead one, bounded enough that it does not hang this
+// node the same way.
+var nfsMountOptions = []string{"vers=4.1", "soft", "timeo=100", "retrans=2"}
 
 // aliasPath is where the alias for a namespace goes.
 func aliasPath(nguid string) string {

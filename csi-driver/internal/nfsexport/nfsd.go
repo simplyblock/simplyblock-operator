@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/simplyblock/atlas/export"
 )
@@ -27,6 +28,12 @@ const (
 
 	// Exists only once the nfsd filesystem is mounted, which is the test.
 	nfsdControl = export.NFSDProcDir + "/threads"
+
+	// selfCheckTimeout bounds the check on top of the mount's own
+	// soft/timeo/retrans -- belt and suspenders, not the actual guarantee.
+	// That is the mount options below, which the kernel enforces regardless
+	// of whether this process is even still watching.
+	selfCheckTimeout = 30 * time.Second
 )
 
 // EnsureNFSD makes the host's NFS server ready to serve an export. Idempotent,
@@ -38,6 +45,14 @@ const (
 // client-recovery database the moment its threads start, and that read is
 // what the package comment on ensureNfsdcld explains hangs indefinitely
 // without nfsdcld there yet to answer for it.
+//
+// A fresh thread pool is checked for real before anything else can reach it:
+// found live, nfsd can pass every check above -- module loaded, threads
+// running, nfsdcld and idmapd both up -- and still silently never answer a
+// client's first request. See selfCheckNFSD. Only when this call is what
+// started the threads: the check is a real mount, not free, and every other
+// call here already reads state rather than assuming it for exactly that
+// reason.
 func EnsureNFSD(ctx context.Context, run runner) error {
 	if err := ensureNFSDModule(ctx, run); err != nil {
 		return err
@@ -48,10 +63,26 @@ func EnsureNFSD(ctx context.Context, run runner) error {
 	if err := ensureNfsdcld(ctx, run); err != nil {
 		return err
 	}
-	if err := ensureNFSDThreads(ctx, run); err != nil {
+	startedThreads, err := ensureNFSDThreads(ctx, run)
+	if err != nil {
 		return err
 	}
-	return ensureIdmapd(ctx, run)
+	if err := ensureIdmapd(ctx, run); err != nil {
+		return err
+	}
+	if !startedThreads {
+		return nil
+	}
+	if err := selfCheckNFSD(ctx, run); err != nil {
+		// A wedged nfsd still reports its old thread count as healthy, which
+		// would let a retry believe it can skip ensureNFSDThreads entirely
+		// and hand this export to the very server that just failed to
+		// answer. Reset it so a retry gets a genuinely fresh thread pool,
+		// not the one this check just found broken.
+		_, _, _ = run(ctx, "rpc.nfsd", "0")
+		return fmt.Errorf("nfsd: %w", err)
+	}
+	return nil
 }
 
 // runner is atlas/blockdev's command shape, named so a test can substitute.
@@ -92,22 +123,65 @@ func ensureNFSDFilesystem(ctx context.Context, run runner) error {
 	return nil
 }
 
-// ensureNFSDThreads starts the server if no threads are running. The count is
-// read rather than assumed: rpc.nfsd on a live server resets it, taking threads
-// from a host serving somebody else's exports.
-func ensureNFSDThreads(ctx context.Context, run runner) error {
+// ensureNFSDThreads starts the server if no threads are running, and reports
+// whether it did. The count is read rather than assumed: rpc.nfsd on a live
+// server resets it, taking threads from a host serving somebody else's
+// exports.
+func ensureNFSDThreads(ctx context.Context, run runner) (started bool, err error) {
 	if running, err := os.ReadFile(nfsdControl); err == nil {
 		if n, convErr := strconv.Atoi(strings.TrimSpace(string(running))); convErr == nil && n > 0 {
-			return nil
+			return false, nil
 		}
 	}
 	out, code, err := run(ctx, "rpc.nfsd", strconv.Itoa(nfsdThreads))
 	if err != nil {
-		return fmt.Errorf("nfsd: running rpc.nfsd: %w", err)
+		return false, fmt.Errorf("nfsd: running rpc.nfsd: %w", err)
 	}
 	if code != 0 {
-		return fmt.Errorf("nfsd: rpc.nfsd exited %d: %s", code, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("nfsd: rpc.nfsd exited %d: %s", code, strings.TrimSpace(string(out)))
 	}
+	return true, nil
+}
+
+// selfCheckNFSD verifies nfsd can complete a real NFSv4.1 call, not merely
+// that its threads exist. Mounting the server's own pseudo-root exercises
+// the exact call (EXCHANGE_ID) that was found live to hang, without needing
+// a real export: NFSv4 serves the pseudo-filesystem root even with nothing
+// exported yet.
+//
+// Found live: a freshly started nfsd's threads can sit idle forever, having
+// silently never picked up a client's very first request, though the bytes
+// were already read off the socket -- a lost wakeup somewhere between the
+// kernel accepting the connection and a thread being told there is work.
+// Nothing in this package can fix that; what it can do is refuse to call
+// nfsd ready until it has actually answered once.
+//
+// soft, with a short timeo/retrans of its own: the failure this guards
+// against is nfsd never replying at all, and a hard mount here would add
+// this process's own call to the same pile of things stuck in
+// uninterruptible sleep -- checking for a hang by risking the same hang
+// defeats the check.
+func selfCheckNFSD(ctx context.Context, run runner) error {
+	mountpoint, err := os.MkdirTemp("", "nfsd-selfcheck-")
+	if err != nil {
+		return fmt.Errorf("nfsd: self-check: making a scratch mountpoint: %w", err)
+	}
+	defer func() { _ = os.Remove(mountpoint) }() // best-effort; empty once unmounted
+
+	checkCtx, cancel := context.WithTimeout(ctx, selfCheckTimeout)
+	defer cancel()
+
+	out, code, err := run(checkCtx, "mount", "-t", "nfs4",
+		"-o", "soft,timeo=100,retrans=1,vers=4.1",
+		"127.0.0.1:/", mountpoint)
+	if err != nil {
+		return fmt.Errorf("self-check: running mount: %w", err)
+	}
+	if code != 0 {
+		return fmt.Errorf("self-check: nfsd did not answer its own pseudo-root within %s: %s",
+			selfCheckTimeout, strings.TrimSpace(string(out)))
+	}
+	_, _, _ = run(ctx, "umount", mountpoint) // best-effort: nfsd answered, which is what this checks
 	return nil
 }
 

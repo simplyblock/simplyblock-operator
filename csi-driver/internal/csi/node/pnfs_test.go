@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,8 +79,28 @@ func TestAliasUsesThePrefixTheKernelTries(t *testing.T) {
 
 // Every pNFS mount carries vers=4.1: layouts do not exist before it.
 func TestMountOptionsAlwaysCarryV41(t *testing.T) {
-	if len(nfsMountOptions) != 1 || nfsMountOptions[0] != "vers=4.1" {
-		t.Fatalf("options = %v, want just vers=4.1", nfsMountOptions)
+	if !slices.Contains(nfsMountOptions, "vers=4.1") {
+		t.Fatalf("options = %v, want vers=4.1 among them", nfsMountOptions)
+	}
+}
+
+// soft, not hard: a metadata server that never answers must surface as a
+// failure this node's own retry loop can act on, not an unkillable mount
+// that also blocks every later NFS mount from this node behind it.
+func TestMountOptionsAreSoftWithBoundedRetries(t *testing.T) {
+	if slices.Contains(nfsMountOptions, "hard") {
+		t.Fatalf("options = %v, want no hard -- that is exactly the unbounded wait this guards against", nfsMountOptions)
+	}
+	if !slices.Contains(nfsMountOptions, "soft") {
+		t.Fatalf("options = %v, want soft", nfsMountOptions)
+	}
+	hasTimeo, hasRetrans := false, false
+	for _, o := range nfsMountOptions {
+		hasTimeo = hasTimeo || strings.HasPrefix(o, "timeo=")
+		hasRetrans = hasRetrans || strings.HasPrefix(o, "retrans=")
+	}
+	if !hasTimeo || !hasRetrans {
+		t.Fatalf("options = %v, want an explicit timeo= and retrans= rather than relying on the kernel's own hard-mount defaults", nfsMountOptions)
 	}
 }
 
