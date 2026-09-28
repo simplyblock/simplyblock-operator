@@ -180,17 +180,23 @@ func TestAFleetWithNoJournalDiskIsSaidSo(t *testing.T) {
 	t.Error("the draft says nothing about the journal for a fleet of identical disks")
 }
 
-// namespaces builds a worker whose devices carry the addresses given, so that
-// two namespaces of one controller can be expressed: the probe reports a device
-// per namespace and the draft names the controller once.
-func namespacesOn(name string, devices ...[2]any) Worker {
-	out := Worker{Name: name, Class: ClassNVMe}
-	for index, device := range devices {
+// namespace is one namespace the probe reports, at the PCI address of the
+// controller carrying it. Two of them at one address is the shape that matters:
+// the probe reports a device each and the draft names the controller once.
+type namespace struct {
+	address string
+	size    uint64
+}
+
+// aWorkerWithNamespaces builds the one worker these cases are about.
+func aWorkerWithNamespaces(namespaces ...namespace) Worker {
+	out := Worker{Name: "worker-1", Class: ClassNVMe}
+	for index, ns := range namespaces {
 		out.Devices = append(out.Devices, nodeprobe.Device{
 			Name:       fmt.Sprintf("nvme%dn%d", index, index),
 			Path:       fmt.Sprintf("/dev/nvme%dn%d", index, index),
-			PCIAddress: device[0].(string),
-			SizeBytes:  device[1].(uint64),
+			PCIAddress: ns.address,
+			SizeBytes:  ns.size,
 			Kind:       "Disk",
 			Transport:  "NVMe",
 			Available:  true,
@@ -220,28 +226,28 @@ func TestTheJournalRuleReadsWhatTheDraftNames(t *testing.T) {
 	}{
 		{
 			name: "one controller, two namespaces, nothing else",
-			worker: namespacesOn("worker-1",
-				[2]any{"0000:5e:00.0", 3 * tib},
-				[2]any{"0000:5e:00.0", 1 * tib}),
+			worker: aWorkerWithNamespaces(
+				namespace{"0000:5e:00.0", 3 * tib},
+				namespace{"0000:5e:00.0", 1 * tib}),
 			propose: false,
 			why:     "the draft names one device, and dedicating it leaves no storage",
 		},
 		{
 			name: "two namespaces on one controller beside a whole one",
-			worker: namespacesOn("worker-1",
-				[2]any{"0000:5e:00.0", 3 * tib},
-				[2]any{"0000:5e:00.0", 1 * tib},
-				[2]any{"0000:5f:00.0", 3 * tib}),
+			worker: aWorkerWithNamespaces(
+				namespace{"0000:5e:00.0", 3 * tib},
+				namespace{"0000:5e:00.0", 1 * tib},
+				namespace{"0000:5f:00.0", 3 * tib}),
 			propose: true,
 			why: "the controllers carry 4T and 3T, so the smaller is unique. " +
 				"Counting namespaces would have made the 1T one the smallest instead",
 		},
 		{
 			name: "namespaces that make the controllers unequal",
-			worker: namespacesOn("worker-1",
-				[2]any{"0000:5e:00.0", 2 * tib},
-				[2]any{"0000:5e:00.0", 2 * tib},
-				[2]any{"0000:5f:00.0", 1 * tib}),
+			worker: aWorkerWithNamespaces(
+				namespace{"0000:5e:00.0", 2 * tib},
+				namespace{"0000:5e:00.0", 2 * tib},
+				namespace{"0000:5f:00.0", 1 * tib}),
 			propose: true,
 			why:     "one controller carries 4T and the other 1T, which is the shape",
 		},
@@ -265,10 +271,10 @@ func TestTheJournalRuleReadsWhatTheDraftNames(t *testing.T) {
 // The note names a device the draft carries, and states the capacity of that
 // device rather than of one namespace of it.
 func TestTheJournalNoteNamesAnAddressTheDraftCarries(t *testing.T) {
-	worker := namespacesOn("worker-1",
-		[2]any{"0000:5e:00.0", 2 * tib},
-		[2]any{"0000:5e:00.0", 2 * tib},
-		[2]any{"0000:5f:00.0", 1 * tib})
+	worker := aWorkerWithNamespaces(
+		namespace{"0000:5e:00.0", 2 * tib},
+		namespace{"0000:5e:00.0", 2 * tib},
+		namespace{"0000:5f:00.0", 1 * tib})
 	template := ClusterTemplateFor("a-cluster", Plan{Class: ClassNVMe, Workers: []Worker{worker}})
 
 	var note string
