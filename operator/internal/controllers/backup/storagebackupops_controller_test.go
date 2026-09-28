@@ -399,6 +399,21 @@ func TestRestoreFailsAgainstAFailedBackup(t *testing.T) {
 	}
 }
 
+// A merged backup has no copy of its own any more, and it does not recover
+// either, so it must fail rather than sit retrying forever.
+func TestRestoreFailsAgainstAMergedBackup(t *testing.T) {
+	merged := availableBackup()
+	merged.Status.Phase = simplyblockv1alpha2.StorageBackupPhaseMerged
+
+	r := opsReconciler(t, &fakeControlPlane{},
+		testClusterObject(), testPoolObject(), merged, restoreOps(testOpsName))
+
+	ops := reconcileUntilSettled(t, r)
+	if ops.Status.Phase != simplyblockv1alpha2.StorageBackupOpsPhaseFailed {
+		t.Errorf("phase = %q, want Failed against a merged backup", ops.Status.Phase)
+	}
+}
+
 // A restore is never asked for twice. The second request would produce a second
 // volume nothing accounts for, so the recorded volume is what guards it.
 func TestTheRestoreRequestIsIssuedOnlyOnce(t *testing.T) {

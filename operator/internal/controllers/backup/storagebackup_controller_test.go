@@ -232,6 +232,9 @@ func TestBackupPhaseGroupsTheControlPlanesStatuses(t *testing.T) {
 		// neither has failed.
 		cpBackupMerging:  simplyblockv1alpha2.StorageBackupPhaseCreating,
 		cpBackupDeleting: simplyblockv1alpha2.StorageBackupPhaseCreating,
+		// Merged never becomes restorable either, but unlike Failed it never
+		// went wrong, so it gets its own terminal phase rather than either.
+		cpBackupMerged: simplyblockv1alpha2.StorageBackupPhaseMerged,
 		// A status this operator has never seen says the operator does not know,
 		// which is not the same as saying the copy is usable.
 		"something_new": simplyblockv1alpha2.StorageBackupPhasePending,

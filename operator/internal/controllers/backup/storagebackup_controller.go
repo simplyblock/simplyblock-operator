@@ -80,6 +80,7 @@ const (
 	cpBackupFailed     = "failed"
 	cpBackupMerging    = "merging"
 	cpBackupDeleting   = "deleting"
+	cpBackupMerged     = "merged"
 )
 
 // BackupCache is the read surface the reconciler needs from the backup
@@ -588,20 +589,23 @@ func backupCopyFrom(dto subscriptions.BackupDTO) *simplyblockv1alpha2.BackupCopy
 	return copied
 }
 
-// backupPhaseFor groups the control plane's own lifecycle strings into the four
+// backupPhaseFor groups the control plane's own lifecycle strings into the five
 // values the kind declares. The string itself is kept verbatim in
 // status.apiStatus, so nothing is lost by the grouping.
 //
-// Merging and deleting are folded into Creating rather than given values of
-// their own, because both describe a copy that is being rewritten and is
-// therefore not stably restorable. An unrecognized status is Pending, which says
-// the operator does not know rather than claiming the copy is usable.
+// Merging and deleting fold into Creating: both describe a copy being
+// rewritten, not stably restorable yet. Merged does not: it is where that
+// rewrite ends up and never becomes Available, so it keeps its own terminal
+// phase. An unrecognized status is Pending, which says the operator does not
+// know rather than claiming the copy is usable.
 func backupPhaseFor(status string) simplyblockv1alpha2.StorageBackupPhase {
 	switch status {
 	case cpBackupCompleted:
 		return simplyblockv1alpha2.StorageBackupPhaseAvailable
 	case cpBackupFailed:
 		return simplyblockv1alpha2.StorageBackupPhaseFailed
+	case cpBackupMerged:
+		return simplyblockv1alpha2.StorageBackupPhaseMerged
 	case cpBackupInProgress, cpBackupMerging, cpBackupDeleting:
 		return simplyblockv1alpha2.StorageBackupPhaseCreating
 	case cpBackupPending:
@@ -620,6 +624,8 @@ func backupMessageFor(status string) string {
 		return "The copy is complete and can be restored"
 	case cpBackupFailed:
 		return "The control plane reported the backup as failed"
+	case cpBackupMerged:
+		return "This copy was merged into a later backup and is no longer independently restorable"
 	case cpBackupMerging:
 		return "The control plane is merging this copy into its chain"
 	case cpBackupDeleting:
