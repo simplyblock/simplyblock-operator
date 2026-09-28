@@ -247,7 +247,7 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 	// inconsistent layout, so it holds in Pending, without the node's lock, and
 	// is admitted when the cluster is ready.
 	//
-	// It is asked once, before the lock, and never of a running operation. An
+	// It is asked once, before the lock, and never of an admitted operation. An
 	// admitted operation changes the cluster's own reading: a relocation restarts
 	// the node and a maintenance window shuts it down, and either makes the
 	// cluster degraded until the node is back. Asking again on every pass held
@@ -255,17 +255,30 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 	// held its node's lock for hours on 2026-09-28. The steps a running operation
 	// performs are guarded by their own preconditions and by their deadlines.
 	//
+	// Admission is the lock rather than the phase. The lock is patched onto the
+	// node and the phase is written afterward, and a crash between the two
+	// restores an operation that holds its lock at Pending. Asking the gate of
+	// that one would hold a lock it already owns for as long as the cluster
+	// stays unready, which is exactly the queue behind it waiting on a wait.
+	//
 	// A node that does not exist is left to the lock, which fails the operation
 	// with the reason, rather than held here with a read error forever.
 	if !running(&ops) && !skipsClusterGate(&ops) {
-		ready, reason, err := r.clusterReady(ctx, &ops)
+		node, err := r.node(ctx, &ops)
 		switch {
 		case apierrors.IsNotFound(err):
 		case err != nil:
-			return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, err.Error())
-		case !ready:
-			r.emit(ctx, &ops, corev1.EventTypeWarning, ClusterNotReady, reason)
-			return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, reason)
+			return ctrl.Result{}, err
+		case node.Status.ActiveOpsRef == ops.Name:
+		default:
+			ready, reason, err := r.clusterReady(ctx, node)
+			if err != nil {
+				return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, err.Error())
+			}
+			if !ready {
+				r.emit(ctx, &ops, corev1.EventTypeWarning, ClusterNotReady, reason)
+				return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, reason)
+			}
 		}
 	}
 
@@ -798,15 +811,20 @@ func running(ops *simplyblockv1alpha2.StorageNodeOps) bool {
 }
 
 func (r *StorageNodeOpsReconciler) clusterReady(
-	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
 ) (bool, string, error) {
-	node, err := r.node(ctx, ops)
-	if err != nil {
-		return false, "", err
-	}
 	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
 	if err := r.Get(ctx, key, &cluster); err != nil {
+		// A cluster object that does not exist is a cluster the operation cannot
+		// run in, which is a reason to hold rather than an error to retry, and
+		// not the same thing as a node that does not exist: that one the lock
+		// fails the operation on.
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf(
+				"StorageCluster %s, which node %s belongs to, does not exist",
+				node.Spec.ClusterRef, node.Name), nil
+		}
 		return false, "", err
 	}
 	if cluster.Status.UUID == "" {

@@ -390,38 +390,40 @@ Files: `operator/internal/controllers/node/rotation_test.go`, `migrate_test.go`,
 Files: `operator/internal/controllers/node/opslock_test.go`, `advance_test.go`,
 `watches_test.go`, `remove_deadlock_test.go`
 
-| #     | Scenario                                                                                | Type       | Test                                                       |
-|-------|-----------------------------------------------------------------------------------------|------------|------------------------------------------------------------|
-| U-108 | The lock is free: it is acquired and the phase becomes `Running`                        | Positive   | `TestTakingTheLockIsWhatStartsTheOperation`                |
-| U-109 | Another operation holds the lock: this one stays `Pending` and requeues                 | Negative   | `TestAnOperationWaitsForTheOneHoldingTheNode`              |
-| U-110 | An operation acquiring the lock enters its graph's initial step with a deadline         | Positive   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`              |
-| U-111 | Success: the phase is `Succeeded` and the lock is cleared                               | Positive   | `TestFinishingWritesTheOutcomeAndLetsTheNodeGo`            |
-| U-112 | Failure: the phase is `Failed` with a message, and the lock is cleared                  | Positive   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`        |
-| U-113 | A release by a non-owner: the lock is left alone                                        | Negative   | `TestALateReleaseDoesNotUnlockSomebodyElsesNode`           |
-| U-114 | Advancing persists the next step and its deadline before the side effect                | Positive   | `TestAFinishedStepEntersTheNextWithItsOwnDeadline`         |
-| U-115 | An unknown action: the operation fails terminally with the reason in the message        | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`           |
-| U-116 | The target node does not exist: the operation fails with a not-found message            | Negative   | `TestAnOperationAgainstAMissingNodeFails`                  |
-| U-117 | A terminal operation re-reconciled: no side effect, and the lock is released again      | Negative   | `TestATerminalOperationStillReleasesALockItLeftBehind`     |
-| U-118 | Two reconcilers acquiring one free lock: the loser gets 409 and requeues                | Negative   | —                                                          |
-| U-119 | The operation is deleted while `Running`: the finalizer releases the lock               | Positive   | `TestDeletingAnOperationUnlocksTheNodeFirst`               |
-| U-120 | Operations on two different nodes run without contending                                | Positive   | —                                                          |
-| U-121 | The cluster is not active: the operation holds and emits `ClusterNotReady`              | Negative   | —                                                          |
-| U-122 | The cluster is rebalancing: the operation holds rather than proceeding                  | Negative   | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
-| U-123 | The cluster becomes active: the held operation resumes with no further input            | Positive   | —                                                          |
-| U-124 | A node event wakes a queued operation before its requeue interval elapses               | Positive   | `TestANodeEventWakesTheOperationsWaitingOnIt`              |
-| U-315 | The holder re-reading its own lock keeps it, since every pass goes through this         | Boundary   | `TestTheHolderKeepsItsOwnLock`                             |
-| U-316 | The finalizer is taken on the pass before anything is locked                            | Positive   | `TestAnOperationTakesItsFinalizerBeforeItTakesAnything`    |
-| U-317 | A removal runs whatever the cluster says, because removal is how a cluster recovers     | Boundary   | `TestRemovalDoesNotWaitOnTheCluster`                       |
-| U-318 | `Migrate` and `HostMaintenance`, the actions that move data, wait on the gate           | Negative   | `TestTheActionsThatMoveDataWaitOnTheCluster`               |
-| U-319 | A removal proceeds against a rebalancing cluster rather than holding                    | Boundary   | `TestARemovalRunsAgainstARebalancingCluster`               |
-| U-320 | `status.observedGeneration` advances, which is how an observed abort is visible         | Positive   | `TestTheObservedGenerationMovesWhenTheOperationIsLookedAt` |
-| U-321 | A cluster event wakes its own nodes and nobody else's                                   | Positive   | `TestAClusterEventWakesItsOwnNodes`                        |
-| U-322 | A worker event wakes the nodes that run on it, which is how a cordon arrives            | Positive   | `TestAWorkerEventWakesTheNodesOnIt`                        |
-| U-430 | A held operation stays `Pending` without the node's lock (2026-09-28 shutdown deadlock) | Regression | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
-| U-431 | A `Shutdown` finishes in the cluster its own shutdown degraded (2026-09-28 deadlock)    | Regression | `TestAShutdownFinishesInTheClusterItsOwnShutdownDegraded`  |
-| U-432 | A `Restart` is issued into a degraded cluster (2026-09-28 deadlock)                     | Regression | `TestARestartRunsAgainstADegradedCluster`                  |
-| U-433 | A step's deadline expires while the cluster is not active (2026-09-28 deadlock)         | Regression | `TestTheDeadlineIsReachableWhileTheClusterIsNotActive`     |
-| U-434 | The four single-step actions run whatever the cluster says (2026-09-28 deadlock)        | Regression | `TestTheSingleStepActionsDoNotWaitOnTheCluster`            |
+| #     | Scenario                                                                                                | Type       | Test                                                       |
+|-------|---------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------|
+| U-108 | The lock is free: it is acquired and the phase becomes `Running`                                        | Positive   | `TestTakingTheLockIsWhatStartsTheOperation`                |
+| U-109 | Another operation holds the lock: this one stays `Pending` and requeues                                 | Negative   | `TestAnOperationWaitsForTheOneHoldingTheNode`              |
+| U-110 | An operation acquiring the lock enters its graph's initial step with a deadline                         | Positive   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`              |
+| U-111 | Success: the phase is `Succeeded` and the lock is cleared                                               | Positive   | `TestFinishingWritesTheOutcomeAndLetsTheNodeGo`            |
+| U-112 | Failure: the phase is `Failed` with a message, and the lock is cleared                                  | Positive   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`        |
+| U-113 | A release by a non-owner: the lock is left alone                                                        | Negative   | `TestALateReleaseDoesNotUnlockSomebodyElsesNode`           |
+| U-114 | Advancing persists the next step and its deadline before the side effect                                | Positive   | `TestAFinishedStepEntersTheNextWithItsOwnDeadline`         |
+| U-115 | An unknown action: the operation fails terminally with the reason in the message                        | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`           |
+| U-116 | The target node does not exist: the operation fails with a not-found message                            | Negative   | `TestAnOperationAgainstAMissingNodeFails`                  |
+| U-117 | A terminal operation re-reconciled: no side effect, and the lock is released again                      | Negative   | `TestATerminalOperationStillReleasesALockItLeftBehind`     |
+| U-118 | Two reconcilers acquiring one free lock: the loser gets 409 and requeues                                | Negative   | —                                                          |
+| U-119 | The operation is deleted while `Running`: the finalizer releases the lock                               | Positive   | `TestDeletingAnOperationUnlocksTheNodeFirst`               |
+| U-120 | Operations on two different nodes run without contending                                                | Positive   | —                                                          |
+| U-121 | The cluster is not active: the operation holds and emits `ClusterNotReady`                              | Negative   | —                                                          |
+| U-122 | The cluster is rebalancing: the operation holds rather than proceeding                                  | Negative   | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
+| U-123 | The cluster becomes active: the held operation resumes with no further input                            | Positive   | —                                                          |
+| U-124 | A node event wakes a queued operation before its requeue interval elapses                               | Positive   | `TestANodeEventWakesTheOperationsWaitingOnIt`              |
+| U-315 | The holder re-reading its own lock keeps it, since every pass goes through this                         | Boundary   | `TestTheHolderKeepsItsOwnLock`                             |
+| U-316 | The finalizer is taken on the pass before anything is locked                                            | Positive   | `TestAnOperationTakesItsFinalizerBeforeItTakesAnything`    |
+| U-317 | A removal runs whatever the cluster says, because removal is how a cluster recovers                     | Boundary   | `TestRemovalDoesNotWaitOnTheCluster`                       |
+| U-318 | `Migrate` and `HostMaintenance`, the actions that move data, wait on the gate                           | Negative   | `TestTheActionsThatMoveDataWaitOnTheCluster`               |
+| U-319 | A removal proceeds against a rebalancing cluster rather than holding                                    | Boundary   | `TestARemovalRunsAgainstARebalancingCluster`               |
+| U-320 | `status.observedGeneration` advances, which is how an observed abort is visible                         | Positive   | `TestTheObservedGenerationMovesWhenTheOperationIsLookedAt` |
+| U-321 | A cluster event wakes its own nodes and nobody else's                                                   | Positive   | `TestAClusterEventWakesItsOwnNodes`                        |
+| U-322 | A worker event wakes the nodes that run on it, which is how a cordon arrives                            | Positive   | `TestAWorkerEventWakesTheNodesOnIt`                        |
+| U-430 | A held operation stays `Pending` without the node's lock (2026-09-28 shutdown deadlock)                 | Regression | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
+| U-431 | A `Shutdown` finishes in the cluster its own shutdown degraded (2026-09-28 deadlock)                    | Regression | `TestAShutdownFinishesInTheClusterItsOwnShutdownDegraded`  |
+| U-432 | A `Restart` is issued into a degraded cluster (2026-09-28 deadlock)                                     | Regression | `TestARestartRunsAgainstADegradedCluster`                  |
+| U-433 | A step's deadline expires while the cluster is not active (2026-09-28 deadlock)                         | Regression | `TestTheDeadlineIsReachableWhileTheClusterIsNotActive`     |
+| U-434 | The four single-step actions run whatever the cluster says (2026-09-28 deadlock)                        | Regression | `TestTheSingleStepActionsDoNotWaitOnTheCluster`            |
+| U-439 | An operation whose lock already names it is admitted, not gated again (2026-09-28, review)              | Regression | `TestAnOperationHoldingItsLockIsAdmittedAlready`           |
+| U-440 | A missing `StorageCluster` object holds the operation at admission with the reason (2026-09-28, review) | Regression | `TestAnOperationHoldsWhenItsClusterObjectIsMissing`        |
 
 ### Operation: The Single-Step Actions (design §7.3)
 

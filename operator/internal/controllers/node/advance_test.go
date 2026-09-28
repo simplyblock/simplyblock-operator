@@ -225,6 +225,71 @@ func TestAnOperationHoldsWhileItsClusterIsRebalancing(t *testing.T) {
 	}
 }
 
+// Admission is the lock, not the phase. The lock is patched onto the node and
+// the phase is written to the operation afterward, and a crash between the two
+// restores an operation whose lock already names it and whose phase is still
+// Pending. That operation has been admitted: asking the gate again would hold
+// the lock it already owns for as long as the cluster stays unready, which is the
+// queue behind it waiting on a wait.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster (review) — the
+// admission check was keyed off the phase alone.
+func TestAnOperationHoldingItsLockIsAdmittedAlready(t *testing.T) {
+	ops := anOperation("a-relocation", simplyblockv1alpha2.StorageNodeOpsActionMigrate)
+	ops.Finalizers = []string{OpsFinalizer}
+	ops.Status.Phase = simplyblockv1alpha2.StorageNodeOpsPhasePending
+	api := aControlPlane()
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
+		ID: opsClusterID, Status: utils.ClusterStatusActive, Rebalancing: true,
+	}}
+	lockedBy(t, apiClient, "a-relocation")
+
+	pass(t, r, "a-relocation")
+
+	got := operationRead(t, apiClient, "a-relocation")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseRunning {
+		t.Errorf("phase = %q (%s), want an operation that holds its lock running",
+			got.Status.Phase, got.Status.Message)
+	}
+	if announcedReason(r, ClusterNotReady) {
+		t.Error("the gate was asked of an operation that already holds the node")
+	}
+}
+
+// A cluster object that does not exist is a cluster the operation cannot run in,
+// and it holds at admission saying so. It is not the same as a node that does
+// not exist, which the lock fails the operation on, and reading the one as the
+// other admitted the operation into a cluster it could not find.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster (review) — a
+// NotFound from the gate was taken for the node's and bypassed the gate.
+func TestAnOperationHoldsWhenItsClusterObjectIsMissing(t *testing.T) {
+	ops := anOperation("a-relocation", simplyblockv1alpha2.StorageNodeOpsActionMigrate)
+	ops.Finalizers = []string{OpsFinalizer}
+	api := aControlPlane()
+	r, apiClient := anOpsWorld(t, api, ops)
+	if err := apiClient.Delete(context.Background(), anOpsCluster()); err != nil {
+		t.Fatalf("removing the cluster: %v", err)
+	}
+
+	pass(t, r, "a-relocation")
+
+	got := operationRead(t, apiClient, "a-relocation")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhasePending {
+		t.Errorf("phase = %q, want a held operation still Pending", got.Status.Phase)
+	}
+	if holder := lockHolder(t, apiClient); holder != "" {
+		t.Errorf("the node is held by %q while its cluster object is missing", holder)
+	}
+	if !announcedReason(r, ClusterNotReady) {
+		t.Error("nothing announced the hold")
+	}
+	if got.Status.Message == "" {
+		t.Error("the operation says nothing about the cluster it cannot find")
+	}
+}
+
 // A shutdown is what makes its own cluster degraded: the node it took down is
 // gone, and the cluster says so until the node is back. The operation finishes
 // anyway, because the completion it is waiting on is the node being offline, and

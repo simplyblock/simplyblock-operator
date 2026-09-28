@@ -1411,10 +1411,10 @@ operation lock.
   Terminal phase?    ← release the lock again best-effort, stop
     │  no
     ▼
-  Running already?   ← yes → skip the gate: it is asked once, at admission
+  Admitted already?  ← Running, or the lock names it → skip the gate
     │  no
     ▼
-  Cluster available? ← not active, or rebalancing → stay Pending, emit, requeue
+  Cluster available? ← not active, rebalancing, or no object → stay Pending, emit, requeue
     │  yes, or the action is exempt
     ▼
   Get the node       ← not found → Failed
@@ -1444,10 +1444,13 @@ layout. The operation holds rather than fails, emits `ClusterNotReady`, and is
 admitted when the cluster is ready. It applies to the two actions that move data,
 `Migrate` and `HostMaintenance`, and to no others.
 
-**The gate is an admission check, asked once and never of a running operation.**
-A held operation stays `Pending` and holds nothing: it has not taken the node's
-lock, so an operation queued on the same node is not queued behind a wait. Once
-admitted, an operation is never gated again, because an admitted operation
+**The gate is an admission check, asked once and never of an admitted
+operation.** A held operation stays `Pending` and holds nothing: it has not taken
+the node's lock, so an operation queued on the same node is not queued behind a
+wait. Admission is the lock rather than the phase, because the lock is patched
+onto the node before the phase is written and a crash between the two restores
+an operation that holds its lock at `Pending`. Once admitted, an operation is
+never gated again, because an admitted operation
 changes the cluster's own reading: a relocation restarts the node and a
 maintenance window shuts it down, and either makes the cluster degraded until
 the node is back. A gate asked on every pass held each of them on the
