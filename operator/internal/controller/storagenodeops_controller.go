@@ -1375,14 +1375,24 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	items []simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)
-	var failed []simplyblockv1alpha1.VolumeMigration
-	for i := range items {
-		if items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
-			items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted {
-			failed = append(failed, items[i])
+	// Failed and Aborted are both retried, but only Failed says anything
+	// about the target. An abort is a decision -- spec.abort set, a cancel
+	// from elsewhere -- not a verdict on the node the volume was heading to,
+	// so it is deleted and re-issued without the target being recorded or
+	// counted; otherwise every abort of a drain's own CR burnt a good node.
+	var failed, aborted []simplyblockv1alpha1.VolumeMigration
+	switch_ := func(vm simplyblockv1alpha1.VolumeMigration) {
+		switch vm.Status.Phase {
+		case simplyblockv1alpha1.VolumeMigrationPhaseFailed:
+			failed = append(failed, vm)
+		case simplyblockv1alpha1.VolumeMigrationPhaseAborted:
+			aborted = append(aborted, vm)
 		}
 	}
-	if len(failed) == 0 {
+	for i := range items {
+		switch_(items[i])
+	}
+	if len(failed)+len(aborted) == 0 {
 		return ctrl.Result{}, false
 	}
 
@@ -1391,7 +1401,10 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 		for i := range failed {
 			_ = r.Delete(ctx, &failed[i])
 		}
-		log.Info("drain: cluster not ready, deleted failed VMs and pausing", "count", len(failed))
+		for i := range aborted {
+			_ = r.Delete(ctx, &aborted[i])
+		}
+		log.Info("drain: cluster not ready, deleted failed VMs and pausing", "count", len(failed)+len(aborted))
 		return res, true
 	}
 
@@ -1424,6 +1437,19 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 			vm.Name, vm.Spec.TargetNodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry",
 			fmt.Sprintf("VolumeMigration %s failed on %s, deleted and will retry with another target",
+				vm.Name, vm.Spec.TargetNodeUUID))
+	}
+	for i := range aborted {
+		vm := &aborted[i]
+		if err := r.Delete(ctx, vm); err != nil {
+			log.Error(err, "drain: failed to delete aborted VolumeMigration", "name", vm.Name)
+			continue
+		}
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "MigrationRetry", "MigrationRetry",
+			"VolumeMigration %s was aborted, deleted and will be re-issued (target %s not blamed)",
+			vm.Name, vm.Spec.TargetNodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry",
+			fmt.Sprintf("VolumeMigration %s was aborted, deleted and will be re-issued (target %s not blamed)",
 				vm.Name, vm.Spec.TargetNodeUUID))
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
