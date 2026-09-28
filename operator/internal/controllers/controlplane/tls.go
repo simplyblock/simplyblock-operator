@@ -147,14 +147,25 @@ func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane) []corev1.Volume {
 // cert-manager takes a Certificate naming the Service's DNS names, and the
 // OpenShift service CA takes an annotation on the Service itself, which is why
 // this returns objects for one and annotations for the other.
+//
+// The chart's own Certificate for this Service carried a commonName and, under
+// mutual TLS, client auth alongside server auth: this one is also presented
+// outbound, to FoundationDB and to a KMS such as OpenBao. The migration onto
+// BuildServiceServingCertificate, built for a Service that only ever answers,
+// dropped both, which is why a cert-auth KMS login had no commonName to name its
+// identity alias after.
 func servingCertificateObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	local := cp.Spec.Source.Local
 	if !local.ServesTLS() || local.TLSProvider() != simplyblockv1alpha2.ControlPlaneTLSCertManager {
 		return nil
 	}
-	return []client.Object{
-		utils.BuildServiceServingCertificate(cp.Namespace, ComponentWebAPI, ServingCertSecret),
+	cert := utils.BuildServiceServingCertificate(cp.Namespace, ComponentWebAPI, ServingCertSecret)
+	if local.RequiresClientCertificate() {
+		if spec, ok := cert.Object["spec"].(map[string]any); ok {
+			spec["usages"] = []any{"digital signature", "key encipherment", "server auth", "client auth"}
+		}
 	}
+	return []client.Object{cert}
 }
 
 // servingCertAnnotations is the OpenShift half: the service CA signs from an
