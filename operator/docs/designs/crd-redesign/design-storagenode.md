@@ -1530,6 +1530,23 @@ share a two-step graph:
 `Restart` passes `reattachVolume` and `force` through when they are set. The
 completion condition is evaluated against the streamed storage-node object (§4.4).
 
+Each call is skipped when the node is already at or past the state the call
+produces, and "past" includes the state of the call being performed: a node
+reporting `in_shutdown` has a shutdown landed on it, and one reporting
+`in_restart` has a restart. The second matters most, because a forced restart
+into a node already restarting is two restarts of one node, and the step is
+re-entered after any crash between the call and the step record (§7.2).
+
+**An unforced restart of a node that is not offline is refused by the operator,
+terminally and with the reason.** The control plane restarts only an offline node
+unless the restart is forced, and it says so nowhere a caller can see: the
+request is accepted with 202 and the restart is dropped on the thread that would
+have performed it. An operation that issued that call would then read an online
+node as a finished restart. Refusing first is what makes the operation say what
+it needs, which is the node shut down first or `spec.force` set. `Migrate` is
+different, and forces by default, because a relocation always restarts a node
+that is online (§9).
+
 The endpoint column keeps the control plane's own lowercase paths, and the
 completion column the control plane's own status strings. A URL segment and a
 backend status are the control plane's vocabulary rather than this group's, and

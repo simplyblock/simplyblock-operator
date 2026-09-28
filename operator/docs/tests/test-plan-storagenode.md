@@ -427,21 +427,24 @@ Files: `operator/internal/controllers/node/opslock_test.go`, `advance_test.go`,
 
 File: `operator/internal/controllers/node/actions_test.go`
 
-| #     | Scenario                                                                         | Type     | Test                                                     |
-|-------|----------------------------------------------------------------------------------|----------|----------------------------------------------------------|
-| U-125 | `Suspend`: the call is issued, and the step completes when the node is suspended | Positive | `TestACallIsIssuedWhenTheNodeIsNotThereYet`              |
-| U-126 | `Resume`: the step completes when the node is online                             | Positive | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor` |
-| U-127 | `Shutdown`: the step completes when the node is offline                          | Positive | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor` |
-| U-128 | `Restart`: `reattachVolume` and `force` are passed through when set              | Positive | `TestOnlyTheFlagsTheOperationStatesAreSent`              |
-| U-129 | The node is already at the target state: the call is not issued at all           | Negative | `TestACallIsSkippedWhenTheNodeIsAlreadyThere`            |
-| U-130 | The call returns 5xx: the step is retried and the phase does not advance         | Negative | —                                                        |
-| U-131 | The call returns 4xx: the step is retried, and the body reaches the event        | Negative | —                                                        |
-| U-132 | The call is retried after a timeout: the endpoint is called at most once more    | Negative | —                                                        |
-| U-133 | The node never reaches the target state: the step's deadline expires and fails   | Boundary | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
-| U-134 | A late response after the deadline expired: ignored, no second commit            | Negative | —                                                        |
-| U-323 | A restart has no state to skip on, so it is issued against an online node        | Boundary | `TestARestartIsIssuedAgainstAnOnlineNode`                |
-| U-324 | An unstated flag is not sent, since not sending is not the same as sending false | Boundary | `TestOnlyTheFlagsTheOperationStatesAreSent`              |
-| U-325 | An operation against a node with no backend UUID: terminal, not retried          | Negative | `TestAnUnprovisionedNodeEndsTheOperation`                |
+| #         | Scenario                                                                                              | Type       | Test                                                                                            |
+|-----------|-------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------------------------|
+| U-125     | `Suspend`: the call is issued, and the step completes when the node is suspended                      | Positive   | `TestACallIsIssuedWhenTheNodeIsNotThereYet`                                                     |
+| U-126     | `Resume`: the step completes when the node is online                                                  | Positive   | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor`                                        |
+| U-127     | `Shutdown`: the step completes when the node is offline                                               | Positive   | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor`                                        |
+| U-128     | `Restart`: `reattachVolume` and `force` are passed through when set                                   | Positive   | `TestOnlyTheFlagsTheOperationStatesAreSent`                                                     |
+| U-129     | The node is already at the target state: the call is not issued at all                                | Negative   | `TestACallIsSkippedWhenTheNodeIsAlreadyThere`                                                   |
+| U-130     | The call returns 5xx: the step is retried and the phase does not advance                              | Negative   | —                                                                                               |
+| U-131     | The call returns 4xx: the step is retried, and the body reaches the event                             | Negative   | —                                                                                               |
+| U-132     | The call is retried after a timeout: the endpoint is called at most once more                         | Negative   | —                                                                                               |
+| U-133     | The node never reaches the target state: the step's deadline expires and fails                        | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`                                             |
+| U-134     | A late response after the deadline expired: ignored, no second commit                                 | Negative   | —                                                                                               |
+| ~~U-323~~ | A restart has no state to skip on, so it is issued against an online node                             | Boundary   | Replaced by U-435: an unforced restart of an online node is a silent no-op in the control plane |
+| U-324     | An unstated flag is not sent, since not sending is not the same as sending false                      | Boundary   | `TestOnlyTheFlagsTheOperationStatesAreSent`                                                     |
+| U-325     | An operation against a node with no backend UUID: terminal, not retried                               | Negative   | `TestAnUnprovisionedNodeEndsTheOperation`                                                       |
+| U-435     | An unforced restart of a node that is not offline is refused terminally, with the reason (2026-09-28) | Regression | `TestARestartOfAnOnlineNodeIsRefusedUnlessForced`                                               |
+| U-436     | A restart is not issued into a node already `in_restart` (2026-09-28)                                 | Regression | `TestARestartIsNotIssuedIntoANodeAlreadyRestarting`                                             |
+| U-437     | A shutdown is not issued into a node already `in_shutdown` (2026-09-28)                               | Regression | `TestAShutdownIsNotIssuedIntoANodeAlreadyShuttingDown`                                          |
 
 ### Operation: Volume Classification (design §8.1)
 

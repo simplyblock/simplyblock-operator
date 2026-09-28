@@ -74,7 +74,10 @@ func (r *StorageNodeOpsReconciler) request(
 
 	switch ops.Spec.Action {
 	case simplyblockv1alpha2.StorageNodeOpsActionShutdown:
-		if reading.Status == nodeStatusOffline {
+		// A node in shutdown is one the call landed on: the control plane accepts
+		// a shutdown and performs it on a thread, and refuses a second one with
+		// 409 for as long as the first runs.
+		if reading.Status == nodeStatusOffline || reading.Status == nodeStatusInShutdown {
 			return true, nil
 		}
 		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
@@ -82,12 +85,27 @@ func (r *StorageNodeOpsReconciler) request(
 		}
 
 	case simplyblockv1alpha2.StorageNodeOpsActionRestart:
-		// A restart has no state of its own to skip on: a node is online before
-		// it and online after it. What guards the second call is the step record
-		// and the completion condition below, which does not report finished
-		// until the node is back.
+		// A node in restart is past where the call would put it, and it is the
+		// one state a re-entered step must skip on: a forced restart into a node
+		// already restarting is two restarts of one node.
+		if reading.Status == nodeStatusInRestart {
+			return true, nil
+		}
+		// The control plane restarts only a node that is offline unless the
+		// restart is forced, and it says so nowhere a caller can see: the request
+		// is accepted and the restart is dropped on the thread that would have
+		// performed it. Refusing here, with the reason, is what turns an
+		// operation that would report an online node as a finished restart into
+		// one that says what it needs.
+		force := boolValue(ops.Spec.Force)
+		if reading.Status != nodeStatusOffline && !force {
+			return false, fatalf("node %s is %s, and the control plane restarts only "+
+				"a node that is offline unless the restart is forced; "+
+				"shut the node down first, or set spec.force",
+				ops.Spec.NodeRef, reading.Status)
+		}
 		params := RestartParams{
-			Force:          boolValue(ops.Spec.Force),
+			Force:          force,
 			ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 		}
 		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {

@@ -94,22 +94,84 @@ func TestACallIsIssuedWhenTheNodeIsNotThereYet(t *testing.T) {
 	}
 }
 
-// A restart has no state of its own to skip on: a node is online before one and
-// online after it. What guards the second call is the persisted step and the wait
-// that follows, which does not finish until the node is back.
-func TestARestartIsIssuedAgainstAnOnlineNode(t *testing.T) {
-	api, _ := requested(t, simplyblockv1alpha2.StorageNodeOpsActionRestart, nodeStatusOnline)
+// A restart of a node that is not offline is refused by the control plane unless
+// it is forced, and the refusal is invisible: the request is accepted and the
+// restart is dropped inside the control plane. So the operator refuses it
+// first, terminally and with the reason, rather than issuing a call that does
+// nothing and then reporting the node online as if it had been restarted.
+//
+// Regression: 2026-09-28-restart-of-an-online-node-is-a-silent-no-op — a Restart
+// against an online node without spec.force reported Succeeded seconds after it
+// was issued, and the node was never restarted.
+func TestARestartOfAnOnlineNodeIsRefusedUnlessForced(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOnline)
+	r, _ := anOpsWorld(t, api)
+	ops := anOperation("a-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
 
-	if asked := api.asked("RestartNode"); asked != 1 {
-		t.Errorf("RestartNode was issued %d time(s), want once", asked)
+	_, err := r.perform(context.Background(), ops, stepRequesting)
+
+	var fatal *terminalStepError
+	if !errors.As(err, &fatal) {
+		t.Errorf("err = %v, want the restart refused terminally", err)
+	}
+	if asked := api.asked("RestartNode"); asked != 0 {
+		t.Errorf("RestartNode was issued %d time(s) against an online node without force", asked)
+	}
+
+	forced := aControlPlane().reporting(nodeStatusOnline)
+	r, _ = anOpsWorld(t, forced)
+	ops = anOperation("a-forced-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
+	ops.Spec.Force = ptr.To(true)
+
+	if _, err := r.perform(context.Background(), ops, stepRequesting); err != nil {
+		t.Fatalf("the forced restart request: %v", err)
+	}
+	if asked := forced.asked("RestartNode"); asked != 1 {
+		t.Errorf("RestartNode was issued %d time(s) with force, want once", asked)
+	}
+}
+
+// A node the control plane already reports restarting is past where a restart
+// would put it, so the call is skipped and the step is finished. The second call
+// is the one that matters: a forced restart into a node already in restart is
+// two restarts of one node.
+//
+// Regression: 2026-09-28-restart-of-an-online-node-is-a-silent-no-op — a
+// Requesting step re-entered after a crash issued the restart again.
+func TestARestartIsNotIssuedIntoANodeAlreadyRestarting(t *testing.T) {
+	api, done := requested(t, simplyblockv1alpha2.StorageNodeOpsActionRestart, nodeStatusInRestart)
+
+	if asked := api.asked("RestartNode"); asked != 0 {
+		t.Errorf("RestartNode was issued %d time(s) into a node already restarting", asked)
+	}
+	if !done {
+		t.Error("the step did not finish against a node already restarting")
+	}
+}
+
+// A node the control plane reports shutting down is past where a shutdown would
+// put it: the request landed and the control plane is performing it.
+//
+// Regression: 2026-09-28-restart-of-an-online-node-is-a-silent-no-op — a
+// Requesting step re-entered after a crash issued the shutdown again, which the
+// control plane refuses with 409 for as long as the first one runs.
+func TestAShutdownIsNotIssuedIntoANodeAlreadyShuttingDown(t *testing.T) {
+	api, done := requested(t, simplyblockv1alpha2.StorageNodeOpsActionShutdown, nodeStatusInShutdown)
+
+	if asked := api.asked("ShutdownNode"); asked != 0 {
+		t.Errorf("ShutdownNode was issued %d time(s) into a node already shutting down", asked)
+	}
+	if !done {
+		t.Error("the step did not finish against a node already shutting down")
 	}
 }
 
 // The two modifiers travel only when the operation states them, because the
 // control plane defaults them itself and not sending one is not the same as
-// sending false.
+// sending false. The node is offline, which is the one state an unforced restart
+// is accepted in.
 func TestOnlyTheFlagsTheOperationStatesAreSent(t *testing.T) {
-	api := aControlPlane()
+	api := aControlPlane().reporting(nodeStatusOffline)
 	r, _ := anOpsWorld(t, api)
 
 	ops := anOperation("a-restart", simplyblockv1alpha2.StorageNodeOpsActionRestart)
