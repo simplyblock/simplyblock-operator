@@ -1408,14 +1408,17 @@ operation lock.
   Terminal phase?    ← release the lock again best-effort, stop
     │  no
     ▼
+  Running already?   ← yes → skip the gate: it is asked once, at admission
+    │  no
+    ▼
+  Cluster available? ← not active, or rebalancing → stay Pending, emit, requeue
+    │  yes, or the action is exempt
+    ▼
   Get the node       ← not found → Failed
     │  found
     ▼
   Lock free?         ← held by another ops → stay Pending, requeue after 15s
     │  free or ours
-    ▼
-  Cluster available? ← not active, or rebalancing → hold, emit, requeue
-    │  yes
     ▼
   Acquire the lock   ← optimistic-lock patch; 409 → requeue immediately
     │
@@ -1431,21 +1434,40 @@ between persisting `Succeeded` and clearing `activeOpsRef` would otherwise leave
 the node locked by a finished operation forever, and the release is idempotent
 (§11).
 
-**The cluster gate is not the same as the lock.** A node operation runs inside a
-cluster, and one whose cluster is mid-rebalance or not active will either be
-rejected by the control plane or succeed into an inconsistent layout. The
-operation holds rather than fails, emits `ClusterNotReady`, and resumes when the
-cluster does. It applies to every action that changes the node's state, which is
-all of them except the four single-step reads of a status and `Remove`.
+**The cluster gate is not the same as the lock.** A node operation that moves
+data runs inside a cluster, and one whose cluster is mid-rebalance or not active
+will either be rejected by the control plane or succeed into an inconsistent
+layout. The operation holds rather than fails, emits `ClusterNotReady`, and is
+admitted when the cluster is ready. It applies to the two actions that move data,
+`Migrate` and `HostMaintenance`, and to no others.
 
-**`Remove` is exempt, because a removal is how an unready cluster becomes
-ready.** Holding it until the cluster is active closes a loop with no way out:
-the node cannot be removed until the cluster is active, and the cluster cannot
-become active while the node it is stuck on is still in it. That is what a node
-whose add never finished does to the cluster it was being added to. The
-exemption follows from the gate's own purpose rather than working against it,
-since the removal is what lets the control plane reach a state it will accept
-further work in.
+**The gate is an admission check, asked once and never of a running operation.**
+A held operation stays `Pending` and holds nothing: it has not taken the node's
+lock, so an operation queued on the same node is not queued behind a wait. Once
+admitted, an operation is never gated again, because an admitted operation
+changes the cluster's own reading: a relocation restarts the node and a
+maintenance window shuts it down, and either makes the cluster degraded until
+the node is back. A gate asked on every pass held each of them on the
+consequence of its own action, and it stood in front of the deadline check, so a
+held operation could never expire. The steps of a running operation are guarded
+by their own preconditions and by their deadlines, and the deadline is the first
+thing a pass reads after the abort flag.
+
+**The five other actions are exempt, because each is how the cluster's reading
+changes.** A removal is how an unready cluster becomes ready: holding it until
+the cluster is active closes a loop with no way out, since the node cannot be
+removed until the cluster is active and the cluster cannot become active while
+the node it is stuck on is still in it, which is what a node whose add never
+finished does to the cluster it was being added to. A `Shutdown` or a `Suspend`
+is what makes a cluster degraded, and a `Restart` or a `Resume` is what makes it
+active again, so a gate on that reading holds the first pair on what they
+produced and makes the second pair unavailable exactly when they are needed. One
+`Shutdown` against a healthy four-node cluster demonstrated the loop on
+2026-09-28: the node it took down degraded the cluster, the degraded cluster
+held the shutdown in `Awaiting` with the node's lock for hours, and three
+`Restart` operations queued behind it. The exemptions follow from the gate's own
+purpose rather than working against it: none of the five moves data, and each is
+what lets the control plane reach a state it will accept further work in.
 
 Watching only `StorageNodeOps` would leave a queued operation waiting up to its
 requeue interval after the lock frees. `nodeToOpsRequests` maps a `StorageNode`
@@ -2020,23 +2042,23 @@ delta, so that no other section has to carry it.
 
 ### 15.2 StorageNodeOps
 
-| Registered                                            | This design                                         | Cost                                                                                                                                                   |
-|-------------------------------------------------------|-----------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                               | Spec rename                                                                                                                                            |
-| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)                       | Type only, the wire values change with the row below                                                                                                   |
-| Six lowercase action values                           | PascalCase (§6.3)                                   | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window                                                                     |
-| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                               | Spec regrouping                                                                                                                                        |
-| `spec.drain`                                          | `spec.remove` (§6.1)                                | Spec rename, matching the action it parameterizes                                                                                                      |
-| Six actions                                           | Seven, adding `HostMaintenance` (§10)               | Additive, and it retires a controller (§15.3)                                                                                                          |
-| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2)         | Additive. Cancellation today means deleting the object                                                                                                 |
-| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)          | Status only. The old string reads into `step.state` with no deadline                                                                                   |
-| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)          | Status only, and it removes an enum value that is ambiguous by construction                                                                            |
-| `status.triggered`                                    | Removed (§7.2)                                      | Status removal. The persisted step is the record, and it covers a case the flag cannot                                                                 |
-| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                               | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step                                                                 |
-| No `observedGeneration`                               | Present (§6.2)                                      | Additive                                                                                                                                               |
-| No state machine behind any action                    | Seven declared graphs (§6.3)                        | The largest piece of work here. Every side effect moves into a step                                                                                    |
-| No deadline on any step                               | `status.step.deadline` (§6.3)                       | Additive, and what makes a stalled operation detectable                                                                                                |
-| A cluster gate only for `Remove`                      | For every state-changing action but `Remove` (§7.1) | Behavioral. A relocation during a rebalance is currently accepted, and `Remove` keeps its exemption because it is how an unready cluster becomes ready |
+| Registered                                            | This design                                              | Cost                                                                                                                                                                                                                                            |
+|-------------------------------------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `spec.storageNodeRef`                                 | `spec.nodeRef` (§6.1)                                    | Spec rename                                                                                                                                                                                                                                     |
+| `spec.action` as a plain `string`                     | `StorageNodeOpsAction` (§6.1)                            | Type only, the wire values change with the row below                                                                                                                                                                                            |
+| Six lowercase action values                           | PascalCase (§6.3)                                        | Spec rename of every value. `design-crd-model.md` §9.7 owns the deprecation window                                                                                                                                                              |
+| `spec.targetWorkerNode`, `spec.newSsdPcie` at the top | `spec.migrate` (§6.1)                                    | Spec regrouping                                                                                                                                                                                                                                 |
+| `spec.drain`                                          | `spec.remove` (§6.1)                                     | Spec rename, matching the action it parameterizes                                                                                                                                                                                               |
+| Six actions                                           | Seven, adding `HostMaintenance` (§10)                    | Additive, and it retires a controller (§15.3)                                                                                                                                                                                                   |
+| No abort                                              | `spec.abort` and the `Aborted` phase (§6.2)              | Additive. Cancellation today means deleting the object                                                                                                                                                                                          |
+| `status.subPhase`, a union of two workflows           | `status.step`, one graph per action (§6.3)               | Status only. The old string reads into `step.state` with no deadline                                                                                                                                                                            |
+| `Migrating` meaning two different things              | `MigratingVolumes` and `Relocating` (§6.3)               | Status only, and it removes an enum value that is ambiguous by construction                                                                                                                                                                     |
+| `status.triggered`                                    | Removed (§7.2)                                           | Status removal. The persisted step is the record, and it covers a case the flag cannot                                                                                                                                                          |
+| `status.volumesMigrated`, `status.volumesPending`     | `status.drain` (§6.2)                                    | Status regrouping. `volumesTotal` replaces a pending count that has to be kept in step                                                                                                                                                          |
+| No `observedGeneration`                               | Present (§6.2)                                           | Additive                                                                                                                                                                                                                                        |
+| No state machine behind any action                    | Seven declared graphs (§6.3)                             | The largest piece of work here. Every side effect moves into a step                                                                                                                                                                             |
+| No deadline on any step                               | `status.step.deadline` (§6.3)                            | Additive, and what makes a stalled operation detectable                                                                                                                                                                                         |
+| A cluster gate only for `Remove`                      | At admission, for `Migrate` and `HostMaintenance` (§7.1) | Behavioral. A relocation during a rebalance is currently accepted. `Remove` keeps its exemption because it is how an unready cluster becomes ready, and the four single-step actions share it because each is how the cluster's reading changes |
 
 ### 15.3 Retiring StorageNodeSet
 
@@ -2113,10 +2135,11 @@ observation positive. This is a control-plane request, and §12 records it.
 holds the cluster's lock while walking every node
 ([`design-storagecluster.md`](design-storagecluster.md) §8), and nothing prevents
 a `StorageNodeOps` from acquiring a node's lock during the walk. The cluster gate
-of §7.1 blocks it in practice, because a walk puts the cluster into a state the
-gate holds on, which is a consequence rather than a rule. Making the cluster lock
-explicit would mean a node operation checking two locks, and a rolling restart
-having to acquire each node's lock as it reaches it.
+of §7.1 blocks a relocation or a maintenance window in practice, because a walk
+puts the cluster into a state the gate holds on, which is a consequence rather
+than a rule, and it blocks none of the five exempt actions. Making the cluster
+lock explicit would mean a node operation checking two locks, and a rolling
+restart having to acquire each node's lock as it reaches it.
 
 **Q6: Retention of completed operations.** Nothing deletes a terminal
 `StorageNodeOps`, so the audit record grows without bound, and a cluster that

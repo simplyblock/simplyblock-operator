@@ -44,6 +44,10 @@ func (d *deliveredCluster) Lookup(string) (subscriptions.ClusterDTO, bool) {
 
 func (d *deliveredCluster) SyncedRoot() bool { return d.synced }
 
+// clusterStatusDegraded is what the control plane reports for a cluster that is
+// serving with a node missing, which is what every shutdown produces.
+const clusterStatusDegraded = "degraded"
+
 // anAdvancingOperation is an operation at the given step, with a deadline that
 // has not passed.
 func anAdvancingOperation(
@@ -188,27 +192,125 @@ func TestAnAbortThatArrivedTooLateIsRefusedAndTheOperationRunsOn(t *testing.T) {
 
 // A cluster that is mid-rebalance is a cluster whose layout an operation would
 // either be refused by or succeed into inconsistently, so the operation holds
-// and says which.
+// and says which. It holds in Pending and without the node's lock: the gate is
+// the admission check of §7.1, and an operation that has not been admitted has
+// nothing to hold.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster — the gate ran
+// after the lock was taken, so a held operation kept the node locked while it
+// waited, and every operation queued behind it waited with it.
 func TestAnOperationHoldsWhileItsClusterIsRebalancing(t *testing.T) {
-	ops := anAdvancingOperation("a-suspend",
-		simplyblockv1alpha2.StorageNodeOpsActionSuspend, stepRequesting)
+	ops := anOperation("a-relocation", simplyblockv1alpha2.StorageNodeOpsActionMigrate)
+	ops.Finalizers = []string{OpsFinalizer}
 	api := aControlPlane()
 	r, apiClient := anOpsWorld(t, api, ops)
 	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
 		ID: opsClusterID, Status: utils.ClusterStatusActive, Rebalancing: true,
 	}}
-	lockedBy(t, apiClient, "a-suspend")
 
-	pass(t, r, "a-suspend")
+	pass(t, r, "a-relocation")
 
-	if asked := api.asked("Suspend"); asked != 0 {
-		t.Errorf("Suspend was issued %d time(s) into a rebalancing cluster", asked)
+	got := operationRead(t, apiClient, "a-relocation")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhasePending {
+		t.Errorf("phase = %q, want a held operation still Pending", got.Status.Phase)
+	}
+	if holder := lockHolder(t, apiClient); holder != "" {
+		t.Errorf("the node is held by %q while the operation waits on the cluster", holder)
 	}
 	if !announcedReason(r, ClusterNotReady) {
 		t.Error("nothing announced the hold, which is what tells it from a stalled controller")
 	}
-	if operationRead(t, apiClient, "a-suspend").Status.Message == "" {
+	if got.Status.Message == "" {
 		t.Error("the operation says nothing about what it is waiting for")
+	}
+}
+
+// A shutdown is what makes its own cluster degraded: the node it took down is
+// gone, and the cluster says so until the node is back. The operation finishes
+// anyway, because the completion it is waiting on is the node being offline, and
+// the cluster's reading is a consequence of that rather than a reason to wait.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster — run
+// lblk_outage_matrix_k8s-20260928-054730: one Shutdown against a healthy
+// four-node cluster held Running/Awaiting for hours, past its own deadline, with
+// the node's lock, and every Restart queued behind it stayed Pending.
+func TestAShutdownFinishesInTheClusterItsOwnShutdownDegraded(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline)
+	ops := anAdvancingOperation("a-shutdown",
+		simplyblockv1alpha2.StorageNodeOpsActionShutdown, stepAwaiting)
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
+		ID: opsClusterID, Status: clusterStatusDegraded,
+	}}
+	lockedBy(t, apiClient, "a-shutdown")
+
+	pass(t, r, "a-shutdown")
+
+	got := operationRead(t, apiClient, "a-shutdown")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+		t.Errorf("phase = %q (%s), want Succeeded against a node already offline",
+			got.Status.Phase, got.Status.Message)
+	}
+	if holder := lockHolder(t, apiClient); holder != "" {
+		t.Errorf("the node is still held by %q after the shutdown finished", holder)
+	}
+}
+
+// A restart is how a degraded cluster becomes active again, so it runs against
+// one. Gating it on the cluster being active makes it unavailable exactly when
+// it is needed.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster — even with the
+// lock free, a Restart of the node whose absence degraded the cluster held on
+// the cluster gate and never issued the restart.
+func TestARestartRunsAgainstADegradedCluster(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOffline)
+	ops := anAdvancingOperation("a-restart",
+		simplyblockv1alpha2.StorageNodeOpsActionRestart, stepRequesting)
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
+		ID: opsClusterID, Status: clusterStatusDegraded,
+	}}
+	lockedBy(t, apiClient, "a-restart")
+
+	pass(t, r, "a-restart")
+
+	if asked := api.asked("RestartNode"); asked != 1 {
+		t.Errorf("RestartNode was issued %d time(s) into a degraded cluster, want once", asked)
+	}
+}
+
+// A step's deadline is reachable whatever the cluster reports. The gate is an
+// admission check, and an operation that was admitted and then stalled while its
+// cluster was not active is the operation a deadline exists for.
+//
+// Regression: 2026-09-28-shutdown-holds-lock-in-degraded-cluster — the gate
+// returned before the deadline was read, so a held operation could never expire:
+// the stuck shutdown was hours past its Step.Deadline and still Running.
+func TestTheDeadlineIsReachableWhileTheClusterIsNotActive(t *testing.T) {
+	api := aControlPlane()
+	ops := anAdvancingOperation("a-relocation",
+		simplyblockv1alpha2.StorageNodeOpsActionMigrate, stepAwaitingNode)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+	r, apiClient := anOpsWorld(t, api, ops)
+	r.Clusters = &deliveredCluster{synced: true, reading: subscriptions.ClusterDTO{
+		ID: opsClusterID, Status: clusterStatusDegraded,
+	}}
+	lockedBy(t, apiClient, "a-relocation")
+
+	pass(t, r, "a-relocation")
+
+	got := operationRead(t, apiClient, "a-relocation")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseFailed {
+		t.Errorf("phase = %q (%s), want Failed past the deadline",
+			got.Status.Phase, got.Status.Message)
+	}
+	if !announcedReason(r, StepDeadlineExceeded) {
+		t.Error("nothing announced the expiry, so a failed operation looks like a slow one")
+	}
+	if holder := lockHolder(t, apiClient); holder != "" {
+		t.Errorf("the node is still held by %q after the operation failed", holder)
 	}
 }
 
