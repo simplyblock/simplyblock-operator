@@ -17,8 +17,8 @@ several lvols, consistency-group snapshots, and the user-facing `VolumeGroupSnap
 |-------|-------------------------------------------------------------------------|---------------------------------|---------|
 | 0     | External prerequisites (§Phase 0)                                       | Other repos, branches, spikes   | Blocked |
 | 1     | `NFSExport` CRD and reconciler, MDS selection, export create and delete | P0-1 through P0-4               | Planned |
-| 2     | Per-export Service and EndpointSlice, planned migration (§13.4)         | Phase 1                         | Partial -- Service/EndpointSlice done (2026-09-24); planned migration not started |
-| 3     | MDS health probe, PR fencing, unplanned failover (§13.5)                | Phase 2, P0-1, P0-2, P0-7, P0-8 | Partial -- health probe done, detection only (2026-09-24); PR fencing wiring and unplanned failover not started |
+| 2     | Per-export Service and EndpointSlice, planned migration (§13.4)         | Phase 1                         | Planned |
+| 3     | MDS health probe, PR fencing, unplanned failover (§13.5)                | Phase 2, P0-1, P0-2, P0-7, P0-8 | Planned |
 | 4     | Snapshot with `xfs_freeze`, clone, restore, online resize               | Phase 1                         | Planned |
 | 5     | Export client restriction, host allow-listing, squash and tenancy       | Phase 1                         | Planned |
 | 6     | Load and soak, scale limits, docs, distro matrix                        | Phases 1 through 5              | Planned |
@@ -26,344 +26,6 @@ several lvols, consistency-group snapshots, and the user-facing `VolumeGroupSnap
 Phases 2 and 4 are independent and can run in parallel. Phase 3 is the one that
 turns a working export into a survivable one, and it is the phase whose promises
 depend on spikes rather than on code (§13.3).
-
-## Implementation Status
-
-Updated as work lands, so the document tracks the code rather than describing an
-intention. "Validated" means measured on a live cluster, with the evidence in
-§Bring-up Findings.
-
-| Item                                                 | Section      | Status                                                 |
-|------------------------------------------------------|--------------|--------------------------------------------------------|
-| `nvme.DeviceSelector.NGUID` and the by-NGUID lookup  | §10.1, P0-5  | **Merged path** — operator PR #546 in review           |
-| pNFS volume handle (`nfs:` four-part form)           | §11          | **Merged path** — operator PR #547 in review           |
-| `ptpl_file` on the lvol namespace                    | §6.2, P0-1   | **Merged** — sbcli PR #1375                             |
-| Direct block I/O end to end                          | §3, §4       | **Validated** -- from inside a pod                     |
-| Many exports on one MDS host                         | §8.4         | **Validated**                                          |
-| Many clients on one export, coherent                 | §4, FR-7     | **Validated**                                          |
-| Fencing: preempt, and writes refused off-registry    | §13.2, FM-1  | **Validated**                                          |
-| Service ClusterIP reached by a kernel mount          | §13.3, Q3    | **Validated** on stock kube-proxy                      |
-| `fsid=<uuid>`, XFS directly on the LUN               | §8.2         | **Validated**                                          |
-| `NFSExport` CRD and types                            | §7.1         | **Done** -- v1alpha2                                   |
-| `NFSExportReconciler`                                | §14.2        | **Done** -- phase graph, selection, finalizer          |
-| Export assembly on the MDS host (`atlas-lib/export`) | §8.2, §8.3   | **Done** -- idempotent, unit-tested                    |
-| Carrying that over csi-link                          | §6.4         | **Done** -- exportrpc, both ends wired                 |
-| CSI controller RWX path                              | §9           | **Done** -- create, validate, and delete               |
-| CSI node client mount and `nvme-eui.` alias          | §10          | **Done** -- stage, unstage, and repair                 |
-| Attaching the namespace, on the host and the client  | §6.4(a), §10 | **Done** -- one path serves both                       |
-| Client policy resolved into the effective client set | §7.1         | **Done** -- NodeScoped, Subnet, Open                   |
-| The address a client mounts                          | §13.3        | **Done** (2026-09-24) -- a per-export Service/EndpointSlice, ahead of failover; see "Revised 2026-09-24" below |
-| MDS health check (`CheckExport`, nfsd/mount/export table) | §13.5    | **Done** (2026-09-24) -- detection only: a Warning event and a fast recheck, no phase change and no failover yet |
-| `SimplyblockDriver` wiring: `spec.link`, `spec.pnfs` | §14.1        | **Done** -- adoption compares rather than refuses      |
-| RBAC over `nfsexports` for both plugins              | §9.3         | **Done** -- a role for the controller plugin           |
-| ReadWriteMany end to end through Kubernetes          | §9, §10      | **Validated** -- two pods, two nodes, coherent         |
-| Expanding an RWX volume                              | §16          | Refused in its own words -- `xfs_growfs` has no caller |
-| PR key release on unstage                            | §10.3        | **Not ours** -- the client kernel does it              |
-| A reaper for the keys of departed nodes              | §10.3, §13   | Not started — **new, see findings**                    |
-| Reservation handover on migration                    | §13.4        | Not started — **new, see findings**                    |
-| Host prerequisites: `nfs-utils`, `blkmapd`           | §14.1, P0-10 | Not started — node OS, not a pod                       |
-| MDS fault tolerance and failover                     | §13          | **Detection only** -- the health probe above; fencing and failover proper are out of scope here, see below |
-
-### What this phase deliberately leaves out
-
-**§13, MDS fault tolerance and failover, is not implemented, and the kind does
-not pretend otherwise.** As of 2026-09-24 a `Ready` export's host is polled
-(`reconcileHealth`, §13.5 step 1), so its loss is no longer silent: the object
-gets a `Warning` event on every failed check, at a shorter interval than a
-healthy one. But nothing acts on that signal. The export's phase does not
-change -- `Degraded` is reached only from an `Assembling` timeout, not from a
-health check failing in `Ready` -- so today's honest description is "detected
-and alarmed on, not recovered": a human has to notice the event and move the
-export by hand, and there is nothing in the CR that will tell them it needs
-moving beyond that event stream. That is a real limitation and the obvious
-next piece of work, and it is written here rather than left for a reader to
-infer from a phase that never advances.
-
-What that means for the API is the part worth stating. `FailingOver` was in the
-phase enum; `status.subPhase` and its whole `NFSExportSubPhase` type existed to
-carry the step within a failover; and `status.serviceName`,
-`status.failoverGeneration`, and the `Fenced` and `Addressable` conditions were
-on the status. Nothing wrote any of them. All are removed, and the test for it
-is simply that every field the status still declares has a writer. A phase in a CRD's enum that no controller can
-drive is a promise the code does not keep: it shows up in `kubectl explain`, it
-reads to a reviewer as built, and an object that reaches it parks with a message
-saying the feature does not exist. A declared condition nothing sets reports
-absent forever, which is indistinguishable from not yet evaluated. Adding them
-back with the implementation is an additive, non-breaking change; shipping them
-empty and removing them later would not be.
-
-One consequence still follows: reservation handover (§13.4) and the reaper for
-the keys of departed nodes (§10.3) belong with failover and are listed as not
-started.
-
-**Revised 2026-09-24: the Service now ships ahead of failover, reversing what
-this section said above.** The reasoning above was that a Service exists to
-survive a move, and until an export can move, standing one up would be
-indirection with nothing behind it. That argument does not distinguish a
-Service from `status.mdsNodeIP` itself, though: neither one does anything a
-move can use until §13.4/§13.5 exist to drive one. What it missed is that the
-Service is not idle in between -- `BuildNFSExportService` /
-`BuildNFSExportEndpointSlice` (`internal/utils/nfsexport_svc.go`) put it on the
-data path from the first bind, exactly as validated in this section's own
-bring-up finding ("A Service ClusterIP is reachable from a kernel mount"), so
-every client is already mounting through the indirection whether or not
-anything ever moves behind it. Standing it up now means failover, when it
-lands, is only ever a controller-side change (repoint the EndpointSlice): no
-client remounts, and no second migration where every existing export's clients
-have to pick up a new mount address the day the Service is introduced. The
-cost is exactly what §13.3's own caveats already priced in -- conntrack
-staleness and the eBPF kube-proxy question (P0-8) -- and neither is worse for
-having no mover to exercise them yet.
-
-### Where the implementation departs from this document
-
-Recorded here rather than left for a reader to find by diffing, because a
-departure nobody wrote down becomes a defect a release later.
-
-| Departure                                                   | Why                                                                                                                                                                                                                                                                |
-|-------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `NFSExport` is v1alpha2, not the v1alpha1 in §14.2          | The kind is new, so there is no v1alpha1 spelling to convert from. The document predates the group's move                                                                                                                                                          |
-| `FSID` is the export UUID, not an allocated value           | `exports(5)` accepts a UUID, so the value is unique cluster-wide and stable by construction. Q1's allocator does not need to exist                                                                                                                                 |
-| MDS selection binds every export to one node; §7.2 says round-robin | One MDS per cluster, not one per export: with no health probe or failover yet (§13), spreading exports across hosts only spreads the same undetected, unrecoverable failure across a bigger fraction of the fleet. Concentrating them behind one node is no worse today and is what a probe and a failover target (§13.5) need to be pointed at. The eligible set can still hold more than one node, for that failover target once §13 lands; selection just no longer spreads live traffic across it |
-| Eligibility checks only `online` and no active op           | §7.2 also wants kernel version, `nfs-utils`, and a node label. `StorageNode` carries none of them, which is P0-6. A node that cannot serve fails visibly in `Assembling` instead                                                                                   |
-| `status.phaseDeadline` is new                               | The phase machine's bound has to outlive the process the same way the phase does, or a restart grants a fresh deadline every pass and never times out                                                                                                              |
-| `ClientPolicy.Mode` is a typed enum                         | §7.1 shows `mode: NodeScoped` without defining the set. A closed set gets a type and an `Enum` marker, so an unknown value is refused at admission                                                                                                                 |
-| `Degraded` is terminal for the controller                   | It is reached by declining to act. Re-deciding it on a timer would bury the event that explains it                                                                                                                                                                 |
-| The export is resolved by volume UUID, not by NGUID         | §8.2 has the MDS find the device by NGUID. The NGUID is assigned by the target and read off the device, so provisioning cannot know it; the volume UUID is the namespace UUID and is known at create. The client still resolves its own alias by NGUID, from sysfs |
-| `status.nguid` is written by the operator, not provisioning | Same reason. The host that assembles the export is the first thing that can observe it, so `CreateExport` reports it back over the same link connection and the reconciler records it                                                                              |
-| pNFS is dropped from `csi-driver/charts/spdk-csi`           | §14 warns that a csi-node change must reach both chart trees or be dropped deliberately. This is dropped: that chart installs no operator, and without one nothing drives export assembly                                                                          |
-| The host side is an `ExportAssembler` interface             | An implementation seam rather than a design change: it makes the controller testable without a node, and is where the csi-link export service plugs in                                                                                                             |
-
----
-
-## Bring-up Findings (2026-09-17)
-
-The whole path was taken to working by hand before any of it was built, on a
-four-node K3s cluster running RHEL 9.5 with a 5.14.0-687.39.1.el9\_8 kernel. What
-follows is what was measured, because several of it contradicts what this document
-said, and two items are design surface that was missing entirely.
-
-**Direct block I/O works.** A 64 MiB read and a 32 MiB write from a client moved
-**zero bytes** through the MDS, with `LAYOUTRETURN` at 0 and md5 matching on both
-ends. Two conditions had to hold, neither of which this document previously stated:
-the namespace must be PTPL-capable (§6.2), and the client needs a
-`/dev/disk/by-id/nvme-eui.${NGUID}` alias (§10.1).
-
-**One `nfsd` serves many exports.** Two volumes, separate bdevs, subsystems, ports,
-`ptpl_file`s and `fsid`s, exported from one host and mounted by one client: both
-direct, both correct. §8.4's model holds.
-
-**Many clients share one export.** Two clients on the same export, concurrent 24 MiB
-writes, both direct, three-way coherent. The device carried three registrants, one
-per host, and the reservation stayed Write Exclusive, Registrants Only throughout —
-which is exactly why both clients could write.
-
-**Fencing is real, in both directions.** The MDS preempted a departed client's key
-(registrants 2 → 1), and a connected non-registrant's raw write was refused outright
-(`0 bytes copied`) while the same write succeeded once registered. §13.2's invariant
-is enforceable rather than aspirational.
-
-**A Service ClusterIP is reachable from a kernel mount**, and direct I/O works
-through it, on stock kube-proxy. The eBPF kube-proxy-replacement case in §13.3
-remains untested.
-
-**MDS selection looked in the wrong namespace, and the unit tests could not see
-it.** §7.2 does not say where the reconciler should look for eligible hosts, and
-the implementation listed `StorageNode` in the export's own namespace. An
-`NFSExport` is created beside the claim it backs, in the workload's namespace,
-and a `StorageNode` belongs to the `StorageNodeSet` in the operator's, so the two
-never coincide: the first RWX claim on the .81 cluster reported "waiting for an
-eligible MDS host" beside three online ones.
-
-The tests passed throughout, because their fixtures put the export and the node
-in one namespace -- an arrangement that does not occur. Worth recording as a
-finding rather than a fix, because the same shape applies to anything else this
-design has one controller reading across the two: **the host is a cluster
-resource and the export is a namespaced one.** Which hosts may serve is P0-6's
-node labeling, not a namespace boundary.
-
-**Releasing a client's reservation key is the kernel's job, and it does it.**
-The finding above that "PR keys are never released per departed node" is half
-wrong, and the half matters. `bl_unregister_scsi` in the client's block-layout
-driver calls `pr_register(bdev, key, 0, false)` when the device node is freed,
-which happens when the deviceid cache entry goes at unmount. A clean unstage
-therefore needs nothing from this design, and adding an unregister to
-`NodeUnstageVolume` would be a second implementation racing the kernel's.
-
-What remains is the other half: a node that dies without unmounting leaves its
-key registered with nothing to remove it. That is the reaper, and it is the
-operator's, because by definition the host that would clean up is gone.
-
-Confirmed on the cluster, incidentally exercising §13.2: two stray registrations
-left by hand were removed from the metadata-server host with
-`nvme resv-acquire --racqa=1` (preempt), leaving the nfsd key alone.
-
-**Direct block I/O works from inside a pod, and two things had to be true for
-it.** Measured on the .81 cluster with the priming fix in place:
-
-```
-NFS WRITE ops:        0            ← nothing reached the metadata server
-NVMe MiB written:     64           ← the data went straight to the namespace
-LAYOUTGET count:      3
-md5 agrees across two pods on two nodes
-```
-
-**The metric in the earlier findings was wrong, and it is worth naming because it
-reads convincingly.** `mountstats`' `serverwrite` byte counter is bumped by the
-layout path too -- a block-layout write completes through the same generic
-writeback -- so it shows the full transfer even when nothing crossed the wire.
-Every "the write went through the MDS" conclusion recorded from that counter was
-an artifact of reading it. The honest pair is the NFS **WRITE operation count**
-and the block device's own bytes: zero ops and 64 MiB of NVMe writes cannot both
-be true unless the data went direct.
-
-**The real defect it was hiding was the mount namespace.** The client resolves a
-layout's device by opening `/dev/disk/by-id/nvme-eui.<nguid>`, in the mount
-namespace of whichever process triggered the I/O. A pod's `/dev` is the minimal
-one kubelet builds:
-
-```
-core fd full mqueue null ptmx pts random shm stderr stdin stdout tty urandom zero
-```
-
-There is no `disk/` in it, so a layout first requested by the application could
-never resolve, and a CSI driver cannot put `/dev/disk/by-id` into arbitrary pods.
-The failure was also not a stumble the next I/O recovers from -- with NFS
-debugging on, which is the only way any of it is visible:
-
-```
-bl_alloc_lseg: number of extents 1
-pNFS: no device found for volume 30634a596e4a6d70703051616c6e4e34
-bl_alloc_lseg returns -19
-pnfs_layout_io_set_failed Setting layout IOMODE_RW fail bit
-```
-
-One failed lookup marks the device unavailable for two minutes and sets the
-layout's read-write fail bit, so everything afterward skips pNFS entirely.
-
-The node plugin takes the layout at the end of `NodeStageVolume` instead. Its
-container mounts the host's `/dev`, so resolution succeeds in its namespace and
-the device lands in the client's device cache, which is per-client rather than
-per-file. With that in place the same debugging shows `bl_alloc_lseg returns 0`
-for the pod's own writes.
-
-**The container made a filesystem the host kernel could not mount.** `mkfs.xfs`
-in the driver image comes from UBI 10 and enables `NREXT64`; the RHEL 9.8 hosts
-run a 5.14 kernel that does not know it. The format succeeded, and the mount
-that followed failed with *Superblock has unknown incompatible features (0x80)* --
-which names a feature flag and not the version skew behind it. Measured on vm03
-with `xfs_db`: the superblock carried `NREXT64`, `BIGTIME`, and `INOBTCNT`.
-
-This is the general case of the `exportfs` finding rather than a second
-coincidence, and the design should state it once as a rule: **an export is the
-host's, so everything that makes state the host kernel must later read runs in
-the host's namespace with the host's tools.** `mkfs`, `mount`, and `exportfs`
-all qualify. What legitimately stays in the container is what is the driver's
-own -- the control-plane client that says where a namespace lives, and the
-`blkid` probe that decides whether formatting would destroy something.
-
-The image is deliberately newer than the hosts, so this skew is permanent and
-not a one-off to be fixed by aligning versions.
-
-The rule then caught two more on the client side, which is why it is worth
-stating as a rule rather than fixing case by case. `mount(8)` hands an NFS mount
-to `/sbin/mount.nfs`, from `nfs-utils`, which the driver image does not carry and
-should not -- §14.1 already requires it on any host that may run an RWX pod, and
-a second copy would be two things to keep in step. And publishing into the pod is
-a bind, which takes no filesystem type: the type on the volume capability comes
-from the StorageClass's `csi.storage.k8s.io/fstype`, which for a pNFS volume is
-the string that selected the path, and passing it on sends
-`mount(8)` looking for a helper named after it -- `/sbin/mount.nfs` exists and
-does not bind.
-
-Worth recording for §16 as well: `csi.storage.k8s.io/fstype` selects this path
-rather than describing a filesystem anything mounts (§9.1). The export is XFS
-because a SCSI layout can be served from nothing else, and the client mounts
-NFS 4.1, so the value names neither.
-
-**`exportfs` has to run on the host, and §14.1 half said so.** The section asks
-for `nfs-utils` on MDS hosts, which is right, and then has csi-node run
-`exportfs` -- which is in the container, where `/var/lib/nfs/etab` and
-`/proc/fs/nfsd` are not the ones `rpc.mountd` reads. An export written there
-would be reported as published and be invisible to every client, which is the
-worst failure available: everything returns success.
-
-It is also simply not in the driver image, and should not be. Shipping a second
-copy would mean one version of `exportfs` writing an `etab` another version
-serves from. So the plugin enters the host's mount namespace through its init
-process, which is what `spec.pnfs` shares the host PID namespace for. The
-document should say, wherever it names a command, which namespace it runs in.
-
-**Nothing attached the backing namespace, on either side.** §6.4(a) says the MDS
-host connects the volume through "the existing csi-node service," and §10 says
-the client does too, and both readings were wrong in the same way: csi-node acts
-only on CSI calls, and no CSI call ever targets the host serving an export.
-kubelet stages a volume on the nodes running the pods.
-
-On the client the error is subtler, because there *is* a CSI call. The block
-branch of `NodeStageVolume` is the branch pNFS does not take, so for an RWX
-volume nothing connected the namespace there either. The mount still succeeds,
-the client finds no local device for the layout, and every byte routes through
-the metadata server -- the exact silent fallback FM-2 describes, arrived at from
-a new direction.
-
-Both sides now attach through the same code, which is deliberate rather than
-tidy: two implementations would mean two host identities, and the fencing in
-§13.2 is written against one reservation key per host.
-
-**A StorageNode name is not a Kubernetes node name, and the link only knows the
-second.** §7.1's `status.storageNodeRef` names a `StorageNode`, which is named
-after the set that created it (`simplyblock-nodes-1kalgm`). The csi-node plugin
-registers its link peer under the Kubernetes node it runs on
-(`vm02.simplyblock3.localdomain`). Neither is derivable from the other;
-`spec.workerNode` is the mapping, and the reconciler has to apply it before every
-call to a host.
-
-The failure is silent and mislabeled, which is the part worth recording:
-`HasSession` returns false for a name no peer ever registered under, the
-reconciler reads that as a host that is merely disconnected, and the export waits
-out `nfsExportAssembleDeadline` and reports an assembly timeout. Nothing in that
-sequence mentions a name mismatch. The document should say, wherever it names a
-host, which of the two names it means.
-
-**Turning pNFS on deadlocked an adopted driver, and the fix was not in this
-design.** `SimplyblockDriver`'s `adoptionRefusal` runs on every reconcile rather
-than only the first, so `spec.link.enableLink` set on a deployment whose node
-plugin had no `--link` was refused with "the handover stops until the running
-deployment and the spec agree" -- and the apply being refused was the only thing
-that could ever make them agree. Reproduced on the .81 cluster with
-`status.origin: Adopted`, which is every cluster upgraded from a chart install.
-
-Writing that refusal is what exposed the same shape in `spec.tls`, which had
-carried it since the field was added and had never been exercised: turning TLS on
-after adoption was refused for the identical reason. Both are fixed by ending the
-comparison at the handover -- before it, a disagreement means the spec does not
-describe the running deployment yet, and after it, the objects are the operator's
-and the same disagreement is an administrator asking for a change. `driverName`
-stays unconditional, because it is immutable and so can never be that change.
-
-**New: persistent-reservation keys are never released.** Three mount, unmount and
-disconnect cycles held steady at two registrants, so there is no per-mount leak. But
-a client that detaches entirely leaves its key registered forever, and PTPL makes
-that survive restarts. Registrants therefore accumulate per distinct node that has
-ever mounted the volume — bounded by cluster size, not by pod churn, but unbounded
-over a volume's life as nodes are rebuilt and take new UIDs. Two consequences:
-`NodeUnstageVolume` should release the key when the last reference on the node drops
-(§10.3), and the operator needs a reaper for keys belonging to nodes that no longer
-exist, since a dead node never runs its own unstage. Preemption is the mechanism for
-both, and it is proven.
-
-**New: migration needs a defined reservation handover, and §13.4 does not have one.**
-A hand-driven migration re-pointed the Service and the client resumed in under half a
-second with no remount, which is the availability half of §13.4 working. But the new
-MDS could not even mount the filesystem until it dealt with the reservation
-(`can't read superblock` — fencing correctly refusing a non-registrant), and a
-handover that left `nfsd`'s own key preempted produced an export that was available,
-correct, and silently had **no direct data path at all**: every read fell back through
-the MDS and a remount did not recover it. That is the worst failure this feature can
-have, because nothing looks wrong. §13.4 step 4 must specify the reservation handover
-explicitly, and §17 should carry a metric for layout state so a degraded export is
-visible.
 
 ---
 
@@ -403,14 +65,6 @@ of placement is therefore the export, not the server: each RWX volume is bound t
 one MDS host, and one MDS host carries many volumes. Per-host `fsid` uniqueness
 follows from this rather than being an edge case (§8.4).
 
-**Validated end to end on 2026-09-17.** The full path — an XFS on a raw NVMe-oF namespace,
-`nfsd` exporting it with `pnfs`, a second node connecting the same namespace and mounting
-NFSv4.1 — was measured moving a 64 MiB read and a 32 MiB write with **zero bytes through the
-MDS** and `LAYOUTRETURN` at 0, on RHEL 9.8's 5.14 kernel. Two things had to be true that this
-document did not previously state: the namespace must be PTPL-capable (§3, §6.2), and the
-client needs an `nvme-eui.` alias the kernel builds its own lookup path from (§10.1). Neither
-is a version floor, and neither was visible without reading `LAYOUTGET` — see §20.
-
 **What is not decided or not available yet.** Fencing needs a persistent
 reservation the control plane does not expose, and the operator-to-csi-node
 control channel this design drives the export through is built but unmerged. Both
@@ -431,24 +85,24 @@ can start.
 
 | #     | Prerequisite                                                                                                                                                                      | Kind                             | Blocks                                                     | Status                      |
 |-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|------------------------------------------------------------|-----------------------------|
-| P0-1  | `ptpl_file` on the lvol's namespace, so it is PTPL-capable and `nfsd` can register its key (§6.2). Not a flag on `bdev_lvol_create`                                               | Control plane (`sbcli`)          | **Any layout being issued at all**, so every phase         | **Merged** (sbcli #1375)    |
-| P0-2  | Persistent-reservation support behind it, so a fenced client's writes are actually refused (§6.2, §15)                                                                            | Storage plane (SPDK)             | Fencing, and MDS failover safety (§13)                     | **Present** — verified live |
+| P0-1  | `ptpl_file` on the lvol's namespace, so it is PTPL-capable and `nfsd` can register its key (§6.2). Not a flag on `bdev_lvol_create`                                               | Control plane (`sbcli`)          | **Any layout being issued at all**, so every phase         | **Merged**                  |
+| P0-2  | Persistent-reservation support behind it, so a fenced client's writes are actually refused (§6.2, §15)                                                                            | Storage plane (SPDK)             | Fencing, and MDS failover safety (§13)                     | **Present**                 |
 | P0-3  | The csi-link mutation gate opened, so the operator may drive `CreateExport` and `DeleteExport` on a node rather than only read from it (§6.4)                                     | Platform (`atlas-lib`, unmerged) | Every export operation, so all of §8                       | Built, unmerged, read-only  |
 | P0-4  | csi-node moved off nvme-cli `initiator.go` onto atlas `nvmeof`, which is what the mutation gate waits on (§6.4, §10.1)                                                            | Platform (`csi-driver`)          | P0-3                                                       | Not started                 |
 | P0-5  | `nvme.DeviceSelector.NGUID` and a by-NGUID lookup in atlas-lib, plus an `nvme-eui.` alias helper, so the client stops shelling out to `nvme id-ns` (§10.1)                        | Platform (`atlas-lib`)           | Client device identity, though a shell-out works meanwhile | Not started                 |
 | P0-6  | Storage-node capability and inventory fields: `nfs_capable`, `nfsd_version`, `pnfs_available`, `kernel_version`, and the NFS data-network IP, surfaced on `StorageNodeDTO` (§6.6) | Control plane (`sbcli`)          | MDS selection without a per-node probe (§7.2)              | Not shipped, recommended    |
 | P0-7  | An answer on NFSv4.1 `server_owner` and `server_scope` across MDS hosts: can they be made to match, or must the client do full state recovery on failover (§13)                   | Node OS, and a spike here        | The freeze bound in NFR-2, and what §13 may promise        | Open, spike needed          |
 | P0-8  | Confirmation that a kernel sunrpc mount reaches a Service ClusterIP on the CNI dataplanes the product supports, including eBPF kube-proxy replacement (§13)                       | Environment, and a spike here    | The stable-address design in §13                           | Open, spike needed          |
-| P0-9  | Client and MDS kernels carrying `nvme_get_unique_id`, without which nfsd cannot identify an NVMe device (§5.3). Not a 6.11 floor: verified working on RHEL 9.8's 5.14.0-687       | Node OS                          | Every phase: pNFS SCSI layout needs it                     | **Satisfied** on RHEL 9.8   |
+| P0-9  | Client and MDS kernels carrying `nvme_get_unique_id`, without which nfsd cannot identify an NVMe device (§5.3). Not a 6.11 floor: RHEL 9.8's 5.14.0-687 has it, RHEL 9.5's 5.14.0-503 does not | Node OS                          | Every phase: pNFS SCSI layout needs it                     | **Satisfied**               |
 | P0-10 | `nfs-utils` on MDS hosts (`nfsd`, `exportfs`) and `nfs-blkmap`/`blkmapd` on clients, plus `nfs-common` on Debian-family (§5.3)                                                    | Node OS                          | Export assembly and the client direct path                 | Environment requirement     |
 | P0-11 | A Debian and Ubuntu spike: `/dev/disk/by-id` naming and the `nfs-common` difference (§5.3)                                                                                        | Node OS                          | The distro matrix commitment                               | Not started (§18, Q4)       |
 
 **Without P0-1** no layout is issued at all: the feature does not degrade, it silently
 does not happen, and the fallback in FM-2 hides that completely. P0-2 turns out to be
 present already — SPDK implements reservations, and the target accepted every type once
-P0-1 was fixed — so fencing is reachable once the namespace is capable. **With P0-1 fixed the whole path
-works:** verified end to end on 2026-09-17, with a 64 MiB read and a 32 MiB write moving zero
-bytes through the MDS and `LAYOUTRETURN` staying at 0. **Without P0-3** the
+P0-1 was fixed — so fencing is reachable once the namespace is capable. **With P0-1 fixed the
+whole path works end to end**, with zero bytes through the MDS and `LAYOUTRETURN` staying at 0.
+**Without P0-3** the
 operator can read fabric state from a node but cannot ask it to assemble an
 export, which is the whole server side of this design. **Without P0-6** MDS
 selection falls back to a per-node capability probe (§7.2), which is slower and
@@ -569,7 +223,7 @@ This matches the PoC notes precisely:
   reservation key (`NFSD_MDS_PR_KEY`) on the exported device inside
   `nfsd4_scsi_proc_getdeviceinfo`, and refuses to hand out a SCSI layout if that
   registration fails. Fencing a dead or misbehaving client is the second thing reservations
-  buy, not the first. **Measured 2026-09-17:** a namespace without the capability logs
+  buy, not the first. A namespace without the capability logs
   `pNFS: failed to register key for device nvme0n1` on the MDS, `GETDEVICEINFO` returns an
   error, and every client silently falls back to MDS-routed I/O (§16, FM-2).
 - **The capability is `ptpl_file`, not a flag on the bdev.** A namespace is
@@ -578,8 +232,7 @@ This matches the PoC notes precisely:
   advertises RESCAP bit 0. Without it `rescap` reads `0xfe` — every reservation type
   except persistence — and since the Linux kernel sets PTPL=1 unconditionally in
   `nvme_pr_register`, every kernel-side registration is rejected with
-  "Invalid Field in Command." Fixed in sbcli by
-  [PR #1375](https://github.com/simplyblock-io/sbcli/pull/1375).
+  "Invalid Field in Command." Fixed in sbcli's namespace-add path.
 - **A kernel carrying `nvme_get_unique_id`** is required on both clients and MDS, which is
   what lets nfsd identify an NVMe device to name it in a layout. This is a symbol, not a
   version: RHEL 9.8's 5.14.0-687 has it and works, RHEL 9.5's 5.14.0-503 does not and
@@ -702,11 +355,9 @@ if eui64:
 ```
 
 The fix is to key the file off whichever identifier the namespace has, leaving `eui64`
-alone because it is device identity:
-[sbcli #1375](https://github.com/simplyblock-io/sbcli/pull/1375). No API, model, or DTO
-change is needed, and no new create parameter has to cross the CSI boundary — which also
-removes the `enable_persistent_reservation` field §9.3 step 3 asks `CreateLVolData` to
-carry.
+alone because it is device identity. No API, model, or DTO change is needed, and no new
+create parameter has to cross the CSI boundary — which also removes the
+`enable_persistent_reservation` field §9.3 step 3 asks `CreateLVolData` to carry.
 
 Two operational consequences the earlier design did not consider, both open:
 
@@ -1415,11 +1066,11 @@ chart.
 ### 14.1 Chart changes
 
 **This section is written against a chart that installed the CSI driver. It no
-longer does.** Since operator PR #513 the node and controller plugins are
-rendered by the `SimplyblockDriver` reconciler
-(`operator/internal/controllers/driver`), so what this section calls a chart
-value is a field on that kind, and what it calls a template is a Go builder.
-The list below is what was implemented, in those terms.
+longer does.** The node and controller plugins are rendered by the
+`SimplyblockDriver` reconciler (`operator/internal/controllers/driver`), so
+what this section calls a chart value is a field on that kind, and what it
+calls a template is a Go builder. The list below restates this section in
+those terms.
 
 - **`spec.link`** on `SimplyblockDriver`, replacing the `csiLink.enabled` value
   the chart used to gate the plugins on. The chart value survives, and now
@@ -1682,10 +1333,9 @@ What each class of test has to prove:
 
 **Every end-to-end scenario must assert that a layout was actually used**, not that the
 data was correct. Correctness holds in the degraded path by design (FM-2), so a test that
-checks only the bytes passes just as happily with pNFS switched off entirely — which is
-exactly what happened during the 2026-09-17 bring-up, twice, before anyone looked at the
-counters. The assertions that bite are `pnfs=LAYOUT_SCSI` in the mount's `nfsv4:` line,
-a non-zero `LAYOUTGET` with zero errors on `GETDEVICEINFO`, and an NFS read byte delta of
+checks only the bytes passes just as happily with pNFS switched off entirely. The
+assertions that bite are `pnfs=LAYOUT_SCSI` in the mount's `nfsv4:` line, a non-zero
+`LAYOUTGET` with zero errors on `GETDEVICEINFO`, and an NFS read byte delta of
 approximately zero across a large read with caches dropped. All three are in
 `/proc/self/mountstats`.
 
