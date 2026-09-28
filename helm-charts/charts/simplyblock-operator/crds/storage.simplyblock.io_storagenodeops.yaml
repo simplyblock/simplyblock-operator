@@ -188,6 +188,14 @@ spec:
                         pass observes the same failure again. Recording which CR was counted
                         makes each failure count once. A recreated CR has a new UID.
                       type: string
+                    failingTarget:
+                      description: |-
+                        FailingTarget is the target the Failures count refers to. Unattributed
+                        failures are only comparable against one node: ten failures spread over
+                        three candidates say nothing about the third, but a count kept per volume
+                        alone would have burnt it. The count restarts whenever the failing
+                        migration's target differs from this one.
+                      type: string
                     failures:
                       description: |-
                         Failures counts consecutive failures for this volume that could not be
@@ -201,14 +209,6 @@ spec:
 
                         Reset whenever a target is burned, so the next candidate starts fresh.
                       type: integer
-                    failingTarget:
-                      description: |-
-                        FailingTarget is the target the Failures count refers to. Unattributed
-                        failures are only comparable against one node: ten failures spread over
-                        three candidates say nothing about the third, but a count kept per volume
-                        alone would have burnt it. The count restarts whenever the failing
-                        migration's target differs from this one.
-                      type: string
                     pvName:
                       description: PVName is the PersistentVolume whose migration
                         these targets failed for.
