@@ -1,6 +1,7 @@
 package lvm
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,10 +10,10 @@ import (
 	"strings"
 )
 
-// runner executes a single LVM/device-mapper command and returns its combined
-// output, which is where these tools put the reason for a failure, as well as
-// (for pvs/lvs) the fields callers scrape from stdout mixed with any
-// WARNING: lines lvm2 writes to stderr.
+// runner executes a single LVM/device-mapper command and returns its stdout,
+// keeping it separate from stderr (where a WARNING: notice lands, e.g. a
+// duplicate-PV signature on a byte-level clone) so neither a JSON report nor a
+// text scrape can mistake a notice for a field value.
 //
 // A field rather than a hardcoded exec.Command so this package's own tests
 // can run the identity logic without lvm2 or a kernel present. Unexported:
@@ -33,14 +34,18 @@ func runCommand(ctx context.Context, args ...string) (string, error) {
 	//nolint:gosec // fixed set of LVM/dm binaries, structured args
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
-	output, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return string(output), fmt.Errorf("timed out running %v", args)
+		return stdout.String(), fmt.Errorf("timed out running %v", args)
 	}
 	if err != nil {
-		return string(output), fmt.Errorf("%v: %w: %s", args, err, strings.TrimSpace(string(output)))
+		combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+		return stdout.String(), fmt.Errorf("%v: %w: %s", args, err, combined)
 	}
-	return string(output), nil
+	return stdout.String(), nil
 }
 
 // PhysicalVolume identifies an LVM physical volume by the device path it was
@@ -149,22 +154,33 @@ func (m *Manager) exec(ctx context.Context, devices []string, args ...string) (s
 	return m.run(ctx, full...)
 }
 
-// firstRealLine returns the first non-empty, non-WARNING: line of out.
-// A runner typically merges stdout+stderr, and pvs/lvs can print
-// WARNING: lines ahead of the actual field value (e.g., duplicate-PV warnings
-// on a byte-level clone). Trusting the whole trimmed blob would pollute both
-// an identity comparison and any log message built from it.
-func firstRealLine(out string) string {
+// realLines returns every non-empty, non-notice line of out, in order.
+// A runner typically merges stdout+stderr, and pvs/lvs can print notices
+// ahead of the actual field values on the same stream: "WARNING:" lines, and
+// the "Please remove the lvm.conf filter" pair a devices file prints under a
+// filtered configuration. Trusting the whole trimmed blob would fold one of
+// them in as if it were a reported value — for a single-field lookup that
+// pollutes an identity comparison or a log message; for a space-separated,
+// possibly multi-valued field like lv_name it can hand back a notice's own
+// words as if they were volume names.
+func realLines(out string) []string {
+	var lines []string
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
-		// LVM's notices come first and on the same stream: "WARNING:" lines,
-		// and the "Please remove the lvm.conf filter" pair a devices file
-		// prints under a filtered configuration. One of them read as a value
-		// is a group that reads as nobody's.
 		if line == "" || strings.HasPrefix(line, "WARNING:") || strings.HasPrefix(line, "Please ") {
 			continue
 		}
-		return line
+		lines = append(lines, line)
 	}
-	return ""
+	return lines
+}
+
+// firstRealLine returns the first line realLines(out) would report, or "" if
+// there is none.
+func firstRealLine(out string) string {
+	lines := realLines(out)
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[0]
 }

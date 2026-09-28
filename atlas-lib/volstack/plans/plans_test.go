@@ -15,6 +15,7 @@ package plans
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -322,7 +323,31 @@ type recordingLVM struct {
 
 func (r *recordingLVM) run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, args)
-	return r.out[args[0]], nil
+	return reportWrap(args, r.out[args[0]]), nil
+}
+
+// reportWrap wraps out as pvs/lvs --reportformat json would, when args asked for
+// it; every other answer passes through unchanged. out is treated as
+// whitespace-separated field values, matching how a test already scripts a
+// plain-text answer for the pre-JSON form of these same commands.
+func reportWrap(args []string, out string) string {
+	if !slices.Contains(args, "--reportformat") {
+		return out
+	}
+	kind, field := "pv", "vg_name"
+	if args[0] == "lvs" {
+		kind, field = "lv", "lv_name"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"report":[{"%s":[`, kind)
+	for i, v := range strings.Fields(out) {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"%s":"%s"}`, field, v)
+	}
+	b.WriteString("]}]}")
+	return b.String()
 }
 
 // renamed is the logical volume an lvrename was pointed at, and reports whether
