@@ -330,8 +330,8 @@ backend/API **before** the CSI work can be completed and validated:
 
 ### 6.2 Persistent reservations (`ptpl_file`) on the lvol's namespace
 
-Earlier drafts put this on `bdev_lvol_create` as an `enable_persistent_reservation`
-flag threaded through the v2 API, the controller, the model, and the DTO. **That is the
+This does not belong on `bdev_lvol_create` as an `enable_persistent_reservation` flag
+threaded through the v2 API, the controller, the model, and the DTO. **That would be the
 wrong layer.** Reservations are a property of the NVMe-oF *namespace*, not of the bdev
 under it, and the parameter that governs them already exists: `ptpl_file` on
 `nvmf_subsystem_add_ns`.
