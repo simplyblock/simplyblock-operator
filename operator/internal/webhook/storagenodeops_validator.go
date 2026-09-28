@@ -57,6 +57,8 @@ type StorageNodeOpsValidator struct{}
 // abort from refuses a delete the abort channel would have honored, and a
 // missing entry admits the withdrawal of a record nothing else accounts for.
 var undeletableNodeSteps = map[simplyblockv1alpha2.StorageNodeOpsStep]string{
+	simplyblockv1alpha2.StorageNodeOpsStepDeparting: "the control plane has accepted the " +
+		"restart and is carrying it out whether or not this record exists",
 	simplyblockv1alpha2.StorageNodeOpsStepAwaiting: "the control plane is carrying out the " +
 		"action, and it is doing so whether or not this record exists",
 	simplyblockv1alpha2.StorageNodeOpsStepRemoving: "the node is being taken out of the cluster",

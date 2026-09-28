@@ -35,6 +35,7 @@ type step = simplyblockv1alpha2.StorageNodeOpsStep
 
 const (
 	stepRequesting       = simplyblockv1alpha2.StorageNodeOpsStepRequesting
+	stepDeparting        = simplyblockv1alpha2.StorageNodeOpsStepDeparting
 	stepAwaiting         = simplyblockv1alpha2.StorageNodeOpsStepAwaiting
 	stepValidating       = simplyblockv1alpha2.StorageNodeOpsStepValidating
 	stepSuspending       = simplyblockv1alpha2.StorageNodeOpsStepSuspending
@@ -78,8 +79,15 @@ const (
 // drain waiting by design from one waiting because of a bug, and without one the
 // two look identical.
 const (
-	requestingDeadline  = 2 * time.Minute
-	awaitingDeadline    = 30 * time.Minute
+	requestingDeadline = 2 * time.Minute
+	awaitingDeadline   = 30 * time.Minute
+
+	// departingDeadline bounds the wait for a restarted node to leave online.
+	// The control plane flips the node to in_restart within seconds of accepting
+	// the call, so a node still online minutes later is one whose restart the
+	// control plane dropped, and this is the budget that turns an invisible
+	// refusal into a failed operation with a reason.
+	departingDeadline   = 5 * time.Minute
 	validatingDeadline  = 24 * time.Hour
 	suspendingDeadline  = 15 * time.Minute
 	migratingDeadline   = 12 * time.Hour
@@ -133,10 +141,11 @@ func deadline[S comparable](d time.Duration) statemachine.TransitionFunc[S] {
 
 // graphs declares one state graph per operation action over one step type.
 func graphs() statemachine.MultiConfig[step] {
-	// requestAndWait is the two-step line the four single-step actions share:
-	// post the action, then wait for the completion condition. It is a function
-	// rather than a shared value because MultiConfig copies the graph when a
-	// machine is built and a shared map would be one graph under four keys.
+	// requestAndWait is the two-step line three of the single-step actions
+	// share: post the action, then wait for the completion condition. It is a
+	// function rather than a shared value because MultiConfig copies the graph
+	// when a machine is built and a shared map would be one graph under several
+	// keys.
 	requestAndWait := func() statemachine.Config[step] {
 		return statemachine.Config[step]{
 			Initial: stepRequesting,
@@ -151,9 +160,31 @@ func graphs() statemachine.MultiConfig[step] {
 		}
 	}
 
+	// A restart waits twice, because its completion state is the state it
+	// started in. The control plane accepts the call and performs it on a
+	// thread, so a node keeps reporting online for a moment after the request,
+	// and a wait for online alone completes before the restart began. Departing
+	// is the observation that it has: the node has left online. Nothing from
+	// there on is abortable, since the restart is the control plane's to finish.
+	restart := statemachine.Config[step]{
+		Initial: stepRequesting,
+		States: map[step]statemachine.StateDef[step]{
+			stepRequesting: {
+				To:        []step{stepDeparting},
+				Abortable: true,
+				OnEnter:   deadline[step](requestingDeadline),
+			},
+			stepDeparting: {
+				To:      []step{stepAwaiting},
+				OnEnter: deadline[step](departingDeadline),
+			},
+			stepAwaiting: {OnEnter: deadline[step](awaitingDeadline)},
+		},
+	}
+
 	return statemachine.MultiConfig[step]{
 		action(simplyblockv1alpha2.StorageNodeOpsActionShutdown): requestAndWait(),
-		action(simplyblockv1alpha2.StorageNodeOpsActionRestart):  requestAndWait(),
+		action(simplyblockv1alpha2.StorageNodeOpsActionRestart):  restart,
 		action(simplyblockv1alpha2.StorageNodeOpsActionSuspend):  requestAndWait(),
 		action(simplyblockv1alpha2.StorageNodeOpsActionResume):   requestAndWait(),
 
@@ -330,6 +361,7 @@ var initialDeadlines = map[statemachine.Action]time.Duration{
 // both.
 var stepBudgets = map[step]time.Duration{
 	stepRequesting:       requestingDeadline,
+	stepDeparting:        departingDeadline,
 	stepAwaiting:         awaitingDeadline,
 	stepValidating:       validatingDeadline,
 	stepSuspending:       suspendingDeadline,

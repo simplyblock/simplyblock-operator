@@ -445,6 +445,7 @@ File: `operator/internal/controllers/node/actions_test.go`
 | U-435     | An unforced restart of a node that is not offline is refused terminally, with the reason (2026-09-28) | Regression | `TestARestartOfAnOnlineNodeIsRefusedUnlessForced`                                               |
 | U-436     | A restart is not issued into a node already `in_restart` (2026-09-28)                                 | Regression | `TestARestartIsNotIssuedIntoANodeAlreadyRestarting`                                             |
 | U-437     | A shutdown is not issued into a node already `in_shutdown` (2026-09-28)                               | Regression | `TestAShutdownIsNotIssuedIntoANodeAlreadyShuttingDown`                                          |
+| U-438     | A restart waits for the node to leave online before it waits for it to return (2026-09-28)            | Regression | `TestARestartWaitsForTheNodeToLeaveBeforeItWaitsForItToReturn`                                  |
 
 ### Operation: Volume Classification (design §8.1)
 

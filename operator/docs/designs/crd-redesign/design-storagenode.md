@@ -1319,7 +1319,7 @@ the `MultiConfig` form: one graph per action over one step type.
 ```go
 // StorageNodeOpsStep is the union of every action's steps; which steps belong to
 // which action is declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 ```
 
@@ -1348,8 +1348,11 @@ catch, because the rule is the union over the kind and the graph is per action.
 The seven graphs:
 
 ```
-Shutdown, Restart, Suspend, Resume
+Shutdown, Suspend, Resume
     Requesting ──► Awaiting
+
+Restart (§7.3)
+    Requesting ──► Departing ──► Awaiting
 
 Remove (§8)
     Validating ──► Suspending ──► MigratingVolumes ──► Verifying ──► Removing
@@ -1512,20 +1515,38 @@ step's unwind. That is why the resume call is part of the abort path for a
 
 ### 7.3 The four single-step actions
 
-`Shutdown`, `Restart`, `Suspend`, and `Resume` are one call and one wait, and
-share a two-step graph:
+`Shutdown`, `Restart`, `Suspend`, and `Resume` are one call and one wait.
+Three of them share a two-step graph:
 
 ```
     Requesting ──► Awaiting
       ← POST the action        ← wait for the completion condition below
 ```
 
-| Action     | Backend call                          | Completion condition  |
-|------------|---------------------------------------|-----------------------|
-| `Shutdown` | `POST /storage-nodes/{node}/shutdown` | `status == offline`   |
-| `Restart`  | `POST /storage-nodes/{node}/restart`  | `status == online`    |
-| `Suspend`  | `POST /storage-nodes/{node}/suspend`  | `status == suspended` |
-| `Resume`   | `POST /storage-nodes/{node}/resume`   | `status == online`    |
+`Restart` waits twice, because its completion state is the state it started in.
+The control plane accepts the call and performs it on a thread, so the node
+keeps reporting `online` for a moment after the request, and a wait for `online`
+alone completes before the restart began:
+
+```
+    Requesting ──► Departing ──► Awaiting
+      ← POST the restart   ← status != online   ← status == online
+```
+
+`Departing` is the observation that the restart has begun, and it is satisfied
+at once by a node that was offline when the restart was requested. A stream that
+coalesces can deliver `online` before and `online` after with nothing in
+between, and the step then waits out its budget and fails an operation whose
+restart happened. That is the trade §16 Q4 records, and it is the right side of
+it: a false failure is visible and recoverable, where the false success it
+replaces released the node's lock while the node was restarting.
+
+| Action     | Backend call                          | Completion condition                        |
+|------------|---------------------------------------|---------------------------------------------|
+| `Shutdown` | `POST /storage-nodes/{node}/shutdown` | `status == offline`                         |
+| `Restart`  | `POST /storage-nodes/{node}/restart`  | `status != online`, then `status == online` |
+| `Suspend`  | `POST /storage-nodes/{node}/suspend`  | `status == suspended`                       |
+| `Resume`   | `POST /storage-nodes/{node}/resume`   | `status == online`                          |
 
 `Restart` passes `reattachVolume` and `force` through when they are set. The
 completion condition is evaluated against the streamed storage-node object (§4.4).
@@ -2744,7 +2765,7 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared
 // by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
@@ -2865,7 +2886,7 @@ type StorageNodeOpsStatus struct {
 	// Step is the position of the running action's state machine, as the shared
 	// statemachine.KubeSnapshot (design-crd-model.md §3.1). The rule is what an
 	// Enum marker would do if a marker could reach a field of a shared type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

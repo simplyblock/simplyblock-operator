@@ -13,9 +13,10 @@
 //     or advances, so the question a `triggered` flag answers is one this
 //     controller never asks.
 //
-// The four single-step actions live here in full. The three multi-step ones are
-// each a file of their own, because a drain, a relocation, and a maintenance
-// window are each a workflow rather than a call.
+// The four single-step actions live here in full, and Restart is the one whose
+// wait has two halves: the node leaving online, and then returning to it. The
+// three multi-step actions are each a file of their own, because a drain, a
+// relocation, and a maintenance window are each a workflow rather than a call.
 //
 // design-storagenode.md §7.3 is the specification for what is here.
 
@@ -39,6 +40,8 @@ func (r *StorageNodeOpsReconciler) perform(
 	switch current {
 	case stepRequesting:
 		return r.request(ctx, ops)
+	case stepDeparting:
+		return r.awaitDeparture(ctx, ops)
 	case stepAwaiting:
 		return r.await(ctx, ops)
 
@@ -154,6 +157,32 @@ func (r *StorageNodeOpsReconciler) await(
 		return false, fatalf("action %s declares no completion condition", ops.Spec.Action)
 	}
 	return reading.Status == wanted, nil
+}
+
+// awaitDeparture is the first of a restart's two waits: the node has left
+// online, which is the observation that the restart has begun. It is a predicate
+// over the current reading like every other completion, and a node reporting
+// anything but online satisfies it, including a node that was offline when the
+// restart was requested and has not moved yet.
+//
+// A stream that coalesces can deliver online before and online after without
+// what was in between, and this step then waits out its budget and fails an
+// operation whose restart happened. That is the trade §16 Q4 records, and it is
+// the right side of it: a false failure is visible and recoverable, and the
+// false success it replaces released the node's lock while the node was
+// restarting.
+func (r *StorageNodeOpsReconciler) awaitDeparture(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps,
+) (bool, error) {
+	clusterID, nodeID, err := r.target(ctx, ops)
+	if err != nil {
+		return false, err
+	}
+	reading, err := r.nodeReading(ctx, clusterID, nodeID)
+	if err != nil {
+		return false, err
+	}
+	return reading.Status != nodeStatusOnline, nil
 }
 
 // completionStatus is what each single-step action waits for the node to report.

@@ -67,12 +67,16 @@ const (
 // StorageNodeOpsStep is one step of a running node operation. The enum is the
 // union of every action's steps; which steps belong to which action is declared by
 // the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
+// +kubebuilder:validation:Enum=Requesting;Departing;Awaiting;Validating;Suspending;MigratingVolumes;Verifying;Removing;Preparing;Relocating;AwaitingNode;Promoting;Holding;ShuttingDown;Releasing;AwaitingHost;Restarting;Cleanup
 type StorageNodeOpsStep string
 
 const (
-	// Shutdown, Restart, Suspend, and Resume.
+	// Shutdown, Restart, Suspend, and Resume. Departing belongs to Restart alone:
+	// a restart is asynchronous and the node keeps reporting online for a moment
+	// after the call, so the operation waits for it to leave before it waits for
+	// it to return.
 	StorageNodeOpsStepRequesting StorageNodeOpsStep = "Requesting"
+	StorageNodeOpsStepDeparting  StorageNodeOpsStep = "Departing"
 	StorageNodeOpsStepAwaiting   StorageNodeOpsStep = "Awaiting"
 
 	// Remove.
@@ -214,7 +218,7 @@ type StorageNodeOpsStatus struct {
 
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Departing','Awaiting','Validating','Suspending','MigratingVolumes','Verifying','Removing','Preparing','Relocating','AwaitingNode','Promoting','Holding','ShuttingDown','Releasing','AwaitingHost','Restarting','Cleanup']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

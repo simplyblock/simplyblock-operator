@@ -166,6 +166,55 @@ func TestAShutdownIsNotIssuedIntoANodeAlreadyShuttingDown(t *testing.T) {
 	}
 }
 
+// A restart is asynchronous: the control plane accepts it and performs it on a
+// thread, so the node keeps reporting online for a moment after the call. A
+// restart that completes on the node being online is therefore one that can
+// complete before it began. The operation waits for the node to leave online
+// first, and only then for it to be back.
+//
+// Regression: 2026-09-28-restart-of-an-online-node-is-a-silent-no-op — a forced
+// Restart of an online node reported Succeeded on the pass after the request,
+// while the control plane was still restarting the node.
+func TestARestartWaitsForTheNodeToLeaveBeforeItWaitsForItToReturn(t *testing.T) {
+	api := aControlPlane().reporting(nodeStatusOnline)
+	ops := anAdvancingOperation("a-restart",
+		simplyblockv1alpha2.StorageNodeOpsActionRestart, stepRequesting)
+	ops.Spec.Force = ptr.To(true)
+	r, apiClient := anOpsWorld(t, api, ops)
+	lockedBy(t, apiClient, "a-restart")
+
+	// The request is issued, and the node has not moved yet.
+	pass(t, r, "a-restart")
+	pass(t, r, "a-restart")
+	if asked := api.asked("RestartNode"); asked != 1 {
+		t.Fatalf("RestartNode was issued %d time(s), want once", asked)
+	}
+	got := operationRead(t, apiClient, "a-restart")
+	if got.Status.Phase == simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+		t.Fatal("the restart reported Succeeded against a node that never left online")
+	}
+
+	// The node leaves, and comes back.
+	api.reporting(nodeStatusInRestart)
+	pass(t, r, "a-restart")
+	pass(t, r, "a-restart")
+	if got := operationRead(t, apiClient, "a-restart"); terminalOps(got.Status.Phase) {
+		t.Fatalf("phase = %q (%s) while the node is still restarting", got.Status.Phase, got.Status.Message)
+	}
+
+	api.reporting(nodeStatusOnline)
+	pass(t, r, "a-restart")
+	pass(t, r, "a-restart")
+	got = operationRead(t, apiClient, "a-restart")
+	if got.Status.Phase != simplyblockv1alpha2.StorageNodeOpsPhaseSucceeded {
+		t.Errorf("phase = %q (%s), want Succeeded once the node is back",
+			got.Status.Phase, got.Status.Message)
+	}
+	if asked := api.asked("RestartNode"); asked != 1 {
+		t.Errorf("RestartNode was issued %d time(s) over the whole restart, want once", asked)
+	}
+}
+
 // The two modifiers travel only when the operation states them, because the
 // control plane defaults them itself and not sending one is not the same as
 // sending false. The node is offline, which is the one state an unforced restart
