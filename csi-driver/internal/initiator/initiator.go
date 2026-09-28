@@ -144,9 +144,6 @@ func New(volumeContext map[string]string) (Initiator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert namespace ID %s to integer: %w", volumeContext["nsId"], err)
 	}
-	if nsId < 1 {
-		return nil, fmt.Errorf("namespace ID must be greater than zero")
-	}
 	// Bounded to what an NVMe namespace id can hold, which is what lets the
 	// fabric repair take it as one without a conversion that could wrap.
 	if uint64(nsId) > math.MaxUint32 {
@@ -200,6 +197,9 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 // So a failed device lookup is diagnosed rather than simply returned, and if the
 // fabric could be repaired the attach is tried once more. See nvmerepair.go.
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
+	if nvmf.nsId < 1 {
+		return "", fmt.Errorf("namespace ID must be greater than zero")
+	}
 	devicePath, err := nvmf.connectOnce(ctx)
 	// The namespace id is bounded at construction, which is what makes the
 	// narrowing safe: New refuses anything below one and anything an NVMe
