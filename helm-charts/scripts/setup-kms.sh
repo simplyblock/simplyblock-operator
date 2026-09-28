@@ -45,7 +45,13 @@ kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null \
 info "Installing OpenBao..."
 helm repo add openbao https://openbao.github.io/openbao-helm
 helm repo update
+# Pinned: openbao-values.yaml configures the "file" storage backend, which
+# OpenBao dropped in 2.7.0 (chart 0.30.0). An unpinned install picked that up
+# the day it was published and the server crash-looped with "unknown storage
+# type file" (2026-09-28). 0.29.6 ships OpenBao 2.6.3, the last with "file".
+OPENBAO_CHART_VERSION="${OPENBAO_CHART_VERSION:-0.29.6}"
 helm upgrade --install openbao openbao/openbao \
+  --version "$OPENBAO_CHART_VERSION" \
   -n "$NAMESPACE" --create-namespace \
   -f "$SCRIPT_DIR/openbao-values.yaml" \
   --set server.dataStorage.storageClass="$STORAGE_CLASS"
