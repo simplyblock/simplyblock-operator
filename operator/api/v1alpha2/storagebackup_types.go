@@ -70,7 +70,12 @@ func StorageBackupName(backupID string) string {
 // Available is the terminal success rather than Succeeded, because a backup is
 // not an operation: what matters afterward is that the copy can be restored, not
 // that the copying finished.
-// +kubebuilder:validation:Enum=Pending;Creating;Available;Failed
+//
+// Merged is a second terminal phase: retention can fold a completed backup into
+// its successor, after which it has no copy of its own to restore. It is not
+// Failed, since nothing went wrong, and not Creating, since it will never
+// become Available.
+// +kubebuilder:validation:Enum=Pending;Creating;Available;Failed;Merged
 type StorageBackupPhase string
 
 const (
@@ -78,6 +83,7 @@ const (
 	StorageBackupPhaseCreating  StorageBackupPhase = "Creating"
 	StorageBackupPhaseAvailable StorageBackupPhase = "Available"
 	StorageBackupPhaseFailed    StorageBackupPhase = "Failed"
+	StorageBackupPhaseMerged    StorageBackupPhase = "Merged"
 )
 
 // BackupSource is what the volume was when the copy was taken. It is written

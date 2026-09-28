@@ -303,10 +303,12 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
-	// Mark the BackupRestore as Failed if the StorageBackup is in terminal state Failed.
-	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
-		msg := fmt.Sprintf("StorageBackup %q failed and cannot be restored: %s",
-			backup.Name, backup.Status.Message)
+	// Mark the BackupRestore as Failed if the StorageBackup is in a terminal
+	// phase that will never become Available: Failed or Merged.
+	if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed ||
+		backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseMerged {
+		msg := fmt.Sprintf("StorageBackup %q cannot be restored (phase=%s): %s",
+			backup.Name, backup.Status.Phase, backup.Status.Message)
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
 			s.Message = msg

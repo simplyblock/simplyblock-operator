@@ -340,6 +340,7 @@ spec:
                     - Creating
                     - Available
                     - Failed
+                    - Merged
                   type: string
                 source:
                   description: Source is what the volume was when the copy was taken.

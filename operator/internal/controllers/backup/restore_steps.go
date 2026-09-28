@@ -89,6 +89,10 @@ func (r *StorageBackupOpsReconciler) validate(
 		// A failed backup has no copy behind it, and it does not recover: it is
 		// replaced by another backup rather than repaired.
 		return false, fatalf("StorageBackup %s failed and has no copy to restore", backup.Name)
+	case simplyblockv1alpha2.StorageBackupPhaseMerged:
+		// A merged backup's data now lives in the backup it was merged into.
+		// Waiting cannot fix that, so this is terminal like Failed above.
+		return false, fatalf("StorageBackup %s was merged into a later backup and has no independent copy to restore", backup.Name)
 	case simplyblockv1alpha2.StorageBackupPhaseAvailable:
 	default:
 		// Still being written. Waiting is right rather than failing: the copy is
