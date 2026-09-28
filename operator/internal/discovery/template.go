@@ -20,7 +20,6 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
 	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
-	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
 const (
@@ -327,6 +326,13 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 // Neither is a worker with one disk, which would be left no storage at all, nor
 // one reporting a disk of no size, because an unsized disk is smaller than
 // anything and the generator invents those for claimed userspace controllers.
+//
+// What counts as a disk here is what the draft names, which is a class address
+// and not a probed device. An NVMe controller with two namespaces is two
+// devices in the report and one entry in the document, so counting devices both
+// over-counts a worker that has one controller and mistakes a namespace for the
+// disk it sits on. The capacity compared is the controller's, summed across its
+// namespaces, because that is the disk a reviewer is being asked to give up.
 func journalDeviceFor(plan Plan) (bool, string) {
 	if len(plan.Workers) == 0 {
 		return false, ""
@@ -336,7 +342,7 @@ func journalDeviceFor(plan Plan) (bool, string) {
 	var onWorker, named string
 
 	for _, worker := range plan.Workers {
-		size, device, ok := soleSmallestDisk(worker.Devices)
+		size, address, ok := soleSmallestDisk(worker)
 		if !ok {
 			return false, fmt.Sprintf(
 				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
@@ -345,13 +351,7 @@ func journalDeviceFor(plan Plan) (bool, string) {
 					"cluster exists", worker.Name)
 		}
 		if onWorker == "" || size < smallest {
-			// Named the way the draft names it, so a reviewer can find the disk
-			// in the document rather than having to map a kernel name onto an
-			// address the document lists instead.
-			smallest, onWorker, named = size, worker.Name, worker.Class.Address(device)
-			if named == "" {
-				named = device.Name
-			}
+			smallest, onWorker, named = size, worker.Name, address
 		}
 	}
 
@@ -363,25 +363,41 @@ func journalDeviceFor(plan Plan) (bool, string) {
 		humanBytes(smallest), named, onWorker)
 }
 
-// soleSmallestDisk returns the one device smaller than every other the worker
-// hands over, and reports whether there is one.
-func soleSmallestDisk(devices []nodeprobe.Device) (uint64, nodeprobe.Device, bool) {
-	if len(devices) < 2 {
-		return 0, nodeprobe.Device{}, false
+// soleSmallestDisk returns the capacity and the draft's name of the one disk
+// smaller than every other the worker hands over, and reports whether there is
+// one.
+//
+// It works in the addresses the draft names rather than the devices the probe
+// reported, so a controller with two namespaces is one disk of their combined
+// size. An address the class cannot name is skipped, which is the same device
+// the draft would leave out.
+func soleSmallestDisk(worker Worker) (uint64, string, bool) {
+	capacity := map[string]uint64{}
+	for _, device := range worker.Devices {
+		address := worker.Class.Address(device)
+		if address == "" {
+			continue
+		}
+		capacity[address] += device.SizeBytes
+	}
+	if len(capacity) < 2 {
+		return 0, "", false
 	}
 
-	smallest, found, ties := devices[0].SizeBytes, devices[0], 1
-	for _, device := range devices[1:] {
+	var smallest uint64
+	var found string
+	ties := 0
+	for address, size := range capacity {
 		switch {
-		case device.SizeBytes < smallest:
-			smallest, found, ties = device.SizeBytes, device, 1
-		case device.SizeBytes == smallest:
+		case found == "" || size < smallest:
+			smallest, found, ties = size, address, 1
+		case size == smallest:
 			ties++
 		}
 	}
 
 	if smallest == 0 || ties != 1 {
-		return 0, nodeprobe.Device{}, false
+		return 0, "", false
 	}
 	return smallest, found, true
 }

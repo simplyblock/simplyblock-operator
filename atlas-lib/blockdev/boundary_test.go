@@ -10,6 +10,7 @@ package blockdev
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -400,5 +401,39 @@ func TestReaderCannotWrite(t *testing.T) {
 		WriteAt([]byte, int64) (int, error)
 	}); isWriter {
 		t.Fatal("the Reader a prober is handed can write to the device")
+	}
+}
+
+// U-21: the sentence a blank reading carries says how many bytes were actually
+// read, which on a device smaller than two regions is the whole device rather
+// than a region.
+//
+// A device of 64 KiB probed with a 128 KiB region was reported as having had its
+// first 131072 bytes read and found zero, which claims twice the device. The
+// number is the evidence for an irreversible write, so it says what was read.
+func TestTheBlankSentenceCountsWhatWasRead(t *testing.T) {
+	region := int64(MinRegionSize)
+
+	for _, size := range []int64{region / 2, region, region + 1024, 8 << 20} {
+		s := newSynth(size, region)
+		got, err := readSynth(t, s)
+		if err != nil {
+			t.Fatalf("Read(%d): %v", size, err)
+		}
+		if got.Content != ContentBlank {
+			t.Fatalf("Read(%d).Content = %s, want Blank", size, got.Content)
+		}
+
+		// A device of two regions or less is read whole, so the head is the
+		// device; above that the head is one region.
+		read := size
+		if read > 2*region {
+			read = region
+		}
+		want := fmt.Sprintf("the first %d bytes", read)
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("a %d-byte device probed with a %d-byte region says %q,\nwant it to contain %q",
+				size, region, got.Detail, want)
+		}
 	}
 }

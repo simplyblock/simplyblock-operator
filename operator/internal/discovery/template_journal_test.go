@@ -15,6 +15,7 @@
 package discovery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -177,4 +178,115 @@ func TestAFleetWithNoJournalDiskIsSaidSo(t *testing.T) {
 		}
 	}
 	t.Error("the draft says nothing about the journal for a fleet of identical disks")
+}
+
+// namespaces builds a worker whose devices carry the addresses given, so that
+// two namespaces of one controller can be expressed: the probe reports a device
+// per namespace and the draft names the controller once.
+func namespacesOn(name string, devices ...[2]any) Worker {
+	out := Worker{Name: name, Class: ClassNVMe}
+	for index, device := range devices {
+		out.Devices = append(out.Devices, nodeprobe.Device{
+			Name:       fmt.Sprintf("nvme%dn%d", index, index),
+			Path:       fmt.Sprintf("/dev/nvme%dn%d", index, index),
+			PCIAddress: device[0].(string),
+			SizeBytes:  device[1].(uint64),
+			Kind:       "Disk",
+			Transport:  "NVMe",
+			Available:  true,
+			Content:    "Blank",
+		})
+	}
+	return out
+}
+
+// Regression: 2026-09-28-journal-rule-counts-namespaces-not-devices. The rule
+// read the probe's devices, and the draft names deduplicated class addresses: a
+// controller with two namespaces is two devices and one entry in the document.
+//
+// Both halves of that mattered. A worker with one controller and two namespaces
+// hands the draft a single device, and the rule proposed dedicating it, which
+// leaves the node no storage at all — the case the single-disk guard exists to
+// stop, walked around by counting namespaces. And where a second controller did
+// exist, the smallest namespace was named as the journal disk while the address
+// it was named by is the whole controller, so the note pointed at a device
+// larger than the size beside it.
+func TestTheJournalRuleReadsWhatTheDraftNames(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		worker  Worker
+		propose bool
+		why     string
+	}{
+		{
+			name: "one controller, two namespaces, nothing else",
+			worker: namespacesOn("worker-1",
+				[2]any{"0000:5e:00.0", 3 * tib},
+				[2]any{"0000:5e:00.0", 1 * tib}),
+			propose: false,
+			why:     "the draft names one device, and dedicating it leaves no storage",
+		},
+		{
+			name: "two namespaces on one controller beside a whole one",
+			worker: namespacesOn("worker-1",
+				[2]any{"0000:5e:00.0", 3 * tib},
+				[2]any{"0000:5e:00.0", 1 * tib},
+				[2]any{"0000:5f:00.0", 3 * tib}),
+			propose: true,
+			why: "the controllers carry 4T and 3T, so the smaller is unique. " +
+				"Counting namespaces would have made the 1T one the smallest instead",
+		},
+		{
+			name: "namespaces that make the controllers unequal",
+			worker: namespacesOn("worker-1",
+				[2]any{"0000:5e:00.0", 2 * tib},
+				[2]any{"0000:5e:00.0", 2 * tib},
+				[2]any{"0000:5f:00.0", 1 * tib}),
+			propose: true,
+			why:     "one controller carries 4T and the other 1T, which is the shape",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			plan := Plan{Class: ClassNVMe, Workers: []Worker{testCase.worker}}
+			value, set := proposedJournalFlag(t, plan)
+			if testCase.propose {
+				if !set || !value {
+					t.Fatalf("the draft does not propose enableJournalDevice: %s", testCase.why)
+				}
+				return
+			}
+			if set {
+				t.Errorf("the draft proposes enableJournalDevice=%v: %s", value, testCase.why)
+			}
+		})
+	}
+}
+
+// The note names a device the draft carries, and states the capacity of that
+// device rather than of one namespace of it.
+func TestTheJournalNoteNamesAnAddressTheDraftCarries(t *testing.T) {
+	worker := namespacesOn("worker-1",
+		[2]any{"0000:5e:00.0", 2 * tib},
+		[2]any{"0000:5e:00.0", 2 * tib},
+		[2]any{"0000:5f:00.0", 1 * tib})
+	template := ClusterTemplateFor("a-cluster", Plan{Class: ClassNVMe, Workers: []Worker{worker}})
+
+	var note string
+	for _, candidate := range template.Notes {
+		if strings.Contains(candidate, "enableJournalDevice") {
+			note = candidate
+		}
+	}
+	if note == "" {
+		t.Fatal("no note about the journal device")
+	}
+	if !strings.Contains(note, "0000:5f:00.0") {
+		t.Errorf("the note does not name the smaller controller: %q", note)
+	}
+	if strings.Contains(note, "0000:5e:00.0") {
+		t.Errorf("the note names the larger controller as the journal disk: %q", note)
+	}
+	if !strings.Contains(note, "1T") {
+		t.Errorf("the note does not state the controller's capacity: %q", note)
+	}
 }

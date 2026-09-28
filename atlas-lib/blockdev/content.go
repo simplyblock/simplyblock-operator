@@ -219,8 +219,12 @@ func (p *Prober) Read(ctx context.Context, dev Device) (Reading, error) {
 		}, nil
 	}
 
+	// The count is what was read and not what was asked for: a device smaller
+	// than two regions is read whole into head, so a region-sized number would
+	// claim bytes past the end of the device. This sentence is the evidence an
+	// irreversible write rests on, so it states the bytes that were examined.
 	return Reading{Content: ContentBlank, Detail: fmt.Sprintf(
-		"the first %d bytes were read and are zero, and no signature matched", p.regionSize)}, nil
+		"the first %d bytes were read and are zero, and no signature matched", len(regions.head))}, nil
 }
 
 // read pulls the two regions off the device. A device smaller than two regions

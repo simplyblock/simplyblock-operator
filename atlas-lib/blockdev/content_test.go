@@ -189,7 +189,8 @@ const (
 	alcemlFirstPage = 1060864
 )
 
-// A simplyblock device whose superblock has been wiped reads as blank, and the
+// Regression: 2026-09-28-alceml-without-a-superblock-reads-as-foreign. A
+// simplyblock device whose superblock has been wiped reads as blank, and the
 // pages that would have named it start just past where the head region stops.
 //
 // Every 1.5 TB disk of all four workers of the OKD lab cluster was in this state

@@ -240,7 +240,7 @@ if want swap; then
         "the signature sits at page size minus ten, so it moves with the page size"
 fi
 
-for meta in 1.0 1.1 1.2; do
+for meta in 0.90 1.0 1.1 1.2; do
     name="mdraid-${meta//./}"
     if want "$name"; then
         dev=$(attach "$name" 64)
@@ -249,7 +249,7 @@ for meta in 1.0 1.1 1.2; do
         mdadm --stop "/dev/md/capture-$name" >/dev/null 2>&1 || true
         capture "$name" "$dev" "mdadm" "$(ver mdadm --version)" \
             "mdadm --create --level=1 --metadata=$meta <dev> missing" \
-            "metadata $meta: 1.0 puts the superblock in the tail region, 1.1 and 1.2 in the head"
+            "metadata $meta: 0.90 and 1.0 put the superblock in the tail region, at different offsets, and 1.1 and 1.2 put it in the head"
     fi
 done
 
