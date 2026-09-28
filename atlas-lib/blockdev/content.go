@@ -31,8 +31,14 @@ const (
 	// authorizes nothing.
 	ContentUnknown Content = iota
 
-	// ContentBlank means every byte of the probed regions was read successfully
-	// and was zero. It is the only reading that permits a format.
+	// ContentBlank means every byte of the head region was read successfully and
+	// was zero, and no detector matched anywhere. It is the only reading that
+	// permits a format.
+	//
+	// The tail is read and is offered to every detector, but it does not decide
+	// this: zeroing the head is how a device is released for reuse, so a head
+	// that is zero and a catalog that matches nothing mean the device is free,
+	// whatever lies behind it.
 	ContentBlank
 
 	// ContentFilesystem means the device carries a filesystem this driver
@@ -128,8 +134,8 @@ const DefaultTimeout = 30 * time.Second
 //
 // The ZFS labels reach further than this and are the one format whose naming
 // degrades in a region smaller than the default. Its devices are still refused,
-// because their labels are not zero and the zero rule does not depend on the
-// catalog.
+// because the first label is at offset 0 and a non-zero head is refused whatever
+// the catalog makes of it.
 const MinRegionSize = 128 << 10
 
 // Prober reads what a block device carries.
@@ -194,21 +200,27 @@ func (p *Prober) Read(ctx context.Context, dev Device) (Reading, error) {
 		return Reading{Content: best.content, Type: best.typ, Detail: detailOf(finds)}, nil
 	}
 
-	// Nothing recognized. The device is blank only if every byte that was read
-	// is zero, which is a positive finding rather than the absence of one: a
-	// format nobody listed still writes bytes here, and so does a device whose
-	// content this catalog has never heard of.
+	// Nothing recognized. The zero test runs last and only here, after every
+	// detector has been given both regions: a format the catalog knows is named
+	// from its signature wherever that signature lives, and md metadata 1.0
+	// writes its own at the end of the device and nowhere else. Reaching this
+	// point means no detector matched at all.
+	//
+	// What is left is decided on the head alone. A non-zero head is a positive
+	// finding rather than the absence of one, and a zero head is a device that
+	// was released: zeroing it is the gesture that gives a device up, so a head
+	// of zeros the catalog cannot place is free to take.
 	if off, nonZero := firstNonZero(regions); nonZero {
 		return Reading{
 			Content: ContentForeign,
 			Type:    "",
 			Detail: fmt.Sprintf(
-				"no known signature, and the probed regions are not empty: first non-zero byte at %d", off),
+				"no known signature, and the head region is not empty: first non-zero byte at %d", off),
 		}, nil
 	}
 
 	return Reading{Content: ContentBlank, Detail: fmt.Sprintf(
-		"the first and last %d bytes were read and are zero", p.regionSize)}, nil
+		"the first %d bytes were read and are zero, and no signature matched", p.regionSize)}, nil
 }
 
 // read pulls the two regions off the device. A device smaller than two regions
@@ -272,13 +284,17 @@ func (p *Prober) readAt(ctx context.Context, r Reader, off, n int64) ([]byte, er
 	return buf, nil
 }
 
-// firstNonZero reports the absolute offset of the first byte that is not zero.
+// firstNonZero reports the absolute offset of the first byte of the head region
+// that is not zero.
+//
+// The tail is deliberately not scanned. It is still read, and every detector
+// still sees it, so a signature that lives only there is still found; what it no
+// longer does is decide whether an unrecognized device is blank. A device
+// smaller than two regions is read whole into head, so for one of those this
+// still covers every byte.
 func firstNonZero(r regions) (int64, bool) {
 	if i := bytes.IndexFunc(r.head, nonZero); i >= 0 {
 		return int64(i), true
-	}
-	if i := bytes.IndexFunc(r.tail, nonZero); i >= 0 {
-		return r.tailAt + int64(i), true
 	}
 	return 0, false
 }

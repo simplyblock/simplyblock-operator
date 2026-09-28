@@ -764,8 +764,8 @@ switch {
 case err != nil:
     // The device could not be read. Never treat this as an empty device.
 case reading.Content == blockdev.ContentBlank:
-    // Positively all zeros in the first and last mebibyte. The only reading
-    // that permits a format.
+    // Positively all zeros in the first mebibyte, with no signature matched
+    // anywhere. The only reading that permits a format.
 case reading.Content == blockdev.ContentFilesystem:
     // reading.Type names it. Mount it; never re-probe and never hand it to a
     // helper that formats on its own probe.

@@ -56,11 +56,13 @@ var catalog = []want{
 	// a storage node, so the image comes off a device this product wrote.
 	{"alceml", ContentSimplyblock, "simplyblock_alceml",
 		"U-65: an alceml superblock, which blkid and wipefs both read as nothing"},
-	// The same product's device without the superblock that names it. The row
-	// records a miss rather than a target: see the test below for what the
-	// device carries and for why the reading cannot reach it.
+	// The same product's device without the superblock that names it. This row
+	// probes at the capture's own 2 MiB region, which reaches the first page
+	// header and so finds the device not empty. At the 1 MiB a host probes with
+	// it reads Blank instead, which is the whole point of the capture and is
+	// asserted by the test below.
 	{"alceml-pages", ContentForeign, "",
-		"U-65: an alceml device whose superblock is gone reads as bytes matching nothing"},
+		"U-65: an alceml device whose superblock is gone, probed wide enough to see its first page"},
 	// U-15: the only reading that permits a format.
 	{"blank", ContentBlank, "", "U-15: a device that has never been written to"},
 }
@@ -187,22 +189,22 @@ const (
 	alcemlFirstPage = 1060864
 )
 
-// A simplyblock device whose superblock has been wiped reads as foreign, and the
+// A simplyblock device whose superblock has been wiped reads as blank, and the
 // pages that would have named it start just past where the head region stops.
 //
-// Every 1.5 TB disk of all four workers of the OKD lab cluster read this way on
-// 2026-09-28, so a four-node deployment came up with one 30 GB disk per worker,
-// and every storage node then refused to configure itself, because lblk mode
-// needs at least two disks per node. The disks are not somebody else's: they
-// carry a previous deployment's data, which is why declining them was right,
-// and the refusal that declined them could not say so, which is why this test
-// exists.
+// Every 1.5 TB disk of all four workers of the OKD lab cluster was in this state
+// on 2026-09-28: the ALCEML_STORAGE superblock at offset 0 gone, and the device
+// still carrying that deployment's pages from 1060864 to about 1.2 TB. The
+// reading called them foreign, discovery declined them, and a four-node
+// deployment came up with one 30 GB disk per worker, so no storage node could
+// configure itself.
 //
-// It asserts the miss rather than the fix. Naming the device would take a
-// detector for the page grid, and that detector has to be written against these
-// bytes rather than against the offsets below, or it would assert only that it
-// agrees with them.
-func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsForeign(t *testing.T) {
+// Blank is the wanted answer, and it is a decision rather than a discovery:
+// zeroing the head is how a device is released for reuse, so a head that is zero
+// and a catalog that matches nothing mean the device is free. The capture is
+// what keeps that decision honest. It holds the pages the rule now steps over,
+// so anyone changing the rule back can see exactly what a format would destroy.
+func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsBlank(t *testing.T) {
 	im := loadImage(t, "alceml-pages")
 
 	// What the device is, read off the capture rather than asserted about it.
@@ -211,11 +213,11 @@ func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsForeign(t *testing.T) {
 			"and is not the case this test covers", got)
 	}
 	if got := string(im.head[alcemlFirstPage : alcemlFirstPage+len(alcemlPageMagic)]); got != alcemlPageMagic {
-		t.Errorf("offset %d carries %q, want %q: the capture no longer shows the page "+
-			"that proves whose device this is", alcemlFirstPage, got, alcemlPageMagic)
+		t.Fatalf("offset %d carries %q, want %q: the capture no longer shows the page "+
+			"that proves this device is not empty", alcemlFirstPage, got, alcemlPageMagic)
 	}
 
-	// What the reading reports, at the region a probe on a host actually uses.
+	// What a host reads, at the region a host probes with.
 	p := NewProberWithOpener(
 		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
 		WithRegionSize(DefaultRegionSize))
@@ -223,30 +225,32 @@ func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsForeign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(alceml-pages): %v", err)
 	}
-	if got.Content == ContentBlank {
-		t.Fatal("the reading calls a device holding a previous deployment's data blank, " +
-			"and formatting it would destroy what is on it")
+	if got.Content != ContentBlank {
+		t.Errorf("Read(alceml-pages).Content = %s, want Blank: a device whose head is zero "+
+			"and whose signature nothing matches has been released\ndetail: %s", got.Content, got.Detail)
+	}
+	if got.Type != "" {
+		t.Errorf("Read(alceml-pages).Type = %q, want empty for a blank device", got.Type)
+	}
+
+	// The same device, probed wide enough to reach its first page, is not empty.
+	// The answer turns on how far the head region reaches, and the two readings
+	// are here together so that nobody has to take that on trust.
+	wide := NewProberWithOpener(
+		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
+		WithRegionSize(im.RegionSize))
+	got, err = wide.Read(context.Background(), im.Device())
+	if err != nil {
+		t.Fatalf("Read(alceml-pages) at %d: %v", im.RegionSize, err)
 	}
 	if got.Content != ContentForeign {
-		t.Errorf("Read(alceml-pages).Content = %s, want Foreign.\n"+
-			"Simplyblock would be the better answer, and reaching it takes a detector for %q "+
-			"rather than a change here",
-			got.Content, alcemlPageMagic)
+		t.Errorf("at a %d-byte region Read(alceml-pages).Content = %s, want Foreign: "+
+			"the head then covers the page at %d", im.RegionSize, got.Content, alcemlFirstPage)
 	}
 
-	// The refusal the cluster produced, to the byte. The first non-zero byte is
-	// in the tail because the head region stops short of the first page.
-	const wantDetail = "no known signature, and the probed regions are not empty: " +
-		"first non-zero byte at 1610611687425"
-	if got.Detail != wantDetail {
-		t.Errorf("Read(alceml-pages).Detail = %q,\nwant %q\n"+
-			"this is the sentence every worker's disk was declined with", got.Detail, wantDetail)
-	}
-
-	// The reason the head says nothing: the grid begins past its last byte.
+	// The reach that separates the two readings.
 	if alcemlFirstPage <= DefaultRegionSize {
-		t.Errorf("the first page is at %d, inside a %d-byte head region, "+
-			"so the head region is not what keeps the reading from naming this device",
-			alcemlFirstPage, DefaultRegionSize)
+		t.Errorf("the first page is at %d, inside a %d-byte head region, so the two readings "+
+			"above cannot differ and this test proves nothing", alcemlFirstPage, DefaultRegionSize)
 	}
 }

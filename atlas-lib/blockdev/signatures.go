@@ -1,9 +1,14 @@
 // The on-disk signatures a reading recognizes, and where each one lives.
 //
-// The catalog decides how well a refusal is worded rather than whether it
-// happens: a format nobody listed here still writes bytes into a probed region,
-// so it fails the zero test and is refused as foreign. That is what keeps an
-// incomplete catalog from being a safety problem.
+// For a format that writes into the head, the catalog decides how well a refusal
+// is worded rather than whether it happens: one nobody listed here still writes
+// bytes into the head, so it fails the zero test and is refused as foreign.
+//
+// For a format that writes only into the tail, the catalog decides whether the
+// refusal happens at all. The zero test is over the head alone, so a tail-only
+// format that is missing here reads as blank and may be formatted. md metadata
+// 1.0 is the one such format known, and it is listed below. Adding another is a
+// correctness fix rather than a wording fix.
 //
 // Offsets counted in logical blocks are resolved against the device rather than
 // against 512, because a GPT header is at LBA 1, which is offset 4096 on a 4Kn
