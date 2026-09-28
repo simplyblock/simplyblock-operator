@@ -88,6 +88,13 @@ func ClusterTemplateFor(name string, plan Plan) ClusterTemplate {
 		out.Notes = append(out.Notes, note)
 	}
 
+	if propose, note := journalDeviceFor(plan); note != "" {
+		if propose {
+			out.Template.EnableJournalDevice = ptr.To(true)
+		}
+		out.Notes = append(out.Notes, note)
+	}
+
 	stripe, note := stripeFor(plan)
 	out.Template.Stripe = stripe
 	out.Notes = append(out.Notes, note)
@@ -298,4 +305,99 @@ func chosenNodeHugePageBytes(worker Worker) uint64 {
 		}
 	}
 	return free
+}
+
+// journalDeviceFor decides whether the draft gives the journal manager a device
+// of its own, and says why either way.
+//
+// The shape it reads is a worker whose smallest disk is smaller than every other
+// disk it hands over. A fleet built that way was built that way on purpose: the
+// odd disk is there to carry the journal, and saying nothing spends it as
+// storage and carves a journal partition out of every disk instead, which is the
+// layout the hardware was bought to avoid.
+//
+// It is unanimous across the fleet or it does not happen. The field is one value
+// for the whole cluster and immutable once the cluster exists, so a fleet where
+// one worker has the shape and another does not has no answer that is right for
+// both, and the draft leaves it to the reviewer rather than picking one.
+//
+// A tie is not the shape. Two disks of the same smallest size are two disks the
+// fleet can use, and giving one to the journal spends capacity nobody set aside.
+// Neither is a worker with one disk, which would be left no storage at all, nor
+// one reporting a disk of no size, because an unsized disk is smaller than
+// anything and the generator invents those for claimed userspace controllers.
+//
+// What counts as a disk here is what the draft names, which is a class address
+// and not a probed device. An NVMe controller with two namespaces is two
+// devices in the report and one entry in the document, so counting devices both
+// over-counts a worker that has one controller and mistakes a namespace for the
+// disk it sits on. The capacity compared is the controller's, summed across its
+// namespaces, because that is the disk a reviewer is being asked to give up.
+func journalDeviceFor(plan Plan) (bool, string) {
+	if len(plan.Workers) == 0 {
+		return false, ""
+	}
+
+	var smallest uint64
+	var onWorker, named string
+
+	for _, worker := range plan.Workers {
+		size, address, ok := soleSmallestDisk(worker)
+		if !ok {
+			return false, fmt.Sprintf(
+				"enableJournalDevice is left unset: %s hands over no single disk smaller than "+
+					"its others, so there is none to dedicate. Setting it would give up a disk "+
+					"the fleet did not set aside, and the field cannot be changed once the "+
+					"cluster exists", worker.Name)
+		}
+		if onWorker == "" || size < smallest {
+			smallest, onWorker, named = size, worker.Name, address
+		}
+	}
+
+	return true, fmt.Sprintf(
+		"enableJournalDevice is set: every worker hands over one disk smaller than its "+
+			"others, the smallest being %s (%s) on %s, and the control plane dedicates that "+
+			"disk to the journal manager instead of carving a journal partition out of every "+
+			"disk. This is the line to remove if the disk was meant to carry data",
+		humanBytes(smallest), named, onWorker)
+}
+
+// soleSmallestDisk returns the capacity and the draft's name of the one disk
+// smaller than every other the worker hands over, and reports whether there is
+// one.
+//
+// It works in the addresses the draft names rather than the devices the probe
+// reported, so a controller with two namespaces is one disk of their combined
+// size. An address the class cannot name is skipped, which is the same device
+// the draft would leave out.
+func soleSmallestDisk(worker Worker) (uint64, string, bool) {
+	capacity := map[string]uint64{}
+	for _, device := range worker.Devices {
+		address := worker.Class.Address(device)
+		if address == "" {
+			continue
+		}
+		capacity[address] += device.SizeBytes
+	}
+	if len(capacity) < 2 {
+		return 0, "", false
+	}
+
+	var smallest uint64
+	var found string
+	ties := 0
+	for address, size := range capacity {
+		switch {
+		case found == "" || size < smallest:
+			smallest, found, ties = size, address, 1
+		case size == smallest:
+			ties++
+		}
+	}
+
+	if smallest == 0 || ties != 1 {
+		return 0, "", false
+	}
+	return smallest, found, true
 }

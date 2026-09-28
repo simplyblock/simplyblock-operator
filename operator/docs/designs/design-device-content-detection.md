@@ -79,10 +79,10 @@ as an absence of data.
 This design replaces that evidence. Instead of asking a tool what it recognized,
 the node reads the device's own bytes and answers one of four readings, with a
 read failure reported as a failure rather than folded into any of them. `Blank`
-becomes a positive finding, established by reading the regions every on-disk
-format writes to and finding them zero, so it means "this device was read and it
-holds nothing" rather than "nothing familiar turned up." That is the reading a
-`mkfs` or a `pvcreate` may rest on.
+becomes a positive finding, established by reading the region every on-disk
+format writes to and finding it zero, so it means "this device was read and its
+head holds nothing" rather than "nothing familiar turned up." That is the reading
+a `mkfs` or a `pvcreate` may rest on.
 
 The detection lives in `atlas-lib/blockdev`, beside the `Device` value
 [`design-node-volume-stack.md`](design-node-volume-stack.md) Appendix A specifies,
@@ -191,8 +191,9 @@ const (
 	// ContentUnknown is the zero value and is never returned by Read.
 	ContentUnknown Content = iota
 
-	// ContentBlank means every byte of the probed regions was read successfully
-	// and was zero. It is the only reading that permits a format.
+	// ContentBlank means every byte of the head region was read successfully and
+	// was zero, and no detector matched anywhere. It is the only reading that
+	// permits a format.
 	ContentBlank
 
 	// ContentFilesystem means the device carries a filesystem this driver
@@ -248,11 +249,11 @@ is the property the whole design turns on.
 
 ### 4.1 The regions
 
-A device is `ContentBlank` when the first mebibyte and the last mebibyte both read
-successfully and contain only zero bytes.
+A device is `ContentBlank` when the first mebibyte reads successfully and contains
+only zero bytes, and no signature in §5 matched anywhere.
 
-Every on-disk format this driver can encounter writes an identifying structure
-into one of those two regions. The head holds the XFS superblock at offset 0, the
+Both regions are read and both are offered to every detector. Only the head
+decides the zero test. The head holds the XFS superblock at offset 0, the
 LVM label in one of the first four sectors, the ext superblock at 1024, the LUKS
 header at 0, a GPT header at 512, an MBR signature at 510, a swap signature near
 the end of the first page, the Btrfs superblock at 65536, an md-raid 1.1 or 1.2
@@ -261,17 +262,35 @@ tail holds a backup GPT header in the last sector, an md-raid 1.0 superblock 8 K
 from the end, and the last two ZFS vdev labels 512 KiB and 256 KiB from the end.
 One mebibyte at each end covers all of them with room to spare.
 
-**The rule is what makes the catalog non-safety-critical.** A format nobody
-listed in §5 still writes bytes into one of these regions, so it fails the zero
-test and is refused as `ContentForeign` rather than mistaken for blank. The
-catalog decides how well a refusal is worded, not whether it happens.
+**Zeroing the head is how a device is released.** `wipefs -a` and a `dd` of zeros
+over the first mebibyte are the two gestures an operator reaches for to give a
+device up, and both leave the data behind them intact. Reading such a device as
+blank is what lets a disk be handed back to a cluster without erasing a terabyte
+first, and it is why the zero test stops at the end of the head.
 
-A device smaller than two mebibytes is read whole, and the two regions overlap
-rather than being clamped.
+**The catalog is non-safety-critical for anything that writes into the head, and
+load-bearing for anything that does not.** A format nobody listed in §5 that
+writes into the head still fails the zero test and is refused as
+`ContentForeign`, which is the overwhelming majority: of the formats in §5, only
+md-raid 1.0 places its sole signature in the tail, and it is listed. A format
+that writes only into the tail and is absent from §5 reads as blank and may be
+formatted. That is the cost of the rule, and it is stated here rather than left to
+be discovered: adding a tail-only format to §5 is a correctness fix, not a wording
+fix.
+
+The same cost falls on a device of this product's own whose superblock has been
+wiped. `atlas-lib/blockdev/testdata/images/alceml-pages` is such a device,
+captured from the OKD lab cluster, and it reads blank at the mebibyte a host
+probes with while still carrying its pages from 1060864 onward. The capture is
+kept so that the bytes a format would destroy are on record.
+
+A device smaller than two mebibytes is read whole, and the head is then the whole
+device, so the zero test covers every byte of it.
 
 ### 4.2 Why a tail read
 
-The tail region is the reason md-raid 1.0 and a backup GPT are covered, and it is
+The tail region is still read although it no longer decides the zero test. It is
+the reason md-raid 1.0 and a backup GPT are covered, and it is
 also the only part of this design that observes the device across its span. A
 device serving its first blocks from a cache while its backing path is gone
 answers the head read and fails the tail read, and a failed read is a refusal.
@@ -317,7 +336,7 @@ hangs and then exits 2.
 | md-raid          | `ContentForeign`     | 0, 4096, or 8 KiB from the end                | `0xa92b4efc`                                                                 |
 | ZFS              | `ContentForeign`     | vdev label offsets                            | `0x00bab10c`                                                                 |
 | alceml           | `ContentSimplyblock` | 0                                             | `ALCEML_STORAGE\0\0`, the superblock a storage node writes                   |
-| anything else    | `ContentForeign`     | anywhere in the probed regions                | a non-zero byte                                                              |
+| anything else    | `ContentForeign`     | anywhere in the head region                   | a non-zero byte                                                              |
 
 **An offset counted in logical blocks is resolved against the device, not against
 512.** The GPT header is at LBA 1 and its backup is at the last LBA, which is
@@ -377,7 +396,9 @@ run still excludes a device an existing `StorageNode` names, and what it produce
 is a draft nobody has approved.
 
 **The order of evaluation is head signatures, then tail signatures, then the zero
-test.** A device carrying both an LVM label and a stale filesystem signature is
+test, and the zero test runs last.** It is reached only when no detector matched
+at all, which is what keeps a tail-only signature in §5 from being stepped over by
+a head that happens to be zero. A device carrying both an LVM label and a stale filesystem signature is
 reported as the LVM label, because the label is at the lower offset and is what
 the stack below is looking for. A refusal names every signature found, not the
 first, so an operator sees the whole picture in one message.
@@ -511,17 +532,17 @@ integration tests assert the reading against a real kernel.
 
 ## 9. Failure Modes and Fallback
 
-| Failure                                            | Detection                       | Behavior                                                                                                      |
-|----------------------------------------------------|---------------------------------|---------------------------------------------------------------------------------------------------------------|
-| A read fails with an I/O error                     | The read returns an error       | `Read` returns an error. Every consumer refuses. Kubelet retries, and the next attempt reads the device again |
-| A read does not return before the deadline         | The context expires             | Reported as a read failure, with the region and the elapsed time in the message                               |
-| `O_DIRECT` is refused                              | `EINVAL` on open                | Buffered read after `BLKFLSBUF`, and the reading is annotated as degraded (§11)                               |
-| The device is smaller than the two regions         | The size from `blockdev.Device` | The whole device is read once and evaluated as one region                                                     |
-| The device size cannot be determined               | `blockdev.Device` reports zero  | Read failure. A tail region cannot be located, and a head-only reading is not `ContentBlank`                  |
-| A signature is found in both regions               | Both matched                    | Both are named in `Detail`, and the head signature decides `Type`                                             |
-| A recognized format sits beyond the probed regions | Not detectable                  | Refused anyway, because such a device is not all zeros in the regions that were read                          |
-| The control plane is unreachable (Phase 2)         | The client call fails           | The Phase 1 reading stands, and the refusal is logged as ungated by provenance (§7.3)                         |
-| The claim cannot be read                           | The API call fails              | Unchanged from [#481](https://github.com/simplyblock/simplyblock-operator/pull/481): staging is refused       |
+| Failure                                         | Detection                       | Behavior                                                                                                      |
+|-------------------------------------------------|---------------------------------|---------------------------------------------------------------------------------------------------------------|
+| A read fails with an I/O error                  | The read returns an error       | `Read` returns an error. Every consumer refuses. Kubelet retries, and the next attempt reads the device again |
+| A read does not return before the deadline      | The context expires             | Reported as a read failure, with the region and the elapsed time in the message                               |
+| `O_DIRECT` is refused                           | `EINVAL` on open                | Buffered read after `BLKFLSBUF`, and the reading is annotated as degraded (§11)                               |
+| The device is smaller than the two regions      | The size from `blockdev.Device` | The whole device is read once and evaluated as one region                                                     |
+| The device size cannot be determined            | `blockdev.Device` reports zero  | Read failure. A tail region cannot be located, and a head-only reading is not `ContentBlank`                  |
+| A signature is found in both regions            | Both matched                    | Both are named in `Detail`, and the head signature decides `Type`                                             |
+| A recognized format sits beyond the head region | Not detectable                  | `ContentBlank`, unless a detector matched it. The zero test reaches the end of the head and no further        |
+| The control plane is unreachable (Phase 2)      | The client call fails           | The Phase 1 reading stands, and the refusal is logged as ungated by provenance (§7.3)                         |
+| The claim cannot be read                        | The API call fails              | Unchanged from [#481](https://github.com/simplyblock/simplyblock-operator/pull/481): staging is refused       |
 
 Every row that is not a refusal is a reading. There is no path on which a failure
 becomes an empty result, which is the single property this design is built to
@@ -607,9 +628,10 @@ Full scenario matrix, coverage status, and hand-off test concepts:
   table, which is the same claim twice and passes even when both are wrong about
   what `mkfs` writes. A captured region is evidence independent of the table, so a
   §5 row that misstates an offset, a byte order, or a feature word fails the test
-  instead of being confirmed by it. The zero-region rule is tested at its
+  instead of being confirmed by it. The zero rule is tested at its
   boundaries with constructed inputs, because a boundary is a property of the rule
-  rather than of any format. The §6 dispatch tables in full, including every row
+  rather than of any format, and that includes the tail bytes it deliberately
+  steps over. The §6 dispatch tables in full, including every row
   that must be an `Observe` error.
 - **Integration:** the readings against a real kernel and live devices, on the
   nvmet harness in `test/integration`. What this adds beyond the captures is the
@@ -642,11 +664,13 @@ Both run on every stage, the reading decides, and a disagreement is logged with
 both answers and counted in
 `simplyblock_csi_node_probe_disagreements_total`. The purpose is not to validate
 the reading against `blkid`, whose answer is the one being replaced. It is to
-find the devices where the new rule refuses something the old one accepted:
-a device carrying stray non-zero bytes that no format wrote, which `blkid` called
-blank and this design calls `ContentForeign`. That case is a fail-safe refusal and
-a legitimate provisioning failure at the same time, and it is better found by a
-counter than by a stuck PVC.
+find the devices where the two rules disagree. In one direction a device carrying
+stray non-zero bytes in its head that no format wrote, which `blkid` called blank
+and this design calls `ContentForeign`, is a fail-safe refusal and a legitimate
+provisioning failure at the same time. In the other a device whose head is zero
+and whose tail carries something neither rule names is now offered, and that
+direction is the one to watch, because it ends in a format. Both are better found
+by a counter than by a stuck PVC or a restore.
 
 **The shadow is removed when the counter has been zero across a release.** Until
 then it is on by default and can be turned off per node with

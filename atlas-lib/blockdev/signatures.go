@@ -1,9 +1,14 @@
 // The on-disk signatures a reading recognizes, and where each one lives.
 //
-// The catalog decides how well a refusal is worded rather than whether it
-// happens: a format nobody listed here still writes bytes into a probed region,
-// so it fails the zero test and is refused as foreign. That is what keeps an
-// incomplete catalog from being a safety problem.
+// For a format that writes into the head, the catalog decides how well a refusal
+// is worded rather than whether it happens: one nobody listed here still writes
+// bytes into the head, so it fails the zero test and is refused as foreign.
+//
+// For a format that writes only into the tail, the catalog decides whether the
+// refusal happens at all. The zero test is over the head alone, so a tail-only
+// format that is missing here reads as blank and may be formatted. md metadata
+// 1.0 is the one such format known, and it is listed below. Adding another is a
+// correctness fix rather than a wording fix.
 //
 // Offsets counted in logical blocks are resolved against the device rather than
 // against 512, because a GPT header is at LBA 1, which is offset 4096 on a 4Kn
@@ -337,12 +342,17 @@ func detectSwap(r regions) (find, bool) {
 // mdMagic is the software-RAID superblock magic, stored little-endian.
 var mdMagic = []byte{0xfc, 0x4e, 0x2b, 0xa9}
 
-// detectMDRaid matches the three metadata layouts by their documented
-// locations: 1.1 at the start, 1.2 one block in, and 1.0 near the end.
+// detectMDRaid matches the four metadata layouts by their documented locations:
+// 1.1 at the start, 1.2 one block in, and 1.0 and 0.90 near the end.
 //
 // The 1.1 case is why this detector earns its place. blkid reports nothing at
 // all for a metadata-1.1 member and exits 2, which is the same answer it gives
 // for a blank device, on a device that is neither degraded nor unreadable.
+//
+// The 0.90 case is why the tail candidates are not optional. Both tail layouts
+// write nothing at the start of the device, so a member of an array that has
+// never been written to has a head of zeros and is blank by the zero rule. The
+// catalog is what stands between such a device and a format.
 func detectMDRaid(r regions) (find, bool) {
 	type candidate struct {
 		off  int64
@@ -356,6 +366,13 @@ func detectMDRaid(r regions) (find, bool) {
 	if sectors := r.size / 512; sectors > 16 {
 		off := ((sectors - 16) &^ 7) * 512
 		cands = append(cands, candidate{off, fmt.Sprintf("metadata 1.0, at %d", off)})
+	}
+	// 0.90 sits where the kernel's MD_NEW_SIZE_SECTORS puts it: the sector count
+	// rounded down to a 64 KiB boundary, less 64 KiB. It is a different offset
+	// from 1.0's and has to be tried separately rather than folded into it.
+	if sectors := r.size / 512; sectors > 128 {
+		off := ((sectors &^ 127) - 128) * 512
+		cands = append(cands, candidate{off, fmt.Sprintf("metadata 0.90, at %d", off)})
 	}
 	for _, c := range cands {
 		if r.eq(c.off, mdMagic) {

@@ -166,3 +166,49 @@ func TestGPTOffsetFollowsTheLogicalBlockSize(t *testing.T) {
 		})
 	}
 }
+
+// Regression: 2026-09-28-md-0-90-reads-as-blank. Legacy md metadata 0.90 keeps
+// its superblock in the last 128 KiB and writes nothing at the start, so a
+// member whose array has never been written to has a head of zeros. Under the
+// head-only zero rule that reads as blank, and the device is offered for a
+// format that destroys the array.
+//
+// It was 1.0, 1.1, and 1.2 in the catalog and not 0.90, on the reasoning that
+// the tail half of the zero rule caught whatever the catalog missed. That
+// reasoning went with the tail half of the rule, and this is the format it was
+// covering: the kernel still assembles 0.90 arrays, and mdadm still creates
+// them on request.
+//
+// The offset is the kernel's MD_NEW_SIZE_SECTORS: the sector count rounded down
+// to a 64 KiB boundary, less 64 KiB.
+//
+// This input is constructed and the other md layouts have captures, which is
+// the wrong way round for a signature: a constructed one asserts that the
+// decoder agrees with the offset written beside it. hack/blockdev/capture-image.sh
+// captures mdraid-090 now, and the fixture is owed as soon as the script is next
+// run on a host with mdadm and loop devices.
+func TestMdMetadata090IsNotBlankAlthoughItsHeadIsZero(t *testing.T) {
+	for _, size := range []int64{8 << 20, 64 << 20, 1 << 30} {
+		sectors := size / 512
+		off := ((sectors &^ 127) - 128) * 512
+
+		s := newSynth(size, MinRegionSize)
+		for i, b := range mdMagic {
+			s.bytes[off+int64(i)] = b
+		}
+
+		got, err := readSynth(t, s)
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		if got.Content == ContentBlank {
+			t.Errorf("a %d-byte md 0.90 member with its superblock at %d reads as Blank, "+
+				"so the array would be formatted away", size, off)
+			continue
+		}
+		if got.Content != ContentForeign || got.Type != "linux_raid_member" {
+			t.Errorf("a %d-byte md 0.90 member reads as %s %q, want Foreign linux_raid_member",
+				size, got.Content, got.Type)
+		}
+	}
+}

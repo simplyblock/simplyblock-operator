@@ -56,6 +56,13 @@ var catalog = []want{
 	// a storage node, so the image comes off a device this product wrote.
 	{"alceml", ContentSimplyblock, "simplyblock_alceml",
 		"U-65: an alceml superblock, which blkid and wipefs both read as nothing"},
+	// The same product's device without the superblock that names it. This row
+	// probes at the capture's own 2 MiB region, which reaches the first page
+	// header and so finds the device not empty. At the 1 MiB a host probes with
+	// it reads Blank instead, which is the whole point of the capture and is
+	// asserted by the test below.
+	{"alceml-pages", ContentForeign, "",
+		"U-65: an alceml device whose superblock is gone, probed wide enough to see its first page"},
 	// U-15: the only reading that permits a format.
 	{"blank", ContentBlank, "", "U-15: a device that has never been written to"},
 }
@@ -162,5 +169,89 @@ func TestZeroReadingAuthorizesNothing(t *testing.T) {
 	}
 	if r.Content == ContentBlank {
 		t.Fatal("the zero Reading reads as Blank, which makes an unpopulated struct a permission to mkfs")
+	}
+}
+
+// The offsets the alceml-pages capture is read against. They are the device's,
+// measured on the capture, and not a layout this package decodes: what the test
+// needs from them is that the page grid exists and where it starts.
+const (
+	// alcemlPageMagic opens every page a storage node writes. It is not the
+	// superblock magic: the superblock names the device once at offset 0, and
+	// this repeats with the grid.
+	alcemlPageMagic = "ALCEML_PAGEv2"
+
+	// alcemlFirstPage is where the grid starts on the captured device. It is
+	// 12288 bytes past the end of a default head region, which is the whole
+	// reason the device reads as it does. The stride to the next page is
+	// 2105344 and is recorded in the capture's manifest rather than here: the
+	// second page is past the captured region, so no test can check it.
+	alcemlFirstPage = 1060864
+)
+
+// Regression: 2026-09-28-alceml-without-a-superblock-reads-as-foreign. A
+// simplyblock device whose superblock has been wiped reads as blank, and the
+// pages that would have named it start just past where the head region stops.
+//
+// Every 1.5 TB disk of all four workers of the OKD lab cluster was in this state
+// on 2026-09-28: the ALCEML_STORAGE superblock at offset 0 gone, and the device
+// still carrying that deployment's pages from 1060864 to about 1.2 TB. The
+// reading called them foreign, discovery declined them, and a four-node
+// deployment came up with one 30 GB disk per worker, so no storage node could
+// configure itself.
+//
+// Blank is the wanted answer, and it is a decision rather than a discovery:
+// zeroing the head is how a device is released for reuse, so a head that is zero
+// and a catalog that matches nothing mean the device is free. The capture is
+// what keeps that decision honest. It holds the pages the rule now steps over,
+// so anyone changing the rule back can see exactly what a format would destroy.
+func TestAnAlcemlDeviceWithoutItsSuperblockReadsAsBlank(t *testing.T) {
+	im := loadImage(t, "alceml-pages")
+
+	// What the device is, read off the capture rather than asserted about it.
+	if got := string(im.head[0:16]); strings.Contains(got, "ALCEML") {
+		t.Fatalf("offset 0 carries %q, so this capture still has its superblock "+
+			"and is not the case this test covers", got)
+	}
+	if got := string(im.head[alcemlFirstPage : alcemlFirstPage+len(alcemlPageMagic)]); got != alcemlPageMagic {
+		t.Fatalf("offset %d carries %q, want %q: the capture no longer shows the page "+
+			"that proves this device is not empty", alcemlFirstPage, got, alcemlPageMagic)
+	}
+
+	// What a host reads, at the region a host probes with.
+	p := NewProberWithOpener(
+		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
+		WithRegionSize(DefaultRegionSize))
+	got, err := p.Read(context.Background(), im.Device())
+	if err != nil {
+		t.Fatalf("Read(alceml-pages): %v", err)
+	}
+	if got.Content != ContentBlank {
+		t.Errorf("Read(alceml-pages).Content = %s, want Blank: a device whose head is zero "+
+			"and whose signature nothing matches has been released\ndetail: %s", got.Content, got.Detail)
+	}
+	if got.Type != "" {
+		t.Errorf("Read(alceml-pages).Type = %q, want empty for a blank device", got.Type)
+	}
+
+	// The same device, probed wide enough to reach its first page, is not empty.
+	// The answer turns on how far the head region reaches, and the two readings
+	// are here together so that nobody has to take that on trust.
+	wide := NewProberWithOpener(
+		func(context.Context, Device) (Reader, error) { return im.Reader(), nil },
+		WithRegionSize(im.RegionSize))
+	got, err = wide.Read(context.Background(), im.Device())
+	if err != nil {
+		t.Fatalf("Read(alceml-pages) at %d: %v", im.RegionSize, err)
+	}
+	if got.Content != ContentForeign {
+		t.Errorf("at a %d-byte region Read(alceml-pages).Content = %s, want Foreign: "+
+			"the head then covers the page at %d", im.RegionSize, got.Content, alcemlFirstPage)
+	}
+
+	// The reach that separates the two readings.
+	if alcemlFirstPage <= DefaultRegionSize {
+		t.Errorf("the first page is at %d, inside a %d-byte head region, so the two readings "+
+			"above cannot differ and this test proves nothing", alcemlFirstPage, DefaultRegionSize)
 	}
 }
