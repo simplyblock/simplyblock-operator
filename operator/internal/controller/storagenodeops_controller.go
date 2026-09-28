@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -1002,6 +1003,14 @@ func (r *StorageNodeOpsReconciler) runDrain(
 		return r.drainMigrate(ctx, ops, sn, clusterUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying:
 		return r.drainVerify(ctx, ops, sn, clusterUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending:
+		// Legacy: a CR that was suspending its node when the operator was
+		// upgraded. The drain shuts the node down now, and drainShutdown
+		// already handles a node that is suspended (or stopped) rather than
+		// online, so carrying the op into ShuttingDown is exact. Failing it
+		// here -- which the default branch would -- left the node suspended
+		// with nothing to resume it.
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseReshuffling:
 		// Legacy: a CR that entered this phase before replica reallocation moved
 		// back into the removal. Nothing to do here any more -- the DELETE that
@@ -1596,6 +1605,15 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 
 	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames,
 		func(pv string) []string { return drainTargetsTriedFor(ops, pv) })
+	if errors.Is(err, errTargetsExhausted) {
+		// Every online peer has failed this volume. The bound on retries
+		// exists so the drain can say so and stop; waiting here would be the
+		// very "hand it back for ever" the bound was written to prevent.
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainTargetsExhausted", "DrainTargetsExhausted",
+			"drain cannot continue: %v", err)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainTargetsExhausted", fmt.Sprintf("drain cannot continue: %v", err))
+		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID, err.Error())
+	}
 	if err != nil {
 		log.Error(err, "drain: no available target nodes for migration")
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget",
@@ -1759,11 +1777,10 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 		// is still up can be handed back; one the drain has already stopped
 		// cannot be resumed -- the resume itself fails, and retrying it
 		// forever is how a refused DELETE turned into an op that never ended.
-		reason := fmt.Sprintf("DELETE node returned status %d", status)
-		if current, _, gerr := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID); gerr == nil && isNodeStopped(current) {
-			return r.failOps(ctx, ops, reason+" (node already stopped; not resuming)")
-		}
-		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID, reason)
+		// resumeAndFail itself declines to resume a node the drain has
+		// already stopped, and fails the op outright instead.
+		return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
+			fmt.Sprintf("DELETE node returned status %d", status))
 	}
 
 	current, code, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID)
@@ -1809,6 +1826,17 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
+
+	// Resume only makes sense for a node that is still up. Once the drain has
+	// stopped it (ShuttingDown and everything after), /resume fails -- there
+	// is no SPDK to resume -- and that failure is a 500 the client classifies
+	// as retryable, so the op requeued on "resume pending" for ever. Every
+	// step after the shutdown ends up here on failure (a device that would
+	// not rebuild, a system volume the backend refused to delete, a refused
+	// DELETE), which is why the rule lives here rather than at each caller.
+	if current, _, err := getNodeBackendStatusWithCode(ctx, apiClient, clusterUUID, nodeUUID); err == nil && isNodeStopped(current) {
+		return r.failOps(ctx, ops, reason+" (node already stopped; not resuming)")
+	}
 
 	resumeEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
 	_, resumeStatus, resumeErr := apiClient.Do(ctx, http.MethodPost, resumeEndpoint, nil)

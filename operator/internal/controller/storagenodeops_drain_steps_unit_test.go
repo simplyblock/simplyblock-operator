@@ -11,6 +11,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -322,5 +323,79 @@ func TestDrainRemove_RefusedDeleteOnAStoppedNodeFailsWithoutResuming(t *testing.
 	}
 	if updated.Status.RemoveTriggered {
 		t.Error("a refused DELETE was latched as sent")
+	}
+}
+
+// A CR mid-flight in the legacy Suspending phase across the upgrade is carried
+// into ShuttingDown, not failed as an unknown phase. drainShutdown already
+// handles a node that is suspended rather than online, so the carry is exact.
+func TestDrainSuspending_LegacyPhaseAdvancesInsteadOfFailing(t *testing.T) {
+	srv := drainStepServer(t, `{"done":false}`, nil)
+	defer srv.Close()
+
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+	ops.Status.Triggered = true
+
+	if _, err := r.runDrain(context.Background(), ops, sn, "cluster-uuid",
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("runDrain: %v", err)
+	}
+
+	updated := reloadOps(t, r)
+	if updated.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		t.Fatalf("a legacy Suspending op was failed: %q", updated.Status.Message)
+	}
+	if updated.Status.SubPhase != simplyblockv1alpha1.StorageNodeOpsSubPhaseShuttingDown {
+		t.Errorf("subPhase: got %q, want ShuttingDown", updated.Status.SubPhase)
+	}
+}
+
+// stoppedNodeStepServer answers a drain step on a node the drain has already
+// stopped: the node GET reports nodeStatus, every other GET returns the step's
+// progress, and every POST (a resume) is counted.
+func stoppedNodeStepServer(t *testing.T, nodeStatus, progress string, posts *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			*posts++
+			w.WriteHeader(http.StatusInternalServerError) // what /resume does to a stopped node
+		case strings.HasSuffix(r.URL.Path, "/storage-nodes/"+opsTestNodeUUID):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + opsTestNodeUUID + `","status":"` + nodeStatus + `"}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(progress))
+		}
+	}))
+}
+
+// A device that will not rebuild fails the drain -- and, because the node is
+// already stopped by then, fails it WITHOUT trying to resume it. Resuming a
+// stopped node returns 500, which the client calls retryable, so this path
+// used to requeue on "resume pending" for ever (2026-09-28 review).
+func TestDrainMigrateDevices_AFailedDeviceOnAStoppedNodeFailsWithoutResuming(t *testing.T) {
+	posts := 0
+	srv := stoppedNodeStepServer(t, nodeStatusMigratingDevices,
+		`{"done":false,"total":3,"completed":1,"failed":1,"message":"device d1 could not be rebuilt"}`, &posts)
+	defer srv.Close()
+
+	r, ops, sn := drainStepFixtures(t, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigratingDevices)
+	ops.Status.DevicesTriggered = true
+
+	if _, err := r.drainMigrateDevices(context.Background(), ops, sn, "cluster-uuid",
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("drainMigrateDevices: %v", err)
+	}
+
+	updated := reloadOps(t, r)
+	if updated.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+		t.Errorf("phase: got %q, want Failed", updated.Status.Phase)
+	}
+	if posts != 0 {
+		t.Errorf("attempted %d resume(s) of a node the drain had already stopped", posts)
+	}
+	if updated.Status.Message == "" || !strings.Contains(updated.Status.Message, "not resuming") {
+		t.Errorf("the failure reason does not say the node was left stopped: %q", updated.Status.Message)
 	}
 }

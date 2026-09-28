@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -253,6 +254,11 @@ type triedFor func(pvName string) []string
 // minutes on 2026-09-25; sbcli now admits every draining status there, so the
 // target is legitimate again and excluding it here would only shrink the
 // candidate set that escalation depends on.
+// errTargetsExhausted is returned by roundRobinTargetNodes when a volume has
+// already failed on every online peer. It is the drain's terminal answer for
+// that volume, not a condition to retry.
+var errTargetsExhausted = errors.New("no migration target left")
+
 func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -297,10 +303,12 @@ func roundRobinTargetNodes(
 		if picked == "" {
 			// Every peer has already failed for this volume. Saying so is the
 			// point of tracking them: the alternative is handing it back to a
-			// node that just failed, for ever.
+			// node that just failed, for ever. Wrapped in errTargetsExhausted
+			// so the caller can tell it from "no peer is online right now",
+			// which is transient and worth waiting out; this is not.
 			return nil, fmt.Errorf(
-				"roundRobinTargetNodes: every online peer of %s has already failed "+
-					"for %s (%d tried)", excludeNodeUUID, pv, len(exhausted))
+				"%w: every online peer of %s has already failed for %s (%d tried)",
+				errTargetsExhausted, excludeNodeUUID, pv, len(exhausted))
 		}
 		assignment[pv] = picked
 	}

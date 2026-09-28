@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -110,6 +111,11 @@ func TestRoundRobinErrorsWhenEveryTargetHasFailedForTheVolume(t *testing.T) {
 	if !strings.Contains(err.Error(), drainTestPVA) {
 		t.Errorf("error should name the volume that ran out of targets, got: %v", err)
 	}
+	// The drain fails the op on this and only this error; "no peer is online
+	// right now" is transient and is waited out instead.
+	if !errors.Is(err, errTargetsExhausted) {
+		t.Errorf("exhausted targets must be reported as errTargetsExhausted, got: %v", err)
+	}
 }
 
 func TestRoundRobinEscalationIsPerVolume(t *testing.T) {
@@ -213,6 +219,9 @@ func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
 	_, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, drainTestNode1, []string{drainTestPVA}, nil)
 	if err == nil {
 		t.Fatal("expected error when no online peer node is available")
+	}
+	if errors.Is(err, errTargetsExhausted) {
+		t.Error("no online peer at all is transient, and must not read as every target exhausted")
 	}
 }
 
