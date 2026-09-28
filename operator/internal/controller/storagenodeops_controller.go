@@ -146,8 +146,26 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 	log := logf.FromContext(ctx)
 
 	if sn.Status.ActiveOpsRef != "" && sn.Status.ActiveOpsRef != ops.Name {
-		log.Info("another ops is active, requeuing", "activeOps", sn.Status.ActiveOpsRef)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		// The lock is only as good as the op it names. A StorageNodeOps has no
+		// finalizer, so one deleted mid-drain vanishes without running
+		// releaseLock and leaves activeOpsRef pointing at nothing; every
+		// later op on the node was then refused for ever ("another ops is
+		// active, requeuing", 2026-09-28, after a stuck batch drain was
+		// deleted to retry it). A finished op that failed to release is the
+		// same case. Both are stale: take the lock over.
+		stale, err := r.opsLockIsStale(ctx, ops.Namespace, sn.Status.ActiveOpsRef)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !stale {
+			log.Info("another ops is active, requeuing", "activeOps", sn.Status.ActiveOpsRef)
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		log.Info("activeOpsRef names an op that no longer runs; taking the lock over",
+			"staleOps", sn.Status.ActiveOpsRef)
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "StaleOpsLock", "StaleOpsLock",
+			"StorageNode %s was still locked by %s, which no longer runs; taking the lock over",
+			sn.Name, sn.Status.ActiveOpsRef)
 	}
 
 	snPatch := client.MergeFrom(sn.DeepCopy())
@@ -167,6 +185,25 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// opsLockIsStale reports whether the StorageNodeOps named by a StorageNode's
+// activeOpsRef no longer holds it: the op does not exist any more, or it has
+// reached a terminal phase. Only a live, unfinished op keeps the lock.
+func (r *StorageNodeOpsReconciler) opsLockIsStale(ctx context.Context, namespace, opsName string) (bool, error) {
+	var holder simplyblockv1alpha1.StorageNodeOps
+	err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: namespace}, &holder)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("looking up lock holder %s: %w", opsName, err)
+	}
+	switch holder.Status.Phase {
+	case simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded, simplyblockv1alpha1.StorageNodeOpsPhaseFailed:
+		return true, nil
+	}
+	return false, nil
 }
 
 // dispatch routes the ops to the correct handler.
