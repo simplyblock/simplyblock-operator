@@ -224,8 +224,10 @@ type StorageNodeOpsStatus struct {
 	// +optional
 	VolumesPending int `json:"volumesPending,omitempty"`
 
-	// Triggered indicates the backend action POST has been sent (used during
-	// Suspending to avoid duplicate POSTs across reconcile iterations).
+	// Triggered indicates the backend action POST has been sent (the once-only
+	// latch of the step that starts with a POST and then polls -- ShuttingDown
+	// for a removal, and the suspend/restart actions -- so a reconcile that
+	// runs again does not POST again).
 	// +optional
 	Triggered bool `json:"triggered,omitempty"`
 
@@ -239,8 +241,8 @@ type StorageNodeOpsStatus struct {
 
 	// DevicesTriggered is the once-only latch for the device rebuild, which
 	// starts with a POST and is then polled, matching what Triggered does for
-	// Suspending. Its own field rather than a shared one so a later step cannot
-	// inherit an earlier step's "already sent".
+	// ShuttingDown. Its own field rather than a shared one so a later step
+	// cannot inherit an earlier step's "already sent".
 	// +optional
 	DevicesTriggered bool `json:"devicesTriggered,omitempty"`
 	// ReshuffleTriggered is retained so an upgrade does not drop the field from

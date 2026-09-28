@@ -1020,7 +1020,9 @@ func (r *StorageNodeOpsReconciler) storageNodePodReady(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Drain state machine (action=remove)
-// Phases: Validating → Suspending → Migrating → Verifying → Removing
+// Phases: Validating → ShuttingDown → MigratingDevices → Migrating → Verifying → Removing
+// (Suspending and Reshuffling are legacy phases a CR may still carry across
+// an upgrade; runDrain carries them forward.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (r *StorageNodeOpsReconciler) runDrain(
@@ -1115,10 +1117,10 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	// Failure-domain balance gate: the backend's own admission check
 	// (check_fd_admission_for_remove) will refuse the DELETE call later in
 	// this drain if removing this node would violate the +/-1 balance rule
-	// -- but by then the node has already been suspended (Suspending runs
-	// before Removing), and that suspension has no path back on its own.
-	// Checking it here, before Suspending, means an infeasible removal
-	// never suspends the node in the first place.
+	// -- but by then the node has already been shut down (ShuttingDown runs
+	// before Removing), and a stopped node has no path back on its own.
+	// Checking it here, before ShuttingDown, means an infeasible removal
+	// never stops the node in the first place.
 	//
 	// Fails outright rather than blocking-and-requeuing like the
 	// pinned/unmanaged-volume checks above: those resolve by acting ON THIS
@@ -1155,7 +1157,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 // Validating is the only sub-phase that needs them. Returns ("", nil) when
 // removal is fine (including when FD data isn't populated yet, same as the
 // backend's own early-outs); a non-empty reason means drainValidate must
-// fail rather than advance to Suspending.
+// fail rather than advance to ShuttingDown.
 func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	ctx context.Context, sn *simplyblockv1alpha1.StorageNode,
 ) (string, error) {
