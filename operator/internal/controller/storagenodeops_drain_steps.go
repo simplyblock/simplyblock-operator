@@ -87,14 +87,28 @@ func (r *StorageNodeOpsReconciler) drainMigrateDevices(
 
 	if !ops.Status.DevicesTriggered {
 		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-		if err != nil || status >= 300 {
+		// A 409 means the control plane already has this rebuild running --
+		// an earlier POST whose answer was lost -- so it is the latch, not
+		// an error. Anything else that is not success is classified: a
+		// transport error or a 5xx is retried, a refusal is final. The
+		// refusal used to be retried too, every 20 s for ever, on a node the
+		// drain had already stopped.
+		if err != nil || (status >= 300 && status != http.StatusConflict) {
+			class := webapi.ClassifyError(err, status) // on the real error, before it is dressed up
 			if err == nil {
 				err = fmt.Errorf("status %d", status)
 			}
-			log.Error(err, "drain: failed to start device migration", "node", nodeUUID)
+			if class.Retryable {
+				log.Error(err, "drain: transient error starting device migration, retrying", "node", nodeUUID)
+				r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DeviceMigrationStartFailed",
+					"DeviceMigrationStartFailed", "could not start device migration on %s: %v (retrying)", nodeUUID, err)
+				return ctrl.Result{RequeueAfter: drainRequeueDevices}, nil
+			}
+			log.Error(err, "drain: device migration refused", "node", nodeUUID, "status", status)
 			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DeviceMigrationStartFailed",
-				"DeviceMigrationStartFailed", "could not start device migration on %s: %v", nodeUUID, err)
-			return ctrl.Result{RequeueAfter: drainRequeueDevices}, nil
+				"DeviceMigrationStartFailed", "device migration on %s refused: %v", nodeUUID, err)
+			return r.resumeAndFail(ctx, ops, sn, apiClient, clusterUUID,
+				fmt.Sprintf("device migration on %s refused: %v", nodeUUID, err))
 		}
 
 		patch := client.MergeFrom(ops.DeepCopy())
