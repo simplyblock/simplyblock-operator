@@ -59,6 +59,17 @@ func (ns *Server) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
 
+	// A pNFS volume is mounted from an export rather than a local device, so it
+	// takes its own path. The namespace is still attached, because the client
+	// reads and writes it directly.
+	if req.GetVolumeContext()[csicommon.CtxAccessProtocol] == csicommon.AccessProtocolNFS {
+		if err := ns.stagePNFSVolume(ctx, req, stagingTargetPath); err != nil {
+			klog.Errorf("failed to stage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
 		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)
@@ -126,16 +137,43 @@ func (ns *Server) NodeUnstageVolume(
 		volumeContext = map[string]string{}
 	}
 
+	// The RPC's context may already be canceled by the time a teardown reaches
+	// the fabric, and a half-released stack is worse than a slow one.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
+	defer cleanupCancel()
+
+	// Unstages the way it staged: mount and alias off, then the namespace this
+	// node connected goes back. It has no volume stack, so the teardown plan
+	// below cannot be built for one.
+	if isPNFSVolume(volumeContext) {
+		spec, ok := backingVolumeOf(volumeID)
+		if !ok {
+			return nil, status.Errorf(codes.Internal, "volume %s has no readable handle", volumeID)
+		}
+		unstage := ns.unstagePNFSVolume
+		if ns.unstagePNFSFn != nil {
+			unstage = ns.unstagePNFSFn
+		}
+		if err := unstage(cleanupCtx, stagingTargetPath, spec); err != nil {
+			klog.Errorf("failed to unstage pNFS volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		if err := ns.mounter.Remove(stagingTargetPath); err != nil {
+			klog.Errorf("failed to delete pNFS mount point, targetPath: %s err: %v", stagingTargetPath, err)
+			return nil, status.Errorf(codes.Internal, "unstage volume %s failed: %s", volumeID, err)
+		}
+		if err := cleanUpVolumeContext(stagingParentPath); err != nil {
+			klog.Errorf("failed to clean up pNFS volume context, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeUnstageVolumeResponse{}, nil
+	}
+
 	plan, err := ns.teardownPlan(volumeID, stagingTargetPath, volumeContext)
 	if err != nil {
 		klog.Errorf("failed to read what was staged for %s: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-
-	// The RPC's context may already be canceled by the time a teardown reaches
-	// the fabric, and a half-released stack is worse than a slow one.
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
-	defer cleanupCancel()
 
 	devicePath := volumeContext["devicePath"]
 	if err := ns.stack.runner.Down(cleanupCtx, volumeID, plan); err != nil {
@@ -492,7 +530,7 @@ func (ns *Server) controlPlaneConnection(
 		return lvol.Connection{}, "", false
 	}
 
-	connection, hostNQN := connectionFromResponses(responses, deviceLvolID(vc))
+	connection, hostNQN := initiator.ConnectionFrom(responses, deviceLvolID(vc))
 	return connection, hostNQN, true
 }
 

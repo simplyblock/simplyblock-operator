@@ -11,6 +11,7 @@
 package mount
 
 import (
+	"context"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -52,6 +53,22 @@ func NewWith(mounter k8smount.Interface, execer exec.Interface) *Mounter {
 // It is the path taken when the device is already known to carry a filesystem.
 func (m *Mounter) Mount(devicePath, target, fsType string, flags []string) error {
 	return m.mounter.Mount(devicePath, target, fsType, flags)
+}
+
+// Format writes a filesystem to devicePath without mounting it.
+//
+// mount-utils has no standalone format -- SafeFormatAndMount only formats on
+// its way to a mount -- and an export needs the two apart: it probes, decides
+// whether formatting is safe, and mounts as separate steps so a re-entered
+// assembly can skip either. This does not check; the caller has established
+// that formatting is the right thing to do.
+func (m *Mounter) Format(ctx context.Context, devicePath, fsType string, options []string) error {
+	args := append(append([]string{}, options...), devicePath)
+	out, err := m.execer.CommandContext(ctx, "mkfs."+fsType, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.%s %s: %w: %s", fsType, devicePath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Unmount detaches whatever is mounted at target.

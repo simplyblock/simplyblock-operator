@@ -31,6 +31,14 @@ Scenario IDs are permanent. This plan keeps the prefixes the design assigned:
 Types are `Positive`, `Negative`, `Boundary`, and `Regression`. The `Test` column
 names the implementing function, or `—` when the scenario is not covered yet.
 
+### Regression Coverage
+
+| #    | Scenario                                                                                                                                                                                        | Type       | Test                                                                                                         |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------------------------------------|
+| R-01 | A Ready export whose size changes while its MDS link is down retains its old observed generation and requeues, so the grow is applied after reconnect (`2026-09-23-pnfs-grow-disconnected-mds`) | Regression | `TestReadyExportDoesNotObserveAGrowWhileTheMDSIsDisconnected`                                                |
+| R-02 | Encryption survives CSI export-record creation and the operator-to-node RPC (`2026-09-23-pnfs-encryption-dropped`)                                                                              | Regression | `TestDesiredExportRecordsEncryption`, `TestCreateRoundTripsTheWholeSpec`                                     |
+| R-03 | Successful pNFS unstage ignores caller cancellation and removes staged state, while failed detach retains the stash for retry (`2026-09-23-pnfs-unstage-state-leak`)                            | Regression | `TestPNFSUnstageUsesCleanupContextAndRemovesStagedState`, `TestPNFSUnstageFailureRetainsStagedStateForRetry` |
+
 Scenario phrasing follows the sibling plans under `operator/docs/tests/`.
 
 ---

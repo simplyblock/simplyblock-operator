@@ -1,0 +1,18 @@
+# buf module for the node NVMe services.
+#
+# The .proto lives next to the Go code generated from it rather than under a
+# proto/atlas/node/v1/ tree, which keeps one package's definition, generated
+# code and hand-written client in one directory. PACKAGE_DIRECTORY_MATCH is the
+# lint rule that costs us -- it wants atlas/node/v1/nvme.proto -- so it is the
+# one exception.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

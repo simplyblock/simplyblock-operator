@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/atlas/export"
 	"github.com/simplyblock/atlas/nvme"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -33,11 +34,12 @@ type Server struct {
 	// of, and reports whether it tore anything down. It is a field so a test can
 	// drive the retry without a kernel, and because the repair reaches sysfs
 	// directly rather than through the stack.
-	repairFabric func(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceID) bool
-	volumeLocks  *csicommon.VolumeLocks
-	kubeClient   kubernetes.Interface
-	manager      *sbkube.Manager
-	guardian     *guardian.Guardian
+	repairFabric  func(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceID) bool
+	unstagePNFSFn func(context.Context, string, export.Spec) error
+	volumeLocks   *csicommon.VolumeLocks
+	kubeClient    kubernetes.Interface
+	manager       *sbkube.Manager
+	guardian      *guardian.Guardian
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the

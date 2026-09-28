@@ -297,6 +297,17 @@ spec:
                   every schedulable worker, which is the usual case: a node that cannot
                   attach a volume cannot run a workload that needs one.
                 type: object
+              pnfs:
+                description: PNFS configures pNFS support on the node plugin.
+                properties:
+                  enablePNFS:
+                    default: false
+                    description: |-
+                      EnablePNFS gives the node plugin the four host directories an export is
+                      assembled through. It is gated because a plugin not serving exports has
+                      no use for them.
+                    type: boolean
+                type: object
               sidecarImages:
                 description: |-
                   SidecarImages overrides the six CSI sidecars, one field each. Unset takes

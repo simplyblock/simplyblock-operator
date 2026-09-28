@@ -71,7 +71,8 @@ func TestDesiredCoversTheWholeObjectSet(t *testing.T) {
 	}
 
 	want := map[string]int{
-		"sa": 2, "cm": 2, "role": 5, "binding": 5,
+		// Six roles: one per plugin, and one per API-server-facing sidecar.
+		"sa": 2, "cm": 2, "role": 6, "binding": 6,
 		"ds": 1, "sts": 1, "csidriver": 1,
 		// the VolumeSnapshotClass, which is unstructured
 		"other": 1,

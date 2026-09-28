@@ -15,6 +15,7 @@ import (
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack"
@@ -80,6 +81,11 @@ type Node struct {
 // node's CSI. A consumer that wants its own passes it; one that forgets gets the
 // real thing rather than a crash on the first LVM command.
 //
+// The host id is taken from the host NQN's own UUID rather than from the node's
+// /etc/nvme/hostid, because the kernel keeps the pair strictly 1:1: a node
+// holding even one connection under the default identity would otherwise refuse
+// every connect naming this one. A caller that set both keeps what it set.
+//
 // It still validates nothing else. A missing interface seam surfaces at the
 // first call through it as an ordinary nil-interface panic that names the seam,
 // and refusing to build a plan here would only move that failure earlier without
@@ -90,6 +96,11 @@ func NewNode(cfg NodeConfig) *Node {
 	}
 	if cfg.Manager == nil {
 		cfg.Manager = lvm.NewManager()
+	}
+	if cfg.HostID == "" && cfg.HostNQN != "" {
+		if hostID, ok := nqn.HostUUID(cfg.HostNQN); ok {
+			cfg.HostID = hostID
+		}
 	}
 	return &Node{cfg: cfg}
 }
