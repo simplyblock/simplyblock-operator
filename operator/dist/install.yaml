@@ -7425,6 +7425,7 @@ spec:
                 - Provisioning
                 - Activating
                 - Online
+                - Rebalancing
                 - Degraded
                 - Unavailable
                 - Suspended

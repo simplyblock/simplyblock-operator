@@ -74,6 +74,45 @@ func TestTheEntityReadsTheClusterStream(t *testing.T) {
 	}
 }
 
+// A cluster that is rebalancing says so in its phase, because that is the one
+// column a watch shows and a rebalance is what makes most operations unavailable.
+// It replaces the two serving phases and never a not-serving one: a suspended
+// cluster with a rebalance task still queued is suspended first. The control
+// plane's own word stays in status.status beside it, so an active rebalance and
+// a degraded one are still told apart.
+func TestARebalancingClusterReportsItsPhase(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   simplyblockv1alpha2.StorageClusterPhase
+	}{
+		{"active", simplyblockv1alpha2.StorageClusterPhaseRebalancing},
+		{"degraded", simplyblockv1alpha2.StorageClusterPhaseRebalancing},
+		{"suspended", simplyblockv1alpha2.StorageClusterPhaseSuspended},
+		{"in_activation", simplyblockv1alpha2.StorageClusterPhaseActivating},
+		{"unready", simplyblockv1alpha2.StorageClusterPhaseProvisioning},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			api := &fakeControlPlane{}
+			refuseClusterReads(t, api)
+			r := newClusterReconciler(t, api, &recorder{}, newTestCluster())
+			r.Clusters = streamedCluster(func(dto *subscriptions.ClusterDTO) {
+				dto.Status = tc.status
+				dto.Rebalancing = true
+			})
+
+			cluster := reconcileCluster(t, r, 1)
+			if cluster.Status.Phase != tc.want {
+				t.Errorf("phase = %q for a rebalancing %s cluster, want %q",
+					cluster.Status.Phase, tc.status, tc.want)
+			}
+			if cluster.Status.Status != tc.status {
+				t.Errorf("status = %q, want the control plane's own word %q kept",
+					cluster.Status.Status, tc.status)
+			}
+		})
+	}
+}
+
 // An unsynced cache is not read. A cluster missing from one and a cluster the
 // control plane has forgotten look identical, and reading the first as the
 // second would report a live cluster as gone.
