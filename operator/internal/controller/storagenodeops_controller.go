@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -1282,12 +1283,16 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return res, nil
 	}
 
-	completed, inProgress := 0, 0
+	// Counted in volumes: a CR that carries a shared subsystem moves every
+	// member volume, and the operator reads "N of M volumes".
+	completed, inProgress, completedCRs := 0, 0, 0
 	for i := range vmigList.Items {
+		n := drainMigrationVolumes(&vmigList.Items[i])
 		if vmigList.Items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
-			completed++
+			completed += n
+			completedCRs++
 		} else {
-			inProgress++
+			inProgress += n
 		}
 	}
 
@@ -1300,7 +1305,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		return r.createMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, ops, sn, vmigList.Items, existingVMNames)
 	}
 
-	if inProgress == 0 && completed == len(vmigList.Items) {
+	if inProgress == 0 && completedCRs == len(vmigList.Items) {
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.VolumesMigrated = completed
 		ops.Status.VolumesPending = 0
@@ -1321,7 +1326,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.VolumesMigrated = completed
 	ops.Status.VolumesPending = inProgress
-	ops.Status.Message = fmt.Sprintf("Migrating: %d of %d volumes migrated", completed, len(vmigList.Items))
+	ops.Status.Message = fmt.Sprintf("Migrating: %d of %d volumes migrated", completed, completed+inProgress)
 	_ = r.Status().Patch(ctx, ops, patch)
 	return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 }
@@ -1542,9 +1547,12 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	if err != nil {
 		return false
 	}
+	// A PV is covered by the CR of its subsystem, which its canonical PV
+	// carries -- see drainSubsystemGroups.
+	canonicalByPV, _ := drainSubsystemGroups(vols, pvm, pvByVol)
 	for _, volUUID := range pvm {
 		if pvName, ok := pvByVol[volUUID]; ok {
-			if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
+			if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonicalByPV[pvName])]; !exists {
 				return true
 			}
 		}
@@ -1589,16 +1597,18 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
 	}
 
-	pvNames := make([]string, 0, len(pvManaged))
-	for _, volUUID := range pvManaged {
-		pvName, ok := pvNameByVolumeUUID[volUUID]
-		if !ok {
-			continue
-		}
-		if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
-			pvNames = append(pvNames, pvName)
+	// One CR per subsystem: the control plane moves a subsystem whole, so the
+	// PVs sharing one travel with its canonical PV's CR (drainSubsystemGroups).
+	// Targets are chosen per subsystem for the same reason -- the members
+	// cannot go to different nodes.
+	_, membersByCanonical := drainSubsystemGroups(volumes, pvManaged, pvNameByVolumeUUID)
+	pvNames := make([]string, 0, len(membersByCanonical))
+	for canonical := range membersByCanonical {
+		if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonical)]; !exists {
+			pvNames = append(pvNames, canonical)
 		}
 	}
+	sort.Strings(pvNames) // round-robin offsets follow list order; keep it stable
 	if len(pvNames) == 0 {
 		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 	}
@@ -1622,16 +1632,10 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	createdCount := 0
-	for _, volUUID := range pvManaged {
-		pvName, ok := pvNameByVolumeUUID[volUUID]
-		if !ok {
-			continue
-		}
+	createdVolumes := 0
+	for _, pvName := range pvNames {
 		migName := drainMigrationName(nodeUUID, pvName)
-		if _, exists := existingVMNames[migName]; exists {
-			continue
-		}
+		members := membersByCanonical[pvName]
 		vmig := &simplyblockv1alpha1.VolumeMigration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      migName,
@@ -1643,6 +1647,9 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 				TargetNodeUUID: targetByPV[pvName],
 			},
 		}
+		if len(members) > 1 {
+			vmig.Annotations = map[string]string{annoSubsystemMembers: strings.Join(members, ",")}
+		}
 		if err := controllerutil.SetControllerReference(ops, vmig, r.Scheme); err != nil {
 			log.Error(err, "drain: failed to set controller reference", "name", migName)
 			continue
@@ -1651,13 +1658,17 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 			log.Error(err, "drain: failed to create VolumeMigration", "name", migName)
 			continue
 		}
-		createdCount++
+		if len(members) > 1 {
+			log.Info("drain: one VolumeMigration for a shared subsystem",
+				"name", migName, "volumes", len(members), "members", members)
+		}
+		createdVolumes += len(members)
 	}
 
 	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.VolumesPending = createdCount
+	ops.Status.VolumesPending = createdVolumes
 	ops.Status.VolumesMigrated = 0
-	ops.Status.Message = fmt.Sprintf("Migrating: 0 of %d volumes migrated", createdCount)
+	ops.Status.Message = fmt.Sprintf("Migrating: 0 of %d volumes migrated", createdVolumes)
 	_ = r.Status().Patch(ctx, ops, patch)
 	return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 }

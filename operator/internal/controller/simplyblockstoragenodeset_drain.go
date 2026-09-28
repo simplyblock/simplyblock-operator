@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -313,6 +314,76 @@ func roundRobinTargetNodes(
 		assignment[pv] = picked
 	}
 	return assignment, nil
+}
+
+// annoSubsystemMembers is set on a drain VolumeMigration that carries a shared
+// (multi-namespace) subsystem: the comma-separated names of every PV on the
+// drained node whose volume lives in that subsystem, the CR's own PV included.
+// The control plane migrates the whole subsystem in one go, so those PVs move
+// with this CR and get no CR of their own.
+const annoSubsystemMembers = "storage.simplyblock.io/subsystem-members"
+
+// drainSubsystemGroups partitions the drained node's PV-managed volumes by NVMe
+// subsystem.
+//
+// The storage API migrates a subsystem, not a volume: a namespaced volume
+// shares its subsystem with siblings, and one migration moves all of them. One
+// VolumeMigration per PV therefore meant several CRs for the same subsystem,
+// each with its own round-robin target; the API refused every create after the
+// first as "a migration already exists", the client cancelled that migration
+// to make room, and the CRs kept cancelling one another -- 79 minutes at "1 of
+// 6 volumes migrated" on 2026-09-28. So a subsystem gets one CR, carried by its
+// canonical PV, and the others are recorded as members.
+//
+// canonicalByPV maps every PV to the PV that carries its subsystem's CR: the
+// lexicographically smallest PV name of the group, so the choice is the same on
+// every reconcile as long as the group is. membersByCanonical lists each
+// group's PVs, sorted. A volume without an NQN is its own group.
+func drainSubsystemGroups(
+	volumes []webapi.VolumeInfo,
+	pvManaged []string,
+	pvNameByVolumeUUID map[string]string,
+) (canonicalByPV map[string]string, membersByCanonical map[string][]string) {
+	nqnByVolume := make(map[string]string, len(volumes))
+	for _, v := range volumes {
+		nqnByVolume[v.UUID] = v.NQN
+	}
+	pvsByNQN := make(map[string][]string)
+	for _, volUUID := range pvManaged {
+		pvName, ok := pvNameByVolumeUUID[volUUID]
+		if !ok {
+			continue
+		}
+		key := nqnByVolume[volUUID]
+		if key == "" {
+			key = "pv:" + pvName
+		}
+		pvsByNQN[key] = append(pvsByNQN[key], pvName)
+	}
+	canonicalByPV = make(map[string]string)
+	membersByCanonical = make(map[string][]string)
+	for _, pvs := range pvsByNQN {
+		sort.Strings(pvs)
+		canonical := pvs[0]
+		membersByCanonical[canonical] = pvs
+		for _, pv := range pvs {
+			canonicalByPV[pv] = canonical
+		}
+	}
+	return canonicalByPV, membersByCanonical
+}
+
+// drainMigrationVolumes is how many of the drained node's volumes a drain
+// VolumeMigration moves: the members it was created for, else what the
+// control plane reported for the subsystem, else one.
+func drainMigrationVolumes(vm *simplyblockv1alpha1.VolumeMigration) int {
+	if members := vm.Annotations[annoSubsystemMembers]; members != "" {
+		return len(strings.Split(members, ","))
+	}
+	if vm.Status.MemberCount > 1 {
+		return vm.Status.MemberCount
+	}
+	return 1
 }
 
 // drainMigrationName builds a DNS-label-safe name for a VolumeMigration CR.

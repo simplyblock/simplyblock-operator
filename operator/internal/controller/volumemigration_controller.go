@@ -182,6 +182,23 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		return r.setFailed(ctx, vm, fmt.Sprintf("volume %s has no subsystem NQN; cannot address its migration", volumeUUID))
 	}
 
+	// The control plane migrates the subsystem whole, and holds one migration
+	// per subsystem. If another live VolumeMigration already carries this
+	// subsystem -- a sibling namespace being drained, pinned or rebalanced --
+	// submitting again would only make CreateMigration cancel that one to
+	// make room, and the two would keep cancelling each other. Wait for it:
+	// its completion moves this volume too.
+	if owner, err := r.liveSiblingMigration(ctx, vm, volume.NQN); err != nil {
+		return ctrl.Result{}, err
+	} else if owner != "" {
+		log.Info("Subsystem already being migrated by another VolumeMigration; waiting",
+			"subsystem", volume.NQN, "owner", owner)
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "WaitingForSiblingMigration", "WaitingForSiblingMigration",
+			"Subsystem %s is already being migrated by VolumeMigration %s; this volume moves with it; retrying in %s",
+			volume.NQN, owner, siblingMigrationRetryDelay)
+		return ctrl.Result{RequeueAfter: siblingMigrationRetryDelay}, nil
+	}
+
 	log.Info("Submitting volume migration",
 		"volume", volumeUUID, "cluster", clusterUUID, "subsystem", volume.NQN,
 		"target", vm.Spec.TargetNodeUUID)
@@ -251,6 +268,35 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		"Migration %s created for subsystem %s (%d volume(s)): validating %d connection(s) to node %s",
 		migration.ID, volume.NQN, migration.MemberCount, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// siblingMigrationRetryDelay is how long a VolumeMigration waits before looking
+// again when another one is already migrating its subsystem.
+const siblingMigrationRetryDelay = 15 * time.Second
+
+// liveSiblingMigration returns the name of another VolumeMigration in the same
+// namespace that is currently migrating the subsystem nqn (Validating or
+// Running), or "" if there is none.
+func (r *VolumeMigrationReconciler) liveSiblingMigration(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	nqn string,
+) (string, error) {
+	var list simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(ctx, &list, client.InNamespace(vm.Namespace)); err != nil {
+		return "", fmt.Errorf("list VolumeMigrations: %w", err)
+	}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Name == vm.Name || other.Status.SubsystemNQN != nqn {
+			continue
+		}
+		switch other.Status.Phase {
+		case simplyblockv1alpha1.VolumeMigrationPhaseValidating, simplyblockv1alpha1.VolumeMigrationPhaseRunning:
+			return other.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // deferMigration holds a migration the control plane refused because the cluster is
