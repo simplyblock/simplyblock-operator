@@ -180,6 +180,7 @@ type VolumeDefaults struct {
 }
 
 // StoragePoolSpec is the desired state of one tenancy unit within a cluster.
+// +kubebuilder:validation:XValidation:rule="!has(self.allowedNodes) || size(self.allowedNodes) == 0 || (has(self.volumeDefaults) && has(self.volumeDefaults.enableDHCHAP) && self.volumeDefaults.enableDHCHAP)",message="allowedNodes requires volumeDefaults.enableDHCHAP to be true"
 type StoragePoolSpec struct {
 	// ClusterRef names the StorageCluster this pool is carved out of, in this
 	// pool's own namespace. The cluster owns this object by controller
@@ -200,7 +201,7 @@ type StoragePoolSpec struct {
 	// AllowedNodes restricts which hosts may carry this pool's volumes, by
 	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
 	// stops new volumes landing on the removed nodes and leaves the existing
-	// ones where they are.
+	// ones where they are. Requires volumeDefaults.enableDHCHAP to be true.
 	//
 	// The list is left exactly as authored: a name that no longer resolves is
 	// dropped from Status.AllowedNodes rather than pruned from here, so a node

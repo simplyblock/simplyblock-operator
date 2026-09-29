@@ -184,8 +184,8 @@ File: `operator/internal/controllers/pool/review_test.go`, and
 
 Four of these share a root: a cluster-scoped name or an `AlreadyExists` result
 was treated as if it belonged to this pool. A `StorageClass` is cluster-scoped
-and the operator watches every namespace, so "the object with the name I would
-have used" and "my object" are separate claims.
+and the operator watches every namespace, so "the object with the name the operator
+would have used" and "the operator's own object" are separate claims.
 
 | #     | Scenario                                                                            | Type       | Test                                               |
 |-------|-------------------------------------------------------------------------------------|------------|----------------------------------------------------|
@@ -288,6 +288,7 @@ so real garbage collection is the only way to exercise them.
 | I-17 | Two pools with the same name in two namespaces: two classes, no collision                | Positive | —    |
 | I-18 | An operation on one pool does not lock another pool of the same cluster                  | Negative | —    |
 | I-19 | The controller's role covers `storageclasses` at cluster scope                           | Positive | —    |
+| I-20 | `allowedNodes` without `enableDHCHAP`: rejected (`TestAllowedNodesRequireDHCHAP`)        | Negative | —    |
 
 ---
 

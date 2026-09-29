@@ -298,7 +298,7 @@ spec:
                     AllowedNodes restricts which hosts may carry this pool's volumes, by
                     Kubernetes Node name. Empty means every node in the cluster. Narrowing it
                     stops new volumes landing on the removed nodes and leaves the existing
-                    ones where they are.
+                    ones where they are. Requires volumeDefaults.enableDHCHAP to be true.
 
                     The list is left exactly as authored: a name that no longer resolves is
                     dropped from Status.AllowedNodes rather than pruned from here, so a node
@@ -487,6 +487,8 @@ spec:
               x-kubernetes-validations:
                 - message: field volumeDefaults is immutable once set
                   rule: '!has(oldSelf.volumeDefaults) || has(self.volumeDefaults)'
+                - message: allowedNodes requires volumeDefaults.enableDHCHAP to be true
+                  rule: '!has(self.allowedNodes) || size(self.allowedNodes) == 0 || (has(self.volumeDefaults) && has(self.volumeDefaults.enableDHCHAP) && self.volumeDefaults.enableDHCHAP)'
             status:
               description: StoragePoolStatus is the observed state of one pool.
               properties:
