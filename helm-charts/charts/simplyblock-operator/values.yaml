@@ -11,10 +11,6 @@ image:
     repository: quay.io/simplyblock-io/simplyblock
     tag: "main"
     pullPolicy: Always
-  storageNode:
-    repository: quay.io/simplyblock-io/storage-node-handler
-    tag: v0.1.9
-    pullPolicy: Always
   operator:
     repository: quay.io/simplyblock-io/simplyblock-operator
     tag: "main"
@@ -28,10 +24,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
-serviceAccount:
-  # Specifies whether a serviceAccount should be created
-  create: true
-
 rbac:
   # Specifies whether RBAC resources should be created
   create: true
@@ -54,11 +46,6 @@ csiConfig:
 csiSecret:
   simplybk:
     secret:
-
-podAnnotations: {}
-
-# SimplyBlock Daemonset, Deployment, Statefulset annotations
-simplyBlockAnnotations: {}
 
 multiCluster:
   enable: false
@@ -395,23 +382,14 @@ controlplane:
     # `tls.crt`. Empty uses the system trust store. Named and unusable fails.
     caBundleSecretRef: ""
 
-  # Accept a pod's service-account token from the CSI driver's two accounts
-  # instead of requiring the static cluster secret. This is the control
-  # plane's half of the switch: set it together with
-  # spec.enableServiceAccountAuth on the SimplyblockDriver, which is what
-  # makes the plugins present a token in the first place.
-  trustCSIServiceAccounts: false
-
   observability:
     enabled: false
     secret: "sWbpOgba1bKnCfcPkVQi"
-    deletionInterval: "3d"
-    level: "DEBUG"
     # Parser used by fluent-bit to read /var/log/containers/*.log.
     # "cri" is correct for every CRI runtime (containerd and CRI-O), which covers
-    # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind and the managed
-    # clouds. Only set this to "docker" on legacy dockershim clusters (k8s <= 1.23),
-    # which write Docker JSON log files instead.
+    # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind, and the
+    # managed clouds. Only set this to `docker` on legacy dockershim clusters
+    # (Kubernetes 1.23 and older), which write Docker JSON log files instead.
     logParser: "cri"
     graylog:
       repository: quay.io/simplyblock-io/graylog
@@ -480,17 +458,6 @@ controlplane:
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
-    minio:
-      repository: quay.io/simplyblock-io/minio
-      tag: RELEASE.2024-01-16T16-07-38Z
-      pullPolicy: IfNotPresent
-      mcRepository: quay.io/simplyblock-io/minio-client
-      mcTag: RELEASE.2024-01-16T16-06-34Z
-      bucket: thanos
-      accessKey: minioadmin
-      secretKey: minioadmin
-      storageSize: 50Gi
-      storageClass:
     fluentbit:
       repository: quay.io/simplyblock-io/fluent-bit
       tag: "1.8.11"
@@ -507,9 +474,6 @@ controlplane:
     create: false
     key: 
     value:
-
-  ports:
-    lvolNvmfPortStart: 9110
 
   csiHostpathDriver:
     enabled: false
@@ -535,8 +499,6 @@ controlplane:
     allowedTopologyZones: []
 
   foundationdb:
-    enabled: true
-    multiAZ: false
     # redundancyMode controls FDB coordinator count:
     # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
     # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)
@@ -580,20 +542,9 @@ controlplane:
     # (workload, latency, storage, coordinator health) on :9444/metrics.
     # Upstream: https://github.com/aikoven/foundationdb-exporter
     exporter:
+      # The exporter's own image and sizing are the operator's, which builds it
+      # beside the management API.
       enabled: true
-      image:
-        repository: aikoven/foundationdb-exporter
-        tag: "3.1.0"
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 200m
-          memory: 128Mi
-
-operator:
-  openShiftCluster: true
 
 # How a volume's move is raised. The operator raises one when the rebalancer
 # moves a volume off a hot node, when a node is drained, and when a claim is
@@ -896,7 +847,8 @@ tls:
   # refuses off OpenShift. A cluster that has neither sets this to false.
   enabled: true
 
-  # Provider responsible for issuing serving certificates. One of: openshift, cert-manager. Required if enabled.
+  # Provider responsible for issuing serving certificates. One of `openshift` or
+  # `cert-manager`. Required if enabled.
   provider: cert-manager
 
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint
