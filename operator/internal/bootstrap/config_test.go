@@ -22,7 +22,13 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
 )
 
-const theNamespace = "simplyblock"
+const (
+	theNamespace = "simplyblock"
+
+	// theOperatorsOwnName is what InitialDiscovery calls the run when an
+	// installation states no name of its own.
+	theOperatorsOwnName = "initial-discovery"
+)
 
 // configMap is the object the chart renders, with whatever document a case wants
 // under the one key.
@@ -53,7 +59,7 @@ func TestAnAbsentConfigMapKeepsTheOperatorsOwnBehavior(t *testing.T) {
 	if !config.DiscoveryEnabled() {
 		t.Error("an installation that states nothing raises no run")
 	}
-	if got := config.RunName("initial-discovery"); got != "initial-discovery" {
+	if got := config.RunName(theOperatorsOwnName); got != theOperatorsOwnName {
 		t.Errorf("RunName = %q, want the operator's own constant", got)
 	}
 	if got := config.RunNamespace(theNamespace); got != theNamespace {
@@ -179,7 +185,7 @@ draft:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got := config.RunName("initial-discovery"); got != "fleet-discovery" {
+	if got := config.RunName(theOperatorsOwnName); got != "fleet-discovery" {
 		t.Errorf("RunName = %q, want the stated name", got)
 	}
 	if got := config.RunNamespace(theNamespace); got != "storage" {
@@ -278,7 +284,7 @@ draft:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got := config.RunName("initial-discovery"); got != "initial-discovery" {
+	if got := config.RunName(theOperatorsOwnName); got != theOperatorsOwnName {
 		t.Errorf("RunName = %q, want the operator's own constant", got)
 	}
 	if got := config.RunNamespace(theNamespace); got != theNamespace {

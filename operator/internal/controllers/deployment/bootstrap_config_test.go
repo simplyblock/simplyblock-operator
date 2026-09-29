@@ -150,7 +150,7 @@ func TestTheInitialRunIsLabeledAsSuch(t *testing.T) {
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if run := theRun(t, d); run.Labels[InitialDiscoveryLabel] != "true" {
+	if run := theRun(t, d); run.Labels[InitialDiscoveryLabel] != readyToDeployValue {
 		t.Errorf("labels = %v, want the run marked as the initial one", run.Labels)
 	}
 }

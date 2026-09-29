@@ -59,7 +59,7 @@ func TestTheChartWritesTheDocumentThisPackageReads(t *testing.T) {
 	if !config.DiscoveryEnabled() {
 		t.Error("the chart's defaults raise no discovery run")
 	}
-	if got := config.RunName("initial-discovery"); got != "initial-discovery" {
+	if got := config.RunName(theOperatorsOwnName); got != theOperatorsOwnName {
 		t.Errorf("the chart names the run %q, want the operator's own constant", got)
 	}
 	if seed := config.Seed(); seed != nil {
