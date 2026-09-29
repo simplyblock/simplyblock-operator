@@ -103,7 +103,9 @@ discovery:
   enabled: true
 
   # What the run is called. It is also what the draft is named after, unless
-  # draft.name below states one.
+  # draft.name below states one, and the draft's name is what the proposed
+  # StorageCluster is named after in turn, so a long name here is refused by the
+  # 37-character check on that last one.
   name: initial-discovery
 
   # Where the run, its probe Jobs, their reports, and the draft go. Empty is the
@@ -114,6 +116,8 @@ discovery:
   # the StorageCluster and its StorageNodes in the draft's namespace, so a draft
   # placed here is a cluster placed here. The namespace has to exist already, and
   # `helm uninstall` does not remove what was built in it.
+  #
+  #   namespace: simplyblock-storage
   namespace: ""
 
   # Which workers the run inspects, by label on the Kubernetes Node. Empty
@@ -124,6 +128,12 @@ discovery:
   # It also decides whether the run is raised at all. A fleet where nothing
   # matches this selector is a fleet with nothing to inspect, and a run raised
   # against one fails.
+  #
+  # The entries are ANDed, and the labels are the fleet's own rather than keys
+  # this product defines:
+  #
+  #   nodeSelector:
+  #     node-role.kubernetes.io/simplyblock-storage: ""
   nodeSelector: {}
 
   # What the run's probe pods tolerate, in the ordinary Kubernetes shape.
@@ -131,7 +141,17 @@ discovery:
   # A fleet that dedicates machines to storage taints them, and a run that
   # tolerates nothing inspects nothing. They reach the draft as well, because the
   # taints a probe had to tolerate are the taints the storage nodes have to live
-  # with.
+  # with, so this is also what the storage-node DaemonSet ends up tolerating:
+  #
+  #   tolerations:
+  #     - key: storage.simplyblock.io/dedicated
+  #       operator: Equal
+  #       value: "true"
+  #       effect: NoSchedule
+  #     - key: node.kubernetes.io/unreachable
+  #       operator: Exists
+  #       effect: NoExecute
+  #       tolerationSeconds: 300
   tolerations: []
 
   # Let the run consider the machines that run the API server and etcd.
@@ -159,32 +179,65 @@ discovery:
     # mounted, held by the kernel, or carrying swap stays out.
     enablePartitionedDevices: true
 
-    # Device paths to keep out, for a fleet whose workers boot from a known disk.
-    # Requires enableLogicalBlockDevices.
+    # The two block-device lists, which require enableLogicalBlockDevices.
+    #
+    # A deny list is the one most deployments want: on a fleet that boots from
+    # /dev/sda, this single entry keeps the root disk out of every group of the
+    # draft. An allow list is the opposite and is narrow enough to be dangerous,
+    # because a draft it emptied looks the same as a fleet with no disks. Prefer
+    # narrowing the draft, which a reviewer can see and correct.
+    #
+    #   blockAllowList:
+    #     - /dev/nvme0n1
+    #   blockDenyList:
+    #     - /dev/sda
+    blockAllowList: []
     blockDenyList: []
 
-    # PCI addresses to keep out, the NVMe class's half of the same thing.
+    # The NVMe class's half of the same thing, by PCI address. The deny entry is
+    # the slot every worker in a uniform fleet boots from.
+    #
+    #   pcieAllowList:
+    #     - "0000:5e:00.0"
+    #   pcieDenyList:
+    #     - "0000:00:1f.2"
+    pcieAllowList: []
     pcieDenyList: []
 
-    # Size range a candidate has to fall in ("1T-16T"), which is how the system
-    # disks of a uniform fleet are excluded. It applies to whichever class is
-    # being scanned.
+    # Restrict candidates to devices whose PCI model string matches, which is how
+    # a fleet with one drive model among several hands over only that model. It
+    # narrows the NVMe class alone.
+    #
+    #   pcieModel: SAMSUNG MZQL23T8HCLS-00A07
+    pcieModel: ""
+
+    # Size range a candidate has to fall in, which is how the system disks of a
+    # uniform fleet are excluded. It applies to whichever class is being scanned:
+    #
+    #   driveSizeRange: 1T-16T
     driveSizeRange: ""
 
   # What the draft proposes, for the parts no probe can read.
   #
-  # Every field here is one discovery would otherwise guess at, and every field
-  # under cluster is immutable on the StorageCluster the draft expands into: a
-  # reviewer can correct anything else after the fact and can correct none of
-  # these. What is left out is what the probes answer better than an installation
-  # can: the vCPU count, the huge-page size, the host OS, and the workers
-  # themselves.
+  # Every field here is one discovery would otherwise guess at, and the guesses
+  # that matter are the ones nobody can take back. stripe,
+  # enableChecksumValidation, and enableAtomicity4K are immutable on the
+  # StorageCluster the draft expands into, and enableDriveFormat is spent when a
+  # node takes its devices, which is destructive and happens once.
+  # maxSubsystemCount is the exception and can be corrected on the cluster later.
+  # It is here because nothing about the hardware decides it.
+  #
+  # What is left out is what the probes answer better than an installation can:
+  # the vCPU count, the huge-page size, the journal device, the host OS, and the
+  # workers themselves.
   #
   # It seeds this run's draft and no other. A discovery run somebody raises later
   # describes whatever the fleet has become by then.
   draft:
     # What the document is called. Empty is "discovered-" followed by the run's
-    # name.
+    # name, so the default is "discovered-initial-discovery."
+    #
+    #   name: production-draft
     name: ""
 
     # State that this is an edge deployment, which differs from a datacenter one
@@ -196,14 +249,22 @@ discovery:
     # to its own default, which is the pairing this release was tested as. The
     # node agent is not here: a draft that pins none takes the ControlPlane
     # object's image, which this chart already writes.
+    #
+    #   images:
+    #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
+    #     spdkProxy: quay.io/simplyblock-io/spdk-proxy:v26.2.6
     images:
       spdk: ""
       spdkProxy: ""
 
     cluster:
       # The StorageCluster's name. Empty is the draft's name with "-cluster"
-      # appended. The control plane derives its own names from it and accepts at
-      # most 37 characters, which the chart refuses a longer one for.
+      # appended, so the default is "discovered-initial-discovery-cluster," which
+      # is 36 of the 37 characters the control plane allows. It derives its own
+      # names from this one, and the chart refuses a longer one rather than
+      # letting the draft fail at CreatingCluster.
+      #
+      #   name: production
       name: ""
 
       # The erasure-coding layout. Empty derives one from the number of storage
@@ -226,7 +287,7 @@ discovery:
       # Format every device the draft names before a storage node takes it. Left
       # out, the draft proposes it set, because a drive carrying anything is not
       # usable otherwise. State false for a fleet whose drives must be handed over
-      # as they are; the draft still lists them either way, so a reviewer sees
+      # as they are. The draft still lists them either way, so a reviewer sees
       # which disks are involved.
       # enableDriveFormat: false
 
