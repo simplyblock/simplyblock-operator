@@ -437,6 +437,178 @@
           }
         }
       }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "namespace": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "Exists",
+                  "Equal"
+                ]
+              },
+              "value": {
+                "type": "string"
+              },
+              "effect": {
+                "enum": [
+                  "NoSchedule",
+                  "PreferNoSchedule",
+                  "NoExecute"
+                ]
+              },
+              "tolerationSeconds": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "enableControlPlaneNodes": {
+          "type": "boolean"
+        },
+        "deviceFilter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enableLogicalBlockDevices": {
+              "type": "boolean"
+            },
+            "enablePartitionedDevices": {
+              "type": "boolean"
+            },
+            "blockAllowList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/dev/[a-zA-Z0-9._/-]+$"
+              }
+            },
+            "blockDenyList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/dev/[a-zA-Z0-9._/-]+$"
+              }
+            },
+            "pcieAllowList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-9a-fA-F]$"
+              }
+            },
+            "pcieDenyList": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-9a-fA-F]$"
+              }
+            },
+            "pcieModel": {
+              "type": "string"
+            },
+            "driveSizeRange": {
+              "type": "string",
+              "pattern": "^$|^[0-9]+[KMGTP]?[i]?[B]?-[0-9]+[KMGTP]?[i]?[B]?$"
+            }
+          }
+        },
+        "draft": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+            },
+            "edgeCluster": {
+              "type": "boolean"
+            },
+            "images": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "spdk": {
+                  "type": "string"
+                },
+                "spdkProxy": {
+                  "type": "string"
+                }
+              }
+            },
+            "cluster": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 37,
+                  "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                },
+                "stripe": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "dataChunks": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "parityChunks": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "maxSubsystemCount": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 75
+                },
+                "enableDriveFormat": {
+                  "type": "boolean"
+                },
+                "enableChecksumValidation": {
+                  "type": "boolean"
+                },
+                "enableAtomicity4K": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

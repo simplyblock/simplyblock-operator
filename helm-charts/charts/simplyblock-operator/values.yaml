@@ -81,6 +81,178 @@ deployment:
   # what it collects in the object store a hosted control plane brings.
   profile: standalone
 
+# The one discovery run a fresh install performs by itself.
+#
+# The operator raises it, inspects every worker this section allows it to, and
+# writes a ClusterDeploymentConfig in Draft. Nothing is deployed until somebody
+# reads that draft and sets `approved: true` on it: `helm install` is not where a
+# running cluster comes from, and there is no value here that makes it one.
+#
+# It happens once per installation. The operator declines the run the moment any
+# OperatorOps, ClusterDeploymentConfig, or StorageCluster already exists, so
+# changing anything below and running `helm upgrade` changes nothing: the run it
+# would configure has already happened. Raising another is
+# `kubectl create -f` against an OperatorOps of your own.
+#
+# Rendered for the managed profile as `enabled: false` alone: there, the cluster
+# that manages this one raises the run, in the namespace it chooses.
+discovery:
+  # Whether this installation raises the run at all. An installation that wants
+  # no draft waiting for it sets this to false and writes its
+  # ClusterDeploymentConfig by hand.
+  enabled: true
+
+  # What the run is called. It is also what the draft is named after, unless
+  # draft.name below states one.
+  name: initial-discovery
+
+  # Where the run, its probe Jobs, their reports, and the draft go. Empty is the
+  # namespace this release is installed into.
+  #
+  # It places those four things. What follows from it is the deployment config
+  # controller's own behavior rather than this value's: approving a draft builds
+  # the StorageCluster and its StorageNodes in the draft's namespace, so a draft
+  # placed here is a cluster placed here. The namespace has to exist already, and
+  # `helm uninstall` does not remove what was built in it.
+  namespace: ""
+
+  # Which workers the run inspects, by label on the Kubernetes Node. Empty
+  # inspects every schedulable worker, which is the usual first run: what it
+  # produces is a draft of everything the fleet has, and narrowing it is what a
+  # reviewer does against a draft they can see.
+  #
+  # It also decides whether the run is raised at all. A fleet where nothing
+  # matches this selector is a fleet with nothing to inspect, and a run raised
+  # against one fails.
+  nodeSelector: {}
+
+  # What the run's probe pods tolerate, in the ordinary Kubernetes shape.
+  #
+  # A fleet that dedicates machines to storage taints them, and a run that
+  # tolerates nothing inspects nothing. They reach the draft as well, because the
+  # taints a probe had to tolerate are the taints the storage nodes have to live
+  # with.
+  tolerations: []
+
+  # Let the run consider the machines that run the API server and etcd.
+  #
+  # Off, because a storage node is a data path and putting one on an etcd host is
+  # a placement almost nobody intends. The single-node development cluster and the
+  # combined three-node deployment are what it is for, and on a single-node
+  # cluster it is what makes the run happen at all: the one machine there is the
+  # control-plane node.
+  enableControlPlaneNodes: false
+
+  # Which of an inspected worker's devices reach the draft. What is filtered out
+  # here never appears in the document, so this is the place to keep a boot disk
+  # out of a fifty-worker draft nobody reads line by line.
+  deviceFilter:
+    # Scan each worker's logical block devices instead of its NVMe devices. It
+    # selects the class rather than adding one: a cluster is built out of one
+    # class of backend storage, and a draft describes one cluster.
+    enableLogicalBlockDevices: false
+
+    # Report devices carrying a partition table alongside the available ones. On,
+    # because a machine that has held data before carries one on every disk and
+    # refusing them makes the run meant to show a fleet what it has report that it
+    # has nothing. It waives the table and nothing else: a device that is also
+    # mounted, held by the kernel, or carrying swap stays out.
+    enablePartitionedDevices: true
+
+    # Device paths to keep out, for a fleet whose workers boot from a known disk.
+    # Requires enableLogicalBlockDevices.
+    blockDenyList: []
+
+    # PCI addresses to keep out, the NVMe class's half of the same thing.
+    pcieDenyList: []
+
+    # Size range a candidate has to fall in ("1T-16T"), which is how the system
+    # disks of a uniform fleet are excluded. It applies to whichever class is
+    # being scanned.
+    driveSizeRange: ""
+
+  # What the draft proposes, for the parts no probe can read.
+  #
+  # Every field here is one discovery would otherwise guess at, and every field
+  # under cluster is immutable on the StorageCluster the draft expands into: a
+  # reviewer can correct anything else after the fact and can correct none of
+  # these. What is left out is what the probes answer better than an installation
+  # can: the vCPU count, the huge-page size, the host OS, and the workers
+  # themselves.
+  #
+  # It seeds this run's draft and no other. A discovery run somebody raises later
+  # describes whatever the fleet has become by then.
+  draft:
+    # What the document is called. Empty is "discovered-" followed by the run's
+    # name.
+    name: ""
+
+    # State that this is an edge deployment, which differs from a datacenter one
+    # in topology and scale rather than in kind. Left out, the draft says nothing
+    # about it.
+    # edgeCluster: true
+
+    # Images the draft pins, as full repository:tag references. Empty leaves each
+    # to its own default, which is the pairing this release was tested as. The
+    # node agent is not here: a draft that pins none takes the ControlPlane
+    # object's image, which this chart already writes.
+    images:
+      spdk: ""
+      spdkProxy: ""
+
+    cluster:
+      # The StorageCluster's name. Empty is the draft's name with "-cluster"
+      # appended. The control plane derives its own names from it and accepts at
+      # most 37 characters, which the chart refuses a longer one for.
+      name: ""
+
+      # The erasure-coding layout. Empty derives one from the number of storage
+      # nodes the run found, which is a fact about the fleet rather than about how
+      # much redundancy this deployment wants: a fleet of three gets 1+1 and a
+      # fleet of twelve gets 2+1, whatever it was built for. A cluster's stripe
+      # cannot be changed afterward.
+      #
+      #   stripe:
+      #     dataChunks: 4
+      #     parityChunks: 2
+      stripe: {}
+
+      # How many NVMe-oF subsystems each storage node serves. Left out, the draft
+      # proposes 30, which is the middle of the range this API accepts and not a
+      # reading: the number follows from how many volumes the deployment expects
+      # to serve and how they are spread.
+      # maxSubsystemCount: 50
+
+      # Format every device the draft names before a storage node takes it. Left
+      # out, the draft proposes it set, because a drive carrying anything is not
+      # usable otherwise. State false for a fleet whose drives must be handed over
+      # as they are; the draft still lists them either way, so a reviewer sees
+      # which disks are involved.
+      # enableDriveFormat: false
+
+      # Validate a CRC on every I/O, for silent-data-error protection. Left out,
+      # the cluster's own default decides, which is off.
+      #
+      # The backend bakes the checksum method into each device when the cluster is
+      # created and never re-applies it, so a cluster created without this is one
+      # nobody can turn it on for. It needs a 4K logical block size, which
+      # enableDriveFormat produces on an NVMe device that can be reformatted and
+      # enableAtomicity4K is the alternative to on one that cannot.
+      # enableChecksumValidation: true
+
+      # Enforce 4K write atomicity on every device the draft names, which is what
+      # lets checksum validation run on a device whose logical block size is under
+      # the data plane's 4K minimum. Left out, the cluster's own default decides,
+      # which is off.
+      #
+      # It is an enforcement and not a reading. A SATA drive presenting 512-byte
+      # logical blocks over a 4K physical sector reports 512 and nothing more, and
+      # a kernel older than 6.11 publishes no atomic write attributes at all, so
+      # this asserts a guarantee nothing verified. Where the hardware does not keep
+      # it, a torn write becomes a checksum that silently disagrees with the data.
+      # The device reports in the run's own draft are what to check it against.
+      # enableAtomicity4K: true
+
 # The CSI driver, as the SimplyblockDriver the chart renders for every profile
 # that runs one.
 #
