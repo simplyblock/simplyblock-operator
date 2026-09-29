@@ -9,7 +9,7 @@ image:
     pullPolicy: Always
   simplyblock:
     repository: quay.io/simplyblock-io/simplyblock
-    tag: "26.2.6-PRE"
+    tag: "main"
     pullPolicy: Always
   storageNode:
     repository: quay.io/simplyblock-io/storage-node-handler
@@ -17,7 +17,7 @@ image:
     pullPolicy: Always
   operator:
     repository: quay.io/simplyblock-io/simplyblock-operator
-    tag: v26.2.6
+    tag: "main"
     pullPolicy: Always
   rebalancer:
     repository: quay.io/simplyblock-io/simplyblock-rebalancer
