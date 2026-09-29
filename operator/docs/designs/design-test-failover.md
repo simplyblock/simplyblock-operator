@@ -408,10 +408,12 @@ The Phase 3 scenarios (§5.6) become testable only when P0-6 exists. The risk co
 ## Appendix A: `testfailover_types.go`
 
 ```go
-package v1alpha1
+package v1alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/statemachine"
 )
 
 // TestFailoverScope selects what a drill recovers.
@@ -553,20 +555,13 @@ type TestFailoverReport struct {
 	InvariantsHeld bool `json:"invariantsHeld,omitempty"`
 }
 
-// TestFailoverStepSnapshot is the durable position of the drill's machine.
-type TestFailoverStepSnapshot struct {
-	// +optional
-	State TestFailoverStep `json:"state,omitempty"`
-	// +optional
-	Deadline *metav1.Time `json:"deadline,omitempty"`
-}
-
 // TestFailoverStatus is the observed state of a drill.
 type TestFailoverStatus struct {
 	// +optional
 	Phase TestFailoverPhase `json:"phase,omitempty"`
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ResolvingSource','ResolvingPoint','Shipping','Cloning','Placing','Releasing']",message="unknown step"
 	// +optional
-	Step TestFailoverStepSnapshot `json:"step,omitempty"`
+	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 	// Triggered records that the current step's side effect was issued, so a
