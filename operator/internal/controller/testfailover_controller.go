@@ -234,12 +234,14 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 	}
 	srcAttrs, _, _ := unstructured.NestedStringMap(pv, "spec", "csi", "volumeAttributes")
 	bubbleVC := bubbleVolumeContext(srcAttrs)
+	fsType, _, _ := unstructured.NestedString(pv, "spec", "csi", "fsType")
 
 	if err := r.transitionTo(ctx, tf, simplyblockv1alpha2.TestFailoverStepResolvingPoint, func(s *simplyblockv1alpha2.TestFailoverStatus) {
 		s.Clones = []simplyblockv1alpha2.TestFailoverClone{{
 			SourceRef:           tf.Spec.SourceRef,
 			SourceHandle:        handle,
 			SourceVolumeContext: bubbleVC,
+			SourceFSType:        fsType,
 		}}
 		s.Message = "resolved the source volume; resolving the recovery point"
 	}); err != nil {
@@ -917,6 +919,7 @@ func (r *TestFailoverReconciler) bubbleManifestWork(tf *simplyblockv1alpha2.Test
 				CSI: &corev1.CSIPersistentVolumeSource{
 					Driver:           csiDriverName,
 					VolumeHandle:     clone.CloneID,
+					FSType:           clone.SourceFSType,
 					VolumeAttributes: clone.SourceVolumeContext,
 				},
 			},

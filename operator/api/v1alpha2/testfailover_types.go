@@ -178,6 +178,14 @@ type TestFailoverClone struct {
 	// back at the source.
 	// +optional
 	SourceVolumeContext map[string]string `json:"sourceVolumeContext,omitempty"`
+
+	// SourceFSType is the source PV's CSI fsType, carried onto the bubble PV so the
+	// node plugin stages the clone with the filesystem it actually carries. The
+	// clone is a block copy of the source, so its filesystem is the source's; an
+	// empty fsType makes the node plugin default to ext4 and refuse to mount an XFS
+	// volume.
+	// +optional
+	SourceFSType string `json:"sourceFSType,omitempty"`
 }
 
 // TestFailoverReport is the evidence a drill produces.

@@ -251,6 +251,7 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 	setViewResult(t, cl, getView(t, cl, tf.Spec.SourceCluster, testFailoverViewName(tf, "src-pv")),
 		map[string]interface{}{"spec": map[string]interface{}{"csi": map[string]interface{}{
 			"volumeHandle": "clusterA:pool:lvolX",
+			"fsType":       "xfs",
 			"volumeAttributes": map[string]interface{}{
 				// class params — kept
 				"tune2fs_reserved_blocks": "",
@@ -279,6 +280,9 @@ func TestFailoverResolvingSourceCapturesStrippedVolumeContext(t *testing.T) {
 	}
 	if len(got.Status.Clones) != 1 {
 		t.Fatalf("clones = %+v, want one", got.Status.Clones)
+	}
+	if got.Status.Clones[0].SourceFSType != "xfs" {
+		t.Errorf("sourceFSType = %q, want the source PV's xfs", got.Status.Clones[0].SourceFSType)
 	}
 	vc := got.Status.Clones[0].SourceVolumeContext
 	for _, k := range []string{"tune2fs_reserved_blocks", "fabric", "qos_rw_iops"} {
@@ -750,6 +754,7 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 		"tune2fs_reserved_blocks": "",
 		"fabric":                  "tcp",
 	}
+	tf.Status.Clones[0].SourceFSType = "xfs"
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -773,6 +778,11 @@ func TestFailoverPlacingPVCarriesSourceVolumeContext(t *testing.T) {
 	}
 	if pv.Spec.CSI.VolumeAttributes["fabric"] != "tcp" {
 		t.Errorf("bubble PV VolumeAttributes did not carry the source class params: %+v", pv.Spec.CSI.VolumeAttributes)
+	}
+	// The clone carries the source's filesystem; without this the node plugin
+	// defaults to ext4 and refuses to mount the XFS volume.
+	if pv.Spec.CSI.FSType != "xfs" {
+		t.Errorf("bubble PV fsType = %q, want the source's xfs", pv.Spec.CSI.FSType)
 	}
 }
 

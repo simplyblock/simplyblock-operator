@@ -191,6 +191,14 @@ spec:
                         resolving a replicated one or reusing a pinned one, so teardown knows
                         whether to delete it.
                       type: boolean
+                    sourceFSType:
+                      description: |-
+                        SourceFSType is the source PV's CSI fsType, carried onto the bubble PV so the
+                        node plugin stages the clone with the filesystem it actually carries. The
+                        clone is a block copy of the source, so its filesystem is the source's; an
+                        empty fsType makes the node plugin default to ext4 and refuse to mount an xfs
+                        volume.
+                      type: string
                     sourceHandle:
                       description: SourceHandle is the source volume's backend handle,
                         read from its PV.
