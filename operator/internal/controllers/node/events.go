@@ -95,4 +95,10 @@ const (
 	// MaintenanceQueued says a maintenance window is holding for another worker,
 	// which is correct behavior and looks like a stalled controller without it.
 	MaintenanceQueued = "MaintenanceQueued"
+
+	// MaintenanceMarkersLeft is the other one that cannot be retried away. A
+	// window's terminal teardown is best-effort, and a budget it could not
+	// delete leaves the worker undrainable by anything until somebody removes
+	// it, with nothing but this event saying so.
+	MaintenanceMarkersLeft = "MaintenanceMarkersLeft"
 )

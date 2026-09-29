@@ -132,5 +132,12 @@ const (
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 
 	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"
-	LabelSpdkProxyRole  = "simplyblock-storage-node"
+
+	// LabelRole is the key the control plane marks an SPDK pod's part with, and
+	// LabelSpdkProxyRole its value. The pair is how the operator finds a pod it
+	// does not create: the control plane deploys one SPDK pod per backend node,
+	// owned by nothing, named after the node's RPC port, so the role is the only
+	// thing about it that is the same on every worker.
+	LabelRole          = "role"
+	LabelSpdkProxyRole = "simplyblock-storage-node"
 )
