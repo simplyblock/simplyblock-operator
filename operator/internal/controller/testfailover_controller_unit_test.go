@@ -23,14 +23,22 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
+// The handles the drill fixtures resolve to at each step. The source lives on
+// clusterA and the recovery bubble on clusterB, so bubble != source in the sample.
+const (
+	testSourceHandle   = "clusterA:poolA:lvolX"
+	testSnapshotHandle = "clusterB:poolB:snapY"
+	testCloneHandle    = "clusterB:poolB:cloneVol"
+)
+
 // atResolvingPoint returns a drill seeded at ResolvingPoint with its source
-// already resolved to sourceHandle.
-func atResolvingPoint(sourceHandle string) *simplyblockv1alpha2.TestFailover {
+// already resolved to testSourceHandle.
+func atResolvingPoint() *simplyblockv1alpha2.TestFailover {
 	tf := atResolvingSource()
 	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepResolvingPoint)}
 	tf.Status.Clones = []simplyblockv1alpha2.TestFailoverClone{{
 		SourceRef:    tf.Spec.SourceRef,
-		SourceHandle: sourceHandle,
+		SourceHandle: testSourceHandle,
 	}}
 	return tf
 }
@@ -303,7 +311,7 @@ func TestFailoverResolvingSourceUnboundPVCFails(t *testing.T) {
 // path: the recovery point is the latest replicated snapshot already on the
 // target backend, read (never taken), and the drill advances to Cloning.
 func TestFailoverResolvingPointDRTargetUsesReplicatedSnapshot(t *testing.T) {
-	tf := atResolvingPoint("clusterA:poolA:lvolX") // bubble != source in the sample
+	tf := atResolvingPoint()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -345,7 +353,7 @@ func TestFailoverResolvingPointDRTargetUsesReplicatedSnapshot(t *testing.T) {
 // TestFailoverResolvingPointDRTargetNoReplicaFails covers that a target with no
 // replicated point yet is a terminal failure, not an endless hold.
 func TestFailoverResolvingPointDRTargetNoReplicaFails(t *testing.T) {
-	tf := atResolvingPoint("clusterA:poolA:lvolX")
+	tf := atResolvingPoint()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -369,7 +377,7 @@ func TestFailoverResolvingPointDRTargetNoReplicaFails(t *testing.T) {
 // TestFailoverResolvingPointInPlaceTakesFreshSnapshot covers the in-place path:
 // the drill takes a fresh snapshot of the source and advances to Cloning.
 func TestFailoverResolvingPointInPlaceTakesFreshSnapshot(t *testing.T) {
-	tf := atResolvingPoint("clusterA:poolA:lvolX")
+	tf := atResolvingPoint()
 	tf.Spec.BubbleCluster = tf.Spec.SourceCluster // in-place
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
@@ -411,7 +419,7 @@ func TestFailoverResolvingPointInPlaceTakesFreshSnapshot(t *testing.T) {
 // idempotency: an already-present snapshot with the drill's name is reused, and
 // no second snapshot is taken.
 func TestFailoverResolvingPointInPlaceReusesExistingSnapshot(t *testing.T) {
-	tf := atResolvingPoint("clusterA:poolA:lvolX")
+	tf := atResolvingPoint()
 	tf.Spec.BubbleCluster = tf.Spec.SourceCluster
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
@@ -447,7 +455,7 @@ func TestFailoverResolvingPointInPlaceReusesExistingSnapshot(t *testing.T) {
 // TestFailoverResolvingPointInPlacePinnedSnapshot covers a pinned recovery point:
 // it is used directly, nothing is taken, and it is not marked for deletion.
 func TestFailoverResolvingPointInPlacePinnedSnapshot(t *testing.T) {
-	tf := atResolvingPoint("clusterA:poolA:lvolX")
+	tf := atResolvingPoint()
 	tf.Spec.BubbleCluster = tf.Spec.SourceCluster
 	tf.Spec.RecoveryPoint = "pinnedSnap"
 	r, cl := newTestFailoverReconciler(t, tf)
@@ -474,17 +482,17 @@ func TestFailoverResolvingPointInPlacePinnedSnapshot(t *testing.T) {
 }
 
 // atCloning returns a drill seeded at Cloning with its recovery point resolved.
-func atCloning(snapshotHandle string) *simplyblockv1alpha2.TestFailover {
-	tf := atResolvingPoint("clusterA:poolA:lvolX")
+func atCloning() *simplyblockv1alpha2.TestFailover {
+	tf := atResolvingPoint()
 	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepCloning)}
-	tf.Status.Clones[0].SnapshotID = snapshotHandle
+	tf.Status.Clones[0].SnapshotID = testSnapshotHandle
 	return tf
 }
 
 // TestFailoverCloningClonesThenAdvances covers cloning the recovery point into a
 // writable volume and advancing to Placing with the clone handle recorded.
 func TestFailoverCloningClonesThenAdvances(t *testing.T) {
-	tf := atCloning("clusterB:poolB:snapY")
+	tf := atCloning()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -495,7 +503,7 @@ func TestFailoverCloningClonesThenAdvances(t *testing.T) {
 			_, _ = w.Write([]byte("[]"))
 		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/storage-pools/poolB/volumes"):
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "cloneZ", "size": 1073741824})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "cloneVol", "size": 1073741824})
 		default:
 			t.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -513,8 +521,8 @@ func TestFailoverCloningClonesThenAdvances(t *testing.T) {
 	if got.Status.Step.State != string(simplyblockv1alpha2.TestFailoverStepPlacing) {
 		t.Errorf("step = %q, want Placing", got.Status.Step.State)
 	}
-	if got.Status.Clones[0].CloneID != "clusterB:poolB:cloneZ" {
-		t.Errorf("clone handle = %q, want clusterB:poolB:cloneZ", got.Status.Clones[0].CloneID)
+	if got.Status.Clones[0].CloneID != "clusterB:poolB:cloneVol" {
+		t.Errorf("clone handle = %q, want clusterB:poolB:cloneVol", got.Status.Clones[0].CloneID)
 	}
 	if got.Status.Clones[0].SizeBytes != 1073741824 {
 		t.Errorf("clone size = %d, want 1073741824", got.Status.Clones[0].SizeBytes)
@@ -524,7 +532,7 @@ func TestFailoverCloningClonesThenAdvances(t *testing.T) {
 // TestFailoverCloningReusesExistingClone covers ask-then-act idempotency: an
 // existing clone with the drill's name is reused, and no second clone is built.
 func TestFailoverCloningReusesExistingClone(t *testing.T) {
-	tf := atCloning("clusterB:poolB:snapY")
+	tf := atCloning()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 	wantName := testFailoverCloneName(tf)
@@ -559,7 +567,7 @@ func TestFailoverCloningReusesExistingClone(t *testing.T) {
 // TestFailoverCloningRetriesOnServerError covers that a transient control-plane
 // error is retried (error returned, no state advance), not swallowed.
 func TestFailoverCloningRetriesOnServerError(t *testing.T) {
-	tf := atCloning("clusterB:poolB:snapY")
+	tf := atCloning()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -581,10 +589,10 @@ func TestFailoverCloningRetriesOnServerError(t *testing.T) {
 }
 
 // atPlacing returns a drill seeded at Placing with its clone built.
-func atPlacing(cloneHandle string) *simplyblockv1alpha2.TestFailover {
-	tf := atCloning("clusterB:poolB:snapY")
+func atPlacing() *simplyblockv1alpha2.TestFailover {
+	tf := atCloning()
 	tf.Status.Step = statemachine.KubeSnapshot{State: string(simplyblockv1alpha2.TestFailoverStepPlacing)}
-	tf.Status.Clones[0].CloneID = cloneHandle
+	tf.Status.Clones[0].CloneID = testCloneHandle
 	tf.Status.Clones[0].SizeBytes = 1073741824
 	return tf
 }
@@ -619,7 +627,7 @@ func markManifestWorkPVCBound(t *testing.T, cl client.Client, mw *workv1.Manifes
 // ManifestWork carrying the bubble namespace, PV, and PVC is delivered to the
 // recovery cluster, and the drill reaches Ready once the PVC binds.
 func TestFailoverPlacingDeliversManifestWorkThenReady(t *testing.T) {
-	tf := atPlacing("clusterB:poolB:cloneZ")
+	tf := atPlacing()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 	key := testFailoverRequest(tf).NamespacedName
@@ -668,7 +676,7 @@ func TestFailoverPlacingDeliversManifestWorkThenReady(t *testing.T) {
 // TestFailoverPlacingReuseManifestWorkOnRestart covers restart safety: a second
 // reconcile before the PVC binds finds the existing ManifestWork, not a duplicate.
 func TestFailoverPlacingReuseManifestWorkOnRestart(t *testing.T) {
-	tf := atPlacing("clusterB:poolB:cloneZ")
+	tf := atPlacing()
 	r, cl := newTestFailoverReconciler(t, tf)
 	ctx := context.Background()
 
@@ -690,7 +698,7 @@ func TestFailoverPlacingReuseManifestWorkOnRestart(t *testing.T) {
 // deletingReadyDrill returns a Ready drill with a clone and a drill-taken
 // snapshot recorded, being deleted.
 func deletingReadyDrill() *simplyblockv1alpha2.TestFailover {
-	tf := atPlacing("clusterB:poolB:cloneZ")
+	tf := atPlacing()
 	tf.Status.Phase = simplyblockv1alpha2.TestFailoverPhaseReady
 	tf.Status.Clones[0].SnapshotID = "clusterA:poolA:snapS"
 	tf.Status.Clones[0].SnapshotTaken = true
@@ -724,7 +732,7 @@ func TestFailoverTeardownReclaimsThenClearsFinalizer(t *testing.T) {
 	var reclaimedClone, deletedSnapshot bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
-		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/volumes/cloneZ"):
+		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/volumes/cloneVol"):
 			reclaimedClone = true
 			w.WriteHeader(http.StatusNoContent)
 		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "/snapshots/snapS"):
@@ -808,7 +816,7 @@ func TestFailoverTeardownHoldsWhenReclaimFails(t *testing.T) {
 // if the source's projected volume handle differs at Ready, the drill fails
 // rather than reporting a passing, non-disruptive test.
 func TestFailoverPlacingFailsWhenSourceChanged(t *testing.T) {
-	tf := atPlacing("clusterB:poolB:cloneZ") // SourceHandle is clusterA:poolA:lvolX
+	tf := atPlacing() // SourceHandle is clusterA:poolA:lvolX
 	view := srcPVView(tf, "clusterA:poolA:DIFFERENT")
 	mw := &workv1.ManifestWork{ObjectMeta: metav1.ObjectMeta{
 		Name: testFailoverManifestWorkName(tf), Namespace: tf.Spec.BubbleCluster,
@@ -836,7 +844,7 @@ func TestFailoverPlacingFailsWhenSourceChanged(t *testing.T) {
 // TestFailoverPlacingConfirmsInvariantHeld covers the passing guard: an unchanged
 // source projection yields Ready with invariantsHeld true.
 func TestFailoverPlacingConfirmsInvariantHeld(t *testing.T) {
-	tf := atPlacing("clusterB:poolB:cloneZ")
+	tf := atPlacing()
 	view := srcPVView(tf, "clusterA:poolA:lvolX") // same as SourceHandle
 	mw := &workv1.ManifestWork{ObjectMeta: metav1.ObjectMeta{
 		Name: testFailoverManifestWorkName(tf), Namespace: tf.Spec.BubbleCluster,

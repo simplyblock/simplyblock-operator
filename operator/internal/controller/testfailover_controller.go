@@ -251,13 +251,13 @@ func (r *TestFailoverReconciler) resolveSource(ctx context.Context, tf *simplybl
 // the source cluster and returns the projected object once the view controller
 // has fetched it. ready is false while the projection is still pending, which is
 // the reconcile's cue to hold.
-func (r *TestFailoverReconciler) projectedSource(ctx context.Context, tf *simplyblockv1alpha2.TestFailover, suffix, resource, name, namespace string) (obj map[string]interface{}, ready bool, err error) {
+func (r *TestFailoverReconciler) projectedSource(ctx context.Context, tf *simplyblockv1alpha2.TestFailover, suffix, resourceKind, name, namespace string) (obj map[string]interface{}, ready bool, err error) {
 	viewName := testFailoverViewName(tf, suffix)
 	view := &unstructured.Unstructured{}
 	view.SetGroupVersionKind(managedClusterViewGVK)
 	getErr := r.Get(ctx, client.ObjectKey{Namespace: tf.Spec.SourceCluster, Name: viewName}, view)
 	if apierrors.IsNotFound(getErr) {
-		if createErr := r.Create(ctx, newManagedClusterView(tf, viewName, resource, name, namespace)); createErr != nil {
+		if createErr := r.Create(ctx, newManagedClusterView(tf, viewName, resourceKind, name, namespace)); createErr != nil {
 			return nil, false, createErr
 		}
 		return nil, false, nil
@@ -275,8 +275,8 @@ func (r *TestFailoverReconciler) projectedSource(ctx context.Context, tf *simply
 // newManagedClusterView builds a view that asks the source cluster to project one
 // object back to the hub. It lives in the source cluster's namespace on the hub
 // and is labeled with the drill's test-id for teardown enumeration.
-func newManagedClusterView(tf *simplyblockv1alpha2.TestFailover, name, resource, targetName, targetNamespace string) *unstructured.Unstructured {
-	scope := map[string]interface{}{"resource": resource, "name": targetName}
+func newManagedClusterView(tf *simplyblockv1alpha2.TestFailover, name, resourceKind, targetName, targetNamespace string) *unstructured.Unstructured {
+	scope := map[string]interface{}{"resource": resourceKind, "name": targetName}
 	if targetNamespace != "" {
 		scope["namespace"] = targetNamespace
 	}
