@@ -106,7 +106,7 @@ spec:
                   ClusterRef names the StorageCluster the operation runs against.
 
                   Bounded at what a StorageCluster name may be, since a longer value names
-                  nothing that can exist (design-api-upgrade.md §19.4).
+                  nothing that can exist.
                 maxLength: 63
                 type: string
                 x-kubernetes-validations:
@@ -240,9 +240,8 @@ spec:
               step:
                 description: |-
                   Step is the position of the running action's state machine. It is
-                  persisted before the side effect that step performs. The closed set is a
-                  CEL rule rather than an Enum marker because a marker cannot reach a field
-                  whose type is declared in another module.
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-

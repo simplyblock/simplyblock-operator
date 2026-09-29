@@ -296,7 +296,7 @@ spec:
                           description: |-
                             Replicas is the number of management API instances. Two is what the chart
                             ships and what the phases assume: a single instance makes Degraded
-                            unreachable for this component and every restart an outage (§5.1).
+                            unreachable for this component and every restart an outage.
                           format: int32
                           minimum: 1
                           type: integer
@@ -518,10 +518,10 @@ spec:
                   type: string
                 components:
                   description: |-
-                    Components is the per-component readiness the phase is derived from
-                    (§4.3), one entry per workload the managed install applies. It is empty
-                    for a remote control plane, which has no components the operator owns.
-                    Without it a Degraded phase says that something is wrong and not what.
+                    Components is the per-component readiness the phase is derived from, one
+                    entry per workload the managed install applies. It is empty for a remote
+                    control plane, which has no components the operator owns. Without it a
+                    Degraded phase says that something is wrong and not what.
                   items:
                     description: |-
                       ControlPlaneComponentStatus is one workload of a managed control plane and how
@@ -540,9 +540,9 @@ spec:
                       essential:
                         description: |-
                           Essential states whether this component at zero ready makes the control
-                          plane Unavailable rather than Degraded. It is decided by the table in
-                          §4.3 rather than by a user, and it is reported here so that a phase can be
-                          explained without reading the operator's source.
+                          plane Unavailable rather than Degraded. It is decided by the operator
+                          rather than by a user, and it is reported here so that a phase can be
+                          explained.
                         type: boolean
                       name:
                         description: Name is the workload's name, as applied.
@@ -611,7 +611,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
+                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'']'
                 version:
                   description: Version is the version the management API reports.
                   type: string

@@ -29,7 +29,7 @@ import (
 // first two values are the operator's own creation path; the rest are its
 // reading of the lifecycle status.status carries in the control plane's own
 // spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -57,6 +57,15 @@ const (
 	// StorageClusterPhaseOnline: the control plane reports the cluster active
 	// and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// StorageClusterPhaseRebalancing: serving, and moving data between its
+	// nodes or devices. It replaces Online and Degraded for as long as the
+	// control plane reports a rebalance running, because a rebalance is what
+	// makes most operations on the cluster unavailable and the phase is the one
+	// column a watch shows. It never replaces a phase that is not serving.
+	// status.status keeps the control plane's own word beside it, which is how
+	// a rebalance on a degraded cluster is told from one on an active cluster.
+	StorageClusterPhaseRebalancing StorageClusterPhase = "Rebalancing"
 
 	// StorageClusterPhaseDegraded: serving, with less than the redundancy it
 	// was built for.
@@ -135,11 +144,11 @@ type CapacityThresholdSpec struct {
 
 // VaultKMS configures the HashiCorp Vault key store.
 type VaultKMS struct {
-	// BaseURL is the Vault endpoint, for example, https://vault.example.com:8200.
+	// Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
 	// Rejected unless it resolves to an external address.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
-	BaseURL string `json:"baseURL"`
+	Endpoint string `json:"endpoint"`
 }
 
 // KMSSpec selects where the cluster stores volume encryption keys. It is a
@@ -189,8 +198,7 @@ type BackupStoreSpec struct {
 
 // StorageClusterDeviceClass is the class of backend storage a cluster is built
 // out of. The values are the two classes simplyblock accepts, spelled as the
-// standards that name them are, which is the exception design-crd-model.md §7.8
-// carries for a word this group did not invent.
+// standards that name them are.
 // +kubebuilder:validation:Enum=NVMe;LogicalBlock
 type StorageClusterDeviceClass string
 
@@ -262,7 +270,7 @@ const (
 // volumes now are and restores the fault-tolerance and node-affinity guarantees
 // a move invalidated.
 //
-// Whether it runs at all is StorageClusterSpec.EnableDataRealignment, a field
+// Whether it runs at all is StorageClusterSpec.DisableDataRealignment, a field
 // of the spec rather than of this block: a toggle named for its subject repeats
 // itself when the subject is also its parent.
 type DataRealignmentSettings struct {
@@ -439,11 +447,9 @@ type RebalancingMetrics struct {
 // that reaches a terminal outcome leaves status.tasks, and what remains of it
 // is an event.
 //
-// It carries what the control plane's own TaskDTO carries and nothing more.
-// The design's Appendix A also declares a progress figure and a creation date,
-// and that schema has neither, so both are absent rather than declared and
-// never written (design-crd-model.md §7.9). Their absence is what makes the
-// list's order the control plane's own rather than newest first.
+// It carries no progress figure and no creation date, because the control plane
+// reports neither, which is why the list is in the control plane's order rather
+// than newest first.
 type ClusterTask struct {
 	// ID is the control plane's identifier, and it is how a CancelTask
 	// operation names the task. A position in the list is not an identity,
@@ -451,9 +457,8 @@ type ClusterTask struct {
 	// +kubebuilder:validation:Required
 	ID string `json:"id"`
 
-	// Type is what kind of job it is, in the control plane's own spelling for
-	// the reason design-crd-model.md §7.8 gives: the value is the backend's
-	// rather than this group's.
+	// Type is what kind of job it is, in the control plane's own spelling: the
+	// value is the backend's rather than this API's.
 	// +optional
 	Type string `json:"type,omitempty"`
 
@@ -470,6 +475,32 @@ type ClusterTask struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Retry int32 `json:"retry,omitempty"`
+}
+
+// OpenShiftSpec is what a deployment onto OpenShift states beyond what every
+// distribution states.
+//
+// Its presence is the statement. A cluster carrying the block runs on OpenShift
+// and one without it does not, which is why there is no boolean beside it: a
+// block naming a machine-config pool on a cluster that also said it was not
+// OpenShift was expressible before and meant nothing.
+type OpenShiftSpec struct {
+	// MachineConfigPool names a machine-config role the storage nodes' own pool
+	// inherits from, beyond the worker role it always inherits.
+	//
+	// It is not the pool the nodes end up in, which the description it carried
+	// before said and which cost a reader the reboot they were trying to avoid.
+	// Adding a node creates a pool of its own, storage-<cluster>, and moves the
+	// node into it; a node belongs to exactly one custom pool, so whatever
+	// machine configuration its previous pool carried is lost unless that
+	// pool's role is named here for the new one to select as well. The default
+	// is the role every pool already selects, which is what makes it a no-op
+	// for a fleet whose workers are ordinary workers.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:default=worker
+	// +optional
+	MachineConfigPool string `json:"machineConfigPool,omitempty"`
 }
 
 // StorageNodesSpec is the Kubernetes workload every storage node in the cluster
@@ -489,9 +520,14 @@ type StorageNodesSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ImagePullPolicy controls when that image is pulled.
+	// ImagePullPolicy controls when that image is pulled. It defaults to Always
+	// for the reason SimplyblockDriver's does: the images this product ships are
+	// moving tags, so a node brought up after a release that kept IfNotPresent
+	// would run whatever its kubelet already held. The workload builder has
+	// always meant this and falls back to Always for an unset policy, a fallback
+	// the schema default means it never reaches.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
-	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:default=Always
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
@@ -502,6 +538,7 @@ type StorageNodesSpec struct {
 
 	// DataInterfaces are the data-plane network interfaces.
 	// +optional
+	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
@@ -516,8 +553,8 @@ type StorageNodesSpec struct {
 	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
-	// MaxParallelNodeAdds limits how many workers may be in the node-add process
-	// at once, counted by distinct worker rather than by object so that a
+	// NodeProvisioningBudget limits how many workers may be in the node-add
+	// process at once, counted by distinct worker rather than by object so that a
 	// two-socket host consumes one slot. Workers hosting a FoundationDB pod are
 	// always sequential regardless of this value, because a node add reboots the
 	// host and two simultaneous FoundationDB reboots reduce the control plane's
@@ -525,7 +562,7 @@ type StorageNodesSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
-	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
 	// journal manager, instead of carving a journal partition out of every
@@ -539,6 +576,25 @@ type StorageNodesSpec struct {
 	// +optional
 	// +k8s:immutable
 	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
+
+	// EnableBlockFormat wipes the partition tables and filesystem signatures
+	// from this cluster's logical block devices, so that a disk carrying
+	// something already becomes one a storage node can take.
+	//
+	// It is the block class's half of the document's enableDriveFormat, and a
+	// separate field because it is a separate operation on a separate channel:
+	// EnableFormat4K is a reformat the control plane performs at node-add, and
+	// this is a wipefs node_configure.py performs on the worker before the node
+	// is added at all. A block device's block size is fixed by the drive, so
+	// there is no reformat to ask for, and an NVMe controller is handed to SPDK
+	// whole, so there are no signatures to wipe. Neither operation is available
+	// in the other's class.
+	//
+	// Destructive, and immutable for the reason the other is: it describes what
+	// was done to the disks a fleet was built on.
+	// +optional
+	// +k8s:immutable
+	EnableBlockFormat *bool `json:"enableBlockFormat,omitempty"`
 
 	// EnableCpuTopology turns on topology-aware CPU assignment.
 	// +optional
@@ -559,15 +615,10 @@ type StorageNodesSpec struct {
 	// +optional
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
-	// OpenShiftCluster states that the Kubernetes distribution is OpenShift.
+	// OpenShift is what this deployment states because it runs on OpenShift,
+	// and its presence is that statement. See OpenShiftSpec.
 	// +optional
-	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
-
-	// OpenShiftMachineConfigPool names the pool generated MachineConfig objects
-	// are labeled into.
-	// +kubebuilder:default=worker
-	// +optional
-	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
 
 	// Tolerations are applied to the storage-node pods.
 	// +optional
@@ -585,7 +636,7 @@ type StorageNodesSpec struct {
 
 // StorageClusterSpec is the desired state of one simplyblock backend cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.kms) || self.kms == oldSelf.kms",message="kms is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomic4kWrites requires enableChecksumValidation to be true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)",message="enableAtomicity4K requires enableChecksumValidation to be true"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -635,27 +686,38 @@ type StorageClusterSpec struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// ClientDataIfname is the network interface clients reach the data plane
-	// on.
+	// on. It is mutable: the control plane reads it on every connect rather than
+	// once at cluster-add, so an edit moves the next attach onto the named
+	// interface.
 	// +optional
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.
+	//
+	// The default is the control plane's own, which is what it applies to a
+	// cluster that sends none, so the field states the number the cluster
+	// actually runs with rather than leaving a reader to know the backend.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
 	// +optional
 	// +k8s:immutable
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
 
-	// RpcBasePort is the base of the RPC port range every node binds.
+	// RpcBasePort is the base of the RPC port range every node binds. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
 	// +optional
 	// +k8s:immutable
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
 
-	// SnodeApiPort is the port each node's storage-node API listens on.
+	// SnodeApiPort is the port each node's storage-node API listens on. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
 	// +optional
 	// +k8s:immutable
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
@@ -667,8 +729,17 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
-	// EnableNodeAffinity selects affinity-based placement for storage
-	// components.
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// Co-locating a workload with the primary node of its volume is a separate
+	// mechanism and is not configured here.
 	// +optional
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -682,16 +753,30 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
 
-	// EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
-	// write atomicity even with a smaller logical block size, as AWS NVMe does
-	// at 512 bytes, which lets checksum fallback mode run on them despite the
-	// data plane's usual 4K minimum. It means nothing unless
-	// EnableChecksumValidation is set, and it cannot change under a live
-	// cluster.
+	// EnableAtomicity4K enforces 4K write atomicity on devices that report a
+	// smaller logical block size, which lets checksum fallback mode run on them
+	// despite the data plane's usual 4K minimum.
+	//
+	// It is an enforcement rather than a reading, and that is what it is for.
+	// A device may complete a 4K write whole across a power failure and have no
+	// way to say so: a SATA drive presenting 512-byte logical blocks over a 4K
+	// physical sector reports 512 and nothing else, and a kernel older than 6.11
+	// publishes no atomic write attributes at all, so the fleet it runs on
+	// cannot be asked. Where the hardware can answer, the storage node's report
+	// carries what it said; where it cannot, this is how an administrator states
+	// what they know and the cluster proceeds on it.
+	//
+	// Which is why it is the setting that loses data when it is wrong. An
+	// enforced guarantee the hardware does not keep is a torn write under a
+	// checksum that disagrees with it, so it is approved against the devices'
+	// own report where one exists.
+	//
+	// It means nothing unless EnableChecksumValidation is set, and it cannot
+	// change under a live cluster.
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
-	EnableAtomic4kWrites *bool `json:"enableAtomic4kWrites,omitempty"`
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// DeviceClass is the class of backend storage every node in this cluster
 	// hands over: NVMe devices named by PCI address, or logical block devices
@@ -747,14 +832,23 @@ type StorageClusterSpec struct {
 	// +optional
 	Backup *BackupStoreSpec `json:"backup,omitempty"`
 
-	// EnableDataRealignment turns on the post-migration data realignment. It is
-	// a field of the spec rather than of the block it governs, because
-	// volumeMigrationSettings.dataRealignment.enableDataRealignment says the
-	// same word twice. There is no EnableVolumeMigration beside it: migration
+	// DisableDataRealignment turns off the post-migration data realignment,
+	// which runs by default. It is spelled as a disable because the behavior it
+	// governs is on: realignment restores the fault-tolerance and node-affinity
+	// guarantees every volume move invalidates, so a cluster that says nothing
+	// gets them back rather than silently accumulating unaligned structures.
+	// Turning it off is for a cluster migrating continuously, where a run that
+	// blocks migrations for tens of minutes costs more than the delay in
+	// realigning; volumeMigrationSettings.dataRealignment.minMoves is the
+	// gentler answer to the same problem.
+	//
+	// It is a field of the spec rather than of the block it governs, because
+	// volumeMigrationSettings.dataRealignment.disableDataRealignment says the
+	// same word twice. There is no DisableVolumeMigration beside it: migration
 	// cannot be turned off, since a drain, a rebalance, and a device
 	// replacement are all performed by moving volumes.
 	// +optional
-	EnableDataRealignment *bool `json:"enableDataRealignment,omitempty"`
+	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional
@@ -797,9 +891,8 @@ type StorageClusterStatus struct {
 	// +optional
 	Phase StorageClusterPhase `json:"phase,omitempty"`
 
-	// Step is the position of the creation machine, as the shared
-	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-	// marker could reach a field of a shared type.
+	// Step is the position of the creation machine. The value is one of the
+	// steps that machine declares.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Claiming','CheckingControlPlane','ResolvingConfig','Creating','Adopting','Persisting']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
@@ -868,18 +961,16 @@ type StorageClusterStatus struct {
 	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 
 	// Tasks are the control plane's running and pending jobs, capped at twenty
-	// and in the order the control plane reports them: its TaskDTO carries no
-	// creation date, so newest-first is not orderable from what is on the wire
-	// (design-storagecluster.md §12.1). Completed and canceled tasks are not
-	// here: they leave the list and become events, so the length tracks
-	// concurrency rather than history.
+	// and in the order the control plane reports them, which is not newest
+	// first. Completed and canceled tasks are not here: they leave the list and
+	// become events, so the length tracks concurrency rather than history.
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	Tasks []ClusterTask `json:"tasks,omitempty"`
 
 	// ProvisioningSlots are the workers whose node add is outstanding. The list
 	// is the metadata of the Provisioning phase, and it is also the mutex that
-	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+	// caps concurrent adds at spec.storageNodes.nodeProvisioningBudget.
 	//
 	// It is one list on one object because that is what makes taking a slot
 	// atomic. A node takes one with an optimistic-locked patch of this field, so

@@ -71,52 +71,52 @@ function of those three inputs and of nothing else.
 Files: `operator/internal/controllers/node/provisioning_test.go`,
 `slot_race_test.go`, `provisioningslots_test.go`, `resolve_retry_test.go`
 
-| #     | Scenario                                                                             | Type       | Test                                                |
-|-------|--------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
-| U-09  | `enableFailureDomains` set and no fault group declared: provisioning is held         | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
-| U-10  | `enableFailureDomains` set and a fault group present: provisioning proceeds          | Positive   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
-| U-11  | `enableFailureDomains` unset: the fault group is not required                        | Negative   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
-| U-12  | A `failureDomain` label of `0`: a label like any other, not read as unset            | Boundary   | —                                                   |
-| U-13  | Held provisioning emits `FailureDomainMissing` and issues no `POST`                  | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
-| U-14  | The worker's storage-node API answers: the host check passes                         | Positive   | —                                                   |
-| U-15  | The worker's storage-node API is unreachable: held, no `POST`                        | Negative   | —                                                   |
-| U-16  | TLS is enabled and the CA is missing: the host check fails informatively             | Negative   | —                                                   |
-| U-17  | The host check retries until the endpoint answers                                    | Positive   | —                                                   |
-| U-18  | Nothing in flight and one slot free: exactly one of three waiting nodes takes it     | Boundary   | `TestOnlyOneNodeTakesAFreeSlot`                     |
-| U-19  | Siblings past `Posting` without a UUID hold the slot                                 | Positive   | `TestANodeInFlightFillsTheCap`                      |
-| U-20  | The node counts every sibling but itself                                             | Boundary   | —                                                   |
-| U-21  | Two nodes on one worker count as one in-flight worker, not two                       | Boundary   | —                                                   |
-| U-22  | A worker already in flight does not block another worker under the limit             | Positive   | `TestACapOfTwoAdmitsTwo`                            |
-| U-23  | `maxParallelNodeAdds` reached: the node holds at `AwaitingSlot` and issues no `POST` | Negative   | `TestANodeInFlightFillsTheCap`                      |
-| U-24  | Workers hosting a FoundationDB pod are identified                                    | Positive   | —                                                   |
-| U-25  | A FoundationDB worker holds while another FoundationDB worker is in flight           | Negative   | —                                                   |
-| U-26  | A FoundationDB worker holds even when `maxParallelNodeAdds` allows more              | Boundary   | —                                                   |
-| U-27  | A non-FoundationDB worker is not held by a FoundationDB worker in flight             | Negative   | —                                                   |
-| U-267 | The same waiting node wins the slot on every pass, so nobody overtakes it            | Positive   | `TestTheChoiceIsStable`                             |
-| U-391 | Three nodes reconciling against a cache holding only themselves: one slot admits one | Regression | `TestTheCapHoldsWhenNodesCannotSeeEachOther`        |
-| U-392 | The same, with two slots free: two are admitted and the third is not                 | Regression | `TestACapOfTwoHoldsWhenNodesCannotSeeEachOther`     |
-| U-393 | A slot taken against a cluster read the holder has not seen is refused               | Regression | `TestASlotTakenFromAStaleReadIsRefused`             |
-| U-394 | Taking a slot records the worker and the object that took it on the cluster          | Positive   | `TestTakingASlotIsRecordedOnTheCluster`             |
-| U-395 | Re-entering `AwaitingSlot` with a slot held keeps the one entry                      | Boundary   | `TestASlotIsNotTakenTwice`                          |
-| U-396 | A node releases the slot it holds and leaves another node's alone                    | Boundary   | `TestASlotIsReleasedOnlyByItsHolder`                |
-| U-397 | A slot whose `StorageNode` no longer exists is reaped, so the cap reopens            | Regression | `TestASlotWhoseNodeIsGoneIsReaped`                  |
-| U-398 | A slot whose holder already has its UUID is reaped                                   | Regression | `TestASlotWhoseNodeIsFinishedIsReaped`              |
-| U-399 | A worker's second socket takes no second slot and resolves against the first         | Regression | `TestASecondSocketDoesNotTakeASecondSlot`           |
-| U-400 | A backend node appearing while a node queues for a slot is adopted, not re-added     | Regression | `TestANodeWaitingForASlotAdoptsTheNodeThatAppeared` |
-| U-401 | No backend node for the worker: the queue takes its slot as before                   | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
-| U-402 | A slot is held while the control plane still reports the node in_creation            | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
-| U-403 | The slot goes back once the node leaves in_creation                                  | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
-| U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass    | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
-| U-405 | A node stating no journal count leaves ha_jm_count to the control plane              | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
-| U-406 | An unstated count is absent from the request rather than sent as zero                | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
-| U-407 | A stated journal count is sent as it stands                                          | Positive   | `TestAStatedJournalCountIsSent`                     |
-| U-408 | The pass publishes the spdk-proxy endpoints, so the builder has a caller             | Regression | `TestThePassPublishesTheProxyEndpoints`             |
-| U-409 | A worker per-pod name resolves to its address on the right port                      | Regression | `TestTheSPDKProxyNamesArePublished`                 |
-| U-410 | One slice per RPC port                                                               | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
-| U-411 | A pod with no address is left unpublished rather than published with none            | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
-| U-412 | Two workers sharing a first DNS label are refused, not merged                        | Negative   | `TestACollidingWorkerNameIsRefused`                 |
-| U-413 | A pushed control-plane change wakes the node controller                              | Regression | `TestAPushedNodeChangeWakesTheController`           |
-| U-414 | A deployment with no informer is given no stream source                              | Negative   | `TestNoInformerIsNoSource`                          |
+| #     | Scenario                                                                                | Type       | Test                                                |
+|-------|-----------------------------------------------------------------------------------------|------------|-----------------------------------------------------|
+| U-09  | `enableFailureDomains` set and no fault group declared: provisioning is held            | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
+| U-10  | `enableFailureDomains` set and a fault group present: provisioning proceeds             | Positive   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
+| U-11  | `enableFailureDomains` unset: the fault group is not required                           | Negative   | `TestANodeThatDeclaresItsFaultGroupPasses`          |
+| U-12  | A `failureDomain` label of `0`: a label like any other, not read as unset               | Boundary   | —                                                   |
+| U-13  | Held provisioning emits `FailureDomainMissing` and issues no `POST`                     | Negative   | `TestANodeWithNoFaultGroupIsHeldRatherThanRefused`  |
+| U-14  | The worker's storage-node API answers: the host check passes                            | Positive   | —                                                   |
+| U-15  | The worker's storage-node API is unreachable: held, no `POST`                           | Negative   | —                                                   |
+| U-16  | TLS is enabled and the CA is missing: the host check fails informatively                | Negative   | —                                                   |
+| U-17  | The host check retries until the endpoint answers                                       | Positive   | —                                                   |
+| U-18  | Nothing in flight and one slot free: exactly one of three waiting nodes takes it        | Boundary   | `TestOnlyOneNodeTakesAFreeSlot`                     |
+| U-19  | Siblings past `Posting` without a UUID hold the slot                                    | Positive   | `TestANodeInFlightFillsTheCap`                      |
+| U-20  | The node counts every sibling but itself                                                | Boundary   | —                                                   |
+| U-21  | Two nodes on one worker count as one in-flight worker, not two                          | Boundary   | —                                                   |
+| U-22  | A worker already in flight does not block another worker under the limit                | Positive   | `TestACapOfTwoAdmitsTwo`                            |
+| U-23  | `nodeProvisioningBudget` reached: the node holds at `AwaitingSlot` and issues no `POST` | Negative   | `TestANodeInFlightFillsTheCap`                      |
+| U-24  | Workers hosting a FoundationDB pod are identified                                       | Positive   | —                                                   |
+| U-25  | A FoundationDB worker holds while another FoundationDB worker is in flight              | Negative   | —                                                   |
+| U-26  | A FoundationDB worker holds even when `nodeProvisioningBudget` allows more              | Boundary   | —                                                   |
+| U-27  | A non-FoundationDB worker is not held by a FoundationDB worker in flight                | Negative   | —                                                   |
+| U-267 | The same waiting node wins the slot on every pass, so nobody overtakes it               | Positive   | `TestTheChoiceIsStable`                             |
+| U-391 | Three nodes reconciling against a cache holding only themselves: one slot admits one    | Regression | `TestTheCapHoldsWhenNodesCannotSeeEachOther`        |
+| U-392 | The same, with two slots free: two are admitted and the third is not                    | Regression | `TestACapOfTwoHoldsWhenNodesCannotSeeEachOther`     |
+| U-393 | A slot taken against a cluster read the holder has not seen is refused                  | Regression | `TestASlotTakenFromAStaleReadIsRefused`             |
+| U-394 | Taking a slot records the worker and the object that took it on the cluster             | Positive   | `TestTakingASlotIsRecordedOnTheCluster`             |
+| U-395 | Re-entering `AwaitingSlot` with a slot held keeps the one entry                         | Boundary   | `TestASlotIsNotTakenTwice`                          |
+| U-396 | A node releases the slot it holds and leaves another node's alone                       | Boundary   | `TestASlotIsReleasedOnlyByItsHolder`                |
+| U-397 | A slot whose `StorageNode` no longer exists is reaped, so the cap reopens               | Regression | `TestASlotWhoseNodeIsGoneIsReaped`                  |
+| U-398 | A slot whose holder already has its UUID is reaped                                      | Regression | `TestASlotWhoseNodeIsFinishedIsReaped`              |
+| U-399 | A worker's second socket takes no second slot and resolves against the first            | Regression | `TestASecondSocketDoesNotTakeASecondSlot`           |
+| U-400 | A backend node appearing while a node queues for a slot is adopted, not re-added        | Regression | `TestANodeWaitingForASlotAdoptsTheNodeThatAppeared` |
+| U-401 | No backend node for the worker: the queue takes its slot as before                      | Negative   | `TestANodeWithNoBackendNodeStillTakesItsSlot`       |
+| U-402 | A slot is held while the control plane still reports the node in_creation               | Regression | `TestASlotIsHeldUntilTheAddIsFinished`              |
+| U-403 | The slot goes back once the node leaves in_creation                                     | Positive   | `TestTheSlotGoesBackWhenTheNodeLeavesCreation`      |
+| U-404 | Every enrolled worker has a per-node entry, across a node set that grows mid-pass       | Regression | `TestEveryEnrolledWorkerHasAnEntry`                 |
+| U-405 | A node stating no journal count leaves ha_jm_count to the control plane                 | Regression | `TestAnUnstatedJournalCountIsLeftToTheControlPlane` |
+| U-406 | An unstated count is absent from the request rather than sent as zero                   | Boundary   | `TestAnUnstatedJournalCountIsNotOnTheWire`          |
+| U-407 | A stated journal count is sent as it stands                                             | Positive   | `TestAStatedJournalCountIsSent`                     |
+| U-408 | The pass publishes the spdk-proxy endpoints, so the builder has a caller                | Regression | `TestThePassPublishesTheProxyEndpoints`             |
+| U-409 | A worker per-pod name resolves to its address on the right port                         | Regression | `TestTheSPDKProxyNamesArePublished`                 |
+| U-410 | One slice per RPC port                                                                  | Positive   | `TestEachRPCPortGetsItsOwnSlice`                    |
+| U-411 | A pod with no address is left unpublished rather than published with none               | Negative   | `TestAPodWithNoAddressIsNotPublished`               |
+| U-412 | Two workers sharing a first DNS label are refused, not merged                           | Negative   | `TestACollidingWorkerNameIsRefused`                 |
+| U-413 | A pushed control-plane change wakes the node controller                                 | Regression | `TestAPushedNodeChangeWakesTheController`           |
+| U-414 | A deployment with no informer is given no stream source                                 | Negative   | `TestNoInformerIsNoSource`                          |
 
 ### Entity: The Provisioning Claim (design §4.2)
 
@@ -221,29 +221,41 @@ with a UUID always gets its drain, whatever the control plane reports about it.
 
 File: `operator/internal/webhook/storagenode_validator_test.go`
 
-| #     | Scenario                                                                            | Type     | Test                                                |
-|-------|-------------------------------------------------------------------------------------|----------|-----------------------------------------------------|
-| U-60  | A user changing `spec.workerNode`: denied with the migration hint                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-61  | The operator's service account changing `spec.workerNode`: allowed                  | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection         | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`      |
-| U-63  | A create rather than an update: allowed, since there is no old value                | Boundary | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet` |
-| U-64  | A service account in another namespace named like the operator's: denied            | Negative | —                                                   |
-| U-239 | A user changing `spec.config.pcieAllowList`: denied                                 | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed         | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                              | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-242 | The operator re-sizing `spec.config.sizing`: allowed                                | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse` |
-| U-243 | An update touching none of the guarded fields: admitted without inspection          | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`      |
-| U-255 | A `config.deviceNames` entry that is a path on an `NVMe` cluster: denied            | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`           |
-| U-256 | A `config.deviceNames` of PCI addresses on an `NVMe` cluster: admitted              | Positive | `TestDeviceNamesOfTheClusterSClassAreAdmitted`      |
-| U-257 | A `config.deviceNames` entry that is an address on a `LogicalBlock` cluster: denied | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`           |
-| U-258 | A list holding an address and a path: denied whichever class the cluster is         | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`           |
-| U-259 | A bare device name: read as a path and classed as block, not as unknown             | Boundary | `TestDeviceNamesOfTheClusterSClassAreAdmitted`      |
-| U-260 | `config.pcieDenyList` set on a `LogicalBlock` cluster: denied                       | Negative | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster` |
-| U-261 | `config.pcieDenyList` set on an `NVMe` cluster: admitted                            | Positive | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster` |
-| U-286 | A cluster stating no device class is read as `NVMe`                                 | Boundary | `TestAClusterWithNoStatedClassIsNVMe`               |
-| U-287 | A node naming no `StorageCluster`: refused at admission                             | Negative | `TestANodeNamingNoClusterIsRefused`                 |
-| U-305 | A user's node whose sizing differs from the fleet's: refused at create              | Negative | `TestAUserSNodeMustAgreeWithTheFleetSSizing`        |
-| U-306 | The operator's node sized against the fleet mid-roll: admitted                      | Positive | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet` |
+| #     | Scenario                                                                                            | Type     | Test                                                                                                       |
+|-------|-----------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------------------------------|
+| U-60  | A user changing `spec.workerNode`: denied with the migration hint                                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-61  | The operator's service account changing `spec.workerNode`: allowed                                  | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-62  | An update that does not touch `spec.workerNode`: allowed without inspection                         | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-418 | A user changing `spec.socketId` or `spec.nodeIndex`: denied, with the field named                   | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-419 | The operator changing either: allowed, because a relocation moves where a node sits                 | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-420 | `spec.nodeIndex` stated where it was absent: a change, not a zero equal to nothing                  | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-421 | A restart moving a node's ports: the status records the ones it came back on                        | Positive | `TestAPortThatMovedOnARestartIsRecorded`                                                                   |
+| U-422 | A reading carrying no ports: the recorded ones stay, because zero is not a port                     | Negative | `TestAReadingCarryingNoPortsLeavesTheOnesAlreadyRecorded`                                                  |
+| U-423 | The first reading of a node not yet listening: what it carries is recorded, and no port is invented | Boundary | `TestTheFirstReadingRecordsWhateverItCarries`                                                              |
+| U-424 | A user changing any member of `spec.config`: denied, with every member the update touched named     | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`, `TestTheRefusalNamesEveryConfigFieldTheUpdateTouched` |
+| U-425 | The operator changing one: allowed, because the block is its record of the node                     | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-426 | A member added to the block later: guarded without being named anywhere                             | Boundary | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-427 | A user changing a label alone: admitted, because the guard is the spec's and not the object's       | Positive | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-428 | A cluster carrying the OpenShift block: the agent is told the distribution and the pool             | Positive | `TestTheOpenShiftBlockReachesTheAgent`                                                                     |
+| U-429 | A cluster carrying none: the agent is told it is not OpenShift, and no pool is named                | Boundary | `TestNoOpenShiftBlockIsNotOpenShift`                                                                       |
+| U-63  | A create rather than an update: allowed, since there is no old value                                | Boundary | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
+| U-64  | A service account in another namespace named like the operator's: denied                            | Negative | —                                                                                                          |
+| U-239 | A user changing `spec.config.pcieAllowList`: denied                                                 | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-240 | The operator merging `newSsdPcie` into `spec.config.pcieAllowList`: allowed                         | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-241 | A user changing `spec.config.sizing.vcpuCount`: denied                                              | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-242 | The operator re-sizing `spec.config.sizing`: allowed                                                | Positive | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`                                                        |
+| U-243 | An update touching none of the guarded fields: admitted without inspection                          | Negative | `TestAnUpdateTouchingNoGuardedFieldIsAdmitted`                                                             |
+| U-255 | A `config.deviceNames` entry that is a path on an `NVMe` cluster: denied                            | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-256 | A `config.deviceNames` of PCI addresses on an `NVMe` cluster: admitted                              | Positive | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
+| U-257 | A `config.deviceNames` entry that is an address on a `LogicalBlock` cluster: denied                 | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-258 | A list holding an address and a path: denied whichever class the cluster is                         | Negative | `TestDeviceNamesMustBeOfTheClusterSClass`                                                                  |
+| U-259 | A bare device name: read as a path and classed as block, not as unknown                             | Boundary | `TestDeviceNamesOfTheClusterSClassAreAdmitted`                                                             |
+| U-260 | `config.pcieDenyList` set on a `LogicalBlock` cluster: denied                                       | Negative | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
+| U-261 | `config.pcieDenyList` set on an `NVMe` cluster: admitted                                            | Positive | `TestThePCIFiltersAreRefusedOnALogicalBlockCluster`                                                        |
+| U-286 | A cluster stating no device class is read as `NVMe`                                                 | Boundary | `TestAClusterWithNoStatedClassIsNVMe`                                                                      |
+| U-287 | A node naming no `StorageCluster`: refused at admission                                             | Negative | `TestANodeNamingNoClusterIsRefused`                                                                        |
+| U-305 | A user's node whose sizing differs from the fleet's: refused at create                              | Negative | `TestAUserSNodeMustAgreeWithTheFleetSSizing`                                                               |
+| U-306 | The operator's node sized against the fleet mid-roll: admitted                                      | Positive | `TestTheOperatorMayCreateANodeSizedAgainstTheFleet`                                                        |
 
 ### Operation: The Deletion Guard (design §7.4)
 
@@ -275,6 +287,8 @@ File: `operator/api/v1alpha1/storagenode_conversion_test.go`
 | U-302 | A failure-domain index becomes its digits on the way up                         | Positive   | `TestStorageNodeFailureDomainIndexBecomesItsDigits`        |
 | U-303 | The four per-node fields that reach nothing survive the round trip              | Boundary   | `TestStorageNodeDeadPerNodeFieldsSurviveTheRoundTrip`      |
 | U-304 | The sizing block survives the trip down                                         | Positive   | `TestStorageNodeSizingSurvivesTheTripDown`                 |
+| U-305 | `config.spdkImagePullPolicy` survives the trip down, which has no field for it  | Positive   | `TestStorageNodeSpdkPullPolicySurvivesTheTripDown`         |
+| U-306 | `config.spdkProxyImagePullPolicy` survives it separately from its sibling       | Positive   | `TestStorageNodeSpdkProxyPullPolicySurvivesTheTripDown`    |
 
 ### Workload: DaemonSet, Services, and RBAC (design §5.1)
 
@@ -335,6 +349,9 @@ File: `operator/internal/controllers/node/pernodeconfig_test.go`
 | U-92  | A device list containing a shell metacharacter is quoted rather than interpolated          | Negative | —                                                      |
 | U-262 | `VCPU_COUNT` and `MAX_HUGE_PAGES_SIZE` come from the node's own sizing                     | Positive | —                                                      |
 | U-263 | Two nodes mid-roll: their entries differ in those two keys and agree on `MAX_SUBSYS_COUNT` | Boundary | —                                                      |
+| U-415 | A node stating `reservedSystemCPU`: its entry carries `RESERVED_SYSTEM_CPUS`               | Positive | `TestTheReservedCPUsReachTheNodesOwnEntry`             |
+| U-416 | A node stating none: no line is written, so the pod's fleet-wide value decides             | Boundary | `TestANodeWithNoReservedCPUsWritesNoLine`              |
+| U-417 | The agent's container exports that one variable out of the entry it sources, and no other  | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
 | U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                        | Positive | —                                                      |
 | U-245 | A `deviceNames` entry that is a device path reaches the node as one                        | Positive | —                                                      |
 | U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                  | Boundary | —                                                      |
@@ -373,53 +390,64 @@ Files: `operator/internal/controllers/node/rotation_test.go`, `migrate_test.go`,
 Files: `operator/internal/controllers/node/opslock_test.go`, `advance_test.go`,
 `watches_test.go`, `remove_deadlock_test.go`
 
-| #     | Scenario                                                                            | Type     | Test                                                       |
-|-------|-------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
-| U-108 | The lock is free: it is acquired and the phase becomes `Running`                    | Positive | `TestTakingTheLockIsWhatStartsTheOperation`                |
-| U-109 | Another operation holds the lock: this one stays `Pending` and requeues             | Negative | `TestAnOperationWaitsForTheOneHoldingTheNode`              |
-| U-110 | An operation acquiring the lock enters its graph's initial step with a deadline     | Positive | `TestTheFirstPassArmsTheStepAMachineIsBornIn`              |
-| U-111 | Success: the phase is `Succeeded` and the lock is cleared                           | Positive | `TestFinishingWritesTheOutcomeAndLetsTheNodeGo`            |
-| U-112 | Failure: the phase is `Failed` with a message, and the lock is cleared              | Positive | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`        |
-| U-113 | A release by a non-owner: the lock is left alone                                    | Negative | `TestALateReleaseDoesNotUnlockSomebodyElsesNode`           |
-| U-114 | Advancing persists the next step and its deadline before the side effect            | Positive | `TestAFinishedStepEntersTheNextWithItsOwnDeadline`         |
-| U-115 | An unknown action: the operation fails terminally with the reason in the message    | Negative | `TestAStepThatBelongsToNoActionEndsTheOperation`           |
-| U-116 | The target node does not exist: the operation fails with a not-found message        | Negative | `TestAnOperationAgainstAMissingNodeFails`                  |
-| U-117 | A terminal operation re-reconciled: no side effect, and the lock is released again  | Negative | `TestATerminalOperationStillReleasesALockItLeftBehind`     |
-| U-118 | Two reconcilers acquiring one free lock: the loser gets 409 and requeues            | Negative | —                                                          |
-| U-119 | The operation is deleted while `Running`: the finalizer releases the lock           | Positive | `TestDeletingAnOperationUnlocksTheNodeFirst`               |
-| U-120 | Operations on two different nodes run without contending                            | Positive | —                                                          |
-| U-121 | The cluster is not active: the operation holds and emits `ClusterNotReady`          | Negative | —                                                          |
-| U-122 | The cluster is rebalancing: the operation holds rather than proceeding              | Negative | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
-| U-123 | The cluster becomes active: the held operation resumes with no further input        | Positive | —                                                          |
-| U-124 | A node event wakes a queued operation before its requeue interval elapses           | Positive | `TestANodeEventWakesTheOperationsWaitingOnIt`              |
-| U-315 | The holder re-reading its own lock keeps it, since every pass goes through this     | Boundary | `TestTheHolderKeepsItsOwnLock`                             |
-| U-316 | The finalizer is taken on the pass before anything is locked                        | Positive | `TestAnOperationTakesItsFinalizerBeforeItTakesAnything`    |
-| U-317 | A removal runs whatever the cluster says, because removal is how a cluster recovers | Boundary | `TestRemovalDoesNotWaitOnTheCluster`                       |
-| U-318 | Every other action waits on the cluster gate                                        | Negative | `TestEveryOtherActionWaitsOnTheCluster`                    |
-| U-319 | A removal proceeds against a rebalancing cluster rather than holding                | Boundary | `TestARemovalRunsAgainstARebalancingCluster`               |
-| U-320 | `status.observedGeneration` advances, which is how an observed abort is visible     | Positive | `TestTheObservedGenerationMovesWhenTheOperationIsLookedAt` |
-| U-321 | A cluster event wakes its own nodes and nobody else's                               | Positive | `TestAClusterEventWakesItsOwnNodes`                        |
-| U-322 | A worker event wakes the nodes that run on it, which is how a cordon arrives        | Positive | `TestAWorkerEventWakesTheNodesOnIt`                        |
+| #     | Scenario                                                                                                | Type       | Test                                                       |
+|-------|---------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------|
+| U-108 | The lock is free: it is acquired and the phase becomes `Running`                                        | Positive   | `TestTakingTheLockIsWhatStartsTheOperation`                |
+| U-109 | Another operation holds the lock: this one stays `Pending` and requeues                                 | Negative   | `TestAnOperationWaitsForTheOneHoldingTheNode`              |
+| U-110 | An operation acquiring the lock enters its graph's initial step with a deadline                         | Positive   | `TestTheFirstPassArmsTheStepAMachineIsBornIn`              |
+| U-111 | Success: the phase is `Succeeded` and the lock is cleared                                               | Positive   | `TestFinishingWritesTheOutcomeAndLetsTheNodeGo`            |
+| U-112 | Failure: the phase is `Failed` with a message, and the lock is cleared                                  | Positive   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`        |
+| U-113 | A release by a non-owner: the lock is left alone                                                        | Negative   | `TestALateReleaseDoesNotUnlockSomebodyElsesNode`           |
+| U-114 | Advancing persists the next step and its deadline before the side effect                                | Positive   | `TestAFinishedStepEntersTheNextWithItsOwnDeadline`         |
+| U-115 | An unknown action: the operation fails terminally with the reason in the message                        | Negative   | `TestAStepThatBelongsToNoActionEndsTheOperation`           |
+| U-116 | The target node does not exist: the operation fails with a not-found message                            | Negative   | `TestAnOperationAgainstAMissingNodeFails`                  |
+| U-117 | A terminal operation re-reconciled: no side effect, and the lock is released again                      | Negative   | `TestATerminalOperationStillReleasesALockItLeftBehind`     |
+| U-118 | Two reconcilers acquiring one free lock: the loser gets 409 and requeues                                | Negative   | —                                                          |
+| U-119 | The operation is deleted while `Running`: the finalizer releases the lock                               | Positive   | `TestDeletingAnOperationUnlocksTheNodeFirst`               |
+| U-120 | Operations on two different nodes run without contending                                                | Positive   | —                                                          |
+| U-121 | The cluster is not active: the operation holds and emits `ClusterNotReady`                              | Negative   | —                                                          |
+| U-122 | The cluster is rebalancing: the operation holds rather than proceeding                                  | Negative   | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
+| U-123 | The cluster becomes active: the held operation resumes with no further input                            | Positive   | —                                                          |
+| U-124 | A node event wakes a queued operation before its requeue interval elapses                               | Positive   | `TestANodeEventWakesTheOperationsWaitingOnIt`              |
+| U-315 | The holder re-reading its own lock keeps it, since every pass goes through this                         | Boundary   | `TestTheHolderKeepsItsOwnLock`                             |
+| U-316 | The finalizer is taken on the pass before anything is locked                                            | Positive   | `TestAnOperationTakesItsFinalizerBeforeItTakesAnything`    |
+| U-317 | A removal runs whatever the cluster says, because removal is how a cluster recovers                     | Boundary   | `TestRemovalDoesNotWaitOnTheCluster`                       |
+| U-318 | `Migrate` and `HostMaintenance`, the actions that move data, wait on the gate                           | Negative   | `TestTheActionsThatMoveDataWaitOnTheCluster`               |
+| U-319 | A removal proceeds against a rebalancing cluster rather than holding                                    | Boundary   | `TestARemovalRunsAgainstARebalancingCluster`               |
+| U-320 | `status.observedGeneration` advances, which is how an observed abort is visible                         | Positive   | `TestTheObservedGenerationMovesWhenTheOperationIsLookedAt` |
+| U-321 | A cluster event wakes its own nodes and nobody else's                                                   | Positive   | `TestAClusterEventWakesItsOwnNodes`                        |
+| U-322 | A worker event wakes the nodes that run on it, which is how a cordon arrives                            | Positive   | `TestAWorkerEventWakesTheNodesOnIt`                        |
+| U-430 | A held operation stays `Pending` without the node's lock (2026-09-28 shutdown deadlock)                 | Regression | `TestAnOperationHoldsWhileItsClusterIsRebalancing`         |
+| U-431 | A `Shutdown` finishes in the cluster its own shutdown degraded (2026-09-28 deadlock)                    | Regression | `TestAShutdownFinishesInTheClusterItsOwnShutdownDegraded`  |
+| U-432 | A `Restart` is issued into a degraded cluster (2026-09-28 deadlock)                                     | Regression | `TestARestartRunsAgainstADegradedCluster`                  |
+| U-433 | A step's deadline expires while the cluster is not active (2026-09-28 deadlock)                         | Regression | `TestTheDeadlineIsReachableWhileTheClusterIsNotActive`     |
+| U-434 | The four single-step actions run whatever the cluster says (2026-09-28 deadlock)                        | Regression | `TestTheSingleStepActionsDoNotWaitOnTheCluster`            |
+| U-439 | An operation whose lock already names it is admitted, not gated again (2026-09-28, review)              | Regression | `TestAnOperationHoldingItsLockIsAdmittedAlready`           |
+| U-440 | A missing `StorageCluster` object holds the operation at admission with the reason (2026-09-28, review) | Regression | `TestAnOperationHoldsWhenItsClusterObjectIsMissing`        |
 
 ### Operation: The Single-Step Actions (design §7.3)
 
 File: `operator/internal/controllers/node/actions_test.go`
 
-| #     | Scenario                                                                         | Type     | Test                                                     |
-|-------|----------------------------------------------------------------------------------|----------|----------------------------------------------------------|
-| U-125 | `Suspend`: the call is issued, and the step completes when the node is suspended | Positive | `TestACallIsIssuedWhenTheNodeIsNotThereYet`              |
-| U-126 | `Resume`: the step completes when the node is online                             | Positive | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor` |
-| U-127 | `Shutdown`: the step completes when the node is offline                          | Positive | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor` |
-| U-128 | `Restart`: `reattachVolume` and `force` are passed through when set              | Positive | `TestOnlyTheFlagsTheOperationStatesAreSent`              |
-| U-129 | The node is already at the target state: the call is not issued at all           | Negative | `TestACallIsSkippedWhenTheNodeIsAlreadyThere`            |
-| U-130 | The call returns 5xx: the step is retried and the phase does not advance         | Negative | —                                                        |
-| U-131 | The call returns 4xx: the step is retried, and the body reaches the event        | Negative | —                                                        |
-| U-132 | The call is retried after a timeout: the endpoint is called at most once more    | Negative | —                                                        |
-| U-133 | The node never reaches the target state: the step's deadline expires and fails   | Boundary | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`      |
-| U-134 | A late response after the deadline expired: ignored, no second commit            | Negative | —                                                        |
-| U-323 | A restart has no state to skip on, so it is issued against an online node        | Boundary | `TestARestartIsIssuedAgainstAnOnlineNode`                |
-| U-324 | An unstated flag is not sent, since not sending is not the same as sending false | Boundary | `TestOnlyTheFlagsTheOperationStatesAreSent`              |
-| U-325 | An operation against a node with no backend UUID: terminal, not retried          | Negative | `TestAnUnprovisionedNodeEndsTheOperation`                |
+| #         | Scenario                                                                                              | Type       | Test                                                                                            |
+|-----------|-------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------------------------------------------|
+| U-125     | `Suspend`: the call is issued, and the step completes when the node is suspended                      | Positive   | `TestACallIsIssuedWhenTheNodeIsNotThereYet`                                                     |
+| U-126     | `Resume`: the step completes when the node is online                                                  | Positive   | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor`                                        |
+| U-127     | `Shutdown`: the step completes when the node is offline                                               | Positive   | `TestTheWaitIsOverWhenTheNodeReportsWhatTheActionWasFor`                                        |
+| U-128     | `Restart`: `reattachVolume` and `force` are passed through when set                                   | Positive   | `TestOnlyTheFlagsTheOperationStatesAreSent`                                                     |
+| U-129     | The node is already at the target state: the call is not issued at all                                | Negative   | `TestACallIsSkippedWhenTheNodeIsAlreadyThere`                                                   |
+| U-130     | The call returns 5xx: the step is retried and the phase does not advance                              | Negative   | —                                                                                               |
+| U-131     | The call returns 4xx: the step is retried, and the body reaches the event                             | Negative   | —                                                                                               |
+| U-132     | The call is retried after a timeout: the endpoint is called at most once more                         | Negative   | —                                                                                               |
+| U-133     | The node never reaches the target state: the step's deadline expires and fails                        | Boundary   | `TestAStepThatOutlivedItsDeadlineFailsTheOperation`                                             |
+| U-134     | A late response after the deadline expired: ignored, no second commit                                 | Negative   | —                                                                                               |
+| ~~U-323~~ | A restart has no state to skip on, so it is issued against an online node                             | Boundary   | Replaced by U-435: an unforced restart of an online node is a silent no-op in the control plane |
+| U-324     | An unstated flag is not sent, since not sending is not the same as sending false                      | Boundary   | `TestOnlyTheFlagsTheOperationStatesAreSent`                                                     |
+| U-325     | An operation against a node with no backend UUID: terminal, not retried                               | Negative   | `TestAnUnprovisionedNodeEndsTheOperation`                                                       |
+| U-435     | An unforced restart of a node that is not offline is refused terminally, with the reason (2026-09-28) | Regression | `TestARestartOfAnOnlineNodeIsRefusedUnlessForced`                                               |
+| U-436     | A restart is not issued into a node already `in_restart` (2026-09-28)                                 | Regression | `TestARestartIsNotIssuedIntoANodeAlreadyRestarting`                                             |
+| U-437     | A shutdown is not issued into a node already `in_shutdown` (2026-09-28)                               | Regression | `TestAShutdownIsNotIssuedIntoANodeAlreadyShuttingDown`                                          |
+| U-438     | A restart waits for the node to leave online before it waits for it to return (2026-09-28)            | Regression | `TestARestartWaitsForTheNodeToLeaveBeforeItWaitsForItToReturn`                                  |
 
 ### Operation: Volume Classification (design §8.1)
 
@@ -758,7 +786,7 @@ row here changes cluster state, and the destructive ones say so.
 | #    | Scenario                                                                          | Type     | Test |
 |------|-----------------------------------------------------------------------------------|----------|------|
 | E-01 | A node object created: provisioned to `Ready` with a UUID within one cycle        | Positive | —    |
-| E-02 | Five workers with `maxParallelNodeAdds` of 2: at most two are ever in flight      | Boundary | —    |
+| E-02 | Five workers with `nodeProvisioningBudget` of 2: at most two are ever in flight   | Boundary | —    |
 | E-03 | FoundationDB and non-FoundationDB workers together: the former stay sequential    | Positive | —    |
 | E-04 | A two-socket worker: two nodes provisioned, each matched to its own backend node  | Positive | —    |
 | E-05 | A pre-existing backend node with no object: adopted, keeping its UUID and volumes | Positive | —    |
@@ -905,11 +933,11 @@ eviction, the kubelet, and the reboot.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 375       | 270     | 105         |
+| Unit        | 392       | 287     | 105         |
 | Integration | 54        | 0       | 54          |
 | E2E         | 26        | 0       | 26          |
 | Manual      | 5         | 0       | 5           |
-| **Total**   | **460**   | **270** | **190**     |
+| **Total**   | **477**   | **287** | **190**     |
 
 Eight further scenarios are struck through: they describe a system this one no
 longer is, and each names the row that replaced it. They are excluded from the

@@ -74,7 +74,7 @@ func declinedReport(t *testing.T, node string) *corev1.ConfigMap {
 			Available: false, Content: "Foreign",
 			Rejections: []nodeprobe.Rejection{{
 				Reason: string(blockdev.ReasonNotBlank),
-				Detail: "no known signature, and the probed regions are not empty: first non-zero byte at 0",
+				Detail: "no known signature, and the head region is not empty: first non-zero byte at 0",
 			}},
 		})
 	}

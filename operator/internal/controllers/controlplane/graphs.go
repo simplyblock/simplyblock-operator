@@ -28,6 +28,7 @@ type installStep = simplyblockv1alpha2.ControlPlaneStep
 const (
 	stepApplyingFoundationDB = simplyblockv1alpha2.ControlPlaneStepApplyingFoundationDB
 	stepAwaitingFoundationDB = simplyblockv1alpha2.ControlPlaneStepAwaitingFoundationDB
+	stepBuildingIndices      = simplyblockv1alpha2.ControlPlaneStepBuildingIndices
 	stepApplyingDatastore    = simplyblockv1alpha2.ControlPlaneStepApplyingDatastore
 	stepApplyingAPI          = simplyblockv1alpha2.ControlPlaneStepApplyingAPI
 	stepAwaitingAPI          = simplyblockv1alpha2.ControlPlaneStepAwaitingAPI
@@ -60,6 +61,11 @@ const (
 	// more, and a FoundationDB that never reaches quorum is indistinguishable
 	// from one still starting without a bound.
 	awaitingFoundationDBDeadline = 45 * time.Minute
+
+	// buildingIndicesDeadline covers pulling the control plane's image and
+	// walking a database that holds nothing, so what it really bounds is a Job
+	// that cannot be scheduled and a backfill that cannot reach the database.
+	buildingIndicesDeadline = 15 * time.Minute
 
 	applyingDatastoreDeadline = 10 * time.Minute
 	applyingAPIDeadline       = 10 * time.Minute
@@ -114,8 +120,12 @@ func installGraph() statemachine.Config[installStep] {
 				OnEnter: deadline[installStep](applyingFoundationDBDeadline),
 			},
 			stepAwaitingFoundationDB: {
-				To:      []installStep{stepApplyingDatastore},
+				To:      []installStep{stepBuildingIndices},
 				OnEnter: deadline[installStep](awaitingFoundationDBDeadline),
+			},
+			stepBuildingIndices: {
+				To:      []installStep{stepApplyingDatastore},
+				OnEnter: deadline[installStep](buildingIndicesDeadline),
 			},
 			stepApplyingDatastore: {
 				To:      []installStep{stepApplyingAPI},
@@ -137,6 +147,7 @@ func installGraph() statemachine.Config[installStep] {
 var installStepBudgets = map[installStep]time.Duration{
 	stepApplyingFoundationDB: applyingFoundationDBDeadline,
 	stepAwaitingFoundationDB: awaitingFoundationDBDeadline,
+	stepBuildingIndices:      buildingIndicesDeadline,
 	stepApplyingDatastore:    applyingDatastoreDeadline,
 	stepApplyingAPI:          applyingAPIDeadline,
 	stepAwaitingAPI:          awaitingAPIDeadline,

@@ -73,10 +73,8 @@ spec:
               spec.restart.components before Restarting recycles them. An edit in between
               produces an operation that checked one thing and did another.
 
-              The rules are declared here rather than as +k8s:immutable on each field.
-              controller-gen emits that marker's rules in an order that varies between runs
-              once a type carries several, and it freezes a block whole; what has to be
-              frozen is each block's presence together with its contents.
+              What is frozen is each parameter block's presence together with its
+              contents.
             properties:
               abort:
                 description: |-
@@ -133,8 +131,8 @@ spec:
                 properties:
                   components:
                     description: |-
-                      Components names the workloads to recycle, from the table in §4.3. Empty
-                      recycles the whole control plane. Naming only components that table marks
+                      Components names the workloads to recycle. Empty recycles the whole
+                      control plane. Naming only components that status.components reports as
                       non-essential skips the drain, because recycling them interrupts nothing.
                     items:
                       type: string
@@ -216,9 +214,8 @@ spec:
               step:
                 description: |-
                   Step is the position of the running action's state machine. It is
-                  persisted before the side effect that step performs. The rule repeats the
-                  ControlPlaneOpsStep enum because a marker cannot reach a field of the
-                  shared snapshot type.
+                  persisted before the side effect that step performs, so a step reported
+                  here is a step that started.
                 properties:
                   deadline:
                     description: |-

@@ -1,2 +1,3 @@
+hostOS is ubuntu of the Debian family, read from every worker's os-release. It is what ubuntuHost is decided by, and the one distribution that decides it is Ubuntu, whose NVMe-oF modules are in a package the base install does not carry
 the draft grows the existing cluster existing-cluster, so it proposes no cluster layout
 wrote discovered-discover-tmpl-05 in Draft: 3 workers with 12 nvme devices, in 1 group(s) across 1 node set(s); 0 refusal(s)

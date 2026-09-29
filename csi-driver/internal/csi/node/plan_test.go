@@ -9,6 +9,8 @@ package node
 
 import (
 	"testing"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // An encrypted volume is planned as one whose content cannot be read, because
@@ -39,5 +41,26 @@ func TestAVolumeContextWithoutTheFlagIsPlaintext(t *testing.T) {
 	volume := stackVolume("/staging", map[string]string{}, mountCapability())
 	if volume.Encrypted {
 		t.Error("a context with no encryption key was planned as encrypted")
+	}
+}
+
+// The PersistentVolume and the claim the node service was told about travel
+// into the plan's volume, from where the volume-group layer writes them into the
+// group's LVM metadata as informational tags. A context that names neither
+// leaves them empty rather than inventing them.
+func TestStackVolumeCarriesThePVAndClaimNames(t *testing.T) {
+	vc := map[string]string{
+		csicommon.CSIStoragePVNameKey:    "pvc-1234",
+		csicommon.CSIStorageNamespaceKey: "team-a",
+		csicommon.CSIStorageNameKey:      "data",
+	}
+	volume := stackVolume("/staging", vc, mountCapability())
+	if volume.PVName != "pvc-1234" || volume.PVCNamespace != "team-a" || volume.PVCName != "data" {
+		t.Fatalf("volume carries pv=%q pvc=%s/%s, want pvc-1234 and team-a/data",
+			volume.PVName, volume.PVCNamespace, volume.PVCName)
+	}
+	bare := stackVolume("/staging", map[string]string{}, mountCapability())
+	if bare.PVName != "" || bare.PVCNamespace != "" || bare.PVCName != "" {
+		t.Fatalf("a context naming no objects produced pv=%q pvc=%s/%s", bare.PVName, bare.PVCNamespace, bare.PVCName)
 	}
 }

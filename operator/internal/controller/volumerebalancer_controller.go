@@ -210,7 +210,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 
 	// Dry-run: when migration creation is disabled the rebalancer still evaluated load and
 	// emitted deviation metrics above; we log the candidates it *would* migrate but create
-	// no VolumeMigration CRs (e.g. to run workload tests without rebalancer interference).
+	// no VolumeMigration CRs (e.g., to run workload tests without rebalancer interference).
 	if !cfg.MigrationEnabled {
 		for _, mc := range toMigrate {
 			log.Info("migrationEnabled=false; skipping migration (dry-run)",
@@ -526,7 +526,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 }
 
 // movingVolumes names the VolumeMigrations for this cluster that the control plane has
-// accepted and not yet finished, i.e. the ones that may be moving data right now.
+// accepted and not yet finished, i.e., the ones that may be moving data right now.
 //
 // Deliberately keyed on MigrationUUID rather than phase alone. A CR whose submission
 // was refused — which is exactly what happens while a realignment is running, since the
@@ -578,11 +578,11 @@ func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
 // resolveDataRealignmentConfig reports whether post-migration data realignment
 // is enabled for the cluster, and how the requests are spaced.
 //
-// The switch is spec.enableDataRealignment rather than a field of the block it
-// governs, and it is off unless a spec asks for it: every enable-formed field
-// in this group is (design-storagecluster.md §3.1). A cluster that had
-// realignment on under the registered default keeps it, because the conversion
-// writes the field rather than leaving the operator to guess.
+// The switch is spec.disableDataRealignment rather than a field of the block it
+// governs, and it is on unless a spec refuses it: the field is disable-formed
+// because the behavior is on by default (design-storagecluster.md §3.1). A
+// cluster that says nothing realigns, which is what keeps the guarantees a
+// volume move invalidates from being lost by omission.
 //
 // There is no volume-migration switch above it any more. Migration cannot be
 // turned off, so "nothing ever moves" is not a state a cluster can be in.
@@ -591,7 +591,7 @@ func resolveDataRealignmentConfig(
 ) (enabled bool, interval time.Duration, minMoves int64) {
 	interval = defaultDataRealignmentInterval
 	minMoves = defaultDataRealignmentMinMoves
-	if !ptr.BoolFromOrFalse(clusterCR.Spec.EnableDataRealignment) {
+	if ptr.BoolFromOrFalse(clusterCR.Spec.DisableDataRealignment) {
 		return false, interval, minMoves
 	}
 	vms := clusterCR.Spec.VolumeMigrationSettings

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
 )
 
@@ -21,8 +22,9 @@ func newLVMGroup(perDevice map[string]string) (*LVMVolumeGroup, *lvmCommands) {
 	cmds := newLVM()
 	cmds.byDevice = perDevice
 	return NewLVMVolumeGroup(LVMVolumeGroupConfig{
-		VolumeGroup: testVG,
-		Manager:     cmds.manager(),
+		VolumeGroup:   testVG,
+		LogicalVolume: testLV,
+		Manager:       cmds.manager(),
 	}), cmds
 }
 
@@ -291,5 +293,102 @@ func TestLVMVolumeGroupNeverCreatesOnAFailedProbe(t *testing.T) {
 	}
 	if cmds.ran("vgcreate") {
 		t.Fatalf("it ran vgcreate anyway:\n%s", cmds.issued())
+	}
+}
+
+// A group made before ownership tags existed carries none, and it is the
+// driver's all the same. The layer knows it by the one shape nobody makes by
+// accident, a complete stack under our names, and adopts it: the tag goes on
+// before anything else is done to the group, and nothing is created.
+func TestLVMVolumeGroupAdoptsACompleteGroupMadeBeforeTheTag(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.unowned = true
+	cmds.out["lvs:lv_name"] = "  " + testLV + "\n"
+
+	if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	adopted := cmds.indexOfWith("vgchange", "--addtag")
+	activated := cmds.indexOfWith("vgchange", "-ay")
+	if adopted < 0 || activated < 0 || adopted > activated {
+		t.Fatalf("want the group adopted and then activated:\n%s", cmds.issued())
+	}
+	if cmds.ran("vgcreate") {
+		t.Fatalf("adoption created a group over the one it adopted:\n%s", cmds.issued())
+	}
+}
+
+// The same group without our volume in it is not a stack of ours that predates
+// the tag. It is somebody's, whatever its name, and it is refused untouched.
+func TestLVMVolumeGroupRefusesAnUntaggedGroupWithoutItsVolume(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.unowned = true
+	cmds.out["lvs:lv_name"] = "  somebody-elses\n"
+
+	_, err := l.Ensure(context.Background(), belowArtifact())
+	if err == nil {
+		t.Fatalf("an untagged group without our volume was acted on:\n%s", cmds.issued())
+	}
+	for _, forbidden := range []string{"vgcreate", "vgextend", "lvchange"} {
+		if cmds.ran(forbidden) {
+			t.Fatalf("the refusal ran %s:\n%s", forbidden, cmds.issued())
+		}
+	}
+	if cmds.indexOfWith("vgchange", "-ay") >= 0 || cmds.indexOfWith("vgchange", "--addtag") >= 0 {
+		t.Fatalf("the refusal activated or adopted the group:\n%s", cmds.issued())
+	}
+}
+
+// The informational tags are made to match on every bring-up, so a claim that
+// was rebound is reflected the next time the volume is staged, and a group
+// already carrying them is left alone.
+func TestLVMVolumeGroupKeepsItsInformationalTagsCurrent(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	l.cfg.Tags = []string{lvm.InformationalTag("pvc", "ns/claim")}
+	cmds.out["vgs:vg_tags"] = "  " + lvm.OwnerTag + "," + lvm.InformationalTag("pvc", "old/claim") + "\n"
+
+	if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if cmds.indexOfWith("vgchange", lvm.InformationalTag("pvc", "ns/claim")) < 0 {
+		t.Fatalf("the current claim was not written:\n%s", cmds.issued())
+	}
+	if cmds.indexOfWith("vgchange", lvm.InformationalTag("pvc", "old/claim")) < 0 {
+		t.Fatalf("the stale claim was not removed:\n%s", cmds.issued())
+	}
+}
+
+// A refusal is not device loss. Release falls back to unmapping by name when
+// LVM cannot answer, and a group that is not the driver's answers perfectly
+// well: it is refused. Unmapping it anyway would take a volume out from under
+// whoever holds it.
+func TestLVMVolumeGroupReleaseDoesNotUnmapAGroupThatIsNotItsOwn(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	cmds.unowned = true
+
+	err := l.Release(context.Background(), belowMembers(1))
+	if !errors.Is(err, lvm.ErrNotOwned) {
+		t.Fatalf("Release: %v, want ErrNotOwned", err)
+	}
+	if cmds.ran("dmsetup") {
+		t.Fatalf("the force path unmapped a group that is not ours:\n%s", cmds.issued())
+	}
+}
+
+// Our volume beside somebody's is not our stack with a stranger in it, it is a
+// group nobody can vouch for. Adoption tags every volume in the group, so the
+// group has to hold ours and the structural names and nothing else.
+func TestLVMVolumeGroupRefusesToAdoptAGroupHoldingAForeignVolumeBesideItsOwn(t *testing.T) {
+	l, cmds := newLVMGroup(map[string]string{"/dev/nvme0n1": ours()})
+	l.cfg.PreserveLogicalVolumes = []string{"vdopool"}
+	cmds.unowned = true
+	cmds.out["lvs:lv_name"] = "  " + testLV + "\n  vdopool\n  theirs\n"
+
+	_, err := l.Ensure(context.Background(), belowArtifact())
+	if !errors.Is(err, lvm.ErrNotOwned) {
+		t.Fatalf("Ensure: %v, want ErrNotOwned", err)
+	}
+	if cmds.indexOfWith("vgchange", "--addtag") >= 0 || cmds.ran("lvchange") {
+		t.Fatalf("the refusal adopted the group:\n%s", cmds.issued())
 	}
 }

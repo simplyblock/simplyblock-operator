@@ -333,17 +333,16 @@ annotation keyed `storage.simplyblock.io/conversion-<field>` on the way down and
 restores it on the way up, so a `v1alpha1` client that reads and writes an object
 back does not truncate it.
 
-`migrationEnabled` is the one field whose conversion is not a copy. It becomes
-`disableMigration`, which inverts the sense, so a mechanical rename produces the
-wrong behavior and the conversion negates a stated value in both directions while
-leaving an unstated one unstated, since both spellings mean the same thing when
-absent (`design-property-renames.md` §3.4).
+`migrationEnabled` and the realignment's `enabled` are the two fields whose
+conversion is not a copy. They become `disableMigration` and
+`spec.disableDataRealignment`, which invert the sense, so a mechanical rename
+produces the wrong behavior and the conversion negates a stated value in both
+directions while leaving an unstated one unstated, since both spellings mean the
+same thing when absent (`design-property-renames.md` §3.4).
 
-`enableDataRealignment` is the one field whose *default* changes direction, from
-on to off. An object that stated nothing is indistinguishable in the stored shape
-from one that deliberately turned the feature off, so the conversion writes the
-value into an annotation on every trip down and reads that annotation's absence on
-the way up as the mark of a client that only ever spoke `v1alpha1`.
+Neither needs a stash. Each governs behavior that is on by default on both sides,
+and the negative spelling is what keeps an absent field saying so, which leaves
+nothing the stored shape cannot express.
 
 `skipKubeletConfiguration` is not a conversion at all. The toggle left the node
 kinds for `StorageCluster.spec.storageNodes.enableKubeletConfiguration`, which is
@@ -2440,10 +2439,9 @@ is proven red before the fix.
 
 Every field mapping, renamed field, moved field, default value, removed field,
 enum change, type change, nested object, list, map, and nil or empty value.
-`migrationEnabled` gets its own test for the inversion, `enableDataRealignment`
-one for the default that changes direction, each field the hub removed one for the
-stash it round-trips through, and each of the three recased action enums a test
-per value.
+`migrationEnabled` and `disableDataRealignment` each get their own test for the
+inversion, each field the hub removed one for the stash it round-trips through, and
+each of the three recased action enums a test per value.
 
 ### 30.2 Round-Trip Tests
 

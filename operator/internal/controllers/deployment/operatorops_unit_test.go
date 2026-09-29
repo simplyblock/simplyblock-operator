@@ -16,6 +16,7 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -36,6 +37,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -806,5 +808,134 @@ func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
 	if !strings.Contains(got.Status.Message, "ConfigMaps") {
 		t.Errorf("the failure does not say where the reports that did arrive are: %q",
 			got.Status.Message)
+	}
+}
+
+// The draft states the operating system the probes read, so that the reviewer
+// approving it sees what the cluster will be told and the expansion has
+// something to spend on ubuntuHost.
+func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
+	// draftFor reads kube-system's UID to disambiguate the cluster name; a fake
+	// client with no such namespace returns NotFound, so the disambiguator falls
+	// back cleanly and this test still asserts only the host OS.
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{{
+		Name: "worker-01",
+		Report: nodeprobe.Report{Node: "worker-01", HostOS: nodeprobe.HostOS{
+			Distro: "ubuntu", Family: "Debian", Version: "22.04",
+		}},
+	}}}
+
+	config, notes := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+
+	if config.Spec.HostOS == nil {
+		t.Fatalf("the draft states no host OS; the notes are %v", notes)
+	}
+	if config.Spec.HostOS.Distro != simplyblockv1alpha2.DistroUbuntu {
+		t.Errorf("the draft states the distro %q, want %q",
+			config.Spec.HostOS.Distro, simplyblockv1alpha2.DistroUbuntu)
+	}
+	if config.Spec.HostOS.Family != simplyblockv1alpha2.HostOSFamilyDebian {
+		t.Errorf("the draft states the family %q, want %q",
+			config.Spec.HostOS.Family, simplyblockv1alpha2.HostOSFamilyDebian)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "hostOS") }) {
+		t.Errorf("the notes are %v, and none of them explains the host OS", notes)
+	}
+}
+
+// A fleet whose workers run different distributions gets no host OS and a note
+// naming the split, because one document becomes one DaemonSet with one flag.
+func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	worker := func(name, distro string) discoverypkg.Worker {
+		return discoverypkg.Worker{
+			Name:   name,
+			Report: nodeprobe.Report{Node: name, HostOS: nodeprobe.HostOS{Distro: distro}},
+		}
+	}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{
+		worker("worker-01", "ubuntu"),
+		worker("worker-02", "rocky"),
+	}}
+
+	config, notes := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+
+	if config.Spec.HostOS != nil {
+		t.Fatalf("the draft states %+v for a fleet running two distributions", config.Spec.HostOS)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "worker-02") }) {
+		t.Errorf("the notes are %v, and none of them says which worker runs what", notes)
+	}
+}
+
+// storagePlaneTaint is what a fleet that dedicates machines to storage puts on
+// them, and what a probe and a storage node both have to tolerate to land
+// there.
+var storagePlaneTaint = []corev1.Toleration{{
+	Key:      "io.simplyblock.node-type",
+	Operator: corev1.TolerationOpEqual,
+	Value:    "storage-plane",
+	Effect:   corev1.TaintEffectNoSchedule,
+}}
+
+// A probe pod is pinned to its worker rather than scheduled onto it, but a
+// taint still evicts what the scheduler was bypassed for. A run against a
+// tainted fleet that tolerated nothing probed nothing.
+func TestDiscoverProbesTolerateWhatTheRunWasToldTo(t *testing.T) {
+	run := discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint})
+	r := newRunner(t, run, worker("worker-1"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probe
+
+	jobs := r.jobs()
+	if len(jobs) != 1 {
+		t.Fatalf("created %d Jobs for 1 worker", len(jobs))
+	}
+	if !reflect.DeepEqual(jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint) {
+		t.Errorf("the probe tolerates %+v, want %+v",
+			jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint)
+	}
+}
+
+// The taints a run was allowed to probe through are the taints the cluster it
+// drafts has to live with, so the draft states them rather than leaving a
+// reviewer to work out that the DaemonSet will schedule nowhere.
+func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
+
+	config, notes := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+
+	if config.Spec.Cluster == nil {
+		t.Fatalf("the draft describes no cluster; the notes are %v", notes)
+	}
+	if !reflect.DeepEqual(config.Spec.Cluster.Tolerations, storagePlaneTaint) {
+		t.Errorf("the draft tolerates %+v, want %+v", config.Spec.Cluster.Tolerations, storagePlaneTaint)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "tolerations") }) {
+		t.Errorf("the notes are %v, and none of them says where the tolerations came from", notes)
+	}
+}
+
+// A growth document names a cluster that already states what it tolerates, so
+// there is no template to put them on and nothing to restate.
+func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{
+		ClusterRef:  "an-existing-cluster",
+		Tolerations: storagePlaneTaint,
+	}
+
+	config, _ := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+
+	if config.Spec.Cluster != nil {
+		t.Errorf("a growth draft describes a cluster: %+v", config.Spec.Cluster)
 	}
 }

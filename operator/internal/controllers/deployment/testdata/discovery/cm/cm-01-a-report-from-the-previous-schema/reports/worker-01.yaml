@@ -99,6 +99,13 @@ data:
           "transport": "NVMe"
         }
       ],
+      "hostOS": {
+        "architecture": "x86_64",
+        "distro": "ubuntu",
+        "family": "Debian",
+        "prettyName": "Ubuntu 22.04.4 LTS",
+        "version": "22.04"
+      },
       "hugePages": [
         {
           "free": 32,
@@ -163,7 +170,7 @@ data:
       },
       "node": "worker-01",
       "probedAt": "2026-09-18T09:00:00Z",
-      "version": 5
+      "version": 6
     }
 kind: ConfigMap
 metadata:

@@ -240,3 +240,43 @@ func TestTheAllowListAndTheDeviceListAreMerged(t *testing.T) {
 		t.Errorf("the allow list and the device list did not merge:\n%s", entry)
 	}
 }
+
+// The CPUs held back from SPDK are a list of core ids, so they are a fact about
+// one machine: "0,1" on a sixteen-core worker and "0,1" on a ninety-six-core
+// worker are not the same statement. The entry is where a per-node value has
+// somewhere to go.
+func TestTheReservedCPUsReachTheNodesOwnEntry(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{}
+	node := &simplyblockv1alpha2.StorageNode{
+		Spec: simplyblockv1alpha2.StorageNodeSpec{
+			Config: simplyblockv1alpha2.StorageNodeConfig{ReservedSystemCPU: "0-3"},
+		},
+	}
+
+	got := entryOf(renderNodeConfig(cluster, node))
+	if got["RESERVED_SYSTEM_CPUS"] != "0-3" {
+		t.Errorf("RESERVED_SYSTEM_CPUS = %q, want the node's own list", got["RESERVED_SYSTEM_CPUS"])
+	}
+}
+
+// A node that states none writes none, so that the cluster's fleet-wide value,
+// which the pod carries as an environment variable, is what decides. An empty
+// line here would override it with nothing.
+func TestANodeWithNoReservedCPUsWritesNoLine(t *testing.T) {
+	got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}))
+	if _, stated := got["RESERVED_SYSTEM_CPUS"]; stated {
+		t.Errorf("the entry carries RESERVED_SYSTEM_CPUS=%q with nothing stated", got["RESERVED_SYSTEM_CPUS"])
+	}
+}
+
+// entryOf reads a rendered entry into its keys.
+func entryOf(entry string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(entry, "\n") {
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			out[key] = strings.Trim(value, "'")
+		}
+	}
+	return out
+}

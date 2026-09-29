@@ -10,6 +10,9 @@ spec:
   approved: false
   clusterRef: existing-cluster
   environment: K3s
+  hostOS:
+    distro: ubuntu
+    family: Debian
   nodeSets:
   - groups:
     - devices:

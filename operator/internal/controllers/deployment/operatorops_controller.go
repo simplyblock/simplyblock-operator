@@ -463,6 +463,11 @@ func (r *OperatorOpsReconciler) probe(
 ) (bool, error) {
 	log := logf.FromContext(ctx)
 
+	spec := ops.Spec.Discover
+	if spec == nil {
+		spec = &simplyblockv1alpha2.DiscoverSpec{}
+	}
+
 	owner := metav1.NewControllerRef(ops,
 		simplyblockv1alpha2.GroupVersion.WithKind("OperatorOps"))
 
@@ -484,6 +489,11 @@ func (r *OperatorOpsReconciler) probe(
 			Image:              r.ProbeImage,
 			ServiceAccountName: r.probeServiceAccount(),
 			Owner:              owner,
+			// A probe is pinned with spec.nodeName, which bypasses the
+			// scheduler and not the taints: a tainted worker keeps the pod off
+			// or evicts it, so a run against a dedicated storage plane that
+			// tolerates nothing inspects nothing.
+			Tolerations: spec.Tolerations,
 		})
 		if err != nil {
 			return false, refusef(OperationFailed, "a probe Job could not be built: %v", err)
@@ -723,6 +733,16 @@ func (r *OperatorOpsReconciler) draftFor(
 	}
 
 	var notes []string
+
+	// What the probes read of the workers' own operating system, stated only
+	// when they agree: one document becomes one storage-node DaemonSet, which
+	// carries one host OS for every worker it schedules, so a fleet that
+	// disagrees has no answer to state and the note says which worker runs
+	// what.
+	hostOS, hostOSNotes := discoverypkg.HostOSFor(plan)
+	config.Spec.HostOS = hostOS
+	notes = append(notes, hostOSNotes...)
+
 	if spec.ClusterRef != "" {
 		// A growth document: the cluster's layout is settled, and naming a
 		// template beside a reference is what admission refuses.
@@ -747,6 +767,18 @@ func (r *OperatorOpsReconciler) draftFor(
 		template := discoverypkg.ClusterTemplateFor(clusterName, plan)
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
+
+		// The taints this run was allowed to probe through are the taints the
+		// storage nodes have to live with, so the draft states them rather than
+		// leaving a reviewer to discover that the DaemonSet schedules nowhere.
+		if len(spec.Tolerations) > 0 {
+			config.Spec.Cluster.Tolerations = spec.Tolerations
+			notes = append(notes, fmt.Sprintf(
+				"tolerations are the %d this run probed with, because a worker whose taint "+
+					"a probe had to tolerate is one a storage node has to tolerate as well. "+
+					"This is the line to correct if the fleet's taints are not the cluster's",
+				len(spec.Tolerations)))
+		}
 	}
 	return config, notes
 }

@@ -46,7 +46,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;ApplyingDatastore;ApplyingAPI;AwaitingAPI
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI
 type ControlPlaneStep string
 
 const (
@@ -58,6 +58,13 @@ const (
 	// itself available, which is the step that can take the longest and the one
 	// whose deadline matters.
 	ControlPlaneStepAwaitingFoundationDB ControlPlaneStep = "AwaitingFoundationDB"
+	// ControlPlaneStepBuildingIndices runs the control plane's own index
+	// backfill against the database that just became available, and holds until
+	// it reports success. It sits here because the secondary indices belong to
+	// the database rather than to a cluster, and a deployment whose tables are
+	// still empty is the one point where every index is complete the moment it
+	// is declared ready.
+	ControlPlaneStepBuildingIndices ControlPlaneStep = "BuildingIndices"
 	// ControlPlaneStepApplyingDatastore applies the object store the control
 	// plane keeps its long-term data in.
 	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
@@ -192,7 +199,7 @@ type LocalControlPlane struct {
 
 	// Replicas is the number of management API instances. Two is what the chart
 	// ships and what the phases assume: a single instance makes Degraded
-	// unreachable for this component and every restart an outage (§5.1).
+	// unreachable for this component and every restart an outage.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=2
 	// +optional
@@ -288,24 +295,11 @@ type ManagedControlPlane struct {
 
 // ControlPlaneSource selects whether this cluster hosts its control plane or is
 // managed by one elsewhere. Exactly one member is set, which is what makes the
-// two modes siblings rather than two unrelated top-level fields, and which
-// member it is cannot change afterward.
+// two modes siblings rather than two unrelated top-level fields.
 //
-// Both rules are declared here rather than on the field that carries the block,
-// for two separate reasons.
-//
-// The immutability is the interesting one. What is frozen is the choice between
-// the two modes and not the block, because the members have to stay editable:
-// changing spec.source.local.image is an ordinary edit, and it is what a
-// ControlPlaneOps upgrade performs. Spelling it +k8s:immutable on the field
-// would emit self == oldSelf over the whole struct, which freezes the image with
-// it and makes that operation impossible to complete.
-//
-// The placement is the dull one. controller-gen v0.21.0 emits a single field's
-// marker-derived rules and its injected immutability rule into one list in an
-// order that varies between runs, so a field carrying both produces a CRD that
-// differs from itself and a drift check that fails at random. Two rules of the
-// same kind on a type are emitted in source order.
+// Which member it is cannot change afterward, while the members themselves stay
+// editable: changing spec.source.local.image is an ordinary edit, and it is what
+// a ControlPlaneOps upgrade performs.
 // +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
 // +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
@@ -355,9 +349,9 @@ type ControlPlaneComponentStatus struct {
 	Ready int32 `json:"ready"`
 
 	// Essential states whether this component at zero ready makes the control
-	// plane Unavailable rather than Degraded. It is decided by the table in
-	// §4.3 rather than by a user, and it is reported here so that a phase can be
-	// explained without reading the operator's source.
+	// plane Unavailable rather than Degraded. It is decided by the operator
+	// rather than by a user, and it is reported here so that a phase can be
+	// explained.
 	// +optional
 	Essential bool `json:"essential,omitempty"`
 }
@@ -371,7 +365,7 @@ type ControlPlaneStatus struct {
 	// Step is the position of the installation machine within Installing. The
 	// rule repeats the ControlPlaneStep enum because a marker cannot reach a
 	// field of the shared snapshot type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
@@ -390,10 +384,10 @@ type ControlPlaneStatus struct {
 	// +optional
 	LastChecked *metav1.Time `json:"lastChecked,omitempty"`
 
-	// Components is the per-component readiness the phase is derived from
-	// (§4.3), one entry per workload the managed install applies. It is empty
-	// for a remote control plane, which has no components the operator owns.
-	// Without it a Degraded phase says that something is wrong and not what.
+	// Components is the per-component readiness the phase is derived from, one
+	// entry per workload the managed install applies. It is empty for a remote
+	// control plane, which has no components the operator owns. Without it a
+	// Degraded phase says that something is wrong and not what.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

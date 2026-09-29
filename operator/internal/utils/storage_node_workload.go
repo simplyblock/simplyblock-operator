@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/simplyblock/atlas/kube"
@@ -17,8 +18,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// defaultInitContainerResources are applied when the user has not set
-// InitContainerResources on the StorageNodeSet CR.
+// defaultInitContainerResources are applied when the cluster states no
+// initContainerResources. The init containers write one env file and run
+// node_configure.py once, so both are sized for a short, small job.
 var defaultInitContainerResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -30,10 +32,15 @@ var defaultInitContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-// defaultContainerResources are applied when the user has not set
-// ContainerResources on the StorageNodeSet CR. No CPU limit is set because
-// SPDK uses busy-polling and a hard CPU ceiling would degrade storage
-// performance. Memory limits are enforced to allow kubelet eviction.
+// defaultContainerResources are applied when the cluster states no
+// containerResources.
+//
+// They are the node management API's and not SPDK's. The container they size
+// runs node_webapp.py, which answers RPCs and starts the SPDK pod; SPDK itself
+// runs in a pod of its own, with its cores pinned outside this cgroup, so a CPU
+// limit here throttles the agent rather than the data path. Memory is limited
+// so that a leaking agent is evicted rather than taking the worker down with
+// it.
 var defaultContainerResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("200m"),
@@ -85,7 +92,7 @@ func BuildStorageNodeDaemonSet(
 
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, "false")},
-		{Name: "OPENSHIFT_CLUSTER", Value: ptr.StringOrDefault(wl.OpenShiftCluster, "false")},
+		{Name: "OPENSHIFT_CLUSTER", Value: strconv.FormatBool(wl.OpenShift != nil)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
@@ -93,11 +100,12 @@ func BuildStorageNodeDaemonSet(
 		}},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, "false")},
 	}
-	if wl.MaxParallelNodeAdds != nil {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.MaxParallelNodeAdds)})
+	if wl.NodeProvisioningBudget != nil {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
 	}
-	if wl.OpenShiftMachineConfigPool != "" {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShiftMachineConfigPool})
+	if wl.OpenShift != nil && wl.OpenShift.MachineConfigPool != "" {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShift.MachineConfigPool})
 	}
 	if wl.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})
@@ -347,8 +355,17 @@ func BuildStorageNodeDaemonSet(
 							Name:            "s-node-api-container",
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
+							// The entry is sourced and one variable is exported
+							// out of it, because sourcing alone sets a shell
+							// variable and sudo passes the environment. Only
+							// that one: exporting the entry wholesale would put
+							// the device lists and the class flag into the
+							// agent's environment, where nothing asked for them.
+							// An entry that states none leaves the pod's own
+							// RESERVED_SYSTEM_CPUS, which is the fleet's.
 							Command: []string{"sh", "-c",
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
+[ -n "${RESERVED_SYSTEM_CPUS}" ] && export RESERVED_SYSTEM_CPUS
 exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},

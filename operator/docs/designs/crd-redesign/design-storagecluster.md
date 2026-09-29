@@ -140,8 +140,11 @@ cluster's volume encryption keys, and is a block rather than a field, which is
 the last part of this section. `enableFailureDomains` opts the cluster into
 failure-domain mode, where every node must label the fault group it belongs to
 ("rack-b") so the control plane can spread chunks across independent ones
-([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` selects
-affinity-based placement for storage components. `deviceClass` names the one class
+([`design-storagenode.md`](design-storagenode.md) §3.1). `enableNodeAffinity` has the data
+plane serve an erasure-coded volume's I/O from the local node's own devices
+before crossing the network, and is not Kubernetes affinity
+([`design-primary-node-placement.md`](../design-primary-node-placement.md)
+§`EnableNodeAffinity` is unrelated to Tier 1). `deviceClass` names the one class
 of backend storage the cluster is built out of. All nine are enforced immutable, in
 two spellings that mean the same thing (§3.2).
 
@@ -318,13 +321,23 @@ a store swapped for another leaves the first store's backups where they are and 
 representing them. Unsetting the field is the same statement with an empty answer.
 
 **Each policy's on-off switch is a field of the spec, and there are two of them.**
-`spec.enableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
+`spec.disableDataRealignment` and `spec.enableVolumeAutoPlacement` sit beside the blocks
 they govern rather than inside them, because a toggle named for its subject repeats
 itself when the subject is also its parent:
 `spec.volumeAutoPlacement.enableVolumeAutoPlacement` says the same word twice. Only the
 switches move up. Each block keeps its tuning fields, so the grouping §3.1 is built on
 survives and the thing a reader turns on is one field at the top rather than one buried
 in each block.
+
+**The two are spelled differently because their defaults differ**, and
+[`design-crd-model.md`](design-crd-model.md) §7.5 makes the form follow the default.
+Auto-placement is off until a cluster asks for it, so it is `enable`-formed. Realignment
+is on until a cluster refuses it, so it is `disable`-formed: realignment restores the
+fault-tolerance and node-affinity guarantees every volume move invalidates, and a cluster
+that never says the word should get them back rather than accumulate unaligned structures
+it never agreed to. Turning it off is for a cluster that migrates continuously, where a
+run that blocks migrations for tens of minutes costs more than the delay in realigning,
+and `minMoves` below is the gentler answer to that same problem.
 
 **There is no switch for volume migration, because migration cannot be turned off.**
 The registered `volumeMigrationSettings.enabled` implies a cluster that refuses to move
@@ -373,14 +386,29 @@ from wherever the field sits, so this is a Kubernetes-side regrouping only.
 
 ### 3.2 Immutability
 
-Nine spec fields are enforced immutable. Eight of them are optional, and the
+Eleven spec fields are enforced immutable. Ten of them are optional, and the
 enforcement is immutable once set: the field may be filled in later, and from that
 point it can be neither changed nor removed.
 
-| Spelling                                         | Fields                                                                       |
-|--------------------------------------------------|------------------------------------------------------------------------------|
-| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`                  |
-| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort` |
+| Spelling                                         | Fields                                                                                                                   |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `+k8s:immutable` on the field                    | `enableNodeAffinity`, `enableFailureDomains`, `deviceClass`, `storageNodes.mgmtInterface`, `storageNodes.dataInterfaces` |
+| Type-level `+kubebuilder:validation:XValidation` | `fabricType`, `kms`, `stripe`, `nvmfBasePort`, `rpcBasePort`, `snodeApiPort`                                             |
+
+**The two node-facing interface fields are immutable because the control plane
+spends them once.** `storageNodes.mgmtInterface` and `storageNodes.dataInterfaces`
+are the node-add's `interface_name` and `data_nics`, and the control plane resolves
+both into the node's own record at that point. Nothing re-reads the cluster field
+afterward, so an edit reconfigures no node that already joined and leaves the
+object describing a network no node is on.
+[`design-storagenode.md`](design-storagenode.md) §5.1 states the pair against the
+group they live in.
+
+**`clientDataIfname` is not one of them, although it reads like one.** It is a
+client-side knob rather than a node-side one: the control plane keeps it on the
+cluster record and renders it as `--host-iface=` into every `nvme connect` the CSI
+driver runs, for the whole life of the cluster. Editing it is how a fleet is moved
+onto a different client data network, and it takes effect on the next attach.
 
 `+k8s:immutable` generates two rules. controller-gen v0.21.0 emits a field-level
 `self == oldSelf`, and for a field outside `required` a parent-level
@@ -571,7 +599,6 @@ spec:
     credentialsSecretRef:
       name: backup-credentials
 
-  enableDataRealignment: true
   enableVolumeAutoPlacement: true
 
   volumeMigrationSettings:
@@ -710,7 +737,7 @@ response lost after the backend committed.
 
 ```go
 // StorageClusterPhase is where the operator has got to with this cluster.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 // StorageClusterStep is one step of the creation path. There is one graph rather
@@ -724,15 +751,27 @@ control plane's lifecycle afterward.** `Pending` and `Creating` are the operator
 own. Every other value is a reading of the string the control plane reports, and
 the mapping is stated once rather than left to be inferred from a switch:
 
-| Control plane reports                    | Phase          |
-|------------------------------------------|----------------|
-| nothing yet                              | `Pending`      |
-| `in_creation`, `in_expansion`, `unready` | `Provisioning` |
-| `in_activation`                          | `Activating`   |
-| `active`                                 | `Online`       |
-| `degraded`, `read_only`                  | `Degraded`     |
-| `suspended`                              | `Suspended`    |
-| anything else                            | `Unavailable`  |
+| Control plane reports                                 | Phase          |
+|-------------------------------------------------------|----------------|
+| nothing yet                                           | `Pending`      |
+| `in_creation`, `in_expansion`, `unready`              | `Provisioning` |
+| `in_activation`                                       | `Activating`   |
+| `active`                                              | `Online`       |
+| `active`, `degraded`, or `read_only` with a rebalance | `Rebalancing`  |
+| `degraded`, `read_only`                               | `Degraded`     |
+| `suspended`                                           | `Suspended`    |
+| anything else                                         | `Unavailable`  |
+
+**`Rebalancing` is read from the flag, over the serving statuses only.** The
+control plane reports a rebalance as `is_re_balancing` beside the status rather
+than as a status, because a cluster is active and rebalancing, or degraded and
+rebalancing, at once. The phase reads the flag over `active`, `degraded`, and
+`read_only`, since a rebalance is what makes most operations on the cluster
+unavailable and the phase is the one column `kubectl get` shows. It never
+replaces a phase that is not serving: a suspended cluster with a rebalance task
+still queued is suspended first. `status.status` keeps the control plane's own
+word beside it, and `status.rebalancing` the flag, which is how a rebalance on a
+degraded cluster is told from one on an active cluster.
 
 `Provisioning` and `Activating` exist because a cluster being built is not a
 cluster that is broken. Without them `unready` and `in_activation` both read as
@@ -1505,7 +1544,7 @@ has to carry it.
 | No `spec.storageNodes`                                                              | The workload group (Appendix A)                                           | Additive, and required by the `StorageNodeSet` retirement. `design-storagenode.md` §5 specifies it                                                                                                                                                                                                                                                                        |
 | No device class anywhere                                                            | `spec.deviceClass`, defaulted to `NVMe` (§3.1)                            | Additive, and inert for every cluster that exists: `NVMe` is the only class the backend accepted before 26.4, so the default describes the registered fleet and the immutability rule starts holding from the first write                                                                                                                                                 |
 | Six misnamed boolean toggles                                                        | `enableXyz` or `disableXyz` (`design-crd-model.md` §7.5)                  | Spec renames, owned by `design-crd-model.md` §9.6, and §3.1 for the two this kind names                                                                                                                                                                                                                                                                                   |
-| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.enableDataRealignment` (§3.1)                                       | Spec rename and a move up one level, and the `enable` form fixes the default at off                                                                                                                                                                                                                                                                                       |
+| `volumeMigrationSettings.dataRealignment.enabled`                                   | `spec.disableDataRealignment` (§3.1)                                      | Spec rename, a move up one level, and an inversion. The behavior is on by default, and the `disable` form is what keeps an unset field meaning that                                                                                                                                                                                                                       |
 | `volumeAutoPlacement.enabled`                                                       | `spec.enableVolumeAutoPlacement` (§3.1)                                   | The same, and it is the choice `design-crd-model.md` §9.6 deferred to this kind                                                                                                                                                                                                                                                                                           |
 | `volumeMigrationSettings.enabled`                                                   | Removed (§3.1)                                                            | Behavioral. Migration cannot be turned off, because a drain, a rebalance, and a device replacement are performed by moving volumes                                                                                                                                                                                                                                        |
 | `spec.backup`, typed `BackupSpec`                                                   | The same field, typed `BackupStoreSpec` (Appendix A)                      | Type rename. `design-controlplane.md` declares a different `BackupSpec` in the same package, and two cannot coexist                                                                                                                                                                                                                                                       |
@@ -1728,7 +1767,7 @@ against the same conventions it audits the shipped types against.
 // StorageClusterPhase is where the operator has got to with this cluster. The
 // first two values are the operator's own creation path; the rest are its reading
 // of the lifecycle status.status carries in the control plane's own spelling.
-// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Degraded;Unavailable;Suspended
+// +kubebuilder:validation:Enum=Pending;Creating;Provisioning;Activating;Online;Rebalancing;Degraded;Unavailable;Suspended
 type StorageClusterPhase string
 
 const (
@@ -1752,6 +1791,11 @@ const (
 
 	// Online: the control plane reports the cluster active and serving.
 	StorageClusterPhaseOnline StorageClusterPhase = "Online"
+
+	// Rebalancing: serving, and moving data between its nodes or devices. It
+	// replaces Online and Degraded while a rebalance runs, and no phase that
+	// is not serving.
+	StorageClusterPhaseRebalancing StorageClusterPhase = "Rebalancing"
 
 	// Degraded: serving, with less than the redundancy it was built for.
 	StorageClusterPhaseDegraded StorageClusterPhase = "Degraded"
@@ -1925,26 +1969,37 @@ type StorageClusterSpec struct {
 	FabricType string `json:"fabricType,omitempty"`
 
 	// ClientDataIfname is the network interface clients reach the data plane on.
+	// It is mutable: the control plane reads it on every connect rather than once
+	// at cluster-add, so an edit moves the next attach onto the named interface.
 	// +optional
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.
+	//
+	// The default is the control plane's own, which is what it applies to a
+	// cluster that sends none, so the field states the number the cluster
+	// actually runs with rather than leaving a reader to know the backend.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
 	// +optional
 	// +k8s:immutable
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
 
-	// RpcBasePort is the base of the RPC port range every node binds.
+	// RpcBasePort is the base of the RPC port range every node binds. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
 	// +optional
 	// +k8s:immutable
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
 
-	// SnodeApiPort is the port each node's storage-node API listens on.
+	// SnodeApiPort is the port each node's storage-node API listens on. Its
+	// default is the control plane's, as NvmfBasePort's is.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
 	// +optional
 	// +k8s:immutable
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
@@ -1956,7 +2011,18 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 
-	// EnableNodeAffinity selects affinity-based placement for storage components.
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// design-primary-node-placement.md §"EnableNodeAffinity is unrelated to
+	// Tier 1" is the longer account, and the co-location of a workload with its
+	// primary node is the separate mechanism described there.
 	// +optional
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -2010,14 +2076,19 @@ type StorageClusterSpec struct {
 	// +optional
 	StorageNodes *StorageNodesSpec `json:"storageNodes,omitempty"`
 
-	// EnableDataRealignment turns on the post-migration data realignment. It is a
-	// field of the spec rather than of the block it governs, because
-	// volumeMigrationSettings.dataRealignment.enableDataRealignment says the same
-	// word twice (§3.1). There is no EnableVolumeMigration beside it: migration
+	// DisableDataRealignment turns off the post-migration data realignment, which
+	// runs by default. It is spelled as a disable because the behavior it governs
+	// is on: realignment restores the fault-tolerance and node-affinity guarantees
+	// every volume move invalidates, so a cluster that says nothing gets them back
+	// rather than silently accumulating unaligned structures.
+	//
+	// It is a field of the spec rather than of the block it governs, because
+	// volumeMigrationSettings.dataRealignment.disableDataRealignment says the same
+	// word twice (§3.1). There is no DisableVolumeMigration beside it: migration
 	// cannot be turned off, since a drain, a rebalance, and a device replacement
 	// are all performed by moving volumes.
 	// +optional
-	EnableDataRealignment *bool `json:"enableDataRealignment,omitempty"`
+	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional
@@ -2152,7 +2223,7 @@ type StorageClusterStatus struct {
 
 	// ProvisioningSlots are the workers whose node add is outstanding. The list
 	// is the metadata of the Provisioning phase, and it is also the mutex that
-	// caps concurrent adds at spec.storageNodes.maxParallelNodeAdds: taking a
+	// caps concurrent adds at spec.storageNodes.nodeProvisioningBudget: taking a
 	// slot is an optimistic-locked patch of this one field, so exactly one node
 	// wins a given resourceVersion (design-storagenode.md §4.2).
 	// +kubebuilder:validation:MaxItems=64

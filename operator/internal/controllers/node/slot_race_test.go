@@ -55,7 +55,7 @@ func slotCluster(limit int32) *simplyblockv1alpha2.StorageCluster {
 		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "simplyblock"},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
 			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
-				MaxParallelNodeAdds: ptr.To(limit),
+				NodeProvisioningBudget: ptr.To(limit),
 			},
 		},
 	}

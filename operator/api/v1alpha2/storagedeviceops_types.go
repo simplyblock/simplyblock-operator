@@ -28,9 +28,9 @@ import (
 
 // StorageDeviceOpsAction is the operation a StorageDeviceOps performs.
 //
-// There is no Add: a device that appears is discovered (§5.1). There is no bare
-// Remove either: a removal is a step of Replace and of Migrate, and taking a
-// device out of the data path without replacing it is Fail (§6.4).
+// There is no Add: a device that appears is discovered. There is no bare Remove
+// either: a removal is a step of Replace and of Migrate, and taking a device out
+// of the data path without replacing it is Fail.
 // +kubebuilder:validation:Enum=Restart
 type StorageDeviceOpsAction string
 
@@ -39,7 +39,7 @@ const (
 	// recycling one device rather than its node.
 	StorageDeviceOpsActionRestart StorageDeviceOpsAction = "Restart"
 
-	// TODO(storagedeviceops): EXTERNAL DEPENDENCY — the four actions below wait
+	// TODO(storagedeviceops): EXTERNAL DEPENDENCY. The four actions below wait
 	// on control-plane verbs the v2 API does not offer. It serves restart,
 	// remove, and reset where design-storagedevice.md §7 asks for seven, and
 	// remove buys no action on its own: it is a step of Replace and of Migrate,
@@ -53,7 +53,7 @@ const (
 	//	          so the cluster rebuilds its redundancy elsewhere and stops
 	//	          reading from a device somebody has judged untrustworthy.
 	//	Replace   POST .../devices/adopt
-	//	          names the device that arrived; the removal verb exists and the
+	//	          names the device that arrived. The removal verb exists, and the
 	//	          pairing is what makes the arrival identifiable.
 	//	Migrate   POST .../devices/{d}/detach, and the adopt above accepting a
 	//	          device WITH ITS CONTENTS. An adopt that can only take an empty
@@ -61,10 +61,10 @@ const (
 	//	          which is what §6.2 gives as the action's reason to exist. This
 	//	          is the row whose absence removes an action rather than
 	//	          degrading it.
-	//
-	// The constants are declared and absent from the Enum marker above, so the
-	// names exist where the reason does while an object naming one is refused at
-	// admission rather than accepted and failed.
+
+	// These four actions are declared but not accepted: the control plane has no
+	// verb for them yet, so an object naming one is refused at admission rather
+	// than created and failed.
 	StorageDeviceOpsActionSelfTest StorageDeviceOpsAction = "SelfTest"
 	StorageDeviceOpsActionFail     StorageDeviceOpsAction = "Fail"
 	StorageDeviceOpsActionReplace  StorageDeviceOpsAction = "Replace"
@@ -89,8 +89,7 @@ const (
 //
 // It carries the two steps Restart has. The eight the other four actions need
 // arrive with those actions, because a step no graph declares is a status value
-// nothing can resume from and a CEL rule that admits one is a rule that admits
-// nonsense.
+// nothing can resume from.
 // +kubebuilder:validation:Enum=Requesting;Awaiting
 type StorageDeviceOpsStep string
 

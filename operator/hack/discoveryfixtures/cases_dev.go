@@ -82,7 +82,7 @@ func devCases() map[string]Case {
 			))},
 		},
 		"DEV-05": {
-			Family: "dev", Slug: "mixed-classes-on-a-block-run", Gap: "G-1",
+			Family: "dev", Slug: "nvme-and-virtio-on-a-block-run", Gap: "G-1",
 			Discover: blockClass(),
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(
 				nvme("nvme0n1", "0000:5e:00.0", 0, 3*tb),

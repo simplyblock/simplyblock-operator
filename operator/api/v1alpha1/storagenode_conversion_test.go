@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -250,5 +251,69 @@ func TestStorageNodeSizingSurvivesTheTripDown(t *testing.T) {
 
 	if diff := cmp.Diff(hub.Spec.Config.Sizing, back.Spec.Config.Sizing); diff != "" {
 		t.Errorf("the sizing did not survive (-want +got):\n%s", diff)
+	}
+}
+
+// SpdkImagePullPolicy is a hub field this version has no home for: the v1alpha1
+// overrides block names the SPDK image and says nothing about when it is pulled.
+// A node whose document set it, read once at v1alpha1 and written back, has to
+// still say Never, or the next read of it silently pulls.
+func TestStorageNodeSpdkPullPolicySurvivesTheTripDown(t *testing.T) {
+	hub := &v1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeSpec{
+			ClusterRef: testCluster,
+			WorkerNode: "worker-3",
+			Config: v1alpha2.StorageNodeConfig{
+				SpdkImage:           "public.ecr.aws/simply-block/ultra:main-latest",
+				SpdkImagePullPolicy: corev1.PullNever,
+			},
+		},
+	}
+
+	var stored StorageNode
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNode
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub.Spec.Config, back.Spec.Config); diff != "" {
+		t.Errorf("the config did not survive (-want +got):\n%s", diff)
+	}
+}
+
+// SpdkProxyImagePullPolicy is the second of the pair, and it stashes separately
+// rather than with its sibling: a node may pin the proxy and follow the SPDK
+// image, so a note that carried both under one key would report the two as one
+// decision.
+func TestStorageNodeSpdkProxyPullPolicySurvivesTheTripDown(t *testing.T) {
+	hub := &v1alpha2.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: v1alpha2.StorageNodeSpec{
+			ClusterRef: testCluster,
+			WorkerNode: "worker-3",
+			Config: v1alpha2.StorageNodeConfig{
+				SpdkImage:                "public.ecr.aws/simply-block/ultra:main-latest",
+				SpdkImagePullPolicy:      corev1.PullAlways,
+				SpdkProxyImage:           "public.ecr.aws/simply-block/simplyblock:main",
+				SpdkProxyImagePullPolicy: corev1.PullIfNotPresent,
+			},
+		},
+	}
+
+	var stored StorageNode
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageNode
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+
+	if diff := cmp.Diff(hub.Spec.Config, back.Spec.Config); diff != "" {
+		t.Errorf("the config did not survive (-want +got):\n%s", diff)
 	}
 }

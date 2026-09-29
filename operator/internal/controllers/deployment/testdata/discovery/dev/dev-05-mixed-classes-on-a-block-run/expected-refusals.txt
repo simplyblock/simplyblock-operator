@@ -1,2 +1,0 @@
-worker-01/nvme0n1: declined by device class because this run scans logical block devices and the device is on NVMe
-worker-01/nvme1n1: declined by device class because this run scans logical block devices and the device is on NVMe

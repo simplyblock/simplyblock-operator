@@ -37,7 +37,21 @@ func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadabl
 		Interfaces:      interfacesOf(inv.Interfaces),
 		Devices:         devicesOf(inv.Devices),
 		NVMeControllers: controllersOf(inv.NVMeControllers),
+		HostOS:          hostOSOf(inv.HostOS),
 		Unreadable:      sentences(unreadable),
+	}
+}
+
+// hostOSOf renders the OS reading, which is five strings and no judgment:
+// whether a distribution is supported is the operator's question and not the
+// probe's.
+func hostOSOf(os inventory.HostOS) HostOS {
+	return HostOS{
+		Distro:       string(os.Distro),
+		Family:       string(os.Family),
+		Version:      os.Version,
+		PrettyName:   os.PrettyName,
+		Architecture: os.Architecture,
 	}
 }
 
@@ -120,20 +134,23 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	out := make([]Device, 0, len(candidates))
 	for _, c := range candidates {
 		device := Device{
-			Name:         c.Name,
-			Path:         c.Path,
-			PCIAddress:   c.PCIAddress,
-			SizeBytes:    c.SizeBytes,
-			Kind:         string(c.Kind),
-			Transport:    string(c.Transport),
-			Vendor:       c.Vendor,
-			Model:        c.Model,
-			Serial:       c.Serial,
-			Rotational:   c.Rotational,
-			NUMANode:     c.NUMANode,
-			SubsystemNQN: c.SubsystemNQN,
-			Available:    c.Available(),
-			ContentType:  c.Reading.Type,
+			Name:       c.Name,
+			Path:       c.Path,
+			PCIAddress: c.PCIAddress,
+			SizeBytes:  c.SizeBytes,
+			Kind:       string(c.Kind),
+			Transport:  string(c.Transport),
+			Vendor:     c.Vendor,
+			Model:      c.Model,
+			Serial:     c.Serial,
+			Rotational: c.Rotational,
+			// Carried as the scan read them, nil included: see Device.
+			AtomicWriteUnitMaxBytes: c.AtomicWriteUnitMaxBytes,
+			AtomicWriteUnitMinBytes: c.AtomicWriteUnitMinBytes,
+			NUMANode:                c.NUMANode,
+			SubsystemNQN:            c.SubsystemNQN,
+			Available:               c.Available(),
+			ContentType:             c.Reading.Type,
 		}
 		// A device refused before anything was opened carries ContentUnknown,
 		// and the report leaves the field empty rather than writing "Unknown":
@@ -191,12 +208,23 @@ func sentences(err error) []string {
 // Summary is the one line the probe logs when it is done, so that a
 // kubectl logs of a finished Job says what it found without anybody parsing
 // JSON.
+// orUnknown is what a summary prints for a reading that was not taken, so that
+// a line with a blank in it says which blank it is.
+func orUnknown(value, unknown string) string {
+	if value == "" {
+		return unknown
+	}
+	return value
+}
+
 func Summary(report Report) string {
 	return fmt.Sprintf(
-		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
+		"node %s: %s on %s, %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
 			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers bound to a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
+		orUnknown(report.HostOS.PrettyName, "an unknown OS"),
+		orUnknown(report.HostOS.Architecture, "an unknown architecture"),
 		len(report.AvailableDevices()), len(report.Devices),
 		report.CPU.OnlineCPUs, report.CPU.PhysicalCores, report.CPU.HyperThreading,
 		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,

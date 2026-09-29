@@ -46,6 +46,17 @@ const (
 	hostSysfsMount = "/host/sys"
 	hostProcMount  = "/host/proc"
 
+	// HostRootMount is where the host's root filesystem is presented, and what
+	// the OS reading takes its os-release from.
+	//
+	// It is assembled from the two directories os-release may live in rather
+	// than being a mount of / itself. The probe needs one file, and a read-only
+	// mount of the host's whole root filesystem would hand a pod every secret
+	// and key on the node to read the name of a distribution. The two are
+	// mounted under one root because /etc/os-release is ordinarily a relative
+	// symlink into /usr/lib, and a mount of /etc alone would leave it dangling.
+	HostRootMount = "/host/root"
+
 	// hostDevMount is /dev and not /host/dev, because a device path is what the
 	// report carries and a reviewer approves: a report naming
 	// /host/dev/nvme0n1 would name a path that exists on no host.
@@ -185,6 +196,8 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 						hostPathVolume("host-sys", "/sys"),
 						hostPathVolume("host-proc", "/proc"),
 						hostPathVolume("host-dev", "/dev"),
+						hostPathVolume("host-etc", "/etc"),
+						hostPathVolume("host-usr-lib", "/usr/lib"),
 					},
 					Containers: []corev1.Container{{
 						Name:            ContainerName,
@@ -198,6 +211,7 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							"--sysfs-root=" + hostSysfsMount,
 							"--proc-root=" + hostProcMount,
 							"--dev-root=" + hostDevMount,
+							"--host-root=" + HostRootMount,
 							"--mountinfo=" + HostMountinfoPath,
 						},
 						Env: append([]corev1.EnvVar{
@@ -223,6 +237,10 @@ func Job(opts JobOptions) (*batchv1.Job, error) {
 							// to be writable even though the device is opened
 							// for reading.
 							{Name: "host-dev", MountPath: hostDevMount},
+							// The host's os-release, in the two places it may
+							// be, under the root the probe is given.
+							{Name: "host-etc", MountPath: HostRootMount + "/etc", ReadOnly: true},
+							{Name: "host-usr-lib", MountPath: HostRootMount + "/usr/lib", ReadOnly: true},
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{

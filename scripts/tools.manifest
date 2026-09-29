@@ -82,3 +82,11 @@ clusteradm.version = v1.3.1
 clusteradm.kind    = tar.gz
 clusteradm.url     = https://github.com/open-cluster-management-io/clusteradm/releases/download/{version}/clusteradm_{os}_{arch}.tar.gz
 clusteradm.inner   = clusteradm
+
+# opm renders and validates the file-based catalog that a CatalogSource serves.
+# Only operator/hack/test-catalog.sh uses it, to put a test build of the operator
+# in front of OLM on an OpenShift cluster.
+opm.backend = binary
+opm.version = v1.74.0
+opm.kind    = raw
+opm.url     = https://github.com/operator-framework/operator-registry/releases/download/{version}/{os}-{arch}-opm

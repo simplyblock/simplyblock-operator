@@ -20,7 +20,7 @@ func TestManager_CreatePhysicalVolume(t *testing.T) {
 		t.Errorf("CreatePhysicalVolume() = %v, want DevicePath /dev/nvme0n1", pv)
 	}
 	want := []string{"pvcreate", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -48,8 +48,8 @@ func TestManager_CreateVolumeGroup(t *testing.T) {
 		if vg.Name != "vg1" {
 			t.Errorf("CreateVolumeGroup() = %v, want Name vg1", vg)
 		}
-		want := []string{"vgcreate", "--devices", "/dev/nvme0n1", "vg1", "/dev/nvme0n1"}
-		if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+		want := []string{"vgcreate", "--devices", "/dev/nvme0n1", "--addtag", OwnerTag, "vg1", "/dev/nvme0n1"}
+		if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 			t.Errorf("recorded call = %v, want %v", fake.calls, want)
 		}
 	})
@@ -62,9 +62,9 @@ func TestManager_CreateVolumeGroup(t *testing.T) {
 			t.Fatalf("CreateVolumeGroup: %v", err)
 		}
 		want := []string{
-			"vgcreate", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "vg1", "/dev/nvme0n1", "/dev/nvme1n1",
+			"vgcreate", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--addtag", OwnerTag, "vg1", "/dev/nvme0n1", "/dev/nvme1n1",
 		}
-		if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+		if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 			t.Errorf("recorded call = %v, want %v", fake.calls, want)
 		}
 	})
@@ -77,7 +77,7 @@ func TestManager_ActivateVolumeGroup(t *testing.T) {
 		t.Fatalf("ActivateVolumeGroup: %v", err)
 	}
 	want := []string{"vgchange", "-ay", "vg1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -89,7 +89,7 @@ func TestManager_DeactivateVolumeGroup(t *testing.T) {
 		t.Fatalf("DeactivateVolumeGroup: %v", err)
 	}
 	want := []string{"vgchange", "-an", "vg1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -113,7 +113,7 @@ func TestManager_RemoveVolumeGroup(t *testing.T) {
 		t.Fatalf("RemoveVolumeGroup: %v", err)
 	}
 	want := []string{"vgremove", "-f", "vg1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -196,8 +196,8 @@ func TestManager_CreateLogicalVolume_DispatchesByHandles(t *testing.T) {
 	if want := (LogicalVolume{VolumeGroup: vg, Name: "lv1"}); lv != want {
 		t.Errorf("CreateLogicalVolume() = %v, want %v", lv, want)
 	}
-	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes", "--fake-flag"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes", "--addtag", OwnerTag, "--fake-flag"}
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -215,8 +215,8 @@ func TestManager_CreateLogicalVolume_NoHandlerMatchesContributesNothing(t *testi
 	if _, err := mgr.CreateLogicalVolume(context.Background(), vg, "pv1", "lv1", LogicalVolumeDefinition{}); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
-	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes", "--addtag", OwnerTag}
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -229,7 +229,7 @@ func TestManager_RemovePhysicalVolume(t *testing.T) {
 		t.Fatalf("RemovePhysicalVolume: %v", err)
 	}
 	want := []string{"pvremove", "--devices", "/dev/nvme0n1", "--yes", "/dev/nvme0n1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -301,7 +301,7 @@ func TestManager_RemoveLogicalVolume(t *testing.T) {
 		t.Fatalf("RemoveLogicalVolume: %v", err)
 	}
 	want := []string{"lvremove", "--yes", "vg1/lv1"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -409,8 +409,8 @@ func TestManager_CreateLogicalVolume_NoPoolTargetsTheVolumeGroup(t *testing.T) {
 	if _, err := mgr.CreateLogicalVolume(context.Background(), vg, "", "lv1", LogicalVolumeDefinition{}); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
-	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1", "--yes"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1", "--yes", "--addtag", OwnerTag}
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -428,8 +428,8 @@ func TestManager_CreateLogicalVolume_Striped(t *testing.T) {
 	if _, err := mgr.CreateLogicalVolume(context.Background(), vg, "", "lv1", def); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
-	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "-i", "4", "-I", "64k", "vg1", "--yes"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "-i", "4", "-I", "64k", "vg1", "--yes", "--addtag", OwnerTag}
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }
@@ -468,8 +468,8 @@ func TestManager_CreateLogicalVolume_StripesWithoutAChunkSize(t *testing.T) {
 		context.Background(), vg, "", "lv1", LogicalVolumeDefinition{Stripes: 4}); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
-	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "-i", "4", "vg1", "--yes"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "-i", "4", "vg1", "--yes", "--addtag", OwnerTag}
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

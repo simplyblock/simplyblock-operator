@@ -134,7 +134,7 @@ func TestManager_Rescan(t *testing.T) {
 		t.Fatalf("Rescan: %v", err)
 	}
 	want := []string{"pvscan", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--cache"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

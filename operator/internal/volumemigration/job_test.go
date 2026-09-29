@@ -133,3 +133,66 @@ func TestBuildJobWithoutAnOwnerCarriesNoReference(t *testing.T) {
 		t.Errorf("owner references = %v, want none", job.OwnerReferences)
 	}
 }
+
+// clusterTolerating builds a StorageCluster whose storage nodes tolerate one
+// taint, which is what a fleet with a dedicated storage plane looks like.
+func clusterTolerating(tolerations []corev1.Toleration) *simplyblockv1alpha2.StorageCluster {
+	cluster := clusterReporting(nil)
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{Tolerations: tolerations}
+	return cluster
+}
+
+func TestJobPlacementCarriesTheClustersTolerations(t *testing.T) {
+	// A validation Job is pinned to the node whose paths it checks. On a
+	// hyperconverged fleet that node is a tainted storage worker, and a Job
+	// tolerating nothing stays Pending until its deadline kills it, which
+	// leaves the migration's paths connected and nothing to disconnect them.
+	scheme := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	tolerations := []corev1.Toleration{{
+		Key:      "io.simplyblock.node-type",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "storage-plane",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(clusterTolerating(tolerations)).Build()
+
+	placement, err := JobPlacementOf(context.Background(), c, testNamespace, testClusterUUID)
+	if err != nil {
+		t.Fatalf("read the placement: %v", err)
+	}
+	if len(placement.Tolerations) != 1 || placement.Tolerations[0].Key != "io.simplyblock.node-type" {
+		t.Errorf("the placement tolerates %+v, want the cluster's taint", placement.Tolerations)
+	}
+	if placement.Image != JobImageDefault {
+		t.Errorf("the placement runs %q, want the default image", placement.Image)
+	}
+
+	job := BuildJob(JobParams{
+		Name: "check", Namespace: testNamespace, Hostname: "worker-1",
+		Image: placement.Image, Tolerations: placement.Tolerations,
+	})
+	if len(job.Spec.Template.Spec.Tolerations) != 1 {
+		t.Errorf("the Job tolerates %+v, want the cluster's taint",
+			job.Spec.Template.Spec.Tolerations)
+	}
+}
+
+func TestJobPlacementOfAClusterThatTakesNoTaint(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(clusterReporting(nil)).Build()
+
+	placement, err := JobPlacementOf(context.Background(), c, testNamespace, testClusterUUID)
+	if err != nil {
+		t.Fatalf("read the placement: %v", err)
+	}
+	if len(placement.Tolerations) != 0 {
+		t.Errorf("the placement tolerates %+v with nothing stated", placement.Tolerations)
+	}
+}

@@ -98,6 +98,40 @@ spec:
                     description: Cluster is the StorageCluster to create. Ignored
                       when ClusterRef is set.
                     properties:
+                      enableAtomicity4K:
+                        description: |-
+                          EnableAtomicity4K enforces 4K write atomicity on every device this
+                          deployment names, which is what lets checksum validation run on devices
+                          whose logical block size is under the data plane's 4K minimum.
+
+                          It is the route to checked I/O on a device that cannot be reformatted: a
+                          logical block device's block size is fixed by the drive, and some NVMe
+                          devices offer no 4K format either. Where a device can be reformatted,
+                          EnableDriveFormat is the other route and this is unnecessary.
+
+                          It is an enforcement because the question is often unanswerable. A SATA
+                          drive presenting 512-byte logical blocks over a 4K physical sector reports
+                          512 and nothing more, and a kernel older than 6.11 publishes no atomic
+                          write attributes at all. Where a device does answer, the storage node's
+                          report carries it, and a reviewer approves this against that rather than
+                          against a vendor's datasheet -- because enforcing a guarantee the hardware
+                          does not keep is how a torn write becomes a checksum that silently
+                          disagrees with it.
+
+                          It means nothing unless EnableChecksumValidation is set, which is the
+                          cluster's own rule and is left to the cluster to enforce.
+                        type: boolean
+                      enableChecksumValidation:
+                        description: |-
+                          EnableChecksumValidation turns on inline CRC validation of every I/O, for
+                          silent-data-error protection.
+
+                          It is on the document because it is immutable on the cluster it lands on:
+                          the backend bakes the checksum method into each device when the cluster is
+                          created and never re-applies it, so a cluster created without this is one
+                          nobody can turn it on for. A deployment that wants its data checked has to
+                          say so here or not at all.
+                        type: boolean
                       enableDriveFormat:
                         description: |-
                           EnableDriveFormat formats every device the document names before a storage
@@ -119,6 +153,18 @@ spec:
                         description: |-
                           EnableFailureDomains opts the cluster into failure-domain mode, in which
                           every group must label the fault group its workers belong to.
+                        type: boolean
+                      enableJournalDevice:
+                        description: |-
+                          EnableJournalDevice dedicates the smallest NVMe device on each of this
+                          deployment's workers to the journal manager, instead of carving a journal
+                          partition out of every device.
+
+                          It is here rather than on a node set because it is immutable on the cluster
+                          it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
+                          built with is not one a later document can vary. It also costs a drive of
+                          capacity per node, which is a trade a reviewer approves rather than one a
+                          default makes for them.
                         type: boolean
                       fabricType:
                         description: FabricType is the storage fabric.
@@ -150,6 +196,22 @@ spec:
                           (design-api-upgrade.md §19.4).
                         maxLength: 63
                         type: string
+                      nodeProvisioningBudget:
+                        description: |-
+                          NodeProvisioningBudget is how many workers the expansion may have in the
+                          node-add process at once. It expands into the cluster's own
+                          spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+                          is counted by distinct worker, so a two-socket host spends one of the
+                          budget, and a worker hosting a FoundationDB pod is sequential whatever the
+                          budget says.
+
+                          It is on the document because a document is what states the size of a
+                          deployment, and a deployment of thirty workers added one at a time is the
+                          difference between an afternoon and a week. Omitted, the cluster's default
+                          of one applies, which is the serial behavior.
+                        format: int32
+                        minimum: 1
+                        type: integer
                       nodesPerSocket:
                         description: |-
                           NodesPerSocket is how many storage nodes run per NUMA socket. See
@@ -191,6 +253,13 @@ spec:
                             minimum: 0
                             type: integer
                         type: object
+                        x-kubernetes-validations:
+                        - message: the erasure-coding scheme must be one of 1+0, 1+1,
+                            2+1, 4+1, 1+2, 2+2, or 4+2, written as dataChunks+parityChunks,
+                            and an unstated half is 1
+                          rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
+                            ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4,
+                            1], [1, 2], [2, 2], [4, 2]]'
                       vcpuCount:
                         description: |-
                           VCPUCount is the number of vCPUs allocated to SPDK on each storage node of

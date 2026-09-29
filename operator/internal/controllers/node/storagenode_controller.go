@@ -587,7 +587,7 @@ func (r *StorageNodeReconciler) checkConfig(
 // awaitSlot is where two independent serialization rules live, and the last place
 // a node that needs no add at all is recognized.
 //
-// maxParallelNodeAdds caps how many workers may be in flight at once, counted by
+// nodeProvisioningBudget caps how many workers may be in flight at once, counted by
 // distinct worker rather than by object so that a two-socket host consumes one
 // slot. Workers hosting a FoundationDB pod are always sequential regardless of
 // that cap, because a node add reboots the host and two simultaneous FoundationDB
@@ -652,8 +652,8 @@ func (r *StorageNodeReconciler) awaitSlot(
 	}
 
 	limit := int32(1)
-	if spec := cluster.Spec.StorageNodes; spec != nil && spec.MaxParallelNodeAdds != nil {
-		limit = *spec.MaxParallelNodeAdds
+	if spec := cluster.Spec.StorageNodes; spec != nil && spec.NodeProvisioningBudget != nil {
+		limit = *spec.NodeProvisioningBudget
 	}
 
 	// Who is in flight is read from the cluster's own record rather than counted
@@ -789,8 +789,10 @@ func (r *StorageNodeReconciler) postNode(
 // one worker are sorted by RPC port ascending, and position in that list is the
 // socket ordinal, because the ports are assigned in socket order at node-add time
 // (§4.3).
-// nodeAddTask is the control plane's own name for the job Posting starts.
-const nodeAddTask = "node_add"
+// nodeAddTask is the control plane's own name for the job Posting starts. It is
+// the shared spelling because utils.ClusterRebalancing reads the same task type
+// off the cluster's mirrored list.
+const nodeAddTask = utils.TaskTypeNodeAdd
 
 // resolve waits for the backend node the add was asked to produce, and asks
 // again when nothing is still working on producing one.
@@ -849,7 +851,7 @@ func addInFlight(cluster *simplyblockv1alpha2.StorageCluster) bool {
 
 // taskDone is the control plane's terminal task status. Everything else it
 // publishes — new, running, suspended — is a task still being worked through.
-const taskDone = "done"
+const taskDone = utils.TaskStateDone
 
 func (r *StorageNodeReconciler) resolveUUID(
 	ctx context.Context,
@@ -1021,12 +1023,47 @@ func applyReading(status *simplyblockv1alpha2.StorageNodeStatus, reading NodeRea
 			Total:  reading.DevicesCount,
 		}
 	}
-	status.Ports = &simplyblockv1alpha2.StorageNodePorts{
+	status.Ports = portsFrom(status.Ports, reading)
+}
+
+// portsFrom is what the node listens on, with a reading that states nothing
+// leaving what was already recorded.
+//
+// A port moves: the control plane assigns it when the node starts, so a restart
+// can hand back a different one and the status has to follow. What it is not is
+// a value a reading may take away. Zero is not a port, so a reading carrying one
+// is a reading that did not say rather than a node that stopped listening, and
+// writing it over a good port takes away the address the latency probe dials and
+// the one the SPDK proxy's endpoints are built from. The device counts above
+// carry forward for the same reason.
+func portsFrom(
+	previous *simplyblockv1alpha2.StorageNodePorts, reading NodeReading,
+) *simplyblockv1alpha2.StorageNodePorts {
+	ports := &simplyblockv1alpha2.StorageNodePorts{
 		Management: reading.ManagementIP,
 		NvmeOf:     ptr.To(reading.NVMeOFPort),
 		Lvol:       ptr.To(reading.LvolPort),
 		Rpc:        ptr.To(reading.RPCPort),
 	}
+	if previous == nil {
+		return ports
+	}
+	if ports.Management == "" {
+		ports.Management = previous.Management
+	}
+	ports.NvmeOf = keptPort(reading.NVMeOFPort, previous.NvmeOf)
+	ports.Lvol = keptPort(reading.LvolPort, previous.Lvol)
+	ports.Rpc = keptPort(reading.RPCPort, previous.Rpc)
+	return ports
+}
+
+// keptPort is the reported port, or the recorded one where the reading carries
+// none.
+func keptPort(reported int32, previous *int32) *int32 {
+	if reported != 0 {
+		return ptr.To(reported)
+	}
+	return previous
 }
 
 // phaseOf is the operator's reading of the lifecycle the control plane reports.

@@ -388,7 +388,7 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			MinHugePagesSize:  "100G",
 			DeviceClass:       v1alpha2.StorageClusterDeviceClassLogicalBlock,
 			KMS: &v1alpha2.KMSSpec{
-				Vault: &v1alpha2.VaultKMS{BaseURL: "https://vault.example.com:8200"},
+				Vault: &v1alpha2.VaultKMS{Endpoint: "https://vault.example.com:8200"},
 			},
 			Backup: &v1alpha2.BackupStoreSpec{
 				Endpoint:             "https://s3.example.com",
@@ -397,7 +397,7 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 				Region:               "eu-central-1",
 				CredentialsSecretRef: corev1.LocalObjectReference{Name: "backup-credentials"},
 			},
-			EnableDataRealignment:     ptr.To(true),
+			DisableDataRealignment:    ptr.To(true),
 			EnableVolumeAutoPlacement: ptr.To(true),
 			VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
 				DisableMigration: ptr.To(true),

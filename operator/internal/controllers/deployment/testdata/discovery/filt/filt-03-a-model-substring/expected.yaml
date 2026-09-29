@@ -10,6 +10,7 @@ spec:
   approved: false
   cluster:
     enableDriveFormat: true
+    enableJournalDevice: true
     maxSubsystemCount: 30
     minHugePagesSize: 16G
     name: discovered-discover-filt-03-cluster
@@ -18,6 +19,9 @@ spec:
       parityChunks: 0
     vcpuCount: 16
   environment: K3s
+  hostOS:
+    distro: ubuntu
+    family: Debian
   nodeSets:
   - groups:
     - devices:

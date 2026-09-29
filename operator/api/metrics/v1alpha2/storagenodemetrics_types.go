@@ -121,9 +121,6 @@ type StorageNodeMetrics struct {
 // +k8s:openapi-gen=true
 type StorageNodeMetricsList struct {
 	metav1.TypeMeta `json:",inline"`
-	// The tag is omitempty rather than the omitzero the CRD kinds in this
-	// repository use, because openapi-gen enforces the streaming-list convention
-	// on a type it generates definitions for and that convention names omitempty.
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []StorageNodeMetrics `json:"items"`
 }

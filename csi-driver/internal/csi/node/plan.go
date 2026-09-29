@@ -162,6 +162,9 @@ func stackVolume(
 	fsType := stagedFsType(vc, volCap)
 	return plans.Volume{
 		UUID:                  deviceLvolID(vc),
+		PVName:                vc[csicommon.CSIStoragePVNameKey],
+		PVCNamespace:          vc[csicommon.CSIStorageNamespaceKey],
+		PVCName:               vc[csicommon.CSIStorageNameKey],
 		StagingPath:           stagingPath,
 		FsType:                fsType,
 		MountFlags:            volumeMountFlags(volCap),

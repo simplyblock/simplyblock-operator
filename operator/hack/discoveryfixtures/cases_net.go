@@ -81,7 +81,7 @@ func netCases() map[string]Case {
 		out := make([]nodeprobe.Interface, 0, n)
 		for i := 0; i < n; i++ {
 			out = append(out, nic(fmt.Sprintf("veth%04x", 0x7a10+i), inventory.LinkVirtual,
-				holding(fmt.Sprintf("10.42.2.%d", 10+i))))
+				peered(), holding(fmt.Sprintf("10.42.2.%d", 10+i))))
 		}
 		return out
 	}
@@ -202,7 +202,7 @@ func netCases() map[string]Case {
 				holding("192.168.20.1")))...)),
 
 		"NET-31": known(netHost("worker-01",
-			nic("veth7a1c", inventory.LinkVirtual, holding(reachedAt)),
+			nic("veth7a1c", inventory.LinkVirtual, peered(), holding(reachedAt)),
 			nic("lo", inventory.LinkLoopback, holding("127.0.0.1")))),
 
 		"NET-33": known(netHost("worker-01",

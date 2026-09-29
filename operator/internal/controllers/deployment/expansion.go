@@ -260,16 +260,41 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 
 	class := DeviceClassOf(config)
 
+	// The document states the ports as one block and the cluster carries them
+	// as three fields. An absent block stands in as an empty one so that each
+	// member travels on its own: a block stating one port leaves the other two
+	// unset, for the cluster's own defaults to decide.
+	ports := template.Ports
+	if ports == nil {
+		ports = &simplyblockv1alpha2.ClusterPortsSpec{}
+	}
+
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: config.Namespace},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
-			MaxSubsystemCount:    template.MaxSubsystemCount,
-			VCPUCount:            template.VCPUCount,
-			MinHugePagesSize:     template.MinHugePagesSize,
-			Stripe:               template.Stripe,
-			FabricType:           template.FabricType,
-			EnableFailureDomains: template.EnableFailureDomains,
-			DeviceClass:          class,
+			MaxSubsystemCount: template.MaxSubsystemCount,
+			VCPUCount:         template.VCPUCount,
+			// Both are immutable on the cluster, so this is the only moment
+			// either can be set at all. Copied as stated, nil included: an
+			// unstated setting leaves the cluster's own default to decide
+			// rather than having the expansion invent one.
+			EnableChecksumValidation: template.EnableChecksumValidation,
+			EnableAtomicity4K:        template.EnableAtomicity4K,
+			MinHugePagesSize:         template.MinHugePagesSize,
+			Stripe:                   template.Stripe,
+			FabricType:               template.FabricType,
+			EnableFailureDomains:     template.EnableFailureDomains,
+			EnableNodeAffinity:       template.EnableNodeAffinity,
+			NvmfBasePort:             ports.NVMf,
+			RpcBasePort:              ports.Rpc,
+			SnodeApiPort:             ports.NodeAgent,
+			KMS:                      template.KMS,
+			// Where the backups go, stated on the document for the reason the
+			// key store is: the cluster is created here and read back on the
+			// next pass, so a store stated on the document is present at
+			// creation rather than patched in afterward.
+			Backup:      template.Backup,
+			DeviceClass: class,
 			// The workload every node runs as. The document's per-group network
 			// interfaces are the same for every group of a cluster in practice,
 			// and the cluster is where a DaemonSet can carry them at all
@@ -280,7 +305,21 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 	return cluster, nil
 }
 
-// buildWorkload resolves spec.environment into the four distribution flags and
+// openShiftOf is the OpenShift block a document's cluster template states, or
+// an empty one where it states none.
+//
+// An empty block is not nothing: its presence is what says the deployment is on
+// OpenShift, and the machine-config pool inside it defaults to the role every
+// pool already selects. This is only ever called for a document whose
+// environment is OpenShift.
+func openShiftOf(template *simplyblockv1alpha2.ClusterTemplate) *simplyblockv1alpha2.OpenShiftSpec {
+	if template == nil || template.OpenShift == nil {
+		return &simplyblockv1alpha2.OpenShiftSpec{}
+	}
+	return template.OpenShift.DeepCopy()
+}
+
+// buildWorkload resolves spec.environment into the distribution flags and
 // carries the first group's interfaces onto the cluster.
 //
 // A DaemonSet is one object for every node it schedules, so its pod template
@@ -298,10 +337,55 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		// document said.
 		workload.SocketsToUse = template.SocketsToUse
 		workload.NodesPerSocket = template.NodesPerSocket
+		// How many workers the node controller may add at once. Left here, a
+		// document that stated a budget was expanded into a cluster carrying the
+		// default of one, and the deployment it described was added serially.
+		// Unstated stays unstated, so the cluster's own default decides it.
+		workload.NodeProvisioningBudget = template.NodeProvisioningBudget
 		// The document says a drive is to be formatted; this is where that is
-		// resolved to how. NVMe is the class the cluster's own field covers, and
-		// the logical-block half has no field to carry it yet.
-		workload.EnableFormat4K = template.EnableDriveFormat
+		// resolved to how, because the how is not the same operation twice. An
+		// NVMe device is reformatted to a 4K block size by the control plane at
+		// node-add, and a logical block device has its signatures wiped on the
+		// worker before the node is added. Setting the NVMe field for a block
+		// cluster asked a control plane to reformat a namespace the cluster does
+		// not have, and left the wipe undone.
+		if DeviceClassOf(config) == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock {
+			workload.EnableBlockFormat = template.EnableDriveFormat
+		} else {
+			workload.EnableFormat4K = template.EnableDriveFormat
+		}
+		// What the storage-node container is sized with. Left here, a document
+		// that stated a fleet's sizing produced a cluster carrying the modest
+		// default, and the correction was an edit to the cluster.
+		if template.ContainerResources != nil {
+			workload.ContainerResources = *template.ContainerResources
+		}
+		// And the init containers, which are sized apart from it: both are gone
+		// before the container the fleet's sizing is about starts.
+		if template.InitContainerResources != nil {
+			workload.InitContainerResources = *template.InitContainerResources
+		}
+		// What the storage-node pods tolerate. A fleet that dedicates machines
+		// to storage taints them, and a DaemonSet that tolerates nothing lands
+		// on none of them: the document that described the deployment would
+		// have produced a cluster whose nodes never start, and the correction
+		// was an edit to the cluster it had just written.
+		workload.Tolerations = template.Tolerations
+		// The journal layout is the cluster's and immutable on it, so the
+		// document is the only place it can still be stated. Dropping it here
+		// partitioned a journal out of every drive on a deployment reviewed for
+		// a dedicated one.
+		workload.EnableJournalDevice = template.EnableJournalDevice
+	}
+
+	// The nodeAgent slot of spec.images. It is read here rather than in
+	// buildCluster because the field it fills is on the workload, and it is
+	// spent only on this path: a document naming an existing cluster in
+	// clusterRef never reaches buildCluster at all, so the slot is ignored for
+	// the same reason spec.cluster is.
+	if images := config.Spec.Images; images != nil && images.NodeAgent != nil {
+		workload.Image = images.NodeAgent.Image
+		workload.ImagePullPolicy = images.NodeAgent.ImagePullPolicy
 	}
 
 	for _, set := range config.Spec.NodeSets {
@@ -315,12 +399,25 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		}
 	}
 
+	// The host OS is spent here too, and on one flag. Ubuntu keeps the NVMe-oF
+	// modules in linux-modules-extra rather than in the base install, so a
+	// storage node on one installs the package for its running kernel before it
+	// starts. Stating any other distribution states that it must not, which is
+	// not the same as a document that states no host OS at all: that one leaves
+	// the cluster's own default to decide, as a hand-written cluster does.
+	if os := config.Spec.HostOS; os != nil && os.Distro != "" {
+		workload.UbuntuHost = ptr.To(os.Distro == simplyblockv1alpha2.DistroUbuntu)
+	}
+
 	// The environment is a shorthand and this is where it is spent. Naming
-	// OpenShift once decides all four, after which nothing reads the field again
-	// and the nodes carry the resolved flags (§3.1).
+	// OpenShift once decides all three, after which nothing reads the field
+	// again and the nodes carry the resolved flags (§3.1).
 	switch config.Spec.Environment {
 	case simplyblockv1alpha2.KubernetesEnvironmentOpenShift:
-		workload.OpenShiftCluster = ptr.To(true)
+		// The block's presence is the statement, and the document's own block
+		// is what fills it: a deployment onto a fleet whose workers sit in a
+		// custom machine-config pool names that pool there.
+		workload.OpenShift = openShiftOf(config.Spec.Cluster)
 		workload.EnableCpuTopology = ptr.To(true)
 		// Stated rather than left nil. The renderer reads an unset flag as skipping
 		// the kubelet configuration, and the settings this product has shipped
@@ -517,10 +614,67 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				DeviceNames:      devicesOf(group),
 				FailureDomain:    group.FailureDomain,
 				SpdkSystemMemory: group.SpdkSystemMemory,
-				JournalManager:   group.JournalManager,
+				// The core ids this group's machines hold back. It reaches the
+				// node's own entry in the per-node ConfigMap, which is where a
+				// per-node value has somewhere to go: the pod's environment
+				// variable is one object's for every worker it schedules.
+				ReservedSystemCPU: group.ReservedSystemCPU,
+				JournalManager:    group.JournalManager,
+				// The two SPDK slots of spec.images. They are the document's
+				// statement for the whole fleet and land per node, because the
+				// fields are per node so that a later rollout can walk it one
+				// machine at a time.
+				SpdkImage:                imageOf(config, spdkSlot),
+				SpdkImagePullPolicy:      pullPolicyOf(config, spdkSlot),
+				SpdkProxyImage:           imageOf(config, spdkProxySlot),
+				SpdkProxyImagePullPolicy: pullPolicyOf(config, spdkProxySlot),
 			},
 		},
 	}
+}
+
+// The two slots of spec.images a node is built from, as accessors rather than as
+// a switch, so that a slot added later is one function and not a case in four.
+func spdkSlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec {
+	return images.SPDK
+}
+
+func spdkProxySlot(images *simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec {
+	return images.SPDKProxy
+}
+
+// imageOf and pullPolicyOf read one slot, or the zero value when the document
+// states no images or not that slot. The zero value is what the expansion writes
+// for an unstated slot, so the field downstream keeps its own default rather than
+// being overridden with nothing.
+func imageOf(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) string {
+	if spec := imageSlot(config, slot); spec != nil {
+		return spec.Image
+	}
+	return ""
+}
+
+func pullPolicyOf(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) corev1.PullPolicy {
+	if spec := imageSlot(config, slot); spec != nil {
+		return spec.ImagePullPolicy
+	}
+	return ""
+}
+
+func imageSlot(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig,
+	slot func(*simplyblockv1alpha2.DeploymentImages) *simplyblockv1alpha2.ImageSpec,
+) *simplyblockv1alpha2.ImageSpec {
+	if config.Spec.Images == nil {
+		return nil
+	}
+	return slot(config.Spec.Images)
 }
 
 // decomposeSlot renders a slot as the socket and the position within it, which is

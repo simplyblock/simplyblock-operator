@@ -352,26 +352,29 @@ func TestWorkerHasDevicesSeparatesReclaimableFromInUse(t *testing.T) {
 	}
 }
 
-// A cluster is built out of one class of backend storage, so a run that scans
-// logical block devices refuses an NVMe device rather than naming it by its
-// path.
+// A local NVMe disk is a logical block device, and a run that was asked for the
+// block class takes one.
 //
-// The rule used to check the transport on one side only: an NVMe run refused a
-// virtio disk, and a block run admitted an NVMe disk, because an NVMe disk has
-// a path like any other. That put both classes in one draft, and a draft is one
-// cluster.
-func TestClassRuleRefusesTheOtherClassOnABlockRun(t *testing.T) {
+// The class a run scans is stated by the administrator through
+// EnableLogicalBlockDevices, so an NVMe disk reaching a block draft is what was
+// asked for rather than a leak between classes. What the kernel presents at
+// /dev/nvme0n1 is a block device like any other, and refusing it leaves a fleet
+// of NVMe hardware unable to be deployed as logical block devices at all.
+func TestClassRuleAdmitsALocalNVMeDiskOnABlockRun(t *testing.T) {
 	nvme := disk("nvme0n1", "0000:5e:00.0", 0, tb)
 
-	if ok, why := admit(ClassRule{Class: ClassBlock}, nvme); ok {
-		t.Error("a block run admitted an NVMe disk, so a draft could hold both classes")
-	} else if !strings.Contains(why, "NVMe") {
-		t.Errorf("the reason %q does not say what bus it is on", why)
+	if ok, why := admit(ClassRule{Class: ClassBlock}, nvme); !ok {
+		t.Errorf("a block run declined a local NVMe disk: %s", why)
 	}
+}
 
-	// A fabric namespace is a volume something else exported, and it is the
-	// other class read the other way: the probe refuses it first, and this is
-	// the rule that keeps it out of a block draft on its own terms.
+// A fabric namespace is the one bus a block run refuses, and every local bus is
+// one it takes.
+//
+// The namespace is a volume something else exported rather than a disk the
+// machine has, so it belongs to neither class. The probe refuses it first, and
+// this is the rule that keeps it out of a block draft on its own terms.
+func TestClassRuleRefusesOnlyAFabricNamespaceOnABlockRun(t *testing.T) {
 	fabric := blockDisk("nvme1n1", tb)
 	fabric.Transport = string(blockdev.TransportNVMeFabric)
 	if ok, why := admit(ClassRule{Class: ClassBlock}, fabric); ok {
@@ -380,10 +383,12 @@ func TestClassRuleRefusesTheOtherClassOnABlockRun(t *testing.T) {
 		t.Errorf("the reason %q does not say what bus it is on", why)
 	}
 
-	// Every other bus is what a block run is for.
+	// Every local bus is what a block run is for, the NVMe one included: the
+	// kernel presents a namespace behind a PCIe controller as an ordinary block
+	// device, and the class reaches every device through the kernel.
 	for _, transport := range []blockdev.Transport{
 		blockdev.TransportVirtio, blockdev.TransportSATA,
-		blockdev.TransportSAS, blockdev.TransportSCSI,
+		blockdev.TransportSAS, blockdev.TransportSCSI, blockdev.TransportNVMe,
 	} {
 		device := blockDisk("sda", tb)
 		device.Transport = string(transport)

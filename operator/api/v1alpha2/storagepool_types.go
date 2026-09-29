@@ -190,8 +190,8 @@ type StoragePoolSpec struct {
 	//
 	// The maximum is what a StorageCluster name may be rather than what a
 	// reference may be: a longer value names nothing that can exist, and the
-	// reference is immutable, so admitting one creates a pool whose only
-	// remedy is deletion (design-api-upgrade.md §19.4).
+	// reference is immutable, so admitting one creates a pool whose only remedy
+	// is deletion.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable

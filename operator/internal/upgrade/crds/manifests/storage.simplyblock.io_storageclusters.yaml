@@ -688,7 +688,9 @@ spec:
                 clientDataIfname:
                   description: |-
                     ClientDataIfname is the network interface clients reach the data plane
-                    on.
+                    on. It is mutable: the control plane reads it on every connect rather than
+                    once at cluster-add, so an edit moves the next attach onto the named
+                    interface.
                   type: string
                 criticalThreshold:
                   description: CriticalThreshold is the capacity level at which the cluster alarms.
@@ -719,15 +721,47 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                enableAtomic4kWrites:
+                disableDataRealignment:
+                  description: |-
+                    DisableDataRealignment turns off the post-migration data realignment,
+                    which runs by default. It is spelled as a disable because the behavior it
+                    governs is on: realignment restores the fault-tolerance and node-affinity
+                    guarantees every volume move invalidates, so a cluster that says nothing
+                    gets them back rather than silently accumulating unaligned structures.
+                    Turning it off is for a cluster migrating continuously, where a run that
+                    blocks migrations for tens of minutes costs more than the delay in
+                    realigning; volumeMigrationSettings.dataRealignment.minMoves is the
+                    gentler answer to the same problem.
+
+                    It is a field of the spec rather than of the block it governs, because
+                    volumeMigrationSettings.dataRealignment.disableDataRealignment says the
+                    same word twice. There is no DisableVolumeMigration beside it: migration
+                    cannot be turned off, since a drain, a rebalance, and a device
+                    replacement are all performed by moving volumes.
+                  type: boolean
+                enableAtomicity4K:
                   default: false
                   description: |-
-                    EnableAtomic4kWrites declares that the cluster's devices guarantee 4K
-                    write atomicity even with a smaller logical block size, as AWS NVMe does
-                    at 512 bytes, which lets checksum fallback mode run on them despite the
-                    data plane's usual 4K minimum. It means nothing unless
-                    EnableChecksumValidation is set, and it cannot change under a live
-                    cluster.
+                    EnableAtomicity4K enforces 4K write atomicity on devices that report a
+                    smaller logical block size, which lets checksum fallback mode run on them
+                    despite the data plane's usual 4K minimum.
+
+                    It is an enforcement rather than a reading, and that is what it is for.
+                    A device may complete a 4K write whole across a power failure and have no
+                    way to say so: a SATA drive presenting 512-byte logical blocks over a 4K
+                    physical sector reports 512 and nothing else, and a kernel older than 6.11
+                    publishes no atomic write attributes at all, so the fleet it runs on
+                    cannot be asked. Where the hardware can answer, the storage node's report
+                    carries what it said; where it cannot, this is how an administrator states
+                    what they know and the cluster proceeds on it.
+
+                    Which is why it is the setting that loses data when it is wrong. An
+                    enforced guarantee the hardware does not keep is a torn write under a
+                    checksum that disagrees with it, so it is approved against the devices'
+                    own report where one exists.
+
+                    It means nothing unless EnableChecksumValidation is set, and it cannot
+                    change under a live cluster.
                   type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -743,15 +777,6 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
-                enableDataRealignment:
-                  description: |-
-                    EnableDataRealignment turns on the post-migration data realignment. It is
-                    a field of the spec rather than of the block it governs, because
-                    volumeMigrationSettings.dataRealignment.enableDataRealignment says the
-                    same word twice. There is no EnableVolumeMigration beside it: migration
-                    cannot be turned off, since a drain, a rebalance, and a device
-                    replacement are all performed by moving volumes.
-                  type: boolean
                 enableFailureDomains:
                   description: |-
                     EnableFailureDomains opts the cluster into failure-domain mode, where
@@ -763,8 +788,17 @@ spec:
                       rule: self == oldSelf
                 enableNodeAffinity:
                   description: |-
-                    EnableNodeAffinity selects affinity-based placement for storage
-                    components.
+                    EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+                    from the local node's own devices where it can, before crossing the
+                    network.
+
+                    It is not Kubernetes affinity, and the name is the one place this API
+                    invites that reading: nothing about it schedules a pod, labels a worker,
+                    or places a volume's primary node. The control plane carries it into the
+                    cluster map it pushes to each node, where it sets the local node's index,
+                    and what changes is which copy of a chunk is read.
+                    Co-locating a workload with the primary node of its volume is a separate
+                    mechanism and is not configured here.
                   type: boolean
                   x-kubernetes-validations:
                     - message: field is immutable
@@ -790,14 +824,14 @@ spec:
                     vault:
                       description: Vault stores keys in HashiCorp Vault.
                       properties:
-                        baseURL:
+                        endpoint:
                           description: |-
-                            BaseURL is the Vault endpoint, for example, https://vault.example.com:8200.
+                            Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
                             Rejected unless it resolves to an external address.
                           pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                           type: string
                       required:
-                        - baseURL
+                        - endpoint
                       type: object
                   type: object
                 maxConcurrentWorkerRestarts:
@@ -833,7 +867,13 @@ spec:
                     the computed minimum is used.
                   type: string
                 nvmfBasePort:
-                  description: NvmfBasePort is the base of the NVMe-oF port range every node binds.
+                  default: 4420
+                  description: |-
+                    NvmfBasePort is the base of the NVMe-oF port range every node binds.
+
+                    The default is the control plane's own, which is what it applies to a
+                    cluster that sends none, so the field states the number the cluster
+                    actually runs with rather than leaving a reader to know the backend.
                   format: int32
                   maximum: 65535
                   minimum: 1024
@@ -842,7 +882,10 @@ spec:
                     - message: field is immutable
                       rule: self == oldSelf
                 rpcBasePort:
-                  description: RpcBasePort is the base of the RPC port range every node binds.
+                  default: 8080
+                  description: |-
+                    RpcBasePort is the base of the RPC port range every node binds. Its
+                    default is the control plane's, as NvmfBasePort's is.
                   format: int32
                   maximum: 65535
                   minimum: 1024
@@ -851,7 +894,10 @@ spec:
                     - message: field is immutable
                       rule: self == oldSelf
                 snodeApiPort:
-                  description: SnodeApiPort is the port each node's storage-node API listens on.
+                  default: 50001
+                  description: |-
+                    SnodeApiPort is the port each node's storage-node API listens on. Its
+                    default is the control plane's, as NvmfBasePort's is.
                   format: int32
                   maximum: 65535
                   minimum: 1024
@@ -934,6 +980,30 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    enableBlockFormat:
+                      description: |-
+                        EnableBlockFormat wipes the partition tables and filesystem signatures
+                        from this cluster's logical block devices, so that a disk carrying
+                        something already becomes one a storage node can take.
+
+                        It is the block class's half of the document's enableDriveFormat, and a
+                        separate field because it is a separate operation on a separate channel:
+                        EnableFormat4K is a reformat the control plane performs at node-add, and
+                        this is a wipefs node_configure.py performs on the worker before the node
+                        is added at all. A block device's block size is fixed by the drive, so
+                        there is no reformat to ask for, and an NVMe controller is handed to SPDK
+                        whole, so there are no signatures to wipe. Neither operation is available
+                        in the other's class.
+
+                        Destructive, and immutable for the reason the other is: it describes what
+                        was done to the disks a fleet was built on.
+                      type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     enableCpuTopology:
                       description: EnableCpuTopology turns on topology-aware CPU assignment.
                       type: boolean
@@ -967,8 +1037,14 @@ spec:
                       pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                       type: string
                     imagePullPolicy:
-                      default: IfNotPresent
-                      description: ImagePullPolicy controls when that image is pulled.
+                      default: Always
+                      description: |-
+                        ImagePullPolicy controls when that image is pulled. It defaults to Always
+                        for the reason SimplyblockDriver's does: the images this product ships are
+                        moving tags, so a node brought up after a release that kept IfNotPresent
+                        would run whatever its kubelet already held. The workload builder has
+                        always meant this and falls back to Always for an unset policy, a fallback
+                        the schema default means it never reaches.
                       enum:
                         - Always
                         - Never
@@ -1033,11 +1109,17 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
-                    maxParallelNodeAdds:
+                    mgmtInterface:
+                      description: MgmtInterface is the management network interface storage nodes bind.
+                      type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
+                    nodeProvisioningBudget:
                       default: 1
                       description: |-
-                        MaxParallelNodeAdds limits how many workers may be in the node-add process
-                        at once, counted by distinct worker rather than by object so that a
+                        NodeProvisioningBudget limits how many workers may be in the node-add
+                        process at once, counted by distinct worker rather than by object so that a
                         two-socket host consumes one slot. Workers hosting a FoundationDB pod are
                         always sequential regardless of this value, because a node add reboots the
                         host and two simultaneous FoundationDB reboots reduce the control plane's
@@ -1045,12 +1127,6 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
-                    mgmtInterface:
-                      description: MgmtInterface is the management network interface storage nodes bind.
-                      type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                     nodesPerSocket:
                       default: 1
                       description: NodesPerSocket is how many storage nodes run per NUMA socket.
@@ -1060,15 +1136,29 @@ spec:
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
-                    openShiftCluster:
-                      description: OpenShiftCluster states that the Kubernetes distribution is OpenShift.
-                      type: boolean
-                    openShiftMachineConfigPool:
-                      default: worker
+                    openshift:
                       description: |-
-                        OpenShiftMachineConfigPool names the pool generated MachineConfig objects
-                        are labeled into.
-                      type: string
+                        OpenShift is what this deployment states because it runs on OpenShift,
+                        and its presence is that statement. See OpenShiftSpec.
+                      properties:
+                        machineConfigPool:
+                          default: worker
+                          description: |-
+                            MachineConfigPool names a machine-config role the storage nodes' own pool
+                            inherits from, beyond the worker role it always inherits.
+
+                            It is not the pool the nodes end up in, which the description it carried
+                            before said and which cost a reader the reboot they were trying to avoid.
+                            Adding a node creates a pool of its own, storage-<cluster>, and moves the
+                            node into it; a node belongs to exactly one custom pool, so whatever
+                            machine configuration its previous pool carried is lost unless that
+                            pool's role is named here for the new one to select as well. The default
+                            is the role every pool already selects, which is what makes it a no-op
+                            for a fleet whose workers are ordinary workers.
+                          maxLength: 253
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      type: object
                     reservedSystemCPU:
                       description: ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
                       type: string
@@ -1128,12 +1218,16 @@ spec:
                   x-kubernetes-validations:
                     - message: field mgmtInterface is immutable once set
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
+                    - message: field dataInterfaces is immutable once set
+                      rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field nodesPerSocket is immutable once set
                       rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
                     - message: field enableJournalDevice is immutable once set
                       rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
                     - message: field enableFormat4K is immutable once set
                       rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
+                    - message: field enableBlockFormat is immutable once set
+                      rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
                 stripe:
                   description: |-
                     Stripe is the erasure-coding layout every volume in the cluster is
@@ -1359,14 +1453,14 @@ spec:
                   rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
                 - message: field enableChecksumValidation is immutable once set
                   rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
-                - message: field enableAtomic4kWrites is immutable once set
-                  rule: '!has(oldSelf.enableAtomic4kWrites) || has(self.enableAtomic4kWrites)'
+                - message: field enableAtomicity4K is immutable once set
+                  rule: '!has(oldSelf.enableAtomicity4K) || has(self.enableAtomicity4K)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
                 - message: kms is immutable once set
                   rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
-                - message: enableAtomic4kWrites requires enableChecksumValidation to be true
-                  rule: '!(has(self.enableAtomic4kWrites) && self.enableAtomic4kWrites) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
+                - message: enableAtomicity4K requires enableChecksumValidation to be true
+                  rule: '!(has(self.enableAtomicity4K) && self.enableAtomicity4K) || (has(self.enableChecksumValidation) && self.enableChecksumValidation)'
             status:
               properties:
                 activeOpsRef:
@@ -1425,6 +1519,7 @@ spec:
                     - Provisioning
                     - Activating
                     - Online
+                    - Rebalancing
                     - Degraded
                     - Unavailable
                     - Suspended
@@ -1433,7 +1528,7 @@ spec:
                   description: |-
                     ProvisioningSlots are the workers whose node add is outstanding. The list
                     is the metadata of the Provisioning phase, and it is also the mutex that
-                    caps concurrent adds at spec.storageNodes.maxParallelNodeAdds.
+                    caps concurrent adds at spec.storageNodes.nodeProvisioningBudget.
 
                     It is one list on one object because that is what makes taking a slot
                     atomic. A node takes one with an optimistic-locked patch of this field, so
@@ -1552,9 +1647,8 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the creation machine, as the shared
-                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                    marker could reach a field of a shared type.
+                    Step is the position of the creation machine. The value is one of the
+                    steps that machine declares.
                   properties:
                     deadline:
                       description: |-
@@ -1575,11 +1669,9 @@ spec:
                 tasks:
                   description: |-
                     Tasks are the control plane's running and pending jobs, capped at twenty
-                    and in the order the control plane reports them: its TaskDTO carries no
-                    creation date, so newest-first is not orderable from what is on the wire
-                    (design-storagecluster.md §12.1). Completed and canceled tasks are not
-                    here: they leave the list and become events, so the length tracks
-                    concurrency rather than history.
+                    and in the order the control plane reports them, which is not newest
+                    first. Completed and canceled tasks are not here: they leave the list and
+                    become events, so the length tracks concurrency rather than history.
                   items:
                     description: |-
                       ClusterTask is one asynchronous job the control plane is running, as of the
@@ -1587,11 +1679,9 @@ spec:
                       that reaches a terminal outcome leaves status.tasks, and what remains of it
                       is an event.
 
-                      It carries what the control plane's own TaskDTO carries and nothing more.
-                      The design's Appendix A also declares a progress figure and a creation date,
-                      and that schema has neither, so both are absent rather than declared and
-                      never written (design-crd-model.md §7.9). Their absence is what makes the
-                      list's order the control plane's own rather than newest first.
+                      It carries no progress figure and no creation date, because the control plane
+                      reports neither, which is why the list is in the control plane's order rather
+                      than newest first.
                     properties:
                       id:
                         description: |-
@@ -1616,9 +1706,8 @@ spec:
                         type: string
                       type:
                         description: |-
-                          Type is what kind of job it is, in the control plane's own spelling for
-                          the reason design-crd-model.md §7.8 gives: the value is the backend's
-                          rather than this group's.
+                          Type is what kind of job it is, in the control plane's own spelling: the
+                          value is the backend's rather than this API's.
                         type: string
                     required:
                       - id

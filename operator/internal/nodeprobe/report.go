@@ -38,7 +38,7 @@ import (
 // because a probe pod outlives the operator that created it across an upgrade:
 // the image is pinned in the Job, and a Job already running keeps the image it
 // started with.
-const ReportVersion = 6
+const ReportVersion = 7
 
 // Report is one worker's inventory as the probe found it.
 type Report struct {
@@ -71,6 +71,16 @@ type Report struct {
 	// grounds it was refused on.
 	Devices []Device `json:"devices,omitempty"`
 
+	// HostOS is the operating system the worker boots and the architecture it
+	// runs on.
+	//
+	// It is the machine's own answer and not the cluster's, which is why it is
+	// here where the environment is not: the distribution a node runs decides
+	// whether a kernel module has to be installed before NVMe-oF works and
+	// which package manager would install it, and two workers of one cluster
+	// can differ.
+	HostOS HostOS `json:"hostOS"`
+
 	// NVMeControllers is every NVMe controller on the machine's PCI bus, with
 	// the driver that owns each.
 	//
@@ -89,6 +99,32 @@ type Report struct {
 	// could not be read still has disks worth reviewing, and a probe that
 	// returned nothing would hide them.
 	Unreadable []string `json:"unreadable,omitempty"`
+}
+
+// HostOS is the worker's operating system as the probe read it.
+//
+// Every field is empty on a probe that could not read the host's os-release,
+// and Unreadable then carries the reason. An empty distro is not a host with
+// no distribution. It is a reading that was not taken.
+type HostOS struct {
+	// Distro is the os-release ID, such as `ubuntu` or `rocky`.
+	Distro string `json:"distro,omitempty"`
+
+	// Family is the packaging tradition the distro belongs to: `Debian`,
+	// `RedHat`, `SUSE`, `Alpine`, or `Arch`. It is empty for a host with no package manager and
+	// for one this product does not place.
+	Family string `json:"family,omitempty"`
+
+	// Version is the os-release VERSION_ID, such as 22.04.
+	Version string `json:"version,omitempty"`
+
+	// PrettyName is the distribution's own description, which is what a
+	// reviewer recognizes fastest.
+	PrettyName string `json:"prettyName,omitempty"`
+
+	// Architecture is uname's machine field: `x86_64`, `aarch64`. It says whether
+	// the images this product ships would run on the worker at all.
+	Architecture string `json:"architecture,omitempty"`
 }
 
 // CPU is what the probe found out about the machine's processors.
@@ -276,6 +312,19 @@ type Device struct {
 	Model      string `json:"model,omitempty"`
 	Serial     string `json:"serial,omitempty"`
 	Rotational bool   `json:"rotational,omitempty"`
+
+	// AtomicWriteUnitMaxBytes is the largest write this device completes whole
+	// across a power failure, and AtomicWriteUnitMinBytes the smallest it makes
+	// that promise about. They are what says whether a cluster may run checksum
+	// validation on a device whose logical block size is under the data plane's
+	// minimum, which is otherwise a claim somebody has to make by hand.
+	//
+	// Absent rather than zero when the kernel does not publish them, which it
+	// did not before 6.11. The distinction is the point: a device that says it
+	// guarantees nothing and a kernel that was never able to ask are different
+	// findings, and only the first is evidence.
+	AtomicWriteUnitMaxBytes *uint32 `json:"atomicWriteUnitMaxBytes,omitempty"`
+	AtomicWriteUnitMinBytes *uint32 `json:"atomicWriteUnitMinBytes,omitempty"`
 
 	// NUMANode is the memory node the device hangs off, or NUMANodeUnknown.
 	NUMANode int `json:"numaNode"`

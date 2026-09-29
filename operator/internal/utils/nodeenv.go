@@ -89,6 +89,6 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT}"
 [ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""
 [ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
 [ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
-[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force-format"
+[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force"
 ARGS="${ARGS}`
 }

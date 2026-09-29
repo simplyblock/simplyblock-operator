@@ -11,12 +11,16 @@
 # Only the trees the readers walk are taken, and a symlink into /sys/devices is
 # followed a little way so the class directories have the attributes behind them.
 # The output is one JSON document of three maps -- directories, file contents,
-# and symlink targets -- with every path relative to /sys.
+# and symlink targets -- with every path relative to /sys, plus the udev links,
+# the two files that say which distribution the host runs, and the machine name
+# uname gives.
 
 import json
 import os
+import platform
 
 SYS = "/sys"
+DEV = "/dev"
 
 # The seeds are the readers' own entry points: interfaces, NVMe controllers,
 # block devices, the PCI bus, CPU topology, NUMA, and huge pages.
@@ -28,6 +32,34 @@ SEEDS = [
     "devices/system/cpu",
     "devices/system/node",
     "kernel/mm/hugepages",
+]
+
+# The udev link directories worth keeping, and the two that are not.
+#
+# by-id and by-path name a device: by-id from what the device says it is (a
+# serial, a WWN, or the identification page a driver exposes instead), by-path
+# from where it is attached. Both survive a reboot, which the kernel name does
+# not -- sd letters are handed out in probe order, so the disk that was sdb
+# comes back as sdc and a document naming the first now names the second.
+#
+# by-uuid and by-label are deliberately not taken. They name the filesystem a
+# device carries rather than the device, so they are content: they change when
+# somebody reformats a disk that is otherwise the same one, and a transcript of
+# what a machine *is* should not turn over when its data does.
+DEV_LINK_DIRS = [
+    "disk/by-id",
+    "disk/by-path",
+]
+
+# The files read from the host's own root filesystem rather than from /sys.
+#
+# They are what the OS reading takes: the distribution's ID, version, and the
+# family its ID_LIKE places it in. Both are captured because /etc/os-release is
+# usually a symlink into /usr/lib and a transcript stores contents rather than
+# following links at replay time.
+ROOT_FILES = [
+    "etc/os-release",
+    "usr/lib/os-release",
 ]
 
 MAX_FILE_BYTES = 64 * 1024
@@ -97,6 +129,61 @@ for rel, path in (("meminfo", "/proc/meminfo"), ("swaps", "/proc/swaps"),
         continue
 dirs.add("self")
 
+# The udev links, in a section of their own.
+#
+# dirs, files, and links stay what they were: paths under /sys, plus the handful
+# of procfs files the readers take from the same root. These are neither, and
+# they do not ride in those maps under a dev/ prefix, because /sys/dev is itself
+# a real directory -- /sys/dev/block and /sys/dev/char. Nothing seeds it today,
+# so nothing collides today, and a prefix that is safe only until somebody adds
+# a seed is a prefix that will be unsafe silently.
+#
+# Paths are relative to /dev, which is what blockdev.ScanConfig.DevRoot is
+# pointed at, and the value is the link's target as the kernel wrote it --
+# usually ../../sda. Only the link and its target are taken, never the device
+# node behind it: the target is what answers which kernel name a stable name
+# resolves to, and a transcript carrying device nodes would be one nobody could
+# materialize without root.
+#
+# Additive on purpose. A transcript written before this has no devlinks at all,
+# which decodes to an empty map and reads as a host whose udev made no links --
+# which is what the committed fixtures need it to mean.
+devlinks = {}
+for link_dir in DEV_LINK_DIRS:
+    absolute = os.path.join(DEV, link_dir)
+    try:
+        names = os.listdir(absolute)
+    except OSError:
+        continue
+    for name in names:
+        path = os.path.join(absolute, name)
+        try:
+            if os.path.islink(path):
+                devlinks[os.path.join(link_dir, name)] = os.readlink(path)
+        except OSError:
+            continue
+
+# The host's own root filesystem, in a section of its own for the reason the
+# udev links are in theirs: etc/ and usr/ are paths under / and not under /sys,
+# and a capture that put them in files would have a reader unable to tell which
+# root a path belonged to. A machine that has neither file, which is a machine
+# with no os-release at all, captures an empty section, and a transcript
+# written before this existed has none, both of which replay as a host whose
+# distribution cannot be read.
+root_files = {}
+for rel in ROOT_FILES:
+    try:
+        with open(os.path.join("/", rel)) as handle:
+            root_files[rel] = handle.read(MAX_FILE_BYTES)
+    except OSError:
+        continue
+
+# The architecture, which is a system call and not a file: nothing in the trees
+# above says what uname -m would.
+machine = platform.machine()
+
 print(json.dumps(
-    {"dirs": sorted(dirs), "files": dict(sorted(files.items())), "links": dict(sorted(links.items()))},
+    {"dirs": sorted(dirs), "files": dict(sorted(files.items())),
+     "links": dict(sorted(links.items())), "devlinks": dict(sorted(devlinks.items())),
+     "root": dict(sorted(root_files.items())), "machine": machine},
     indent=1, sort_keys=True))

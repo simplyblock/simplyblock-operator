@@ -11,10 +11,12 @@ package deployment
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -412,11 +414,38 @@ func TestTheEnvironmentResolvesIntoTheWorkloadFlags(t *testing.T) {
 	r := reconcilerFor(t)
 
 	workload := r.buildWorkload(config)
-	if workload.OpenShiftCluster == nil || !*workload.OpenShiftCluster {
-		t.Error("OpenShift did not set openShiftCluster")
+	if workload.OpenShift == nil {
+		t.Error("OpenShift left the cluster with no OpenShift block, which is what states it")
 	}
 	if workload.EnableCpuTopology == nil || !*workload.EnableCpuTopology {
 		t.Error("OpenShift did not set enableCpuTopology")
+	}
+}
+
+// The document's own block travels with it, which is what a fleet whose workers
+// sit in a custom machine-config pool states.
+func TestTheDocumentsMachineConfigPoolReachesTheCluster(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+		c.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if workload.OpenShift == nil || workload.OpenShift.MachineConfigPool != "infra" {
+		t.Errorf("the cluster's OpenShift block is %+v, want the document's pool", workload.OpenShift)
+	}
+}
+
+// An environment that is not OpenShift states no block, whatever the template
+// carries: the environment is what says which distribution this is.
+func TestANonOpenShiftEnvironmentStatesNoBlock(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentK3s
+		c.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+	})
+
+	if workload := reconcilerFor(t).buildWorkload(config); workload.OpenShift != nil {
+		t.Errorf("a K3s document produced the OpenShift block %+v", workload.OpenShift)
 	}
 }
 
@@ -432,5 +461,203 @@ func TestEveryNodeGetsADistinctName(t *testing.T) {
 			}
 			seen[name] = struct{}{}
 		}
+	}
+}
+
+// The host OS is spent the same way the environment is, and on the one flag it
+// decides: Ubuntu keeps the NVMe-oF modules in a package the base install does
+// not carry, so a storage node on one has to install it and a node on anything
+// else must not be told to try.
+func TestTheHostOSResolvesIntoUbuntuHost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		hostOS *simplyblockv1alpha2.HostOSSpec
+		want   bool
+	}{
+		{"ubuntu", &simplyblockv1alpha2.HostOSSpec{
+			Distro: simplyblockv1alpha2.DistroUbuntu,
+			Family: simplyblockv1alpha2.HostOSFamilyDebian,
+		}, true},
+		// Debian is the family and not the distribution, and the package is
+		// Ubuntu's: a Debian host has the modules already.
+		{"debian", &simplyblockv1alpha2.HostOSSpec{
+			Distro: "debian",
+			Family: simplyblockv1alpha2.HostOSFamilyDebian,
+		}, false},
+		{"rocky", &simplyblockv1alpha2.HostOSSpec{
+			Distro: "rocky",
+			Family: simplyblockv1alpha2.HostOSFamilyRedHat,
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.HostOS = tc.hostOS
+			})
+
+			workload := reconcilerFor(t).buildWorkload(config)
+			if workload.UbuntuHost == nil {
+				t.Fatalf("a document stating %s left ubuntuHost unset", tc.hostOS.Distro)
+			}
+			if *workload.UbuntuHost != tc.want {
+				t.Errorf("a document stating %s set ubuntuHost to %v, want %v",
+					tc.hostOS.Distro, *workload.UbuntuHost, tc.want)
+			}
+		})
+	}
+}
+
+// A document that states no host OS states nothing about ubuntuHost either. It
+// is not the same as stating a host that is not Ubuntu: the cluster falls back
+// to its own default, which is what a hand-written cluster gets, and a reviewer
+// who knows better can still set it.
+func TestADocumentWithNoHostOSLeavesUbuntuHostUnset(t *testing.T) {
+	workload := reconcilerFor(t).buildWorkload(aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {}))
+	if workload.UbuntuHost != nil {
+		t.Errorf("ubuntuHost is %v with no host OS stated, want unset", *workload.UbuntuHost)
+	}
+}
+
+// Where the storage-node pods are allowed to run is the document's to state.
+// A fleet that taints its storage plane, which is how a machine is dedicated
+// to one workload, has a DaemonSet that schedules nowhere without this, and a
+// document that could not say so left an administrator editing the cluster the
+// document had just written.
+func TestTheDocumentsTolerationsReachTheStorageNodes(t *testing.T) {
+	tolerations := []corev1.Toleration{{
+		Key:      "io.simplyblock.node-type",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "storage-plane",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.Tolerations = tolerations
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !reflect.DeepEqual(workload.Tolerations, tolerations) {
+		t.Errorf("the cluster tolerates %+v, want %+v", workload.Tolerations, tolerations)
+	}
+}
+
+// A growth document names a cluster instead of describing one, and that cluster
+// already states what its storage nodes tolerate. There is no template to read
+// them from, and re-stating them would be a second answer to a settled
+// question.
+func TestAGrowthDocumentStatesNoTolerations(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster = nil
+		c.Spec.ClusterRef = theCluster
+	})
+
+	if workload := reconcilerFor(t).buildWorkload(config); len(workload.Tolerations) != 0 {
+		t.Errorf("a growth document produced %+v", workload.Tolerations)
+	}
+}
+
+// What the storage-node container is sized with. The default is the agent's
+// modest one, and a fleet whose nodes serve many subsystems outgrows it: a
+// document that could not say so left the sizing to an edit of the cluster it
+// had just written.
+func TestTheDocumentsContainerResourcesReachTheStorageNodes(t *testing.T) {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+	}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.ContainerResources = &resources
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !workload.ContainerResources.Requests.Cpu().Equal(resource.MustParse("500m")) {
+		t.Errorf("the container requests %v, want 500m", workload.ContainerResources.Requests.Cpu())
+	}
+	if !workload.ContainerResources.Limits.Memory().Equal(resource.MustParse("4Gi")) {
+		t.Errorf("the container is limited to %v, want 4Gi", workload.ContainerResources.Limits.Memory())
+	}
+}
+
+// A document that states no resources states nothing, and the cluster's own
+// defaults decide. Stating an empty block would be a third answer beside the
+// default and the stated one.
+func TestADocumentWithNoContainerResourcesLeavesTheClustersUnset(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if len(workload.ContainerResources.Requests) != 0 || len(workload.ContainerResources.Limits) != 0 {
+		t.Errorf("the cluster is sized %+v with nothing stated", workload.ContainerResources)
+	}
+}
+
+// The init containers are sized separately, because they do a different job:
+// one writes an env file and the other runs node_configure.py once, and both
+// are done before the container the fleet's sizing is about starts.
+func TestTheDocumentsInitContainerResourcesReachTheStorageNodes(t *testing.T) {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+	}
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.Cluster.InitContainerResources = &resources
+	})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if !workload.InitContainerResources.Limits.Memory().Equal(resource.MustParse("1Gi")) {
+		t.Errorf("the init containers are limited to %v, want 1Gi",
+			workload.InitContainerResources.Limits.Memory())
+	}
+	// The two blocks are independent: sizing the init containers says nothing
+	// about the container that runs for the node's life.
+	if len(workload.ContainerResources.Requests) != 0 {
+		t.Errorf("sizing the init containers also sized the container: %+v", workload.ContainerResources)
+	}
+}
+
+func TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+
+	workload := reconcilerFor(t).buildWorkload(config)
+	if len(workload.InitContainerResources.Requests) != 0 || len(workload.InitContainerResources.Limits) != 0 {
+		t.Errorf("the init containers are sized %+v with nothing stated", workload.InitContainerResources)
+	}
+}
+
+// The CPUs held back from SPDK are stated per group, because they are a list of
+// core ids: a group of sixteen-core workers and a group of ninety-six-core
+// workers have no one list that is right for both, and a group is what a
+// document calls machines that share their hardware.
+func TestTheGroupsReservedCPUsReachEveryNodeOfIt(t *testing.T) {
+	config := aDocument(func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+		c.Spec.NodeSets[0].Groups[0].ReservedSystemCPU = "0-3"
+	})
+	cluster := aCluster(nil)
+	r := reconcilerFor(t)
+
+	node := r.buildNode(config, cluster,
+		config.Spec.NodeSets[0], config.Spec.NodeSets[0].Groups[0], "worker-1", 0)
+
+	if got := node.Spec.Config.ReservedSystemCPU; got != "0-3" {
+		t.Errorf("the node holds back %q, want the group's %q", got, "0-3")
+	}
+}
+
+// A group that states none leaves the node stating none, so that the cluster's
+// fleet-wide value is what the agent reads. Writing an empty string would be
+// the same as stating one.
+func TestAGroupWithNoReservedCPUsStatesNone(t *testing.T) {
+	config := aDocument(func(*simplyblockv1alpha2.ClusterDeploymentConfig) {})
+	cluster := aCluster(nil)
+	r := reconcilerFor(t)
+
+	node := r.buildNode(config, cluster,
+		config.Spec.NodeSets[0], config.Spec.NodeSets[0].Groups[0], "worker-1", 0)
+
+	if got := node.Spec.Config.ReservedSystemCPU; got != "" {
+		t.Errorf("the node holds back %q with nothing stated", got)
 	}
 }

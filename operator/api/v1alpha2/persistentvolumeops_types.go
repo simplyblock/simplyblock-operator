@@ -40,13 +40,13 @@ import (
 // including deletion. It sits in metadata rather than status because a
 // PersistentVolume is a core type this operator must not add fields to, and it
 // touches neither spec nor status, so it cannot conflict with the provisioner
-// or the volume's own controllers (design-persistentvolumeops.md §6).
+// or the volume's own controllers.
 const PersistentVolumeOpsLock = "storage.simplyblock.io/active-ops"
 
 // PersistentVolumeOpsManagedByLabel carries the kind of the controller that
 // created an operation, which is what a watch mapping and a List select on: a
 // reference in the spec cannot be selected on, and a label value admits no
-// namespace separator (design-crd-model.md §7.3).
+// namespace separator.
 //
 // It narrows rather than identifies. The label finds the operations some drain
 // created, and the UID in spec.creatorRef says which drain.
@@ -54,8 +54,8 @@ const PersistentVolumeOpsManagedByLabel = "storage.simplyblock.io/managed-by"
 
 // PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
 // The kind is named for its target rather than for the action so that carrying
-// a second one later would not rename it; it carries one, and no second one is
-// planned (design-persistentvolumeops.md §4.1).
+// a second one later would not rename it. It carries one, and no second one is
+// planned.
 // +kubebuilder:validation:Enum=Migrate
 type PersistentVolumeOpsAction string
 
@@ -153,10 +153,9 @@ type MigrateVolumeSpec struct {
 // It exists because a cluster-scoped object cannot be owned by a namespaced
 // one: Kubernetes treats such a reference as unresolvable and garbage-collects
 // the dependent. Core Kubernetes has the same situation twice and answers it
-// the same way — a PersistentVolume names its claim through spec.claimRef and a
+// the same way: a PersistentVolume names its claim through spec.claimRef and a
 // VolumeSnapshotContent names its snapshot through spec.volumeSnapshotRef, both
-// with a UID — and that shape carries over here unchanged
-// (design-persistentvolumeops.md §11.1).
+// with a UID, and that shape carries over here unchanged.
 type CreatorReference struct {
 	// Kind is the creating object's kind, which is StorageNodeOps for a drain.
 	// +kubebuilder:validation:Required
@@ -180,9 +179,8 @@ type CreatorReference struct {
 // PersistentVolumeOpsSpec is one operation to perform against one
 // PersistentVolume.
 //
-// The rule keeps the action and its parameter block in agreement, which is a
-// statement about this object alone and so belongs on the type rather than in
-// the webhook.
+// The action and its parameter block have to agree: Migrate requires
+// spec.migrate, and no other action accepts it.
 // +kubebuilder:validation:XValidation:rule="self.action == 'Migrate' ? has(self.migrate) : !has(self.migrate)",message="migrate is required for action Migrate and must be absent otherwise"
 type PersistentVolumeOpsSpec struct {
 	// PersistentVolumeName names the PersistentVolume this operation acts on.
@@ -285,7 +283,7 @@ type ValidationJob struct {
 // MigrationStatus is everything about the migration rather than about the
 // operation. It is durable working state: a controller that restarts mid-copy
 // reads it to find the backend migration it started and the Jobs it has to
-// clean up (design-crd-model.md §3.1).
+// clean up.
 type MigrationStatus struct {
 	// MigrationUUID is the control plane's identifier for the copy.
 	// +optional
@@ -356,10 +354,9 @@ type PersistentVolumeOpsStatus struct {
 	// +optional
 	Phase PersistentVolumeOpsPhase `json:"phase,omitempty"`
 
-	// Step is the position of the running action's state machine, as the shared
-	// statemachine.KubeSnapshot. It is persisted before the side effect that
-	// step performs. The rule is what an Enum marker would do if a marker could
-	// reach a field of a shared type.
+	// Step is the position of the running action's state machine. It is
+	// persisted before the side effect that step performs, so a step reported
+	// here is a step that started.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

@@ -452,7 +452,7 @@ spec:
                     its nodes.
 
                     Bounded at what a StorageCluster name may be, since a longer value names
-                    nothing that can exist (design-api-upgrade.md §19.4).
+                    nothing that can exist.
                   maxLength: 63
                   type: string
                   x-kubernetes-validations:
@@ -563,6 +563,29 @@ spec:
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
+                    reservedSystemCPU:
+                      description: |-
+                        ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
+                        core list such as 0,1 or 0-3.
+
+                        It is per node and not per cluster because it names core ids: 0,1 on a
+                        sixteen-core worker and 0,1 on a ninety-six-core worker are different
+                        fractions of the machine, and a fleet whose groups differ in core count
+                        has no one list that is right for all of them.
+                        StorageCluster.spec.storageNodes.reservedSystemCPU is the fleet's value,
+                        which the pod carries as an environment variable, and this overrides it
+                        for the node that states it.
+
+                        On OpenShift the value reaches the kubelet through a KubeletConfig for
+                        the machine config pool rather than through the node alone, so nodes
+                        sharing a pool that disagree are writing over one another's pool
+                        configuration. It carries no immutability marker, because the CPUs a
+                        machine holds back are a tuning decision rather than a layout one, and
+                        the webhook that guards spec.config is what decides who may retune
+                        them.
+                      maxLength: 63
+                      pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
+                      type: string
                     sizing:
                       description: |-
                         Sizing is what this node's huge pages and core layout were sized from.
@@ -590,14 +613,43 @@ spec:
                         SpdkImage overrides the SPDK image the control plane starts for this node,
                         which is what makes a phased image rollout expressible per node.
                       type: string
+                    spdkImagePullPolicy:
+                      default: Always
+                      description: |-
+                        SpdkImagePullPolicy controls when that image is pulled, and defaults to
+                        Always because the images this product ships are moving tags.
+
+                        The control plane starts the SPDK pod, not the operator, and its
+                        spdk_process_start takes no pull policy: the pod template it renders writes
+                        Always itself. So a node states the policy here and the node-add call does
+                        not yet carry it, which is a gap the control plane closes rather than this
+                        kind. Stating anything but Always is therefore recorded and not yet obeyed.
+                      enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                      type: string
                     spdkProxyImage:
                       description: SpdkProxyImage overrides the SPDK proxy image for this node.
+                      type: string
+                    spdkProxyImagePullPolicy:
+                      default: Always
+                      description: |-
+                        SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+                        apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+                        the SPDK image, and it carries the same not-yet-spent caveat: the template
+                        the control plane renders writes Always for both containers.
+                      enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
                       type: string
                     spdkSystemMemory:
                       description: |-
                         SpdkSystemMemory is the memory the control plane starts this node's SPDK
-                        with, as a size string such as 4G or 512M. Mutable: a node whose device
-                        count grew legitimately needs to raise it.
+                        with, as a size string such as 4G or 512M. It can be raised, because a
+                        node whose device count grew legitimately needs more, and who may raise it
+                        is decided at admission.
                       pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                       type: string
                   required:
@@ -621,13 +673,10 @@ spec:
                 nodeIndex:
                   description: |-
                     NodeIndex is the position among the nodes sharing this socket, in
-                    0..nodesPerSocket-1. See SocketID.
+                    0..nodesPerSocket-1. See SocketID, whose guard it shares.
                   format: int32
                   minimum: 0
                   type: integer
-                  x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                 nodeSet:
                   description: |-
                     NodeSet is the name of the group in ClusterDeploymentConfig.nodeSets[] this
@@ -658,16 +707,18 @@ spec:
                     SocketID is the NUMA socket this node is bound to, as declared in the node
                     set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
                     pair a person reads; nothing but a print column consumes either.
+
+                    It is not marked immutable, because where a node sits is a fact about the
+                    host it runs on and a relocation moves it: the target worker's free socket
+                    is not necessarily the source's. The StorageNode validating webhook
+                    rejects a change made by an identity outside the operator's namespace,
+                    which is the same treatment WorkerNode takes and for the same reason.
                   type: string
-                  x-kubernetes-validations:
-                    - message: field is immutable
-                      rule: self == oldSelf
                 workerNode:
                   description: |-
                     WorkerNode is the Kubernetes worker hostname this node runs on. It is not
-                    marked immutable, because a migration re-points it, but the StorageNode
-                    validating webhook rejects any change made by an identity outside the
-                    operator's namespace.
+                    immutable, because a migration re-points it, but a change made by anything
+                    outside the operator's namespace is rejected.
                   type: string
               required:
                 - clusterRef
@@ -677,10 +728,6 @@ spec:
               x-kubernetes-validations:
                 - message: field nodeSet is immutable once set
                   rule: '!has(oldSelf.nodeSet) || has(self.nodeSet)'
-                - message: field socketId is immutable once set
-                  rule: '!has(oldSelf.socketId) || has(self.socketId)'
-                - message: field nodeIndex is immutable once set
-                  rule: '!has(oldSelf.nodeIndex) || has(self.nodeIndex)'
                 - message: field slot is immutable once set
                   rule: '!has(oldSelf.slot) || has(self.slot)'
             status:
@@ -850,9 +897,8 @@ spec:
                   type: string
                 step:
                   description: |-
-                    Step is the position of the provisioning machine, as the shared
-                    statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-                    marker could reach a field of a shared type.
+                    Step is the position of the provisioning machine. The value is one of the
+                    steps that machine declares.
                   properties:
                     deadline:
                       description: |-

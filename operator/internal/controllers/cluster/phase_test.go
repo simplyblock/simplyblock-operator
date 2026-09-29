@@ -47,8 +47,31 @@ func TestThePhaseReadsTheControlPlanesLifecycle(t *testing.T) {
 		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
-			if got := phaseFor(tc.status); got != tc.want {
+			if got := phaseFor(tc.status, false); got != tc.want {
 				t.Errorf("phaseFor(%q) = %q, want %q", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// A rebalance is read over the two serving statuses and over nothing else.
+func TestARebalanceIsReadOverTheServingStatusesOnly(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   simplyblockv1alpha2.StorageClusterPhase
+	}{
+		{"active", simplyblockv1alpha2.StorageClusterPhaseRebalancing},
+		{"degraded", simplyblockv1alpha2.StorageClusterPhaseRebalancing},
+		{"read_only", simplyblockv1alpha2.StorageClusterPhaseRebalancing},
+		{"suspended", simplyblockv1alpha2.StorageClusterPhaseSuspended},
+		{"in_activation", simplyblockv1alpha2.StorageClusterPhaseActivating},
+		{"unready", simplyblockv1alpha2.StorageClusterPhaseProvisioning},
+		{"", simplyblockv1alpha2.StorageClusterPhasePending},
+		{"something_new", simplyblockv1alpha2.StorageClusterPhaseUnavailable},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			if got := phaseFor(tc.status, true); got != tc.want {
+				t.Errorf("phaseFor(%q, rebalancing) = %q, want %q", tc.status, got, tc.want)
 			}
 		})
 	}

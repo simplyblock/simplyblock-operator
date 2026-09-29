@@ -304,8 +304,12 @@ verify-config-yaml: yq ## Check that every manifest under config/ parses as YAML
 	fi; \
 	echo "config/: every manifest parses"
 
+.PHONY: verify-crd-kustomization
+verify-crd-kustomization: ## Check that every generated CRD is listed in config/crd/kustomization.yaml.
+	@hack/check-crd-kustomization.sh
+
 .PHONY: bundle
-bundle: yq verify-config-yaml ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+bundle: yq verify-config-yaml verify-crd-kustomization ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
 	operator-sdk generate kustomize manifests -q; \
 	OPERATOR_DIGEST=$$(curl -sI \

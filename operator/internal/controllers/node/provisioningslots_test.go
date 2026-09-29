@@ -325,7 +325,7 @@ func TestASecondSocketDoesNotTakeASecondSlot(t *testing.T) {
 // control plane writes the node object at the start of add_node, with
 // status=in_creation, so its UUID exists seconds into an add that runs for
 // minutes. Releasing on the UUID made every add look finished the moment it
-// began: on a six-worker cluster with maxParallelNodeAdds 1, five node_add tasks
+// began: on a six-worker cluster with nodeProvisioningBudget 1, five node_add tasks
 // ran at once and five SPDK pods came up together. The cap exists because an add
 // reboots its host.
 func TestASlotIsHeldUntilTheAddIsFinished(t *testing.T) {

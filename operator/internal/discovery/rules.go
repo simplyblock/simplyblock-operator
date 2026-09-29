@@ -159,19 +159,27 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 }
 
 // ClassRule admits a device that can be named in the class the run is scanning,
-// and refuses one of the other class.
+// and refuses one the class cannot take.
 //
 // It is a rule rather than a precondition because the failure is worth
 // reporting: an NVMe run against a worker whose disks are virtio finds devices
 // it cannot name, and "no NVMe devices" is a more useful answer than an empty
 // draft.
 //
-// The check is symmetric, and it has to be. A cluster is built out of one class
-// of backend storage, so the two classes cannot both reach one draft — and
-// while an NVMe run recognizes its own class by the bus, a block run cannot
-// recognize its own by the address, because an NVMe device has a path like
-// every other block device. Naming devices by path is what the block class does
-// rather than what makes a device one, so the bus is what both sides read.
+// The two sides are not symmetric, because the classes are not two disjoint
+// sets of hardware. The NVMe class is the narrow one: SPDK binds a controller
+// through vfio-pci, so only a device on the NVMe bus and carrying a PCI address
+// qualifies, and a virtio disk is refused. The block class is the wide one: it
+// reaches a device through the kernel, where a local NVMe namespace at
+// /dev/nvme0n1 is a block device like any other, so it is admitted. One machine
+// can therefore be deployed either way, and which way is the administrator's
+// statement through EnableLogicalBlockDevices rather than something the bus
+// decides for them.
+//
+// A fabric namespace is the one bus the block class still refuses. It is a
+// volume something else exported rather than a disk the machine has, so it
+// belongs to neither class, and refusing it here keeps a block run's answer
+// about what the device is rather than about what is holding it.
 type ClassRule struct {
 	Class DeviceClass
 }
@@ -187,25 +195,15 @@ func (r ClassRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, str
 		return false, fmt.Sprintf("this run scans NVMe devices and the device is on %s",
 			transportOrNone(device.Transport))
 	}
-	if r.Class == ClassBlock && onNVMe(device.Transport) {
-		return false, fmt.Sprintf("this run scans logical block devices and the device is on %s",
+	if r.Class == ClassBlock && device.Transport == string(blockdev.TransportNVMeFabric) {
+		return false, fmt.Sprintf("this run scans logical block devices and the device is on %s, "+
+			"which is a volume something else exported rather than a disk this machine has",
 			transportOrNone(device.Transport))
 	}
 	if address := r.Class.Address(device); address == "" {
 		return false, fmt.Sprintf("it has no %s to name it by", addressKind(r.Class))
 	}
 	return true, ""
-}
-
-// onNVMe reports whether a bus is one of the two the NVMe class covers.
-//
-// A fabric namespace is in, and it is the one worth naming: it is a volume
-// something else exported, so it is neither class's candidate, and refusing it
-// here rather than leaving it to the availability rule keeps a block run's
-// refusal about what the device is rather than about what is holding it.
-func onNVMe(transport string) bool {
-	return transport == string(blockdev.TransportNVMe) ||
-		transport == string(blockdev.TransportNVMeFabric)
 }
 
 // transportOrNone names a transport for a message, including the empty one.
@@ -224,24 +222,41 @@ func addressKind(class DeviceClass) string {
 	return "PCI address"
 }
 
-// WholeDiskRule admits only a whole disk.
+// WholeDiskRule admits a whole disk, and a partition where the class can take
+// one.
 //
-// The probe already refuses everything else, so this is belt and braces — but
-// it is the one rule whose absence would be silent: a partition admitted by a
-// waiver would be handed to a cluster as though it were a disk.
-type WholeDiskRule struct{}
+// Which class can take one follows from how the device is reached. SPDK binds an
+// NVMe controller through vfio-pci and is handed the whole device, so a
+// partition of one was never something a run could propose: admitting it would
+// hand a cluster a partition as though it were a disk, which is the silent
+// failure this rule exists for. A logical block device is reached through the
+// kernel, where a partition is an ordinary block device and the backend takes
+// one — the journal share is documented for the case where the smallest device
+// selected is a partition.
+//
+// Nothing else is admitted in either class. A loopback device and a
+// device-mapper node are no more candidates for the block class than for NVMe,
+// so the relaxation is the partition and not the rule.
+type WholeDiskRule struct {
+	// Class is what the run is scanning, which decides whether a partition is a
+	// device this deployment could be handed at all.
+	Class DeviceClass
+}
 
 func (WholeDiskRule) Name() string { return "whole disk" }
 
-// PreFilter: a partition or a loopback device was never a disk this run could
-// have taken, so refusing it explains nothing about the fleet's storage.
+// PreFilter: a device this class could never have taken is not an answer to
+// why a fleet proposed no storage, so refusing it explains nothing.
 func (WholeDiskRule) PreFilter() bool { return true }
 
-func (WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
-	if device.Kind != string(blockdev.KindDisk) {
-		return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
+func (r WholeDiskRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool, string) {
+	if device.Kind == string(blockdev.KindDisk) {
+		return true, ""
 	}
-	return true, ""
+	if r.Class == ClassBlock && device.Kind == string(blockdev.KindPartition) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("it is a %s rather than a whole disk", device.Kind)
 }
 
 // AllowDenyRule admits a device whose address is in the allow list, when there

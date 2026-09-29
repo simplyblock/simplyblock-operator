@@ -36,6 +36,10 @@ const (
 	// StepDeadlineExceeded is an installation step that outlived its budget,
 	// which is how a wait by design is separated from a wait caused by a bug.
 	StepDeadlineExceeded = "StepDeadlineExceeded"
+	// InstallationFailed is an installation step that cannot finish: the index
+	// backfill Job has used up its attempts. The install stops rather than
+	// retrying on an interval, and this is the event that says so.
+	InstallationFailed = "InstallationFailed"
 
 	// ClustersStillPresent holds a deletion. It is a hold rather than a failure:
 	// removing the clusters resolves it, and nothing else can.

@@ -51,23 +51,25 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_validate
 
 File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 
-| #        | Scenario                                                                                                 | Type     | Test |
-|----------|----------------------------------------------------------------------------------------------------------|----------|------|
-| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —    |
-| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —    |
-| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —    |
-| U-15     | Each node carries its group's device selection                                                           | Positive | —    |
-| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —    |
-| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —    |
-| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —    |
-| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —    |
-| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —    |
-| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —    |
-| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —    |
-| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —    |
-| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —    |
-| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —    |
-| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —    |
+| #        | Scenario                                                                                                 | Type     | Test                                                |
+|----------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------|
+| U-12     | One group of two workers, one socket, one node per socket: two `StorageNode` objects                     | Positive | —                                                   |
+| U-13     | The same on a two-socket layout: four objects, slots 0 and 1 per worker                                  | Positive | —                                                   |
+| U-14     | `nodesPerSocket` of 2 on two sockets: four slots per worker                                              | Boundary | —                                                   |
+| U-15     | Each node carries its group's device selection                                                           | Positive | —                                                   |
+| U-16     | Each node carries the cluster block's sizing in `spec.config.sizing`                                     | Positive | —                                                   |
+| U-17     | Each node carries `spec.nodeSet` naming the set it was declared in                                       | Positive | —                                                   |
+| U-18     | Each node carries a controller reference to the `StorageCluster`, not to the config                      | Positive | —                                                   |
+| ~~U-19~~ | Two node sets with different sizing. Withdrawn: sizing is the cluster's, and a set has none to differ in | —        | —                                                   |
+| U-20     | Re-entering `CreatingNodes` with every node present: nothing is created                                  | Negative | —                                                   |
+| U-21     | Re-entering with half the nodes present: only the missing slots are created                              | Positive | —                                                   |
+| U-22     | `status.clusterRef` and `status.nodeRefs` record what was produced                                       | Positive | —                                                   |
+| U-23     | The expansion finishes without waiting for a node to be provisioned                                      | Positive | —                                                   |
+| U-24     | A cluster whose creation fails: the phase becomes `Failed` with the reason                               | Negative | —                                                   |
+| U-25     | `AwaitingCluster` holds until `status.uuid` is set                                                       | Negative | —                                                   |
+| U-26     | A step's deadline expires: `StepDeadlineExceeded`, phase does not advance                                | Boundary | —                                                   |
+| U-185    | The template's `nodeProvisioningBudget` reaches the cluster the expansion creates                        | Positive | `TestTheProvisioningBudgetReachesTheCreatedCluster` |
+| U-186    | A template stating no budget leaves the field unset, so the cluster's default decides it                 | Negative | `TestAnUnstatedProvisioningBudgetIsNotInvented`     |
 
 ### Create-Only Semantics (design §6)
 
@@ -182,7 +184,10 @@ removed. Their IDs are retired rather than reused.
 ### Device Selection and the Discovery Filter (design §3.1, §8.1)
 
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
-and `operator/internal/controllers/deployment/operatorops_discover_test.go`
+and `operator/internal/controllers/deployment/operatorops_discover_test.go`. The
+three rows about the Jobs the operator pins to a node are tested where those
+Jobs are built: `operator/internal/volumemigration/job_test.go` and
+`operator/internal/controller/storagenode_latency_job_test.go`
 
 | #        | Scenario                                                                                                    | Type     | Test |
 |----------|-------------------------------------------------------------------------------------------------------------|----------|------|
@@ -243,28 +248,81 @@ hole in the gate rather than a convenience.
 Files: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_test.go`
 and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 
-| #         | Scenario                                                                                                                     | Type     | Test |
-|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-116     | `environment: OpenShift`: every node gets the four flags that distribution implies                                           | Positive | —    |
-| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —    |
-| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —    |
-| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —    |
-| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —    |
-| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —    |
-| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —    |
-| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —    |
-| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —    |
-| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —    |
-| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —    |
-| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —    |
-| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —    |
-| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —    |
-| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —    |
-| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —    |
+| #         | Scenario                                                                                                                     | Type     | Test                                                              |
+|-----------|------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------------|
+| U-116     | `environment: OpenShift`: every node gets the three flags that distribution implies                                          | Positive | —                                                                 |
+| U-117     | `environment: Vanilla`: every node gets that distribution's flags, not OpenShift's                                           | Positive | —                                                                 |
+| U-118     | `environment` absent: no distribution flag is stamped, and none is invented                                                  | Boundary | —                                                                 |
+| U-119     | A node edited after expansion to flip one flag: nothing re-stamps it                                                         | Negative | —                                                                 |
+| ~~U-120~~ | A group naming both, expanded with `MixedDeviceClasses`. Withdrawn: a mixed document is rejected rather than advised against | —        | —                                                                 |
+| ~~U-121~~ | A group naming both: one `deviceNames` list carrying addresses and paths. Withdrawn with `U-120`                             | —        | —                                                                 |
+| ~~U-122~~ | `MixedDeviceClasses` holds nothing. Withdrawn: the event is gone, and `DeviceClassMismatch` (`U-143`) replaces it            | —        | —                                                                 |
+| U-123     | Discovery against a cluster this operator deployed: claimed workers are not candidates                                       | Negative | —                                                                 |
+| U-124     | The same run: an unclaimed worker beside claimed ones is a candidate                                                         | Positive | —                                                                 |
+| U-125     | The same run: a device an existing node owns is not a candidate                                                              | Negative | —                                                                 |
+| U-126     | The same run writes a growth document, with `clusterRef` set and only new node sets                                          | Positive | —                                                                 |
+| U-127     | Every worker and device already claimed: an empty draft, not a duplicate of the first                                        | Boundary | —                                                                 |
+| U-128     | `spec.environment` from node labels alone                                                                                    | Positive | —                                                                 |
+| U-129     | `spec.environment` from a service only that distribution registers                                                           | Positive | —                                                                 |
+| U-130     | Conflicting evidence: one distribution is concluded and the reason is in the message                                         | Boundary | —                                                                 |
+| U-131     | Two runs against one Kubernetes cluster: the same `spec.environment` both times                                              | Positive | —                                                                 |
+| U-187     | `hostOS.distro: ubuntu`: the cluster gets `ubuntuHost` set                                                                   | Positive | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-188     | `hostOS.distro: rocky`: the cluster gets `ubuntuHost` unset, not absent                                                      | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-189     | `hostOS.distro: debian`: the family is Debian and `ubuntuHost` is still false                                                | Negative | `TestTheHostOSResolvesIntoUbuntuHost`                             |
+| U-190     | `hostOS` absent: `ubuntuHost` is left alone and the cluster's own default decides                                            | Boundary | `TestADocumentWithNoHostOSLeavesUbuntuHostUnset`                  |
+| U-191     | A fleet whose workers all report one distribution: the draft states it                                                       | Positive | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                      |
+| U-192     | A fleet running two distributions: the draft states none and the event names which worker runs what                          | Negative | `TestHostOSForRefusesToStateOneForAFleetThatDisagrees`            |
+| U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                            | Boundary | `TestHostOSForRefusesToStateOneNobodyRead`                        |
+| U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                       | Positive | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot`     |
+| U-195     | A distribution with no package manager: the distro is stated and the family is not                                           | Boundary | `TestHostOSForStatesNoFamilyForAHostThatHasNone`                  |
+| U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                    | Positive | `TestTheDocumentsTolerationsReachTheStorageNodes`                 |
+| U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                           | Boundary | `TestAGrowthDocumentStatesNoTolerations`                          |
+| U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                   | Positive | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`                   |
+| U-199     | The same run's draft states those tolerations for the cluster it proposes                                                    | Positive | `TestTheDraftCarriesTheTolerationsTheRunProbedWith`               |
+| U-200     | A growth run with tolerations: the draft describes no cluster, so there is nowhere to state them                             | Boundary | `TestAGrowthDraftCarriesNoTolerations`                            |
+| U-201     | A migration validation Job on a tainted node: it tolerates what the cluster's storage nodes tolerate                         | Positive | `TestJobPlacementCarriesTheClustersTolerations`                   |
+| U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                        | Boundary | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
+| U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                        | Positive | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
+| U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                      | Positive | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
+| U-205     | A document that states no container resources: the cluster states none either, and the default decides                       | Boundary | `TestADocumentWithNoContainerResourcesLeavesTheClustersUnset`     |
+| U-206     | `spec.cluster.initContainerResources`: the cluster's init containers are sized as the document states                        | Positive | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
+| U-207     | Sizing the init containers alone: the container that runs for the node's life is left unsized                                | Boundary | `TestTheDocumentsInitContainerResourcesReachTheStorageNodes`      |
+| U-208     | A document that states no init container resources: the cluster states none either                                           | Boundary | `TestADocumentWithNoInitContainerResourcesLeavesTheClustersUnset` |
+| U-209     | `groups[].reservedSystemCPU`: every node of that group holds back the list the group states                                  | Positive | `TestTheGroupsReservedCPUsReachEveryNodeOfIt`                     |
+| U-210     | A group that states none: the node states none, and the cluster's fleet-wide value decides                                   | Boundary | `TestAGroupWithNoReservedCPUsStatesNone`                          |
+| U-211     | `spec.cluster.enableNodeAffinity`: the cluster the document creates carries it                                               | Positive | `TestNodeAffinityReachesTheCluster`                               |
+| U-212     | A document that states none: the cluster states none, since the control plane bakes it in at create                          | Boundary | `TestADocumentStatingNoNodeAffinityLeavesTheClusterUnset`         |
+| U-213     | `spec.cluster.ports`: all three reach the cluster fields they name                                                           | Positive | `TestTheDocumentsPortsReachTheCluster`                            |
+| U-214     | A block stating one port: the schema defaults the other two to the control plane's                                           | Boundary | `TestThePortsBlockIsDefaultedByTheApiserver`                      |
+| U-216     | The expansion spends the block member by member, so an unstated member travels as nothing                                    | Boundary | `TestThePortsBlockIsSpentMemberByMember`                          |
+| U-217     | `spec.cluster.openshift`: the cluster the expansion writes carries the block and its pool                                    | Positive | `TestTheDocumentsMachineConfigPoolReachesTheCluster`              |
+| U-218     | `environment: OpenShift` with no block: the cluster still carries one, because its presence is the statement                 | Boundary | `TestTheEnvironmentResolvesIntoTheWorkloadFlags`                  |
+| U-219     | A non-OpenShift environment: no block reaches the cluster, whatever the template holds                                       | Negative | `TestANonOpenShiftEnvironmentStatesNoBlock`                       |
+| U-220     | A document naming the block without naming the distribution: refused by the schema                                           | Negative | `TestAnOpenShiftBlockNeedsAnOpenShiftEnvironment`                 |
+| U-221     | `spec.cluster.backup`: the cluster is created carrying the store the document states                                         | Positive | `TestTheDocumentsBackupStoreReachesTheCluster`                    |
+| U-222     | A document that states none: the cluster is created with no store, which is a cluster whose backups are nobody's yet         | Boundary | `TestADocumentWithNoBackupStoreCreatesAClusterWithNone`           |
+| U-215     | A document with no ports block: all three stay unset                                                                         | Boundary | `TestADocumentWithNoPortsLeavesTheClustersUnset`                  |
 
 `U-126` and `U-127` are the pair design §8.1 turns on. Re-running discovery after
 an expansion is how a fleet grows, so the run has to produce a document that adds
 and one that adds nothing when there is nothing to add.
+
+`U-187` through `U-190` are the four halves of one decision, and the fourth is
+the one worth stating: a document that says nothing about the host OS is not a
+document saying the host is not Ubuntu. The first leaves the cluster's default
+to decide and the second overrides it, and a test that only covered Ubuntu would
+not tell them apart.
+
+`U-192` and `U-193` are why the conclusion is allowed to be nothing. One document
+becomes one storage-node DaemonSet carrying one host OS, so a fleet that
+disagrees has no answer to state, and averaging one out of the majority would
+hand every minority worker a flag read off a machine that is not it.
+
+`U-198` through `U-203` are one rule applied in four places: a pod the operator
+pins to a node is not excused from that node's taints. The probe, the storage
+node, the migration validation Job, and the latency baseline Job all land on
+machines a fleet dedicates to storage, and each of them tolerating nothing is a
+pod that stays Pending until something times out.
 
 `U-131` is what makes design §12's second question a non-question. Two documents
 written against one Kubernetes cluster read the same evidence, so they agree on
@@ -366,6 +424,21 @@ File: `operator/internal/controllers/deployment/clusterdeploymentconfig_expand_t
 `U-149` is the row that keeps the cap where it belongs. A per-node copy could only
 repeat the cluster's value, and design §3.1 leaves it out for that reason.
 
+### Deployment Images (design §3.1)
+
+File: `operator/internal/controllers/deployment/images_test.go`
+
+| #     | Scenario                                                                        | Type     | Test                                       |
+|-------|---------------------------------------------------------------------------------|----------|--------------------------------------------|
+| U-151 | `images.nodeAgent` reaches `StorageCluster.spec.storageNodes`, image and policy | Positive | `TestTheNodeAgentImageReachesTheWorkload`  |
+| U-152 | `images.spdk` and `images.spdkProxy` reach every node's `spec.config`           | Positive | `TestTheSPDKImagesReachEveryNode`          |
+| U-153 | A document stating no images writes no image and no policy anywhere             | Boundary | `TestADocumentWithNoImagesStatesNone`      |
+| U-154 | One slot stated: the others are written as unstated rather than as empty        | Boundary | `TestOneStatedSlotLeavesTheOthersUnstated` |
+
+`U-153` and `U-154` are the rows that keep an unstated slot from overriding a
+downstream default with an empty string, which is the failure a struct of plain
+strings invites and the reason each slot is a pointer.
+
 ### Erasure Coding and the Node Minimum (design §4.1, §5.1)
 
 Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
@@ -461,6 +534,9 @@ immutability rules are CEL and cannot be exercised any other way.
 | I-53     | `spec.cluster.vcpuCount` omitted on a creating document: rejected as `Required`                                        | Negative | —                                                  |
 | I-54     | `spec.cluster.minHugePagesSize` omitted: accepted, and each node uses the computed minimum                             | Boundary | —                                                  |
 | I-55     | A document whose cluster template states a scheme outside the supported seven: rejected by the schema                  | Negative | `TestTheDocumentsSchemaRefusesAnUnsupportedScheme` |
+| I-56     | An image slot stating no `imagePullPolicy`: the stored document reads `Always`                                         | Boundary | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
+| I-57     | An `imagePullPolicy` outside the enum: rejected                                                                        | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
+| I-58     | An image from a registry outside the trusted set: rejected by the pattern                                              | Negative | `TestTheApiserverStampsAndPolicesTheImageSlots`    |
 
 ---
 
@@ -478,7 +554,7 @@ place discovery's central question can be answered.
 | ~~E-05~~ | Approving that draft adopts the running cluster. Withdrawn: adoption is design-storagecluster.md §4.3 | —        | —    |
 | E-06     | A second config adds a rack to the running cluster                                                    | Positive | —    |
 | E-07     | Deleting every config: the cluster keeps serving I/O                                                  | Positive | —    |
-| E-08     | An expansion of twenty workers: `maxParallelNodeAdds` still bounds the adds                           | Boundary | —    |
+| E-08     | An expansion of twenty workers: `nodeProvisioningBudget` still bounds the adds                        | Boundary | —    |
 | E-11     | Sustained I/O during an expansion that adds nodes: no interruption                                    | Positive | —    |
 | E-12     | Discovery with the flag set on a worker with SATA disks: they reach the draft                         | Positive | —    |
 | E-13     | A cluster built from logical block devices serves I/O                                                 | Positive | —    |
@@ -541,11 +617,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 133       | 0       | 133         | 9         |
-| Integration | 53        | 0       | 53          | 1         |
+| Unit        | 173       | 40      | 133         | 9         |
+| Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **200**   | **0**   | **200**     | **12**    |
+| **Total**   | **243**   | **43**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as
@@ -558,8 +634,10 @@ replaced with a rejection. The last two are the node set's sizing, which the sam
 section moved to the cluster block, leaving a set with no sizing to omit or to
 differ in.
 
-Nothing is covered, and nothing can be: neither kind exists. Every row is a
-specification, and the plan's value before implementation is that it says what
+The covered column counts the rows that name a test. The rest were written before
+the kinds existed and have not been re-audited against what was since built, so an
+uncovered row here says that nobody has checked rather than that nothing runs.
+Every row is a specification either way, and the plan's value is that it says what
 the kinds have to do rather than what somebody remembers deciding.
 
 The distribution is worth reading, though. Seventy per cent of the scenarios

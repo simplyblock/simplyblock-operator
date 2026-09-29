@@ -386,7 +386,7 @@ func BasicDeviceRules(filter *simplyblockv1alpha2.DeviceFilter) []DeviceRule {
 	class := ClassOf(filter)
 
 	rules := []DeviceRule{
-		WholeDiskRule{},
+		WholeDiskRule{Class: class},
 		SimplyblockVolumeRule{},
 		ClassRule{Class: class},
 	}

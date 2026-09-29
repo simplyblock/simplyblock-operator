@@ -598,7 +598,10 @@ func (r *StorageClusterReconciler) persist(
 		status.MaxFaultTolerance = &ftt
 		status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
-		status.Phase = phaseFor(found.Status)
+		// The adoption record carries no rebalancing flag: it is the creation
+		// snapshot, and the steady-state pass rewrites the phase from the
+		// stream on the pass that follows.
+		status.Phase = phaseFor(found.Status, false)
 		status.Step = statemachine.KubeSnapshot{}
 		status.Message = ""
 	})
@@ -707,7 +710,7 @@ func (r *StorageClusterReconciler) sync(
 		status.MaxFaultTolerance = &ftt
 		status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(
 			cluster.Spec.MaxConcurrentWorkerRestarts, &ftt)
-		status.Phase = phaseFor(reading.Status)
+		status.Phase = phaseFor(reading.Status, reading.Rebalancing)
 		status.Tasks = tasks
 	})
 	if err != nil {
@@ -982,7 +985,7 @@ func (r *StorageClusterReconciler) creationParams(
 		HashicorpVaultSettings: vault,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		InlineChecksum:         ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomic4kWrites),
+		Atomic4k:               ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
 		DeviceMode:             deviceMode(cluster.Spec.DeviceClass),
 	}, nil
 }
@@ -1062,13 +1065,13 @@ func (r *StorageClusterReconciler) backupConfig(
 // regrouping under spec.kms is Kubernetes-side only: the control plane keeps
 // hashicorp_vault_settings.base_url, and this is where the two meet.
 func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (*utils.HashicorpVaultConfig, error) {
-	if kms == nil || kms.Vault == nil || kms.Vault.BaseURL == "" {
+	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
 		return nil, nil
 	}
-	if err := atlasnet.ValidateExternalURL(kms.Vault.BaseURL); err != nil {
-		return nil, fmt.Errorf("spec.kms.vault.baseURL: %w", err)
+	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
+		return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
 	}
-	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.BaseURL}, nil
+	return &utils.HashicorpVaultConfig{BaseURL: kms.Vault.Endpoint}, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object
@@ -1259,6 +1262,7 @@ var allPhases = []simplyblockv1alpha2.StorageClusterPhase{
 	simplyblockv1alpha2.StorageClusterPhaseProvisioning,
 	simplyblockv1alpha2.StorageClusterPhaseActivating,
 	simplyblockv1alpha2.StorageClusterPhaseOnline,
+	simplyblockv1alpha2.StorageClusterPhaseRebalancing,
 	simplyblockv1alpha2.StorageClusterPhaseDegraded,
 	simplyblockv1alpha2.StorageClusterPhaseUnavailable,
 	simplyblockv1alpha2.StorageClusterPhaseSuspended,
@@ -1347,11 +1351,24 @@ func creationGraph() statemachine.Config[simplyblockv1alpha2.StorageClusterStep]
 // phaseFor reads the control plane's lifecycle string as this group's phase.
 // The values on the left are the control plane's own vocabulary, which is why
 // they are lowercase; only a value this API defines is PascalCase.
-func phaseFor(status string) simplyblockv1alpha2.StorageClusterPhase {
+//
+// The control plane reports a rebalance as a flag beside the status rather than
+// as a status, because a cluster is active and rebalancing, or degraded and
+// rebalancing, at once. The phase reads the flag over the two serving statuses
+// and over nothing else: a rebalance is what makes most operations unavailable,
+// so it is what a watch on the phase column should show, while a cluster that is
+// not serving is not serving whatever tasks it has queued.
+func phaseFor(status string, rebalancing bool) simplyblockv1alpha2.StorageClusterPhase {
 	switch lower(status) {
 	case utils.ClusterStatusActive:
+		if rebalancing {
+			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
+		}
 		return simplyblockv1alpha2.StorageClusterPhaseOnline
 	case "degraded", "read_only":
+		if rebalancing {
+			return simplyblockv1alpha2.StorageClusterPhaseRebalancing
+		}
 		return simplyblockv1alpha2.StorageClusterPhaseDegraded
 	case utils.ClusterStatusSuspended:
 		return simplyblockv1alpha2.StorageClusterPhaseSuspended

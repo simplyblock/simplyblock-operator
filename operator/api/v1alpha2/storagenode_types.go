@@ -19,6 +19,7 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/simplyblock/atlas/statemachine"
@@ -162,16 +163,62 @@ type StorageNodeConfig struct {
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
 
+	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
+	// Always because the images this product ships are moving tags.
+	//
+	// The control plane starts the SPDK pod, not the operator, and its
+	// spdk_process_start takes no pull policy: the pod template it renders writes
+	// Always itself. So a node states the policy here and the node-add call does
+	// not yet carry it, which is a gap the control plane closes rather than this
+	// kind. Stating anything but Always is therefore recorded and not yet obeyed.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
+
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
+	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
+	// apart from SpdkImagePullPolicy because a node may pin the proxy and follow
+	// the SPDK image, and it carries the same not-yet-spent caveat: the template
+	// the control plane renders writes Always for both containers.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with, as a size string such as 4G or 512M. Mutable: a node whose device
-	// count grew legitimately needs to raise it.
+	// with, as a size string such as 4G or 512M. It can be raised, because a
+	// node whose device count grew legitimately needs more, and who may raise it
+	// is decided at admission.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
+
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
+	// core list such as 0,1 or 0-3.
+	//
+	// It is per node and not per cluster because it names core ids: 0,1 on a
+	// sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine, and a fleet whose groups differ in core count
+	// has no one list that is right for all of them.
+	// StorageCluster.spec.storageNodes.reservedSystemCPU is the fleet's value,
+	// which the pod carries as an environment variable, and this overrides it
+	// for the node that states it.
+	//
+	// On OpenShift the value reaches the kubelet through a KubeletConfig for
+	// the machine config pool rather than through the node alone, so nodes
+	// sharing a pool that disagree are writing over one another's pool
+	// configuration. It carries no immutability marker, because the CPUs a
+	// machine holds back are a tuning decision rather than a layout one, and
+	// the webhook that guards spec.config is what decides who may retune
+	// them.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the
@@ -250,7 +297,7 @@ type StorageNodeSpec struct {
 	// its nodes.
 	//
 	// Bounded at what a StorageCluster name may be, since a longer value names
-	// nothing that can exist (design-api-upgrade.md §19.4).
+	// nothing that can exist.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
@@ -265,24 +312,27 @@ type StorageNodeSpec struct {
 	NodeSet string `json:"nodeSet,omitempty"`
 
 	// WorkerNode is the Kubernetes worker hostname this node runs on. It is not
-	// marked immutable, because a migration re-points it, but the StorageNode
-	// validating webhook rejects any change made by an identity outside the
-	// operator's namespace.
+	// immutable, because a migration re-points it, but a change made by anything
+	// outside the operator's namespace is rejected.
 	// +kubebuilder:validation:Required
 	WorkerNode string `json:"workerNode"`
 
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
 	// set's socket list, so 0 or 1. With NodeIndex it decomposes Slot into the
 	// pair a person reads; nothing but a print column consumes either.
+	//
+	// It is not marked immutable, because where a node sits is a fact about the
+	// host it runs on and a relocation moves it: the target worker's free socket
+	// is not necessarily the source's. The StorageNode validating webhook
+	// rejects a change made by an identity outside the operator's namespace,
+	// which is the same treatment WorkerNode takes and for the same reason.
 	// +optional
-	// +k8s:immutable
 	SocketID string `json:"socketId,omitempty"`
 
 	// NodeIndex is the position among the nodes sharing this socket, in
-	// 0..nodesPerSocket-1. See SocketID.
+	// 0..nodesPerSocket-1. See SocketID, whose guard it shares.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
-	// +k8s:immutable
 	NodeIndex *int32 `json:"nodeIndex,omitempty"`
 
 	// Slot is which storage-node slot on this worker the object occupies, counted
@@ -437,9 +487,8 @@ type StorageNodeStatus struct {
 	// +optional
 	Phase StorageNodePhase `json:"phase,omitempty"`
 
-	// Step is the position of the provisioning machine, as the shared
-	// statemachine.KubeSnapshot. The rule is what an Enum marker would do if a
-	// marker could reach a field of a shared type.
+	// Step is the position of the provisioning machine. The value is one of the
+	// steps that machine declares.
 	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['CheckingHost','CheckingConfig','AwaitingSlot','Posting','Resolving','Adopting','AwaitingWorker']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`

@@ -643,19 +643,19 @@ func peerEnvIf(peerTLS bool) []corev1.EnvVar {
 	if !peerTLS {
 		return nil
 	}
-	return fdbOperatorPeerEnv()
+	return fdbClientEnv()
 }
 
 func peerVolumeIf(peerTLS bool) []corev1.Volume {
 	if !peerTLS {
 		return nil
 	}
-	return fdbOperatorPeerVolume()
+	return fdbClientVolume()
 }
 
 func peerMountIf(peerTLS bool) []corev1.VolumeMount {
 	if !peerTLS {
 		return nil
 	}
-	return fdbOperatorPeerMount()
+	return fdbClientMount()
 }

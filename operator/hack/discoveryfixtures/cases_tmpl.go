@@ -88,7 +88,7 @@ func allCases() map[string]Case {
 	for _, family := range []map[string]Case{
 		devCases(), numaCases(), sizeCases(), pciCases(), fleetCases(),
 		netCases(), roleCases(), filterCases(), heldCases(), failCases(),
-		configMapCases(), templateCases(),
+		configMapCases(), templateCases(), hostCases(),
 	} {
 		for id, c := range family {
 			if _, repeated := out[id]; repeated {

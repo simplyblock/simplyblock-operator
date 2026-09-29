@@ -182,6 +182,53 @@ other is a paragraph that lost its connectives.
 A table beats both when every row answers the same two or three questions. That
 is why the design documents carry so many of them.
 
+## A published comment is written for someone without the source
+
+Most comments in this repository are read by the next person to open the file,
+who has everything else on disk. Some are not. A doc comment on an exported Go
+symbol is published by `go doc` and `pkg.go.dev`, and a doc comment in
+`operator/api/**` goes further: controller-gen copies it into the CRD's OpenAPI
+`description`, which ships in the chart, lands in the cluster, and is what
+`kubectl explain` prints. The comment on a field is that field's user
+documentation, and it is the only documentation most users will ever read.
+
+**So a comment under `operator/api/**` states what the kind or the field is, what
+values it takes, what the system does with it, and what happens when it is left
+out or changed.** A reader holding nothing but `kubectl explain` has to be able
+to act on every sentence.
+
+None of this reaches that reader, so none of it belongs there:
+
+- **A path into the repository:** a design document, a Go file, a package, a
+  generated artifact. `kubectl explain storagenode.spec.clusterRef` today ends
+  with "(design-api-upgrade.md §19.4)," which names a file the user does not
+  have.
+- **The build:** controller-gen, openapi-gen, `zz_generated*`, `make -C operator
+  generate`, a marker's spelling, or why a validation is declared at one level
+  rather than another. The `OperatorOps` spec description explains that
+  controller-gen emits marker rules in a varying order, which is true, internal,
+  and shipped to users.
+- **The internals behind the behavior:** which reconciler acts, which webhook
+  admits, which cache is read. State the behavior a user observes. "A manifest
+  written against v1alpha1 is still accepted and converted" says what they need.
+  The conversion webhook is ours.
+- **The history of the API:** what a property used to be called, what a redesign
+  moved, an alternative that was weighed. A rename matters to a user only as the
+  version that still works.
+
+That last point is where this rule and the `new-files` skill meet. A file's
+opening comment normally earns its place by saying why the code lives *here*,
+and for an internal package that is exactly right. For a type in
+`operator/api/**` the boundary question is internal too, and the answer belongs
+in the design document, not in the CRD a customer reads.
+
+Package doc comments carry the same split. Under `operator/api/**` the package
+comment describes the group: what the kinds are for, which version is stored,
+what a client may do with them. Whatever a maintainer needs about generators,
+markers, and regeneration is not documentation of the API, and moving it below
+the `package` clause only hides it from `go doc` while leaving it in the file.
+Cut it, and let the `build-system` skill and the markers themselves carry it.
+
 ## Names, terms, and spelling
 
 **The brand is lowercase**: `simplyblock`, mid-sentence, always. It is

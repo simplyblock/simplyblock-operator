@@ -23,8 +23,8 @@ import (
 )
 
 // SimplyblockDriverPhase is where the operator has got to with the CSI driver.
-// Installing covers the applies of §4.1, and the three values after it are
-// decided by what the node plugins and the controller plugin report (§4.2).
+// Installing covers the applies, and the three values after it are decided by
+// what the node plugins and the controller plugin report.
 // +kubebuilder:validation:Enum=Installing;Ready;Degraded;Unavailable
 type SimplyblockDriverPhase string
 
@@ -124,19 +124,14 @@ const (
 
 // DriverTLS configures whether this deployment's two plugins reach the
 // control plane over TLS. Unset (every field at its zero value) is a
-// plaintext data path, which is what every deployment measured before this
-// field existed ran as — the chart rendered `simplyblock.tlsEnv`,
-// `simplyblock.tlsVolumeMount`, and `simplyblock.clientTlsVolume`
-// unconditionally on both plugins, gated on the same three Helm values these
-// fields replace.
+// plaintext data path, which is what every deployment ran as before this field
+// existed.
 //
-// The client-certificate Secret each plugin mounts is not named here: it is
+// The client-certificate Secret each plugin mounts is not named here. It is
 // `<object name>-csi-controller-client-tls` and
-// `<object name>-csi-node-client-tls`, the same names
-// operator/internal/controllers/driver/names.go derives for every other
-// object, and the same ones this chart's controlplane_certificates.yaml
-// already writes for cert-manager. A field naming them again would be a
-// second place for the two to disagree.
+// `<object name>-csi-node-client-tls`, derived from the object's name like
+// every other object this deployment creates, and a field naming them again
+// would be a second place for the two to disagree.
 type DriverTLS struct {
 	// EnableTLS turns on TLS between both plugins and the control plane.
 	// +kubebuilder:default=false
@@ -175,8 +170,8 @@ type SimplyblockDriverSpec struct {
 	// because the default Image is a moving tag: it follows the operator's own,
 	// and a development build's tag is rebuilt in place. IfNotPresent against a
 	// tag that moved leaves the workers that already pulled it running the old
-	// plugin and the workers that had not running the new one, which is the
-	// skew of §5 inside one deployment and invisible from the object.
+	// plugin and the workers that had not running the new one, which is version
+	// skew inside one deployment and invisible from the object.
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
@@ -247,10 +242,9 @@ type SimplyblockDriverSpec struct {
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field
-	// existed, so adoption of a deployment already running TLS needs this to
-	// already agree with what the plugins are configured for — see
-	// adoption.go's tlsAdoptionMismatch — rather than reading it off a live
-	// object the way spec.driverName's default cannot be.
+	// existed. Adopting a deployment that already runs TLS requires this to
+	// agree with what its plugins are configured for, because it is not read
+	// off the running objects.
 	// +optional
 	TLS DriverTLS `json:"tls,omitempty"`
 }
@@ -266,7 +260,7 @@ const (
 	SnapshotSupportOriginDetected SnapshotSupportOrigin = "Detected"
 	// SnapshotSupportOriginInstalled is a cluster where the operator applied
 	// them. They are cluster-scoped and shared, so they carry no controller
-	// reference and outlive this object (§4.1).
+	// reference and outlive this object.
 	SnapshotSupportOriginInstalled SnapshotSupportOrigin = "Installed"
 )
 

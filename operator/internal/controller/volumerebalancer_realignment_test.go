@@ -37,30 +37,32 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 
 	cases := []struct {
 		name         string
-		enabled      *bool
+		disabled     *bool
 		vms          *simplyblockv1alpha2.VolumeMigrationSettings
 		wantEnabled  bool
 		wantInterval time.Duration
 		wantMinMoves int64
 	}{
 		{
-			// The switch is enable-formed, so a cluster that says nothing gets
-			// nothing (design-storagecluster.md §3.1). A cluster upgraded from
-			// v1alpha1 arrives with the field written by the conversion, which
-			// is what keeps the registered default's behavior.
-			name:        "no switch → off",
-			wantEnabled: false,
+			// The switch is disable-formed, so a cluster that says nothing
+			// realigns (design-storagecluster.md §3.1). Realignment restores
+			// the fault-tolerance and node-affinity guarantees every volume
+			// move invalidates, and losing them by omission is what an off
+			// default would cost.
+			name:         "nothing stated → on",
+			wantEnabled:  true,
+			wantInterval: defaultDataRealignmentInterval,
+			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
-			name:         "switch on with no settings → default interval",
-			enabled:      ptr.To(true),
+			name:         "the switch stated false → on",
+			disabled:     ptr.To(false),
 			wantEnabled:  true,
 			wantInterval: defaultDataRealignmentInterval,
 			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
 			name:         "settings present but DataRealignment nil → default",
-			enabled:      ptr.To(true),
 			vms:          &simplyblockv1alpha2.VolumeMigrationSettings{},
 			wantEnabled:  true,
 			wantInterval: defaultDataRealignmentInterval,
@@ -69,16 +71,15 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 		{
 			// The tuning block stays configured while the switch is off, which
 			// is what makes turning it back on need one edit rather than four.
-			name:    "switch off with a tuned block → off",
-			enabled: ptr.To(false),
+			name:     "switch off with a tuned block → off",
+			disabled: ptr.To(true),
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{Interval: dur(time.Minute)},
 			},
 			wantEnabled: false,
 		},
 		{
-			name:    "custom interval honored",
-			enabled: ptr.To(true),
+			name: "custom interval honored",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{Interval: dur(3 * time.Minute)},
 			},
@@ -87,8 +88,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
-			name:    "zero interval falls back to default",
-			enabled: ptr.To(true),
+			name: "zero interval falls back to default",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{Interval: dur(0)},
 			},
@@ -97,8 +97,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
-			name:    "negative interval falls back to default",
-			enabled: ptr.To(true),
+			name: "negative interval falls back to default",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{Interval: dur(-5 * time.Minute)},
 			},
@@ -107,8 +106,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
-			name:    "a tuned block with the switch on is honored",
-			enabled: ptr.To(true),
+			name: "a tuned block with the switch on is honored",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{Interval: dur(time.Minute)},
 			},
@@ -117,8 +115,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: defaultDataRealignmentMinMoves,
 		},
 		{
-			name:    "custom minMoves honored",
-			enabled: ptr.To(true),
+			name: "custom minMoves honored",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{MinMoves: ptr.To(int32(10))},
 			},
@@ -127,10 +124,9 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 			wantMinMoves: 10,
 		},
 		{
-			// Zero would mean "realign when nothing has moved", which is not a
+			// Zero would mean "realign when nothing has moved," which is not a
 			// meaningful request; fall back rather than spin.
-			name:    "zero minMoves falls back to default",
-			enabled: ptr.To(true),
+			name: "zero minMoves falls back to default",
 			vms: &simplyblockv1alpha2.VolumeMigrationSettings{
 				DataRealignment: &simplyblockv1alpha2.DataRealignmentSettings{MinMoves: ptr.To(int32(0))},
 			},
@@ -144,7 +140,7 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cr := &simplyblockv1alpha2.StorageCluster{
 				Spec: simplyblockv1alpha2.StorageClusterSpec{
-					EnableDataRealignment:   tc.enabled,
+					DisableDataRealignment:  tc.disabled,
 					VolumeMigrationSettings: tc.vms,
 				},
 			}
@@ -187,7 +183,7 @@ func TestNextRequeue(t *testing.T) {
 // reconcileDataRealignment — behavior + negative cases.
 // ---------------------------------------------------------------------------
 
-// realignFixture wires a reconciler to a counting HTTP stub and a fake k8s client.
+// realignFixture wires a reconciler to a counting HTTP stub and a fake K8s client.
 type realignFixture struct {
 	r        *VolumeRebalancerReconciler
 	cl       client.Client
@@ -232,9 +228,9 @@ func (f *realignFixture) getCluster(t *testing.T) *simplyblockv1alpha2.StorageCl
 // realignTestCluster builds a StorageCluster with `generation` volume moves recorded and
 // `realigned` of them already covered — so generation-realigned is what is outstanding.
 //
-// The realignment switch is on, because every case below is about when a
-// realignment runs rather than about whether the cluster asked for one. The
-// one case that is about the switch turns it off itself.
+// The realignment switch is left unstated, which is on, because every case
+// below is about when a realignment runs rather than about whether the cluster
+// asked for one. The one case that is about the switch turns it off itself.
 func realignTestCluster(
 	generation, realigned int64,
 	lastAt *metav1.Time,
@@ -244,7 +240,6 @@ func realignTestCluster(
 	cr := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: realignClusterName, Namespace: realignNamespace},
 		Spec: simplyblockv1alpha2.StorageClusterSpec{
-			EnableDataRealignment:   ptr.To(true),
 			VolumeMigrationSettings: vms,
 		},
 		Status: simplyblockv1alpha2.StorageClusterStatus{
@@ -262,7 +257,7 @@ func realignTestCluster(
 
 func TestReconcileDataRealignment_DisabledSkips(t *testing.T) {
 	cr := realignTestCluster(1, 0, nil, true, nil)
-	cr.Spec.EnableDataRealignment = ptr.To(false)
+	cr.Spec.DisableDataRealignment = ptr.To(true)
 	f := newRealignFixture(t, http.StatusOK, cr)
 
 	if got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID); got != 0 {

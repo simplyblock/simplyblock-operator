@@ -71,6 +71,14 @@ const (
 	// difference is the whole reason this package exists.
 	ReasonUnreadable Reason = "Unreadable"
 
+	// ReasonRemovable is a device the kernel reports as removable: an optical
+	// drive, a USB stick, a card reader. It is refused for what it is rather
+	// than for what is currently in it, because backend storage that can be
+	// taken out of the machine is storage the cluster loses without a fault to
+	// diagnose, and an empty drive and a loaded one differ only in the size
+	// they report.
+	ReasonRemovable Reason = "Removable"
+
 	// ReasonReadOnly is a device the kernel presents read-only, which a cluster
 	// cannot write to.
 	ReasonReadOnly Reason = "ReadOnly"
@@ -222,6 +230,10 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	}
 	if disk.SizeBytes == 0 {
 		c.reject(ReasonNoCapacity, "the device reports a size of zero")
+	}
+	if disk.Removable {
+		c.reject(ReasonRemovable,
+			"the kernel reports the device as removable, so it can leave the machine")
 	}
 	if disk.ReadOnly {
 		c.reject(ReasonReadOnly, "the kernel presents the device read-only")

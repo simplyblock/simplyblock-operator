@@ -1,14 +1,15 @@
 // A deployment's whole inventory, gathered in one call.
 //
 // This is the only place a caller has to know about to ask what there is to
-// deploy on. The five readings come from five places — the CPU topology, the
-// huge-page pools, the network interfaces, the block devices, and the
-// Kubernetes API — and a discovery run wants all five before it writes a
-// document, so collecting them separately would leave every caller writing the
-// same five calls and the same partial-failure handling.
+// deploy on. The readings come from as many places — the CPU topology, the
+// memory, the huge-page pools, the network interfaces, the block devices, the
+// host's own os-release, and the Kubernetes API — and a discovery run wants all
+// of them before it writes a document, so collecting them separately would
+// leave every caller writing the same calls and the same partial-failure
+// handling.
 //
-// Four of the five are one machine's and the fifth is the cluster's, and they
-// are gathered together anyway because that is the shape of the answer: a
+// All but one are a machine's own and the last is the cluster's, and they are
+// gathered together anyway because that is the shape of the answer: a
 // ClusterDeploymentConfig states an environment and a set of workers with their
 // devices, so a run that produced one half without the other has produced
 // nothing reviewable.
@@ -74,6 +75,12 @@ type Config struct {
 	// blockdev.DefaultDevRoot. It decides the paths the disks are opened by.
 	DevRoot string
 
+	// HostRoot is where the host's root filesystem is mounted, defaulting to
+	// DefaultHostRoot. The OS reading is the only one that uses it, and it is
+	// the reading a container gets a plausible wrong answer for when it is left
+	// alone: every image carries an os-release of its own. See ReadHostOS.
+	HostRoot string
+
 	// MountinfoPath is the mount table the disk reading consults, defaulting to
 	// this process's own. A collection running in a pod has to point it at the
 	// host's, which is PID 1's: a pod has its own mount namespace, so its own
@@ -94,6 +101,11 @@ type Config struct {
 	// reader is LocalAddresses, this process's own network namespace, which is
 	// the host's for a caller running with host networking.
 	InterfaceAddresses AddressReader
+
+	// Machine answers what hardware the kernel is running on. A nil reader is
+	// LocalMachine, the uname of the kernel this process runs under, which is
+	// the host's kernel whether or not the process is in a container.
+	Machine MachineReader
 
 	// Kubernetes is the cluster half of a collection's sources. The zero value
 	// collects no environment, which is what a caller inspecting a machine
@@ -213,6 +225,11 @@ type Inventory struct {
 	// at all. This is what says the disks are there and something else has
 	// them.
 	NVMeControllers []pci.Device
+
+	// HostOS is the distribution the worker runs and the architecture it runs
+	// on. It is the machine's own answer, read from its os-release and its
+	// kernel, where Environment is the cluster's.
+	HostOS HostOS
 
 	// Environment is which Kubernetes distribution the cluster runs, and the
 	// markers that said so.
@@ -384,8 +401,8 @@ func (i Inventory) ByNUMANode() []NUMANodeInventory {
 	return nodes
 }
 
-// Collect reads all five, and returns what it could read beside what it could
-// not.
+// Collect reads all of them, and returns what it could read beside what it
+// could not.
 //
 // The error joins every reader that failed, so a caller inspecting twenty
 // workers can record the failure against the one worker and keep the rest of
@@ -419,6 +436,12 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		errs = append(errs, fmt.Errorf("read the huge pages: %w", err))
 	}
 	inv.HugePages = pages
+
+	hostOS, err := ReadHostOS(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the host OS: %w", err))
+	}
+	inv.HostOS = hostOS
 
 	ifaces, err := ReadInterfaces(cfg)
 	if err != nil {

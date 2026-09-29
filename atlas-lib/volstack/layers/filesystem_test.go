@@ -208,7 +208,7 @@ func TestAnEncryptedVolumeIsStagedThoughItsContentCannotBeRead(t *testing.T) {
 		Ops:         fs,
 		Content: fakeReader{reading: blockdev.Reading{
 			Content: blockdev.ContentForeign,
-			Detail:  "no known signature, and the probed regions are not empty: first non-zero byte at 0",
+			Detail:  "no known signature, and the head region is not empty: first non-zero byte at 0",
 		}},
 		Encrypted: true,
 	})

@@ -211,6 +211,7 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		Interfaces:      []inventory.Interface{{Name: "eth0", SpeedMbps: 25000}},
 		Devices:         []blockdev.Candidate{oneFreeDisk()},
 		NVMeControllers: []pci.Device{{Address: "0000:5e:00.0", Class: "0x010802", Driver: "nvme"}},
+		HostOS:          ubuntuHost(),
 	}
 
 	report := FromInventory("worker-3", probedAt, inv, nil)
@@ -222,6 +223,7 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		"interfaces":      len(report.Interfaces) != 0,
 		"devices":         len(report.Devices) != 0,
 		"nvmeControllers": len(report.NVMeControllers) != 0,
+		"hostOS":          report.HostOS.Distro != "",
 	} {
 		if !carried {
 			t.Errorf("the %s reading was not carried into the report", name)
@@ -298,5 +300,51 @@ func TestSummaryNamesWhatWasFound(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Errorf("the summary %q does not say %q", summary, want)
 		}
+	}
+}
+
+// ubuntuHost is the OS reading of the distribution most storage nodes run on.
+func ubuntuHost() inventory.HostOS {
+	return inventory.HostOS{
+		Distro:       inventory.DistroUbuntu,
+		Family:       inventory.OSFamilyDebian,
+		Version:      "22.04",
+		PrettyName:   "Ubuntu 22.04.4 LTS",
+		Architecture: "x86_64",
+	}
+}
+
+func TestFromInventoryCarriesTheDistroFamilyVersionAndArchitecture(t *testing.T) {
+	// All four, because each answers a different question a reviewer has: which
+	// host this is, which package manager it has, whether the version is one
+	// this product supports, and whether the images it would run are built for
+	// it.
+	report := FromInventory(testNode, probedAt, inventory.Inventory{HostOS: ubuntuHost()}, nil)
+
+	if report.HostOS.Distro != string(inventory.DistroUbuntu) {
+		t.Errorf("the report names the distro %q, want %q", report.HostOS.Distro, inventory.DistroUbuntu)
+	}
+	if report.HostOS.Family != string(inventory.OSFamilyDebian) {
+		t.Errorf("the report names the family %q, want %q", report.HostOS.Family, inventory.OSFamilyDebian)
+	}
+	if report.HostOS.Version != "22.04" {
+		t.Errorf("the report names the version %q, want %q", report.HostOS.Version, "22.04")
+	}
+	if report.HostOS.Architecture != "x86_64" {
+		t.Errorf("the report names the architecture %q, want %q", report.HostOS.Architecture, "x86_64")
+	}
+	if report.HostOS.PrettyName != "Ubuntu 22.04.4 LTS" {
+		t.Errorf("the report names the OS %q, want %q", report.HostOS.PrettyName, "Ubuntu 22.04.4 LTS")
+	}
+}
+
+func TestFromInventoryReportsAHostWhoseOSWasNotRead(t *testing.T) {
+	// A probe that was not given the host's root filesystem reports an empty
+	// distro beside the failure that says why, rather than a plausible one read
+	// out of its own image.
+	report := FromInventory(testNode, probedAt, inventory.Inventory{}, nil)
+
+	if report.HostOS.Distro != "" {
+		t.Errorf("the report names the distro %q with nothing read", report.HostOS.Distro)
 	}
 }

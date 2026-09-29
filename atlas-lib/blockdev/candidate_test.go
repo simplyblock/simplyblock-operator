@@ -270,6 +270,89 @@ func TestCandidatesNeverHandsOverAFabricNamespace(t *testing.T) {
 	}
 }
 
+// A removable device is never backend storage, whatever is in it.
+//
+// The optical drive is the case that turned up on a real worker: a QEMU
+// DVD-ROM with install media in it reports a whole disk of 924 MB on the SATA
+// bus, reads as a blank device through a content probe that finds no signature
+// it knows, and is therefore admitted on every other ground. Nothing else
+// distinguishes it, and a cluster that took it would lose the device the moment
+// the medium was ejected.
+//
+// The waiver rules out nothing here: this is what the device is rather than
+// what is currently on it, so unlike a stale partition table there is no state
+// an administrator could know better than the kernel does.
+func TestCandidatesRejectsARemovableDevice(t *testing.T) {
+	const (
+		fixed = "devices/pci0000:00/0000:5e:00.0/nvme/nvme0/nvme0n1"
+		opti  = "devices/pci0000:00/0000:00:1f.2/ata2/host2/target2:0:0/2:0:0:0/block/sr0"
+		usb   = "devices/pci0000:00/0000:14:00.0/usb1/1-3/1-3:1.0/host3/target3:0:0/3:0:0:0/block/sdc"
+	)
+	h := tree{files: map[string]string{}, links: map[string]string{}}
+
+	// A fixed NVMe SSD, which is what the run is for.
+	h.blockAttrs(fixed, "259:0", 6251233968, false, false, false)
+	h.links["class/block/nvme0n1"] = "../../" + fixed
+	h.links[fixed+"/device"] = ".."
+
+	// The optical drive, with a medium in it so that it reports a size.
+	h.blockAttrs(opti, "11:0", 1805164, true, false, true)
+	h.links["class/block/sr0"] = "../../" + opti
+	h.links[opti+"/device"] = "../.."
+
+	// A USB stick, which is the same statement on a different bus: removable is
+	// what the kernel says about the device, not about the medium.
+	h.blockAttrs(usb, "8:32", 60063744, false, false, true)
+	h.links["class/block/sdc"] = "../../" + usb
+	h.links[usb+"/device"] = "../.."
+
+	// Nothing on this host is mounted or swapping: the refusal under test has
+	// to rest on what the devices are, and a usage finding would supply a
+	// second ground that hides whether the first one fired.
+	h.files["self/mountinfo"] = ""
+	h.files["swaps"] = ""
+
+	root := h.write(t)
+	in := Inspector{
+		Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+		// Only the fixed disk is served, which asserts the second half of the
+		// rejection: a device refused on a structural ground is never opened,
+		// so a removable drive's medium is not read to decide something the
+		// kernel already answered. An opener reaching sr0 fails the test by
+		// having no content to serve.
+		Prober: NewProberWithOpener(contentOpener(map[string]sparse{
+			"nvme0n1": blank(6251233968 * 512),
+		}), WithRegionSize(MinRegionSize)),
+		Exclusive: free,
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, name := range []string{"sr0", "sdc"} {
+		device := found(t, cands, name)
+		if device.Available() {
+			t.Errorf("handed over %s, a removable device, as backend storage", name)
+		}
+		if !device.RejectedFor(ReasonRemovable) {
+			t.Errorf("rejected %s for %v, want %s", name, device.Rejections, ReasonRemovable)
+		}
+		// The waiver an administrator has is for a stale partition table, and
+		// it must not reach this: a device rejected for being removable and for
+		// nothing else is still not a candidate.
+		if device.OnlyRejectedFor(ReasonPartitioned) {
+			t.Errorf("%s reads as refused only for its partition table", name)
+		}
+	}
+
+	fixedDisk := found(t, cands, "nvme0n1")
+	if !fixedDisk.Available() {
+		t.Errorf("rejected the fixed disk beside them: %v", fixedDisk.Rejections)
+	}
+}
+
 func TestCandidatesRejectsADiskTheKernelWillNotHandOver(t *testing.T) {
 	held := func(path string) error {
 		if path == "/dev/nvme0n1" {

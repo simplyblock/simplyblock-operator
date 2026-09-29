@@ -96,7 +96,12 @@ func tlsMount(local *simplyblockv1alpha2.LocalControlPlane) []corev1.VolumeMount
 // certificate and key there and publishes its bundle as a ConfigMap, so the two
 // are projected together and the bundle's key is renamed to the ca.crt the image
 // reads from either provider.
-func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane, secret string) []corev1.Volume {
+//
+// The Secret is the serving certificate's for every workload of this install.
+// The driver's own tlsVolume takes the name as a parameter, because the node and
+// the controller present different client certificates. A control plane has one
+// identity, and every pod of it mounts the same material.
+func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane) []corev1.Volume {
 	if !local.ServesTLS() {
 		return nil
 	}
@@ -108,7 +113,7 @@ func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane, secret string) []co
 				Projected: &corev1.ProjectedVolumeSource{
 					Sources: []corev1.VolumeProjection{
 						{Secret: &corev1.SecretProjection{
-							LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+							LocalObjectReference: corev1.LocalObjectReference{Name: ServingCertSecret},
 						}},
 						{ConfigMap: &corev1.ConfigMapProjection{
 							LocalObjectReference: corev1.LocalObjectReference{Name: openShiftCAConfigMap},
@@ -125,7 +130,7 @@ func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane, secret string) []co
 	return []corev1.Volume{{
 		Name: tlsVolumeName,
 		VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{SecretName: secret},
+			Secret: &corev1.SecretVolumeSource{SecretName: ServingCertSecret},
 		},
 	}}
 }
@@ -142,14 +147,25 @@ func tlsVolume(local *simplyblockv1alpha2.LocalControlPlane, secret string) []co
 // cert-manager takes a Certificate naming the Service's DNS names, and the
 // OpenShift service CA takes an annotation on the Service itself, which is why
 // this returns objects for one and annotations for the other.
+//
+// The chart's own Certificate for this Service carried a commonName and, under
+// mutual TLS, client auth alongside server auth: this one is also presented
+// outbound, to FoundationDB and to a KMS such as OpenBao. The migration onto
+// BuildServiceServingCertificate, built for a Service that only ever answers,
+// dropped both, which is why a cert-auth KMS login had no commonName to name its
+// identity alias after.
 func servingCertificateObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	local := cp.Spec.Source.Local
 	if !local.ServesTLS() || local.TLSProvider() != simplyblockv1alpha2.ControlPlaneTLSCertManager {
 		return nil
 	}
-	return []client.Object{
-		utils.BuildServiceServingCertificate(cp.Namespace, ComponentWebAPI, ServingCertSecret),
+	cert := utils.BuildServiceServingCertificate(cp.Namespace, ComponentWebAPI, ServingCertSecret)
+	if local.RequiresClientCertificate() {
+		if spec, ok := cert.Object["spec"].(map[string]any); ok {
+			spec["usages"] = []any{"digital signature", "key encipherment", "server auth", "client auth"}
+		}
 	}
+	return []client.Object{cert}
 }
 
 // servingCertAnnotations is the OpenShift half: the service CA signs from an
@@ -216,9 +232,11 @@ func fdbPeerMount() []any {
 	}}
 }
 
-// fdbOperatorPeerEnv is the same material for the FoundationDB operator itself,
-// which reconciles the cluster and has to reach it the way its processes do.
-func fdbOperatorPeerEnv() []corev1.EnvVar {
+// fdbClientEnv is the same material for a pod that reaches the database as a
+// client rather than as one of its processes: the FoundationDB operator, which
+// reconciles the cluster and has to reach it the way its processes do, and the
+// index backfill.
+func fdbClientEnv() []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{Name: "FDB_TLS_CERTIFICATE_FILE", Value: fdbTLSMountPath + "/tls.crt"},
 		{Name: "FDB_TLS_KEY_FILE", Value: fdbTLSMountPath + "/tls.key"},
@@ -226,9 +244,9 @@ func fdbOperatorPeerEnv() []corev1.EnvVar {
 	}
 }
 
-// fdbOperatorPeerVolume and fdbOperatorPeerMount are the typed halves of the
-// same, for the operator's own Deployment.
-func fdbOperatorPeerVolume() []corev1.Volume {
+// fdbClientVolume and fdbClientMount are the typed halves of the same, for the
+// workloads this operator builds itself.
+func fdbClientVolume() []corev1.Volume {
 	return []corev1.Volume{{
 		Name: fdbTLSVolumeName,
 		VolumeSource: corev1.VolumeSource{
@@ -237,7 +255,7 @@ func fdbOperatorPeerVolume() []corev1.Volume {
 	}}
 }
 
-func fdbOperatorPeerMount() []corev1.VolumeMount {
+func fdbClientMount() []corev1.VolumeMount {
 	return []corev1.VolumeMount{{
 		Name: fdbTLSVolumeName, MountPath: fdbTLSMountPath, ReadOnly: true,
 	}}

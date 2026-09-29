@@ -136,6 +136,34 @@ The full table with adoption numbers is in `references/markers.md`. The minimum:
   `+listType=map` and `+listMapKey=type` or server-side apply replaces the whole
   list instead of merging it, and none of the three existing ones do.
 
+## A doc comment here is the CRD's user documentation
+
+controller-gen copies every doc comment in `operator/api/**` into the OpenAPI
+`description` of the CRD it generates. That file ships in the chart, is applied
+to the cluster, and is what `kubectl explain` prints. A field's comment is the
+only documentation most users will ever read about that field, and it reaches
+them with no repository behind it.
+
+Write it for that reader: what the field is, what values it accepts, what the
+system does with it, and what happens when it is omitted or changed. Leave out
+the repository path, the design document, the generator, the marker, and the
+reconciler. Two descriptions shipped today show the failure. `kubectl explain
+storagenode.spec.clusterRef` ends with "(design-api-upgrade.md §19.4)," and the
+`OperatorOps` spec description explains that controller-gen emits marker rules in
+an order that varies between runs. Both are true, and neither is actionable
+without the source tree.
+
+Grep the generated CRDs for the leak rather than trusting a reading of the Go:
+
+```bash
+grep -rn 'design-\|\.md\|controller-gen\|operator/internal\|atlas-lib\|zz_generated' \
+  helm-charts/charts/simplyblock-operator/crds/storage.simplyblock.io_*.yaml
+```
+
+The `controller-gen.kubebuilder.io/version` annotation on line 6 of every file is
+the generator's own and is not a finding. `house-style` has the full rule in "A
+published comment is written for someone without the source."
+
 ## Immutability is a marker, not a sentence
 
 A doc comment reading `// Immutable.` enforces nothing. Six fields across

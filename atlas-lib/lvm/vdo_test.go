@@ -78,10 +78,10 @@ func TestManager_CreateLogicalVolume_VDODefinitionProducesVDOCommand(t *testing.
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
 	want := []string{
-		"lvcreate", "-n", "lvol1", "-l", "100%FREE", "vdo-lvol1/vdopool", "--yes",
+		"lvcreate", "-n", "lvol1", "-l", "100%FREE", "vdo-lvol1/vdopool", "--yes", "--addtag", OwnerTag,
 		"--type", "vdo", "--config", "activation{checks=0}", "--compression", "y", "--deduplication", "y",
 	}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

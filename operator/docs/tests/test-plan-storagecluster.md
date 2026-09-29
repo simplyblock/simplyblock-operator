@@ -99,16 +99,17 @@ File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
 File: `operator/internal/controllers/cluster/storagecluster_controller_test.go`
 
-| #    | Scenario                                                                                  | Type     | Test                                                       |
-|------|-------------------------------------------------------------------------------------------|----------|------------------------------------------------------------|
-| U-21 | Backend reports the same status, NQN, and rebalancing flag: no patch issued               | Boundary | —                                                          |
-| U-22 | Backend status changed: status patched and requeued                                       | Positive | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance` |
-| U-23 | Backend read fails: requeue, status left untouched                                        | Negative | —                                                          |
-| U-24 | Per-cluster Secret missing: sync proceeds without the credentials upsert                  | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                  |
-| U-69 | `status.phase` follows the control plane's lifecycle string                               | Positive | `TestThePhaseFollowsTheControlPlanesStatus`                |
-| U-70 | `status.tasks` holds running and pending only, capped at 20, in the control plane's order | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                  |
-| U-71 | A task that leaves the window emits `TaskCompleted`                                       | Positive | `TestATaskLeavingTheWindowEmitsAnEvent`                    |
-| U-72 | The task read fails: the recorded window is kept rather than emptied                      | Negative | `TestAFailedTaskReadLeavesTheWindowAlone`                  |
+| #    | Scenario                                                                                      | Type     | Test                                                                                       |
+|------|-----------------------------------------------------------------------------------------------|----------|--------------------------------------------------------------------------------------------|
+| U-21 | Backend reports the same status, NQN, and rebalancing flag: no patch issued                   | Boundary | —                                                                                          |
+| U-22 | Backend status changed: status patched and requeued                                           | Positive | `TestTheEffectiveRestartLimitIsClampedToTheFaultTolerance`                                 |
+| U-23 | Backend read fails: requeue, status left untouched                                            | Negative | —                                                                                          |
+| U-24 | Per-cluster Secret missing: sync proceeds without the credentials upsert                      | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
+| U-69 | `status.phase` follows the control plane's lifecycle string                                   | Positive | `TestThePhaseFollowsTheControlPlanesStatus`                                                |
+| U-99 | A rebalance is read as the phase over `active` and `degraded`, and over no not-serving status | Positive | `TestARebalancingClusterReportsItsPhase`, `TestARebalanceIsReadOverTheServingStatusesOnly` |
+| U-70 | `status.tasks` holds running and pending only, capped at 20, in the control plane's order     | Boundary | `TestTheTaskWindowHoldsOnlyWhatIsRunning`                                                  |
+| U-71 | A task that leaves the window emits `TaskCompleted`                                           | Positive | `TestATaskLeavingTheWindowEmitsAnEvent`                                                    |
+| U-72 | The task read fails: the recorded window is kept rather than emptied                          | Negative | `TestAFailedTaskReadLeavesTheWindowAlone`                                                  |
 
 `U-72` is the row worth reading twice. An empty `status.tasks` means nothing is
 running, and a failed read does not say that, so a control plane that cannot be
@@ -309,12 +310,15 @@ hub-first direction in `operator/api/v1alpha1/hub_roundtrip_test.go`.
 | U-CV-22 | A deliberate `LogicalBlock` survives being stored and read back                                       | Positive | `TestStorageClusterADeliberateDeviceClassSurvives`            |
 | U-CV-23 | A removed-field annotation is cleared when the field it notes states nothing                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsValueDoes`    |
 | U-CV-24 | A removed-field annotation is cleared when the block it belongs to is absent                          | Negative | `TestStorageClusterARemovedFieldsNoteGoesWhenItsBlockDoes`    |
+| U-CV-25 | The realignment switch reaches the hub unstated and needs no conversion note                          | Negative | `TestStorageClusterRealignmentIsCarriedWithoutANote`          |
 
-`U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for.
-`enableDataRealignment` is the one row in the whole migration whose default
-changes direction — the registered field was on unless refused, and the
-enable-formed one is off unless asked for — so the conversion records which side
-wrote it rather than guessing.
+`U-CV-10` and `U-CV-11` are the pair `design-property-renames.md` §3.4 asks for,
+and `U-CV-25` is what the pair rests on. `disableDataRealignment` inverts the
+registered `enabled` and keeps its default, so a cluster that never mentioned
+realignment has to reach the hub still not mentioning it: any value written there
+is a statement the cluster did not make, and it is what an off default would have
+cost. `U-CV-25` asserts both halves without naming the field, because what is
+wanted is that nothing is said rather than that a particular word is said.
 
 ---
 
@@ -331,7 +335,9 @@ any other version goes through a conversion webhook `envtest` does not run, so a
 `v1alpha1` row would fail on an unreachable webhook rather than on what it is
 about.
 
-File: `operator/internal/controllers/cluster/cel_validation_test.go`
+Files: `operator/internal/controllers/cluster/cel_validation_test.go`,
+`operator/internal/controllers/cluster/imagepullpolicy_test.go`, and
+`operator/internal/controllers/cluster/interfaces_test.go`
 
 | #    | Scenario                                                                                                 | Type     | Test                                                                  |
 |------|----------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------|
@@ -366,6 +372,9 @@ File: `operator/internal/controllers/cluster/cel_validation_test.go`
 | I-29 | The default pool a cluster is created with picks up the CRD's declared defaults                          | Positive | `TestTheDefaultPoolIsFormattedXFS`                                    |
 | I-30 | Each of the seven supported schemes at creation: accepted; 3+1, 8+2, 2+0, 4+0, 1+3, and 16+4: rejected   | Negative | `TestStorageClusterCELAcceptsOnlyTheSupportedErasureCodingSchemes`    |
 | I-31 | A stripe stating one half only: read as the control plane's default for the other, and accepted          | Boundary | `TestStorageClusterCELReadsAnUnstatedHalfAsTheDefault`                |
+| I-32 | `spec.storageNodes` present with no `imagePullPolicy`: the stored object reads `Always`                  | Boundary | `TestAStorageClusterThatNamesNoPullPolicyPullsAlways`                 |
+| I-33 | `spec.storageNodes.dataInterfaces` changed, appended to, or cleared after creation: rejected             | Negative | `TestTheDataInterfacesAreImmutableOnceSet`                            |
+| I-34 | `spec.storageNodes.dataInterfaces` absent at creation, set later: accepted                               | Boundary | `TestTheDataInterfacesCanBeSetOnceOnAClusterThatOmittedThem`          |
 
 `I-01` is answered by a unit test rather than an integration one: a not-found read
 needs no API server to be a not-found read, and the row is kept because the ID is
@@ -467,10 +476,10 @@ against a real API server under real concurrency.
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
 | Unit        | 179       | 163     | 16          |
-| Integration | 29        | 10      | 19          |
+| Integration | 32        | 13      | 19          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **224**   | **173** | **51**      |
+| **Total**   | **227**   | **176** | **51**      |
 
 The unit count excludes the six struck-through rows, which the rework removed
 rather than left uncovered, and includes the `U-CM-`, `U-SM-`, `U-CP-`, and
