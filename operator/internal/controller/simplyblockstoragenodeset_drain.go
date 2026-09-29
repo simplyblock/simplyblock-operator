@@ -399,6 +399,38 @@ func drainSubsystemGroups(
 	return canonicalByPV, membersByCanonical
 }
 
+// drainCoveredPVs is every PV an existing drain VolumeMigration already moves:
+// its own PV and, for a shared subsystem, the members it lists.
+//
+// Grouping alone is not stable across a batch cutover. The control plane moves
+// the members' records to the target one at a time, so for a moment only some
+// of them still read as being on the drained node; grouping what is left named
+// the group after a different PV, found no CR under that name, and created a
+// second VolumeMigration for a volume the first was already moving (2026-09-29,
+// run 12: "1 of 7 volumes", then a refusal because the volume was already on
+// the target). A PV an existing CR covers is never scheduled again.
+func drainCoveredPVs(items []simplyblockv1alpha1.VolumeMigration) map[string]struct{} {
+	covered := make(map[string]struct{})
+	for i := range items {
+		covered[items[i].Spec.PVName] = struct{}{}
+		if members := items[i].Annotations[annoSubsystemMembers]; members != "" {
+			for _, pv := range strings.Split(members, ",") {
+				covered[pv] = struct{}{}
+			}
+		}
+	}
+	return covered
+}
+
+func anyCovered(pvs []string, covered map[string]struct{}) bool {
+	for _, pv := range pvs {
+		if _, ok := covered[pv]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // drainMigrationVolumes is how many of the drained node's volumes a drain
 // VolumeMigration moves: the members it was created for, else what the
 // control plane reported for the subsystem, else one.

@@ -80,3 +80,47 @@ func TestReconcileStart_AFinishedSiblingDoesNotBlock(t *testing.T) {
 		t.Errorf("phase = %q, want Validating: finished siblings do not hold the subsystem", got.Status.Phase)
 	}
 }
+
+// A volume already on its target -- moved by a sibling's batch -- completes
+// the VolumeMigration instead of failing it and blaming the target.
+func TestReconcileStart_AlreadyOnTargetCompletes(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveVolume(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"LVol ` + testVolumeUUID + ` is already on node target-node; cannot migrate to the same node"}`))
+	})
+	vm := baseVM() // target "target-node"
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
+		t.Errorf("phase = %q (err %q), want Completed", got.Status.Phase, got.Status.ErrorMessage)
+	}
+}
+
+// The same refusal naming a DIFFERENT node is not success.
+func TestReconcileStart_AlreadyOnAnotherNodeStillFails(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveVolume(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"LVol ` + testVolumeUUID + ` is already on node other-node; cannot migrate to the same node"}`))
+	})
+	vm := baseVM()
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", got.Status.Phase)
+	}
+}

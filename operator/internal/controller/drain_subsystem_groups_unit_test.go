@@ -176,11 +176,87 @@ func TestHasMissingVolumeMigrations_SiblingIsCoveredByItsSubsystemCR(t *testing.
 		drainMigrationName(opsTestNodeUUID, "pvc-1"): {},
 		drainMigrationName(opsTestNodeUUID, "pvc-3"): {},
 	}
-	if r.hasMissingVolumeMigrationsOps(context.Background(), webapi.NewClient(srv.URL), "cluster-1", opsTestNodeUUID, ops, existing) {
+	if r.hasMissingVolumeMigrationsOps(context.Background(), webapi.NewClient(srv.URL), "cluster-1", opsTestNodeUUID, ops, existing, nil) {
 		t.Errorf("pvc-2 is covered by pvc-1's subsystem CR; nothing is missing")
 	}
 	delete(existing, drainMigrationName(opsTestNodeUUID, "pvc-3"))
-	if !r.hasMissingVolumeMigrationsOps(context.Background(), webapi.NewClient(srv.URL), "cluster-1", opsTestNodeUUID, ops, existing) {
+	if !r.hasMissingVolumeMigrationsOps(context.Background(), webapi.NewClient(srv.URL), "cluster-1", opsTestNodeUUID, ops, existing, nil) {
 		t.Errorf("the lone volume's CR is gone; it is missing")
+	}
+}
+
+// drainVolumesMidCutoverServer lists the drained node's volumes during a
+// batch cutover: pvc-1, the group's canonical PV, has already moved to the
+// target; pvc-2, its sibling in the same subsystem, still reads as on the
+// drained node.
+func drainVolumesMidCutoverServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/storage-pools/"):
+			_, _ = w.Write([]byte(`[{"id":"pool-1","name":"pool"}]`))
+		case strings.HasSuffix(r.URL.Path, "/volumes/"):
+			_, _ = w.Write([]byte(`[
+				{"id":"vol-1","name":"pvc-1","nqn":"` + sharedNQN + `","storage_node_id":"node-target","status":"online"},
+				{"id":"vol-2","name":"pvc-2","nqn":"` + sharedNQN + `","storage_node_id":"` + opsTestNodeUUID + `","status":"online"}
+			]`))
+		case strings.HasSuffix(r.URL.Path, "/storage-nodes/"):
+			_, _ = w.Write([]byte(`[{"id":"` + opsTestNodeUUID + `","status":"online"},{"id":"node-target","status":"online"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// A sibling still on the drained node mid-cutover is covered by the CR that
+// lists it as a member; it must not get a second VolumeMigration.
+func TestDrain_ASiblingMidCutoverIsNotScheduledTwice(t *testing.T) {
+	srv := drainVolumesMidCutoverServer(t)
+	defer srv.Close()
+
+	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", utils.NodeActionRemove)
+	existingCR := simplyblockv1alpha1.VolumeMigration{}
+	existingCR.Name = drainMigrationName(opsTestNodeUUID, "pvc-1")
+	existingCR.Namespace = opsTestNS
+	existingCR.Annotations = map[string]string{annoSubsystemMembers: "pvc-1,pvc-2"}
+	existingCR.Spec.PVName = "pvc-1"
+	existingCR.Spec.TargetNodeUUID = "node-target"
+	existingCR.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseRunning
+	r := newOpsReconciler(t, sn, ops, drainPV("pvc-1", "vol-1"), drainPV("pvc-2", "vol-2"))
+
+	items := []simplyblockv1alpha1.VolumeMigration{existingCR}
+	names := map[string]struct{}{existingCR.Name: {}}
+	api := webapi.NewClient(srv.URL)
+	if r.hasMissingVolumeMigrationsOps(context.Background(), api, "cluster-1", opsTestNodeUUID, ops, names, items) {
+		t.Error("pvc-2 is listed as a member of the running CR; nothing is missing")
+	}
+	if _, err := r.createMissingVolumeMigrationsOps(context.Background(), api, "cluster-1", ops, sn, items, names); err != nil {
+		t.Fatalf("createMissingVolumeMigrationsOps: %v", err)
+	}
+	var list simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(context.Background(), &list, client.InNamespace(opsTestNS)); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("no new VolumeMigration may be created for a covered sibling, got %d", len(list.Items))
+	}
+}
+
+func TestDrainCoveredPVsIncludesMembers(t *testing.T) {
+	a := simplyblockv1alpha1.VolumeMigration{}
+	a.Spec.PVName = "pvc-a"
+	b := simplyblockv1alpha1.VolumeMigration{}
+	b.Spec.PVName = "pvc-b"
+	b.Annotations = map[string]string{annoSubsystemMembers: "pvc-b,pvc-c"}
+	got := drainCoveredPVs([]simplyblockv1alpha1.VolumeMigration{a, b})
+	for _, pv := range []string{"pvc-a", "pvc-b", "pvc-c"} {
+		if _, ok := got[pv]; !ok {
+			t.Errorf("%s must be covered", pv)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("covered = %v, want exactly pvc-a, pvc-b, pvc-c", got)
 	}
 }

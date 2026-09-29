@@ -1340,7 +1340,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		existingVMNames[vmigList.Items[i].Name] = struct{}{}
 	}
 
-	if len(vmigList.Items) == 0 || r.hasMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, nodeUUID, ops, existingVMNames) {
+	if len(vmigList.Items) == 0 || r.hasMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, nodeUUID, ops, existingVMNames, vmigList.Items) {
 		return r.createMissingVolumeMigrationsOps(ctx, apiClient, clusterUUID, ops, sn, vmigList.Items, existingVMNames)
 	}
 
@@ -1661,6 +1661,7 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	clusterUUID, nodeUUID string,
 	ops *simplyblockv1alpha1.StorageNodeOps,
 	existingVMNames map[string]struct{},
+	existingItems []simplyblockv1alpha1.VolumeMigration,
 ) bool {
 	vols, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
@@ -1677,8 +1678,12 @@ func (r *StorageNodeOpsReconciler) hasMissingVolumeMigrationsOps(
 	// A PV is covered by the CR of its subsystem, which its canonical PV
 	// carries -- see drainSubsystemGroups.
 	canonicalByPV, _ := drainSubsystemGroups(vols, pvm, pvByVol)
+	covered := drainCoveredPVs(existingItems)
 	for _, volUUID := range pvm {
 		if pvName, ok := pvByVol[volUUID]; ok {
+			if _, done := covered[pvName]; done {
+				continue
+			}
 			if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonicalByPV[pvName])]; !exists {
 				return true
 			}
@@ -1729,11 +1734,16 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 	// Targets are chosen per subsystem for the same reason -- the members
 	// cannot go to different nodes.
 	_, membersByCanonical := drainSubsystemGroups(volumes, pvManaged, pvNameByVolumeUUID)
+	covered := drainCoveredPVs(existingItems)
 	pvNames := make([]string, 0, len(membersByCanonical))
-	for canonical := range membersByCanonical {
-		if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonical)]; !exists {
-			pvNames = append(pvNames, canonical)
+	for canonical, members := range membersByCanonical {
+		if _, exists := existingVMNames[drainMigrationName(nodeUUID, canonical)]; exists {
+			continue
 		}
+		if anyCovered(members, covered) {
+			continue
+		}
+		pvNames = append(pvNames, canonical)
 	}
 	sort.Strings(pvNames) // round-robin offsets follow list order; keep it stable
 	if len(pvNames) == 0 {
