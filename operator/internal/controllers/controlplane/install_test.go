@@ -14,6 +14,7 @@ package controlplane
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -606,6 +607,63 @@ func TestSchedulingReachesEveryPodTheInstallCreates(t *testing.T) {
 		}
 		if len(spec.Tolerations) == 0 {
 			t.Errorf("%s carries no tolerations", obj.GetName())
+		}
+	}
+}
+
+// A deployment that pins the database pins the database alone.
+//
+// The reason to pin it at all is the node-add cap: a worker hosting a
+// FoundationDB process is added on its own, whatever the provisioning budget
+// says, so a fleet confines the database to a few workers to leave the rest free
+// to be added together. What that asks for is the database somewhere specific,
+// not the management API, the exporters, and the operator's own controller
+// following it there.
+func TestPinningTheDatabasePinsTheDatabaseAlone(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}
+	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
+		NodeSelector: map[string]string{"storage.simplyblock.io/foundationdb": ""},
+	}
+
+	// Every process class, because the FoundationDB operator replaces
+	// general.podTemplate wholesale for a class that overrides it.
+	want := map[string]any{"storage.simplyblock.io/foundationdb": ""}
+	cluster := foundationDBCluster(cp)
+	for _, class := range []string{"general", "storage", "log"} {
+		got := nestedAny(t, cluster.Object,
+			"spec", "processes", class, "podTemplate", "spec", "nodeSelector")
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("process class %s is pinned by %v, want %v", class, got, want)
+		}
+	}
+
+	for _, obj := range managementAPIObjects(cp) {
+		deployment, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			continue
+		}
+		if selector := deployment.Spec.Template.Spec.NodeSelector; !reflect.DeepEqual(
+			selector, cp.Spec.Source.Local.NodeSelector) {
+			t.Errorf("%s followed the database to %v", obj.GetName(), selector)
+		}
+	}
+}
+
+// A deployment that states no selector for the database leaves it wherever the
+// control plane as a whole was placed, which is where every deployment that
+// predates the field has it.
+func TestAnUnpinnedDatabaseStaysWithTheControlPlane(t *testing.T) {
+	cp := localControlPlane()
+	cp.Spec.Source.Local.NodeSelector = map[string]string{"simplyblock.io/control-plane": "true"}
+
+	want := map[string]any{"simplyblock.io/control-plane": "true"}
+	cluster := foundationDBCluster(cp)
+	for _, class := range []string{"general", "storage", "log"} {
+		got := nestedAny(t, cluster.Object,
+			"spec", "processes", class, "podTemplate", "spec", "nodeSelector")
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("process class %s is pinned by %v, want %v", class, got, want)
 		}
 	}
 }

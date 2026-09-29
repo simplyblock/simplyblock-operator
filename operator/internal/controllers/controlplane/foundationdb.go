@@ -367,8 +367,8 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 				},
 			},
 		}
-		if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
-			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(local.NodeSelector)
+		if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
+			template["spec"].(map[string]any)["nodeSelector"] = toAnyMap(selector)
 		}
 		if peerTLS {
 			// The operator replaces general.podTemplate wholesale for a class
@@ -399,9 +399,9 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"spec": volumeClaimSpec(fdb),
 		},
 	}
-	if local := cp.Spec.Source.Local; local != nil && len(local.NodeSelector) > 0 {
+	if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["nodeSelector"] =
-			toAnyMap(local.NodeSelector)
+			toAnyMap(selector)
 	}
 	if peerTLS {
 		general["podTemplate"].(map[string]any)["spec"].(map[string]any)["volumes"] = fdbPeerVolume()
@@ -498,6 +498,28 @@ func volumeClaimSpec(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
 		spec["storageClassName"] = fdb.StorageClassName
 	}
 	return spec
+}
+
+// foundationDBNodeSelector is where the database's processes are placed.
+//
+// The database's own selector wins over the control plane's whole, and does not
+// merge with it: the two are answers to the same question from different scopes,
+// and a merge would place the database on the intersection: the one answer
+// neither of them gave, and an empty one whenever the deployment states the
+// specific selector because the general one was wrong.
+//
+// It covers only the processes. The FoundationDB operator's own controller is a
+// Deployment placed with everything else, because it is a controller rather than
+// a database process and rebooting its host costs the database nothing.
+func foundationDBNodeSelector(cp *simplyblockv1alpha2.ControlPlane) map[string]string {
+	local := cp.Spec.Source.Local
+	if local == nil {
+		return nil
+	}
+	if fdb := local.FoundationDB; fdb != nil && len(fdb.NodeSelector) > 0 {
+		return fdb.NodeSelector
+	}
+	return local.NodeSelector
 }
 
 // coordinatorCount is spec.source.local.foundationDB.replicas, or the API's
