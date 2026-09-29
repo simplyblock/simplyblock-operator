@@ -57,6 +57,7 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/bootstrap"
 )
 
 // InitialDiscoveryName is what the run is called. It is fixed rather than
@@ -64,6 +65,15 @@ import (
 // and so that an administrator who does not want it can say so by writing an
 // object with that name and deleting nothing.
 const InitialDiscoveryName = "initial-discovery"
+
+// InitialDiscoveryLabel marks the run this raised, so that the draft seed an
+// installation stated is applied to that run's document and to no other.
+//
+// It is a label rather than a comparison against the configured name. The
+// reconciler that reads it would otherwise re-derive this decision from a
+// ConfigMap that may have been edited between the install and the Writing step,
+// and disagree with the object in its hand.
+const InitialDiscoveryLabel = "storage.simplyblock.io/initial-discovery"
 
 // How long the create waits for the operator's own webhook to begin serving, and
 // how often it asks.
@@ -103,7 +113,25 @@ func (d *InitialDiscovery) NeedLeaderElection() bool { return true }
 func (d *InitialDiscovery) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("initial-discovery")
 
-	reason, err := d.declineReason(ctx)
+	// What the installation stated, or the operator's own behavior where it
+	// stated nothing. A document that cannot be read is reported once and then
+	// treated as absent: the alternative is an install that raises no run because
+	// of a typo, which is the outcome hardest to account for from the outside.
+	config, err := bootstrap.Load(ctx, d.Client, d.Namespace)
+	if err != nil {
+		log.Error(err, "the installation's bootstrap configuration could not be read; "+
+			"the operator's own defaults apply")
+	}
+
+	if !config.DiscoveryEnabled() {
+		log.Info("the initial discovery run is declined; this installation raises none")
+		return nil
+	}
+
+	namespace := config.RunNamespace(d.Namespace)
+	name := config.RunName(InitialDiscoveryName)
+
+	reason, err := d.declineReason(ctx, config)
 	if err != nil {
 		// A read that failed is not evidence of an empty cluster. Declining is the
 		// conservative answer: the cost of not running is an administrator writing
@@ -119,29 +147,19 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 
 	run := &simplyblockv1alpha2.OperatorOps{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      InitialDiscoveryName,
-			Namespace: d.Namespace,
+			Name:      name,
+			Namespace: namespace,
+			// The seed this installation stated is applied to this run's document
+			// and to no other, so the run carries what it is.
+			Labels: map[string]string{InitialDiscoveryLabel: "true"},
 		},
 		Spec: simplyblockv1alpha2.OperatorOpsSpec{
 			Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
-			// The run states no selector. What it produces is a draft of
-			// everything the fleet has, which is what a reviewer narrows: a
-			// guess at which disks somebody meant would be a guess they then
-			// have to find and undo (§8.1).
-			//
-			// The one thing it does state is that a partition table is not by
-			// itself a reason to leave a disk out. A machine that has held data
-			// before carries one on every disk, so refusing them makes the run
-			// meant to show a fleet what it has report that it has nothing. The
-			// waiver stays narrow on its own terms: it admits a disk whose only
-			// refusal is the table, and a disk that is also mounted, held by
-			// the kernel, or carrying swap is refused for those instead — which
-			// is what keeps a boot disk out of a draft nobody reads closely.
-			Discover: &simplyblockv1alpha2.DiscoverSpec{
-				DeviceFilter: &simplyblockv1alpha2.DeviceFilter{
-					EnablePartitionedDevices: ptr.To(true),
-				},
-			},
+			// An installation that stated nothing gets a run that narrows nothing
+			// and waives a partition table, which is what this raised before a
+			// configuration existed: what it produces is a draft of everything the
+			// fleet has, and that is what a reviewer narrows.
+			Discover: config.DiscoverSpec(),
 		},
 	}
 	if err := d.createRun(ctx, run); err != nil {
@@ -153,7 +171,7 @@ func (d *InitialDiscovery) Start(ctx context.Context) error {
 	}
 
 	log.Info("raised the initial discovery run; its draft is what to review",
-		"operatorOps", InitialDiscoveryName, "namespace", d.Namespace)
+		"operatorOps", name, "namespace", namespace)
 	return nil
 }
 
@@ -205,7 +223,7 @@ func webhookUnreachable(err error) bool {
 
 // declineReason answers whether anything already exists, and says which thing. An
 // empty string means the install has nothing and the run is worth raising.
-func (d *InitialDiscovery) declineReason(ctx context.Context) (string, error) {
+func (d *InitialDiscovery) declineReason(ctx context.Context, config *bootstrap.Config) (string, error) {
 	var runs simplyblockv1alpha2.OperatorOpsList
 	if err := d.List(ctx, &runs); err != nil {
 		return "", fmt.Errorf("listing operator operations: %w", err)
@@ -230,20 +248,26 @@ func (d *InitialDiscovery) declineReason(ctx context.Context) (string, error) {
 		return fmt.Sprintf("%d storage cluster(s) are already deployed", len(clusters.Items)), nil
 	}
 
-	// The run this would raise states no filter and no selector, so it asks about
-	// every machine, and UsableWorker is the same predicate it would then apply.
-	// Reading it here rather than restating the conditions is what keeps the two
-	// from drifting into a bootstrap that raises runs the run itself declines.
+	// The question is whether there is a machine the run would inspect, so it is
+	// asked about the machines that run is narrowed to rather than about every
+	// machine in the cluster. UsableWorker is the same predicate the run then
+	// applies, and the selector and the opt-in are the same two the run carries:
+	// reading all three off the run this would raise is what keeps the bootstrap
+	// from raising runs the run itself declines.
+	spec := config.DiscoverSpec()
+
+	options := []client.ListOption{}
+	if len(spec.NodeSelector) > 0 {
+		options = append(options, client.MatchingLabels(spec.NodeSelector))
+	}
 	var nodes corev1.NodeList
-	if err := d.List(ctx, &nodes); err != nil {
+	if err := d.List(ctx, &nodes, options...); err != nil {
 		return "", fmt.Errorf("listing nodes: %w", err)
 	}
+	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
 	usable := 0
 	for _, node := range nodes.Items {
-		// The opt-in is a decision an administrator makes on a run they wrote.
-		// This one writes no spec, so it asks the question the run it would raise
-		// asks: false, and a control-plane node does not count.
-		if UsableWorker(node, false) {
+		if UsableWorker(node, useControlPlane) {
 			usable++
 		}
 	}
