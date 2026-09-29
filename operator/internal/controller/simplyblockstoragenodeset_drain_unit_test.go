@@ -619,3 +619,38 @@ func TestRoundRobinEscalatesFromPreferredIntoFallback(t *testing.T) {
 		t.Errorf("pv-a went to %q; node-3 failed, node-2 is the remaining (fallback) target", assignment[drainTestPVA])
 	}
 }
+
+// The drained node's own secondary is the fallback source once the drainee is
+// shut down; the control plane refuses it as a target, so it is offered only
+// when nothing else is left (2026-09-29, run 10: ~320 refusals on it).
+func TestRoundRobinOffersTheDraineesOwnReplicasLast(t *testing.T) {
+	mock := replicaTopologyNodes(t, `[
+		{"id":"node-1","status":"online","secondary_node_id":"node-2","tertiary_node_id":"node-3"},
+		{"id":"node-2","status":"online"},
+		{"id":"node-3","status":"online"},
+		{"id":"node-4","status":"online","secondary_node_id":"node-1"},
+		{"id":"node-5","status":"online"}
+	]`)
+	defer mock.Close()
+
+	assignment, err := roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, drainTestNode1, []string{"pv-a", "pv-b", "pv-c"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for pv, got := range assignment {
+		if got != "node-5" {
+			t.Errorf("%s went to %s; node-5 is the only target that is neither the drainee's replica nor replicates onto it", pv, got)
+		}
+	}
+
+	tried := func(pv string) []string { return []string{"node-5", "node-4"} }
+	assignment, err = roundRobinTargetNodes(context.Background(), webapi.NewClient(mock.URL()),
+		drainTestClusterUUID, drainTestNode1, []string{"pv-a"}, tried)
+	if err != nil {
+		t.Fatalf("the drainee's replicas remain a last resort: %v", err)
+	}
+	if got := assignment["pv-a"]; got != "node-2" && got != "node-3" {
+		t.Errorf("pv-a went to %q; only the drainee's own replicas are left", got)
+	}
+}

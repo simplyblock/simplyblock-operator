@@ -281,18 +281,32 @@ func roundRobinTargetNodes(
 	// replica anyway. Such targets go last. They stay candidates: on a small
 	// cluster every peer may replicate onto the drainee, and draining beats
 	// refusing.
-	var preferred, fallback []string
+	//
+	// The drained node's OWN secondary and tertiary go after those: once the
+	// drainee is shut down, the control plane reads the volume from one of
+	// them (the fallback source) and refuses it as a target outright, and the
+	// other is where the removal's own replica relocation is about to act.
+	drainee := webapi.StorageNodeInfo{}
+	for _, n := range nodes {
+		if n.UUID == excludeNodeUUID {
+			drainee = n
+		}
+	}
+	var preferred, fallback, ownReplicas []string
 	for _, n := range nodes {
 		if n.UUID == excludeNodeUUID || n.Status != utils.NodeStatusOnline {
 			continue
 		}
-		if n.SecondaryNodeID == excludeNodeUUID || n.TertiaryNodeID == excludeNodeUUID {
+		switch {
+		case n.UUID == drainee.SecondaryNodeID || n.UUID == drainee.TertiaryNodeID:
+			ownReplicas = append(ownReplicas, n.UUID)
+		case n.SecondaryNodeID == excludeNodeUUID || n.TertiaryNodeID == excludeNodeUUID:
 			fallback = append(fallback, n.UUID)
-		} else {
+		default:
 			preferred = append(preferred, n.UUID)
 		}
 	}
-	if len(preferred)+len(fallback) == 0 {
+	if len(preferred)+len(fallback)+len(ownReplicas) == 0 {
 		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
 	}
 
@@ -309,6 +323,9 @@ func roundRobinTargetNodes(
 		picked := pickRoundRobin(preferred, i, exhausted)
 		if picked == "" {
 			picked = pickRoundRobin(fallback, i, exhausted)
+		}
+		if picked == "" {
+			picked = pickRoundRobin(ownReplicas, i, exhausted)
 		}
 		if picked == "" {
 			// Every peer has already failed for this volume. Saying so is the

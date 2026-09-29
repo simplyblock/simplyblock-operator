@@ -1398,7 +1398,28 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 		return ctrl.Result{}, false
 	}
 
-	// Check if the cluster is paused — if so, delete and wait.
+	// The target is recorded as exhausted BEFORE any delete, and the status
+	// write is what makes the next attempt a different attempt. Deleting alone
+	// re-picks from the same ordered candidate list, so the volume goes back to
+	// the node it just failed on -- with one volume, for ever. The event says
+	// "will retry with new target"; recording it is what makes that true.
+	//
+	// That holds on the pause path too. It used to delete first and count
+	// never, and a drain reads "cluster is rebalancing" most of the time, so a
+	// target the control plane refuses outright was offered again ~320 times
+	// in ten minutes with one failure counted (2026-09-29, run 10).
+	opsPatch := client.MergeFrom(ops.DeepCopy())
+	recorded := recordExhaustedTargets(ops, failed)
+	if recorded {
+		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
+			// Deleting without the record would lose the escalation, so leave
+			// the CRs alone and come back: a failed CR is idle, not harmful.
+			log.Error(err, "drain: could not record exhausted migration targets; not deleting yet")
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
+		}
+	}
+
+	// Cluster paused: delete and wait; the next pass recreates them.
 	if res, paused := r.clusterPauseCheck(ctx, ops, apiClient); paused {
 		for i := range failed {
 			_ = r.Delete(ctx, &failed[i])
@@ -1411,22 +1432,6 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	}
 
 	// Cluster ready: delete failed CRs and let createMissingVolumeMigrationsOps recreate them.
-	//
-	// The target is recorded as exhausted BEFORE the delete, and the status
-	// write is what makes the next attempt a different attempt. Deleting alone
-	// re-picks from the same ordered candidate list, so the volume goes back to
-	// the node it just failed on -- with one volume, for ever. The event says
-	// "will retry with new target"; recording it is what makes that true.
-	opsPatch := client.MergeFrom(ops.DeepCopy())
-	recorded := recordExhaustedTargets(ops, failed)
-	if recorded {
-		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
-			// Deleting without the record would lose the escalation, so leave
-			// the CRs alone and come back: a failed CR is idle, not harmful.
-			log.Error(err, "drain: could not record exhausted migration targets; not deleting yet")
-			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
-		}
-	}
 
 	for i := range failed {
 		vm := &failed[i]
@@ -1490,7 +1495,7 @@ func recordExhaustedTargets(
 		// cause is retried, but counted -- otherwise the drain recreates the
 		// same migration against the same node for ever, which is what happens
 		// when nothing can be blamed and nothing is bounded.
-		if targetWasEngaged(&failed[i]) {
+		if targetWasEngaged(&failed[i]) || targetRefusedByBackend(&failed[i]) {
 			if recordDrainTargetTried(ops, pv, target) {
 				recorded = true
 			}
@@ -1583,6 +1588,16 @@ func resetUnattributedFailures(ops *simplyblockv1alpha1.StorageNodeOps, pvName s
 // Failed, losing the phase the failure came from.
 func targetWasEngaged(vm *simplyblockv1alpha1.VolumeMigration) bool {
 	return vm.Status.SourceNodeUUID != ""
+}
+
+// targetRefusedByBackend reports whether the control plane refused this
+// target itself when the migration was created -- "Cannot migrate to node X:
+// ..." (X is the fallback source, is the volume's own node, cannot host it).
+// No retry against the same node can succeed, so it burns the target at once
+// even though the migration never engaged it.
+func targetRefusedByBackend(vm *simplyblockv1alpha1.VolumeMigration) bool {
+	target := vm.Spec.TargetNodeUUID
+	return target != "" && strings.Contains(vm.Status.ErrorMessage, "Cannot migrate to node "+target)
 }
 
 // markFailureCounted records that the failed CR with uid has been counted for
