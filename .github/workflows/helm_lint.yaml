@@ -47,3 +47,13 @@ jobs:
         run: |
           make -C operator yq
           helm-charts/scripts/check-values-references.sh
+
+      # The release packages the chart with its image tags rewritten, and the
+      # rewrite is anchored to the shape of values.yaml. Running it here on a
+      # copy fails the pull request that moves those keys, rather than the
+      # release that would have published the development tags.
+      - name: Release stamping
+        run: |
+          make -C operator yq
+          cp -R helm-charts/charts/simplyblock-operator "$RUNNER_TEMP/chart"
+          helm-charts/scripts/stamp-release-version.sh "$RUNNER_TEMP/chart" v0.0.0-lint

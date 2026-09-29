@@ -4,6 +4,11 @@ name: "Helm: Release"
 # `helm-charts-operator` artifact. It does NOT open a PR or publish anything —
 # merging and publishing the unified Helm repo is handled by the repo-global
 # release workflow (repo_release.yaml).
+#
+# A run that names a version packages a release: the chart carries that version
+# and the images that release built. A run without one packages the chart as the
+# branch commits it, which is the moving `main` tag the development chart
+# installs.
 
 on:
   push:
@@ -13,6 +18,11 @@ on:
     paths:
       - 'helm-charts/charts/simplyblock-operator/Chart.yaml'
   workflow_call:
+    inputs:
+      version:
+        description: "Release tag (e.g. v26.2.7) the packaged chart names; empty packages the chart as committed"
+        required: false
+        type: string
 
 jobs:
   package:
@@ -26,11 +36,30 @@ jobs:
         with:
           version: latest
 
+      # The committed values.yaml names the development images, so a release
+      # rewrites the two tags it publishes before Helm reads them.
+      - name: Stamp the release images into the chart
+        if: inputs.version != ''
+        run: |
+          make -C operator yq
+          helm-charts/scripts/stamp-release-version.sh \
+            helm-charts/charts/simplyblock-operator "${{ inputs.version }}"
+
       - name: Package chart
         run: |
-          VERSION="$(grep '^version:' helm-charts/charts/simplyblock-operator/Chart.yaml | awk '{print $2}' | tr -d '"')"
+          RELEASE_TAG="${{ inputs.version }}"
+          if [ -n "$RELEASE_TAG" ]; then
+            # The chart version is semver, so it carries the release tag without
+            # its leading "v," and appVersion states the release it installs.
+            VERSION="${RELEASE_TAG#v}"
+            set -- --version "$VERSION" --app-version "$VERSION"
+          else
+            VERSION="$(grep '^version:' helm-charts/charts/simplyblock-operator/Chart.yaml | awk '{print $2}' | tr -d '"')"
+            set --
+          fi
           mkdir -p "helm-charts/charts/$VERSION"
-          helm package helm-charts/charts/simplyblock-operator --destination "helm-charts/charts/$VERSION/"
+          helm package helm-charts/charts/simplyblock-operator \
+            "$@" --destination "helm-charts/charts/$VERSION/"
 
       - name: Index chart repo
         run: helm repo index helm-charts/charts/ --url https://install.simplyblock.io/helm
